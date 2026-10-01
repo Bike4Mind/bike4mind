@@ -75,11 +75,98 @@ const FORCED_SKIP_REMEDY: Record<ForcedSkipReason, string> = {
   no_lake_scope: 'Pick the data lakes this chat should use, or clear the choice to use every one you can reach.',
 };
 
+type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
+
+/**
+ * Why the session's lake never reached any surface on this turn, when the seed recorded one. Keyed
+ * on `lakeScope` (seed-written, first-writer-wins) rather than on the merged outcome, because the
+ * merge ranks a tool's 'ok' above the forced arm's 'no_lakes' (see retrievalSummaryMerge.ts), so the
+ * abstain is gone from `outcome` by the time a turn is stored.
+ *
+ * Keyed off the schema enums, like ForcedSkipReason, so a new reason fails to compile in the copy maps.
+ */
+type ScopeAbstainReason =
+  NonNullable<RetrievalSummary['notServingLakes']>['reason'] | NonNullable<RetrievalSummary['excludedLakes']>['reason'];
+
+/**
+ * `none`: no surface searched anything (the merged outcome kept 'no_lakes'). `ownFiles`: a tool
+ * still ran and found nothing - search_knowledge_base ORs the caller's own and shared files in
+ * beside the lake arms (knowledgeBaseSearch/index.ts), and a draft's files are its owner's own, so
+ * "not searched" would be false there and the copy says what was searched instead.
+ */
+type ScopeAbstainSearched = 'none' | 'ownFiles';
+
+interface ScopeAbstain {
+  reason: ScopeAbstainReason;
+  searched: ScopeAbstainSearched;
+}
+
+const SCOPE_ABSTAIN_COPY: Record<ScopeAbstainReason, Record<ScopeAbstainSearched, string>> = {
+  draft: {
+    none: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
+    ownFiles:
+      "This chat's data lake is a draft, so it was not searched as a data lake. Your own and shared files were searched, and nothing matched.",
+  },
+  access: {
+    none: "This chat's data lake is not one you can currently reach, so it was not searched.",
+    ownFiles:
+      "This chat's data lake is not one you can currently reach, so it was not searched. Your own and shared files were searched, and nothing matched.",
+  },
+};
+
+const SCOPE_ABSTAIN_REMEDY: Record<ScopeAbstainReason, Record<ScopeAbstainSearched, string>> = {
+  draft: {
+    none: 'Publish the lake to ground answers in it.',
+    ownFiles:
+      'Publish the lake so retrieval searches it as a data lake. If nothing comes back after that, its files may not cover this question.',
+  },
+  access: {
+    none: 'Check that you still have access to it, or pick a different lake for this chat.',
+    ownFiles: 'Check that you still have access to it, or pick a different lake for this chat.',
+  },
+};
+
+const SCOPE_ABSTAIN_CORPUS_COPY: Record<ScopeAbstainSearched, string> = {
+  none: "This chat's data lake was not searched, so nothing is known about whether it is indexed.",
+  ownFiles: "This chat's data lake was not searched as a data lake, so nothing is known about whether it is indexed.",
+};
+
 const countDocuments = (promptMeta: PromptMeta): number =>
   promptMeta.citables?.filter(c => c.type === 'document').length ?? 0;
 
 const groundedThroughUninstrumentedTool = (promptMeta: PromptMeta): boolean =>
   !!promptMeta.functionCalls?.some(call => call.name === UNINSTRUMENTED_CONTENT_TOOL);
+
+// Only an EMPTY recorded scope: a partial abstain (one named lake serving, another a draft) still
+// searched something, so its volume is judged as usual. Draft wins a tie because its remedy is the
+// caller's own to take.
+// `notServingLakes` is the named-lake marker: the seed (ChatCompletionProcess.ts) writes it, zero
+// included, only when the session named a lake. Otherwise `lakeScope`/`excludedLakes` are
+// account-wide, not "this chat's lake". A failed draft lookup also leaves it absent.
+function scopeAbstain(promptMeta: PromptMeta): ScopeAbstain | undefined {
+  const retrieval = promptMeta.retrieval;
+  if (!retrieval?.lakeScope || retrieval.lakeScope.length > 0 || !retrieval.notServingLakes) return undefined;
+  let searched: ScopeAbstainSearched;
+  if (retrieval.outcome === 'no_lakes') {
+    searched = 'none';
+  } else if (
+    retrieval.outcome === 'ok' &&
+    (retrieval.injected?.chunks ?? 0) === 0 &&
+    // The keyword fallback's own-file hits write citables but no `injected`.
+    countDocuments(promptMeta) === 0 &&
+    // retrieve_knowledge_content records no volume, so a zero here cannot rule out that it read
+    // something - the same guard diagnoseVolume applies.
+    !groundedThroughUninstrumentedTool(promptMeta)
+  ) {
+    searched = 'ownFiles';
+  } else {
+    return undefined;
+  }
+  if (retrieval.notServingLakes.count > 0) return { reason: retrieval.notServingLakes.reason, searched };
+  const excluded = retrieval.excludedLakes;
+  if (excluded && excluded.count > 0) return { reason: excluded.reason, searched };
+  return undefined;
+}
 
 function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
   const label = 'Retrieval';
@@ -117,6 +204,19 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
           ? 'Retrieval was available and the model chose not to search your knowledge base.'
           : 'Retrieval was available but never ran on this turn.',
       remedy: 'Ask the question so it clearly refers to your documents, or turn on forced retrieval for this session.',
+    };
+  }
+
+  // Ahead of the volume and no-lakes arms, behind 'failed' and 'not_indexed': those are real faults
+  // on whatever did run, while a zero here is the expected result of searching no lake at all.
+  const abstain = scopeAbstain(promptMeta);
+  if (abstain) {
+    return {
+      id: 'retrieval',
+      label,
+      status: 'warn',
+      detail: SCOPE_ABSTAIN_COPY[abstain.reason][abstain.searched],
+      remedy: SCOPE_ABSTAIN_REMEDY[abstain.reason][abstain.searched],
     };
   }
 
@@ -160,7 +260,7 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
   }
 }
 
-function diagnoseVolume(promptMeta: PromptMeta, retrieval: NonNullable<PromptMeta['retrieval']>): DiagnosisCheck {
+function diagnoseVolume(promptMeta: PromptMeta, retrieval: RetrievalSummary): DiagnosisCheck {
   const label = 'Retrieval';
   const injected = retrieval.injected;
 
@@ -274,6 +374,26 @@ function diagnoseCorpus(promptMeta: PromptMeta): DiagnosisCheck {
       label,
       status: 'unknown',
       detail: 'No search ran, so nothing is known about whether the documents in scope are indexed.',
+    };
+  }
+
+  // "Searchable" would be a claim about a lake no surface ever compared against.
+  const abstain = scopeAbstain(promptMeta);
+  if (abstain) {
+    return {
+      id: 'corpus',
+      label,
+      status: 'unknown',
+      detail: SCOPE_ABSTAIN_CORPUS_COPY[abstain.searched],
+    };
+  }
+
+  if (outcome === 'no_lakes') {
+    return {
+      id: 'corpus',
+      label,
+      status: 'unknown',
+      detail: 'No knowledge base was in scope, so nothing is known about whether one is indexed.',
     };
   }
 

@@ -123,6 +123,7 @@ import {
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -3190,12 +3191,26 @@ export class ChatCompletionProcess {
         const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
           tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
         );
-        const excludedByAccessCount =
-          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure, {
-                callerMaySeeAllLakes: this.user?.isAdmin === true,
-              })
-            : narrowedAccess?.excludedByAccessCount;
+        // Both ways a named lake drops out of scope, measured only where the session named one:
+        // gate-excluded (above), and draft - retrieval is active-only, so a draft narrows to
+        // nothing; counted over the identity-named tags that did not survive into lakeScope.
+        // Independent reads, so they run together.
+        const namesALake = accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags);
+        const [excludedByAccessCount, notServingCount] = namesALake
+          ? await Promise.all([
+              this.getDataLakeAccessContext().then(accessContext =>
+                measureIdentityNamedExclusion(accessContext, identityTagsToMeasure, {
+                  callerMaySeeAllLakes: this.user?.isAdmin === true,
+                })
+              ),
+              countNotServingNamedLakes(
+                this.db.dataLakes,
+                this.user.id,
+                datalakeTagsFrom(session.retrievalTags ?? []).filter(tag => !lakeScope.includes(tag)),
+                this.logger
+              ),
+            ])
+          : [narrowedAccess?.excludedByAccessCount, undefined];
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
         // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
@@ -3203,6 +3218,8 @@ export class ChatCompletionProcess {
         // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
           excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
+        const notServingLakes =
+          notServingCount !== undefined ? { count: notServingCount, reason: 'draft' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3210,6 +3227,7 @@ export class ChatCompletionProcess {
           dataLakeTags: [],
           lakeScope,
           ...(excludedLakes ? { excludedLakes } : {}),
+          ...(notServingLakes ? { notServingLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
