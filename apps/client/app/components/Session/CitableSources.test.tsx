@@ -9,7 +9,8 @@ import { CitationInteractionProvider } from './CitationInteractionContext';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 
 // CitableSourceItem calls useNavigate, which needs a router context we don't set up here.
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
+const navigate = vi.fn();
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -75,6 +76,7 @@ describe('CitableSources cited-passage anchor', () => {
   };
 
   beforeEach(() => {
+    navigate.mockClear();
     useSessionLayout.setState({ citedPassage: null });
   });
 
@@ -120,7 +122,7 @@ describe('CitableSources cited-passage anchor', () => {
   });
 
   it('hands an internal chip to onInternalCitationClick instead of navigating or writing the anchor', () => {
-    const onInternalCitationClick = vi.fn();
+    const onInternalCitationClick = vi.fn(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onInternalCitationClick }}>
@@ -136,10 +138,51 @@ describe('CitableSources cited-passage anchor', () => {
     expect(onInternalCitationClick).toHaveBeenCalledTimes(1);
     expect(onInternalCitationClick.mock.calls[0][0]).toMatchObject({ id: 'file-1' });
     expect(useSessionLayout.getState().citedPassage).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the default navigation when onInternalCitationClick declines the chip', () => {
+    const onInternalCitationClick = vi.fn(() => false);
+    render(
+      <TestWrapper>
+        <CitationInteractionProvider value={{ onInternalCitationClick }}>
+          <CitableSources
+            citables={[lakeChip({ sourceSystem: 'knowledge_base', chunkId: 'c1', fullContext: 'Text.' })]}
+          />
+        </CitationInteractionProvider>
+      </TestWrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('citable-source-chip'));
+
+    expect(onInternalCitationClick).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(useSessionLayout.getState().citedPassage).toEqual({
+      fileId: 'file-1',
+      chunkId: 'c1',
+      passage: 'Text.',
+    });
+  });
+
+  it('lets onCitationClick win over onInternalCitationClick for an internal chip', () => {
+    const onCitationClick = vi.fn();
+    const onInternalCitationClick = vi.fn(() => true);
+    render(
+      <TestWrapper>
+        <CitationInteractionProvider value={{ onCitationClick, onInternalCitationClick }}>
+          <CitableSources citables={[lakeChip({ sourceSystem: 'knowledge_base' })]} />
+        </CitationInteractionProvider>
+      </TestWrapper>
+    );
+
+    fireEvent.click(screen.getByTestId('citable-source-chip'));
+
+    expect(onCitationClick).toHaveBeenCalledTimes(1);
+    expect(onInternalCitationClick).not.toHaveBeenCalled();
   });
 
   it('leaves an external chip as a plain link when only onInternalCitationClick is provided', () => {
-    const onInternalCitationClick = vi.fn();
+    const onInternalCitationClick = vi.fn(() => true);
     render(
       <TestWrapper>
         <CitationInteractionProvider value={{ onInternalCitationClick }}>
