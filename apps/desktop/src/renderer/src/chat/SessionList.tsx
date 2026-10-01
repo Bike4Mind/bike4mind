@@ -15,7 +15,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
 import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
-import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon, SlidersIcon } from './icons';
+import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
 
@@ -223,30 +223,10 @@ function SectionLabel({ children }: { children: ReactNode }) {
 function ProjectHeader({
   group,
   onCreateInProject,
-  onSearch,
-  onSettings,
 }: {
   group: ProjectGroup;
   onCreateInProject: (group: ProjectGroup) => void;
-  onSearch: (group: ProjectGroup) => void;
-  onSettings: (group: ProjectGroup) => void;
 }) {
-  const actions: { label: string; icon: ReactNode; run: () => void; testId: string }[] = [
-    {
-      label: `New session in ${group.name}`,
-      icon: <PlusIcon />,
-      run: () => onCreateInProject(group),
-      testId: 'project-new-btn',
-    },
-    { label: `Search ${group.name}`, icon: <SearchIcon />, run: () => onSearch(group), testId: 'project-search-btn' },
-    {
-      label: `${group.name} settings`,
-      icon: <SlidersIcon />,
-      run: () => onSettings(group),
-      testId: 'project-settings-btn',
-    },
-  ];
-
   return (
     <Stack
       direction="row"
@@ -258,19 +238,16 @@ function ProjectHeader({
           {group.name}
         </Typography>
       </Tooltip>
-      {actions.map(action => (
-        <IconButton
-          key={action.testId}
-          size="sm"
-          variant="plain"
-          color="neutral"
-          aria-label={action.label}
-          onClick={action.run}
-          data-testid={action.testId}
-        >
-          {action.icon}
-        </IconButton>
-      ))}
+      <IconButton
+        size="sm"
+        variant="plain"
+        color="neutral"
+        aria-label={`New session in ${group.name}`}
+        onClick={() => onCreateInProject(group)}
+        data-testid="project-new-btn"
+      >
+        <PlusIcon />
+      </IconButton>
     </Stack>
   );
 }
@@ -481,12 +458,7 @@ export function SessionList({
 
             {sections.projects.map(group => (
               <Box key={group.directory} data-testid="project-group">
-                <ProjectHeader
-                  group={group}
-                  onCreateInProject={target => onCreateInProject(target.directory)}
-                  onSearch={target => setQuery(target.name)}
-                  onSettings={target => onSelect(target.sessions[0].id)}
-                />
+                <ProjectHeader group={group} onCreateInProject={target => onCreateInProject(target.directory)} />
                 <List size="sm" sx={SESSION_LIST_SX}>
                   {group.sessions.map(session => (
                     <SessionRow key={session.id} session={session} {...rowProps} />
