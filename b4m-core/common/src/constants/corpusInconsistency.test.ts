@@ -117,7 +117,26 @@ describe('metric disagreements', () => {
     // The rupee sign (U+20B9) has no explicit canonicalUnit mapping, unlike dollar/euro/pound/yen -
     // but METRIC still captures it as curpre via \p{Sc}, and currency is decided from that capture
     // rather than from whether the canonicalized string happens to be in the explicit ISO list.
-    expect(kinds([doc('a', 'Cost is ₹5'), doc('b', 'Cost is 5 inr')])).toEqual([]);
+    expect(kinds([doc('a', 'Cost is \u20B95'), doc('b', 'Cost is 5 inr')])).toEqual([]);
+  });
+
+  it('does not read a spaced unit abbreviation as a magnitude', () => {
+    expect(kinds([doc('a', 'Height is 120 m.'), doc('b', 'Height is 120 meters.')])).toEqual([]);
+    expect(kinds([doc('a', 'Timeout is 5 m'), doc('b', 'Timeout is 5 minutes')])).toEqual([]);
+    expect(kinds([doc('a', 'Speed is 5 m/s'), doc('b', 'Speed is 5.')])).toEqual([]);
+    expect(kinds([doc('a', 'Option is 2 B.'), doc('b', 'Option is 2.')])).toEqual([]);
+  });
+
+  it('scales spelled-out magnitudes the same as their suffix form', () => {
+    expect(kinds([doc('a', 'Revenue is $10 million.'), doc('b', 'Revenue is $10M.')])).toEqual([]);
+    expect(kinds([doc('a', 'Revenue is $1.2 billion.'), doc('b', 'Revenue is $1.2B.')])).toEqual([]);
+    expect(kinds([doc('a', 'Revenue is $10 million.'), doc('b', 'Revenue is $12M.')])).toEqual(['metric-disagreement']);
+  });
+
+  it('keeps distinct 13-digit figures distinct', () => {
+    expect(kinds([doc('a', 'Account is 1234567890123.'), doc('b', 'Account is 1234567890124.')])).toEqual([
+      'metric-disagreement',
+    ]);
   });
 });
 
@@ -151,6 +170,18 @@ describe('metric disagreements with unitRequired', () => {
   it('treats currency symbols and words as the same unit for grouping when required', () => {
     expect(unitKinds([doc('a', 'Revenue is $1.2M.'), doc('b', 'Revenue is 1200000 dollars.')])).toEqual([]);
     expect(unitKinds([doc('a', 'Cost is EUR 1,200.'), doc('b', 'Cost is 1.2k euros.')])).toEqual([]);
+  });
+
+  it('groups an unmapped currency symbol with its code', () => {
+    expect(unitKinds([doc('a', 'Cost is \u20B95.'), doc('b', 'Cost is 6 inr.')])).toEqual(['metric-disagreement']);
+  });
+
+  it.each([
+    ['$1,2', 'Annual revenue is $1,2'],
+    ['$1', 'Annual revenue is $1'],
+    ['$12', 'Annual revenue is $12'],
+  ])('drops a passage clipped mid-number after a prefix currency (%s)', (_label, clipped) => {
+    expect(unitKinds([doc('a', 'Annual revenue is $1,200,000 for the year.'), doc('b', clipped)])).toEqual([]);
   });
 
   it('leaves the default behaviour alone', () => {
