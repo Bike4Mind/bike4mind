@@ -1,4 +1,9 @@
-import { redactPromptMetaForViewer, toToolPayloads, type IChatHistoryItemDocument } from '@bike4mind/common';
+import {
+  PolledFallbackInfoSchema,
+  redactPromptMetaForViewer,
+  toToolPayloads,
+  type IChatHistoryItemDocument,
+} from '@bike4mind/common';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
 
 /**
@@ -32,6 +37,10 @@ export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { 
   // them off loaded quests), so a share holder gains nothing new here.
   const toolPayloads = toToolPayloads(quest.uiSideEffects);
 
+  // safeParse: the model tolerates partial records, and one malformed fallbackInfo must not make
+  // the whole quest unreadable.
+  const fallbackInfo = quest.fallbackInfo ? PolledFallbackInfoSchema.safeParse(quest.fallbackInfo).data : undefined;
+
   return {
     id: quest.id,
     status: quest.status,
@@ -50,6 +59,8 @@ export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { 
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,
+    // Which model actually answered, when the requested one failed over.
+    fallbackInfo,
     images,
     videos,
     files,

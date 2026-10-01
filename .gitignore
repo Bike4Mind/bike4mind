@@ -182,3 +182,5 @@ packages/scripts/out/
 # that must never reach this repo's permanent, public history. Unanchored on purpose so it
 # matches wherever an operator lands it.
 datalake-prefix-only-census-*.json
+
+.codex/
