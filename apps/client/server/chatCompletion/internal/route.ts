@@ -30,7 +30,7 @@ export const GENERIC_PROCESSING_FAILURE_REPLY = 'Something went wrong while proc
 
 /**
  * Namespace for quest-lifecycle operational metrics; also used by the timeout sweep
- * (apps/client/server/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
+ * (apps/workers/src/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
  * `Stage` dimension in sync with infra/alarms.ts.
  */
 const QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';

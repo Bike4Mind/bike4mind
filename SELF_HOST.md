@@ -1002,7 +1002,7 @@ Database failures reject the run. Successful earlier batches remain cleaned; the
 Focused tests use disposable Mongo, exact retention boundaries and an injected later-batch write failure. CI also runs the retention tests with `TZ=America/New_York` set before Node starts, covering a daylight-saving transition. They establish persisted application effects, not a Kubernetes deployment drill.
 
 ```sh
-VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test server/cron/telemetryCleanup.test.ts __tests__/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
-TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test:integration server/cron/telemetryCleanup.retention.e2e.test.ts
+TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
 ```

@@ -682,7 +682,7 @@ export default defineConfig([
     },
   },
 
-  // apps/workers - the moved apps/workers/src/{events,selfhost} files came from apps/client/server,
+  // apps/workers - the moved apps/workers/src/{events,selfhost,cron} files came from apps/client/server,
   // so they keep the same enforcement it had there: the Overwatch barrel restriction and B4Mv3
   // facade guards (mirrored from the apps/client/server block above rather than sharing its `files`
   // glob - apps/client/server legitimately imports `next` for API route types, so folding the

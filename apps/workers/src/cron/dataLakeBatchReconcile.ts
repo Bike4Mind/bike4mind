@@ -10,7 +10,7 @@
  * so a race between the two just makes the loser a no-op. Idempotent across runs (forced batches
  * leave the non-terminal set), capped per run so it stays inside the Lambda timeout.
  *
- * runStuckBatchSweep is also the self-host worker's counterpart (worker/main.ts) - self-host has
+ * runStuckBatchSweep is also the self-host worker's counterpart (../selfhost/main.ts) - self-host has
  * no SST cron, so it drives the same sweep off its own scheduled-task interval.
  *
  * Schedule: daily. Enabled: production + dev.
@@ -58,7 +58,7 @@ const MODERATION_RESCUE_MAX_PER_RUN = 200;
 /**
  * How many stranded-vectorize sends are in flight at once, matching the bound the un-chunked sweep
  * and driveLakeResyncPoll already use. sendToQueue builds a fresh SQSClient per call
- * (server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and every
+ * (@server/utils/sqs.ts), so its retry token bucket never throttles down across the loop and every
  * failed send pays its full attempt budget with no back-off. Run one-at-a-time against a degraded
  * queue, CHUNK_RESCUE_MAX_PER_RUN of those is a wall-clock cost this handler cannot absorb - it is
  * the LAST of three sweeps in one 10-minute Lambda, so the tail is what gets cut off.
@@ -119,7 +119,7 @@ async function rescueStrandedVectorizeFiles(): Promise<number> {
 
 /**
  * Find + reconcile stuck data-lake batches. The hosted daily cron (handler(), below) and the
- * self-host worker's scheduled task (worker/main.ts) both come through here, so the two drivers
+ * self-host worker's scheduled task (../selfhost/main.ts) both come through here, so the two drivers
  * run the exact same stuck-batch logic rather than the self-host path drifting from the cron.
  */
 export async function runStuckBatchSweep(runLogger: Logger): Promise<{ candidates: number; forced: string[] }> {

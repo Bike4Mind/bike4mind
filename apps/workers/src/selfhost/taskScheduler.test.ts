@@ -64,7 +64,7 @@ vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: async () => ({ modelId: 'test-model', llm: {} }) },
 }));
 
-import { handler } from '@server/cron/scheduler';
+import { handler } from '@workers/cron/scheduler';
 import { registerTaskScheduler } from './taskScheduler';
 import { dispatch } from '@server/queueHandlers/researchEngineQueue';
 

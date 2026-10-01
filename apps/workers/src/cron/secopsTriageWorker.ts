@@ -19,7 +19,7 @@ import { createSecopsTriageService } from '@server/services/secopsTriageService'
 import { decryptToken } from '@server/security/tokenEncryption';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
-import { dispatchWithLogger } from '../queueHandlers/utils';
+import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { Resource } from 'sst';
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/SecOpsTriage';

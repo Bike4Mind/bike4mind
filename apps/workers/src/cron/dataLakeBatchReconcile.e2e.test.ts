@@ -9,11 +9,10 @@ import { dataLakeService } from '@bike4mind/services';
 /**
  * Real-Mongo guard for runStuckBatchSweep: both the hosted daily cron (handler(), in
  * dataLakeBatchReconcile.test.ts, fully mocked) and the self-host worker's new scheduled task
- * (worker/main.ts) call this function directly, so proving it actually persists the
+ * (../selfhost/main.ts) call this function directly, so proving it actually persists the
  * forced-terminal transition against a real batch document - not a mocked reconciler - is what
- * backs self-host's new dependency on it. Lives in apps/client because it is the only package
- * with both @bike4mind/services and @bike4mind/database as dependencies. Consumes the built
- * dist, so `pnpm turbo:core:build` must be current.
+ * backs self-host's new dependency on it. Consumes the built dist, so `pnpm turbo:core:build`
+ * must be current.
  */
 
 const h = vi.hoisted(() => ({
