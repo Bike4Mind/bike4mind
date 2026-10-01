@@ -7,6 +7,7 @@ import { sessionArchive, sessionDelete, sessionList, sessionRead, sessionSend, s
 import { generateImageTool, generateMusicTool, generateSoundEffectTool, generateSpeechTool } from './mediaTools';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
 import { bashExecute } from './shellTools';
+import { skillTool } from './skillTool';
 import { todoWrite } from './todoTool';
 import { fileEdit, fileWrite } from './writeTools';
 import type { ToolDefinition, ToolSchema } from './types';
@@ -90,10 +91,33 @@ const HOST_TOOLS: readonly ToolDefinition[] = [
  */
 const MEMORY_TOOLS: readonly ToolDefinition[] = [memoryRead, memoryWrite, memoryDelete];
 
+/**
+ * Running one of the user's own skills, the way typing `/name` in the composer does.
+ *
+ * A family of one, offered whenever there is a catalog to read - including in a conversation
+ * that has been granted no folder, because a global skill is a file of the user's instructions
+ * and does not need one. It is the only family here that is neither gated nor needs to be: the
+ * call reads a markdown file and returns its text, and everything the returned instructions then
+ * ask for is an ordinary tool call that stops at the gate. See skillTool.ts.
+ *
+ * What it may list and run is decided by the SESSION, not by its arguments: a project's skills
+ * are withheld until the user trusts that project, which is the same gate the composer's picker
+ * passes, and a skill marked not-model-invocable is absent from both the prompt list and this
+ * tool's reach.
+ */
+const SKILL_TOOLS: readonly ToolDefinition[] = [skillTool];
+
 const BY_NAME = new Map(
-  [...localTools(false), applyPatch, exploreTool, ...MEDIA_TOOLS, ...HOST_TOOLS, ...BROWSER_TOOLS, ...MEMORY_TOOLS].map(
-    tool => [tool.schema.name, tool]
-  )
+  [
+    ...localTools(false),
+    applyPatch,
+    exploreTool,
+    ...MEDIA_TOOLS,
+    ...HOST_TOOLS,
+    ...BROWSER_TOOLS,
+    ...MEMORY_TOOLS,
+    ...SKILL_TOOLS,
+  ].map(tool => [tool.schema.name, tool])
 );
 
 export function findTool(name: string): ToolDefinition | undefined {
@@ -109,7 +133,9 @@ export function findTool(name: string): ToolDefinition | undefined {
  * available" than one that always fails. The generation tools need only a signed-in session,
  * so they are offered to a user who has shared nothing. The host tools need a project, which
  * is what makes them Code-only. MCP tools are a fourth family, passed in rather than declared
- * here because they only exist once a server the user configured is connected.
+ * here because they only exist once a server the user configured is connected. The skill tool
+ * is the one family that needs neither a folder nor a sign-in: it reads the user's own skill
+ * files, so it is offered wherever a catalog exists.
  */
 export function toolsForRequest(options: {
   roots: readonly string[];
@@ -127,6 +153,8 @@ export function toolsForRequest(options: {
   browser?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;
+  /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
+  skills?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -141,6 +169,7 @@ export function toolsForRequest(options: {
     ...(options.host ? HOST_TOOLS : []),
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
+    ...(options.skills ? SKILL_TOOLS : []),
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),
