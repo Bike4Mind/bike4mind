@@ -1,5 +1,6 @@
-import { stat } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { WorktreeEntry } from './git';
 import { branchExists, containerDirectory, fetchRemoteFor, git, listWorktrees, resolveBaseRef } from './git';
 
 /**
@@ -30,6 +31,30 @@ async function directoryExists(path: string): Promise<boolean> {
 }
 
 /**
+ * The registered worktree sitting at `path`, if any.
+ *
+ * Both sides go through realpath first: git reports resolved paths, while `path` is built by
+ * join from whatever the user picked, so /var vs /private/var and a differently-cased parent
+ * folder would each defeat a plain string compare on macOS.
+ */
+async function registeredAt(entries: readonly WorktreeEntry[], path: string): Promise<WorktreeEntry | null> {
+  const wanted = await canonical(path);
+  if (!wanted) return null;
+  for (const entry of entries) {
+    if ((await canonical(entry.path)) === wanted) return entry;
+  }
+  return null;
+}
+
+async function canonical(path: string): Promise<string | null> {
+  try {
+    return await realpath(path);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The worktree a Code session with the workspace toggle ON should run in, creating it only if
  * there is not already one for that branch.
  *
@@ -43,6 +68,11 @@ async function directoryExists(path: string): Promise<boolean> {
  * would fail against it. That second lookup is also what makes selecting the branch the main
  * checkout is already on resolve to the main checkout instead of erroring - the resolved path
  * is surfaced to the user, so "isolated" is never claimed when it is not true.
+ *
+ * When neither lookup hits, what is at the path still has to be told apart. A folder git has
+ * never heard of and a worktree that has since been switched to another branch are the same
+ * stat() but opposite remedies: the first is the user's to move aside, while moving the second
+ * with `mv` would strand git's registration on a path that no longer exists.
  */
 export async function resolveWorkspace(projectDirectory: string, branch: string): Promise<WorkspaceResolution> {
   const registered = await listWorktrees(projectDirectory);
@@ -52,6 +82,16 @@ export async function resolveWorkspace(projectDirectory: string, branch: string)
 
   const container = await containerDirectory(projectDirectory);
   const path = join(container, worktreeFolderName(branch));
+
+  const occupant = await registeredAt(registered, path);
+  if (occupant) {
+    const holds = occupant.branch ? `the branch ${occupant.branch}` : 'a detached HEAD';
+    throw new Error(
+      `${path} is a git worktree holding ${holds}, not ${branch}. Pick a different branch for this ` +
+        `session, or move that worktree with 'git worktree move' - plain mv would leave git ` +
+        `pointing at a path that no longer exists.`
+    );
+  }
 
   // Something is at the path but git does not know it as a worktree. Refusing beats both
   // clobbering it and adopting a directory whose contents nobody has vouched for.

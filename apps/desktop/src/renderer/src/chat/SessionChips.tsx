@@ -192,6 +192,9 @@ function BranchChip({
 
   const typed = filter.trim();
   const canCreate = !unset && !!typed && !branches.includes(typed);
+  // The pill's own label, so the marked entry is the branch the chip claims rather than the
+  // one recorded at creation; 'no branch' matches nothing, which is the intended miss.
+  const onNow = branchChip.label;
 
   return (
     <Box sx={pillSx} data-testid="session-chip-branch">
@@ -237,12 +240,12 @@ function BranchChip({
           {matches.map(entry => (
             <MenuItem
               key={entry}
-              selected={entry === project?.branch}
+              selected={entry === onNow}
               onClick={() => void binding.setBranch(entry)}
               data-testid="session-chip-branch-option"
             >
               <Typography level="body-sm" noWrap>
-                {entry === project?.branch ? '* ' : ''}
+                {entry === onNow ? '* ' : ''}
                 {entry}
               </Typography>
             </MenuItem>
@@ -332,34 +335,57 @@ function ContextChips({ project, binding }: { project: ChatProject | null; bindi
   );
 }
 
+interface BranchReading {
+  branches: string[];
+  isRepository: boolean;
+  /** HEAD of the working directory; undefined until git has answered. */
+  checkedOut: string | null | undefined;
+}
+
 /**
- * The branches of the directory this session is currently on.
+ * The branches of the directory this session is currently on, and the branch it is actually on.
  *
  * Re-read whenever the directory changes, because that is the whole reason the list is not
  * stored with the session: branch names belong to a repository, and the ones shown after a move
  * must be the new repository's. A null directory is an unbound session: there is no repository
  * to ask, so nothing is asked.
+ *
+ * The list comes from the project root while HEAD comes from the working directory, which are
+ * the same folder unless the session runs in a worktree. Asking the root for both would report
+ * the branch of a checkout this session never touches; asking the worktree for both would leave
+ * the user no branch menu to escape with on a worktree that has since been deleted.
  */
-function useBranches(directory: string | null): { branches: string[]; isRepository: boolean } {
-  const [state, setState] = useState<{ branches: string[]; isRepository: boolean }>({
+function useBranches(directory: string | null, workingDirectory: string | null): BranchReading {
+  const [state, setState] = useState<BranchReading>({
     branches: [],
     isRepository: true,
+    checkedOut: undefined,
   });
 
   useEffect(() => {
     if (!directory) {
-      setState({ branches: [], isRepository: false });
+      setState({ branches: [], isRepository: false, checkedOut: undefined });
       return;
     }
     let current = true;
-    void window.b4m.chat.inspectProject(directory).then(inspected => {
+    const workspace = workingDirectory ?? directory;
+    void Promise.all([
+      window.b4m.chat.inspectProject(directory),
+      // Swallowed rather than awaited strictly: a worktree that has been deleted must still
+      // leave the branch list standing, since that menu is the only way back out of it.
+      workspace === directory ? null : window.b4m.chat.inspectProject(workspace).catch(() => null),
+    ]).then(([inspected, inWorkspace]) => {
       if (!current) return;
-      setState({ branches: inspected.branches, isRepository: inspected.isRepository });
+      setState({
+        branches: inspected.branches,
+        isRepository: inspected.isRepository,
+        checkedOut: (inWorkspace ?? inspected).currentBranch,
+      });
     });
     return () => {
       current = false;
     };
-  }, [directory]);
+  }, [directory, workingDirectory]);
 
   return state;
 }
@@ -372,10 +398,13 @@ function useBranches(directory: string | null): { branches: string[]; isReposito
  * has no project and draws nothing here.
  */
 export function SessionChips({ project, binding }: { project: ChatProject | null; binding: ProjectBindingController }) {
-  const { branches, isRepository } = useBranches(project?.directory ?? null);
+  const { branches, isRepository, checkedOut } = useBranches(
+    project?.directory ?? null,
+    project?.workingDirectory ?? null
+  );
   const chips = useMemo(
-    () => describeChipRow(project, { isRepository, count: branches.length }),
-    [project, isRepository, branches.length]
+    () => describeChipRow(project, { isRepository, count: branches.length, checkedOut }),
+    [project, isRepository, branches.length, checkedOut]
   );
   const bound = useMemo(() => ({ ...binding, chips }), [binding, chips]);
 
