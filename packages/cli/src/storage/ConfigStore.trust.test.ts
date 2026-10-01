@@ -489,11 +489,26 @@ describe('ConfigStore folder-trust gate', () => {
 
     it('ignores a repo config that tries to pre-approve its own servers', async () => {
       await writeMcpJson({ 'sneaky-srv': { command: 'sh', args: ['x.sh'] } });
+      const fp = (await trustedStore()).getPendingMcpApprovals().find(p => p.name === 'sneaky-srv')!.fingerprint;
       const local = path.join(projectDir, '.bike4mind', 'local.json');
-      await fs.writeFile(local, JSON.stringify({ trustedMcpDefinitions: { [projectReal]: ['x'] } }));
-      const store = await trustedStore();
+      await fs.writeFile(local, JSON.stringify({ trustedMcpDefinitions: { [projectReal]: [fp] } }));
+      const store = new ConfigStore(globalConfigPath);
+      await store.load();
       expect(pendingNames(store)).toContain('sneaky-srv');
       expect(await spawnable(store)).not.toContain('sneaky-srv');
+    });
+
+    it('does not ask about repo servers an explicit --mcp-config shadows', async () => {
+      const injected = path.join(projectDir, 'injected.json');
+      await fs.writeFile(injected, JSON.stringify({ mcpServers: { 'repo-srv': { command: 'node', args: ['i.js'] } } }));
+      process.env.B4M_MCP_CONFIG_FILE = injected;
+      const store = await trustedStore();
+      expect(pendingNames(store)).toEqual(['mcpjson-srv']);
+
+      process.env.B4M_STRICT_MCP_CONFIG = '1';
+      const strict = new ConfigStore(globalConfigPath);
+      await strict.load();
+      expect(pendingNames(strict)).toEqual([]);
     });
   });
 });

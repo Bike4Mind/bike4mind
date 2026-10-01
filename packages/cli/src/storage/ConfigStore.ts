@@ -1116,8 +1116,12 @@ export class ConfigStore {
         // malformed/missing file (injected === null) yields an empty set, never
         // a silent fall-back to the broader merged config.
         merged.mcpServers = injected ?? [];
+        this.pendingMcpApprovals = [];
       } else if (injected) {
         merged.mcpServers = mergeMcpServers(merged.mcpServers, injected);
+        // An injected name replaces the repo one, so that repo def never spawns.
+        const injectedNames = new Set(injected.map(s => s.name));
+        this.pendingMcpApprovals = this.pendingMcpApprovals.filter(s => !injectedNames.has(s.name));
       }
     }
 
@@ -1324,8 +1328,8 @@ export class ConfigStore {
     if (config) {
       // The security-critical, repo-launderable fields never flow through a
       // generic save(): the structural sets (mcpServers / trustedTools /
-      // additionalDirectories / trustedProjects / trustedMcpDefinitions) and the security-posture fields
-      // (tools / sandbox) change ONLY via their dedicated mutators (addMcpServer,
+      // additionalDirectories / trustedProjects / trustedMcpDefinitions) and the
+      // security-posture fields (tools / sandbox) change ONLY via their dedicated mutators (addMcpServer,
       // trustTool, saveSandboxConfig, trustProject, ...). Stripping them here - a
       // runtime allowlist on top of the GlobalConfigPatch type - means even a
       // caller that casts past the type and spreads the merged effective config
@@ -1343,11 +1347,11 @@ export class ConfigStore {
         sandbox,
         ...rest
       } = config as Partial<CliConfig>;
-      void trustedMcpDefinitions;
       void mcpServers;
       void trustedTools;
       void additionalDirectories;
       void trustedProjects;
+      void trustedMcpDefinitions;
       void tools;
       void sandbox;
 

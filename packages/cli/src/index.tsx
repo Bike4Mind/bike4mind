@@ -558,7 +558,6 @@ function CliApp() {
       if (
         pendingMcp.length > 0 &&
         !mcpApprovalResolvedRef.current &&
-        state.configStore.isProjectTrusted() &&
         Boolean(process.stdin.isTTY) &&
         Boolean(process.stdout.isTTY)
       ) {
