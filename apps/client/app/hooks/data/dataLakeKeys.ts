@@ -126,6 +126,15 @@ export const dataLakeKeys = {
   /** Invalidation prefix covering every filter variant of one lake's findings. */
   findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
   /**
+   * One file's current tag names under one lake's prefix
+   * (GET /api/data-lakes/:id/files/:fabFileId/tags). Seeds the retag editor: a tag write is
+   * replace-semantics, so the editor must start from the real current set or a submit silently
+   * strips every name it never knew about.
+   */
+  lakeFileTags: (dataLakeId: string, fabFileId: string) => ['dataLakeFileTags', dataLakeId, fabFileId] as const,
+  /** Invalidation prefix covering every file's tag seed in one lake - what a corpus action stales. */
+  lakeFileTagsOf: (dataLakeId: string) => ['dataLakeFileTags', dataLakeId] as const,
+  /**
    * One lake's saved research configurations (GET /api/data-lakes/:id/research/configs), #1682.
    * Outside `list` for the same reason as `spend` and `proposals`.
    */
