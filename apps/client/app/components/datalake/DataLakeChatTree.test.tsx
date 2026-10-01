@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IFabFileDocument } from '@bike4mind/common';
+import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeChatTree from './DataLakeChatTree';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 
@@ -235,5 +236,81 @@ describe('DataLakeChatTree draft marker', () => {
 
     renderTree({ tree, breadcrumb: ['acme'], articles: [], draftLakePaths: new Set(['acme:legal']) });
     expect(screen.getByTestId('datalake-node-draft-chip-legal')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeChatTree lake-root rows', () => {
+  const node = (segment: string, fullPath: string, fileCount: number, children: TagNode[] = []): TagNode => ({
+    segment,
+    fullPath,
+    fileCount,
+    ownFileCount: 0,
+    children,
+  });
+  const lookup = (entries: Record<string, { name: string; datalakeTag: string }>) => (path: string[]) =>
+    entries[path.join(':')];
+
+  it('labels a lake-prefix row with the lake name and still humanizes other segments', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 4), node('some-other', 'some-other', 1)],
+      breadcrumb: [],
+      lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
+    });
+    expect(screen.getByText('Curation QA 0930')).toBeTruthy();
+    expect(screen.queryByText('Curation qa 0930')).toBeNull();
+    expect(screen.getByText('Some other')).toBeTruthy();
+  });
+
+  it('labels the last node of a multi-segment prefix, not the namespace above it', () => {
+    renderTree({
+      tree: [node('acme', 'acme', 2, [node('legal', 'acme:legal', 2)])],
+      breadcrumb: ['acme'],
+      lakeForPath: lookup({ 'acme:legal': { name: 'Legal Vault', datalakeTag: 'datalake:legal' } }),
+    });
+    expect(screen.getByText('Legal Vault')).toBeTruthy();
+    expect(screen.getByTestId('datalake-back').textContent).toBe('All Categories');
+  });
+
+  it('uses the lake name in the back row when popping out of the lake node', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 4, [node('a', 'curation-qa-0930:a', 4)])],
+      breadcrumb: ['curation-qa-0930', 'a'],
+      lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
+    });
+    expect(screen.getByTestId('datalake-back').textContent).toBe('Curation QA 0930');
+  });
+
+  it('shows the distinct member count, not the tag-occurrence sum, on a lake root row', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 12)],
+      breadcrumb: [],
+      lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
+      lakeFileCounts: { 'datalake:cqa': 3 },
+    });
+    const row = screen.getByTestId('datalake-node-curation-qa-0930');
+    expect(row.textContent).toContain('3');
+    expect(row.textContent).not.toContain('12');
+  });
+
+  it('falls back to the occurrence count when the lake has no member count entry', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 12)],
+      breadcrumb: [],
+      lakeForPath: lookup({ 'curation-qa-0930': { name: 'Curation QA 0930', datalakeTag: 'datalake:cqa' } }),
+      lakeFileCounts: {},
+    });
+    expect(screen.getByTestId('datalake-node-curation-qa-0930').textContent).toContain('12');
+  });
+
+  it('keeps the humanized label and occurrence count on an unmapped (shared-prefix) row', () => {
+    renderTree({
+      tree: [node('curation-qa-0930', 'curation-qa-0930', 12)],
+      breadcrumb: [],
+      lakeForPath: () => undefined,
+      lakeFileCounts: { 'datalake:cqa': 3, 'datalake:cqb': 5 },
+    });
+    const row = screen.getByTestId('datalake-node-curation-qa-0930');
+    expect(row.textContent).toContain('Curation qa 0930');
+    expect(row.textContent).toContain('12');
   });
 });

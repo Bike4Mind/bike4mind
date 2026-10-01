@@ -52,7 +52,9 @@ const {
   removeFileLakeIds: [] as Array<string | null>,
   // Mutable so delete-gating tests can vary the accessible-lake list per-test.
   lakesState: {
-    value: [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }] as unknown[],
+    value: [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ] as unknown[],
   },
   workBenchState: {
     files: [] as { id: string; fileName: string }[],
@@ -240,6 +242,8 @@ vi.mock('./DataLakeChatTree', () => ({
     emptySlot?: React.ReactNode;
     dropHint?: string;
     tree: { segment: string }[];
+    lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
+    lakeFileCounts?: Record<string, number>;
     uncategorized?: { files: { id: string }[]; count: number };
     isError?: boolean;
   }) => {
@@ -257,6 +261,8 @@ vi.mock('./DataLakeChatTree', () => ({
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
         data-error={String(!!props.isError)}
+        data-lake-label={props.lakeForPath?.(['acme', 'legal'])?.name ?? props.lakeForPath?.(['lakea'])?.name ?? ''}
+        data-lake-counts={JSON.stringify(props.lakeFileCounts ?? null)}
         data-uncategorized-count={props.uncategorized ? String(props.uncategorized.count) : ''}
         data-uncategorized-files={(props.uncategorized?.files ?? []).map(f => f.id).join(',')}
       >
@@ -323,7 +329,9 @@ describe('DataLakeExplorer chat-first surface', () => {
     vi.clearAllMocks();
     removeFileLakeIds.length = 0;
     mockFileOwnerId.value = 'owner-1';
-    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ];
     workBenchState.files = [];
     // Re-applied each test since clearAllMocks only clears call history, not implementation -
     // runs the functional updater the way the real zustand store does, persists the result, and
@@ -570,7 +578,9 @@ describe('DataLakeExplorer chat-first surface', () => {
   });
 
   it('delete is not offered when the owning lake is not manageable', () => {
-    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: false }];
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: false },
+    ];
     renderExplorer();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'false');
   });
@@ -963,5 +973,38 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 
     expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'all-lakes-empty');
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', '');
+  });
+
+  describe('lake-prefix lookup handed to the tree', () => {
+    afterEach(() => {
+      tagCountsState.tagCounts = [];
+      tagCountsState.total = 0;
+      tagCountsState.lakeFileCounts = {};
+    });
+
+    it('maps a multi-segment prefix by its full path to the lake name', () => {
+      lakesState.value = [
+        { id: 'l1', name: 'Legal Vault', datalakeTag: 'datalake:legal', fileTagPrefix: 'acme:legal:', canManage: true },
+      ];
+      tagCountsState.tagCounts = [{ tag: 'acme:legal:nda', count: 2 }];
+      tagCountsState.total = 2;
+      tagCountsState.lakeFileCounts = { 'datalake:legal': 2 };
+      renderExplorer();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-label', 'Legal Vault');
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-counts', '{"datalake:legal":2}');
+    });
+
+    it('leaves a prefix shared by two accessible lakes unmapped', () => {
+      lakesState.value = [
+        { id: 'l1', name: 'Lake A', datalakeTag: 'datalake:a', fileTagPrefix: 'lakea:', canManage: true },
+        { id: 'l2', name: 'Lake A Copy', datalakeTag: 'datalake:a2', fileTagPrefix: 'lakea', canManage: true },
+      ];
+      tagCountsState.tagCounts = [{ tag: 'lakea:notes', count: 2 }];
+      tagCountsState.total = 2;
+      renderExplorer();
+
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-label', '');
+    });
   });
 });

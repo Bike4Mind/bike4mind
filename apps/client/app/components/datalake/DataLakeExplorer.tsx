@@ -6,6 +6,7 @@ import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { UNCATEGORIZED_KEY } from './DataLakeTreeView';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
+import { prefixSegments } from '@client/app/components/DataLakeWizard/manager/shared';
 import { scopeTagCountsToLakes, seedEmptyLakeTags } from './scopeTagCountsToLakes';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
@@ -102,6 +103,24 @@ interface DataLakeExplorerProps {
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
+
+type LakeLabel = { name: string; datalakeTag: string };
+
+/** Normalized prefix path ('acme:legal') -> the lake that owns it. A prefix held by two or more
+ *  accessible lakes is omitted so neither the name nor the member count is credited to the wrong one. */
+export function buildLakePrefixLookup(
+  lakes: readonly { name: string; datalakeTag: string; fileTagPrefix: string }[]
+): Map<string, LakeLabel> {
+  const byPath = new Map<string, LakeLabel | null>();
+  for (const lake of lakes) {
+    const key = prefixSegments(lake.fileTagPrefix).join(':');
+    if (!key) continue;
+    byPath.set(key, byPath.has(key) ? null : { name: lake.name, datalakeTag: lake.datalakeTag });
+  }
+  const unique = new Map<string, LakeLabel>();
+  byPath.forEach((lake, key) => lake && unique.set(key, lake));
+  return unique;
+}
 
 /** Stable empty fallback for seedEmptyLakeTags below, so an in-flight lake list never churns
  *  the memo it feeds (see lakesInScope). */
@@ -380,6 +399,8 @@ export default function DataLakeExplorer({
       ),
     [lakesInScope]
   );
+  const lakePrefixLookup = useMemo(() => buildLakePrefixLookup(lakes ?? []), [lakes]);
+  const lakeForPath = useCallback((path: string[]) => lakePrefixLookup.get(path.join(':')), [lakePrefixLookup]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -619,6 +640,8 @@ export default function DataLakeExplorer({
       >
         <DataLakeChatTree
           tree={tree}
+          lakeForPath={lakeForPath}
+          lakeFileCounts={tagCountsData?.lakeFileCounts}
           articles={leafArticles}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}

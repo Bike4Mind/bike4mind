@@ -97,6 +97,12 @@ interface DataLakeChatTreeProps {
    * at rest - the one thing the retired page's header row carried that has no other home.
    */
   dropHint?: string;
+  /** Resolves a node's full path to the lake whose tag prefix it is, so the row shows the lake's
+   *  own name. Must return undefined for a prefix more than one lake holds. */
+  lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
+  /** Distinct members per `datalakeTag`; a lake-root row shows this instead of the tag-occurrence
+   *  sum in `node.fileCount`, which counts a file once per prefix tag it carries. */
+  lakeFileCounts?: Record<string, number>;
 }
 
 /**
@@ -126,6 +132,8 @@ export default function DataLakeChatTree({
   subHeader,
   emptySlot,
   dropHint,
+  lakeForPath,
+  lakeFileCounts,
 }: DataLakeChatTreeProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -316,6 +324,7 @@ export default function DataLakeChatTree({
     fileListSx: TREE_LIST_SX,
     renderNodeRow: (node, depth, onOpen) => {
       const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
+      const lake = lakeForPath?.([...breadcrumb.slice(0, depth), node.segment]);
       return (
         <ListItem>
           <ListItemButton
@@ -325,13 +334,13 @@ export default function DataLakeChatTree({
           >
             <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
             <ListItemContent>
-              <TreeRowLabel label={humanizeSegment(node.segment, depth)} />
+              <TreeRowLabel label={lake?.name ?? humanizeSegment(node.segment, depth)} />
             </ListItemContent>
             {draftLakePaths?.has([...breadcrumb, node.segment].join(':')) && (
               <LakeDraftChip testId={`datalake-node-draft-chip-${node.segment}`} />
             )}
             <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-              {node.fileCount}
+              {(lake && lakeFileCounts?.[lake.datalakeTag]) ?? node.fileCount}
             </Chip>
           </ListItemButton>
         </ListItem>
@@ -424,7 +433,8 @@ export default function DataLakeChatTree({
         </ListItemButton>
       </ListItem>
     ),
-    humanize: humanizeSegment,
+    humanize: (segment, depth) =>
+      lakeForPath?.([...breadcrumb.slice(0, depth), segment])?.name ?? humanizeSegment(segment, depth),
     allCategoriesLabel: 'All Categories',
     emptyFilesLabel: 'No articles found',
     errorLabel: 'Failed to load articles',
