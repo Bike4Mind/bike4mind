@@ -214,8 +214,10 @@ export function LakeInfoPanel({
     >
       {/* pr clears the modal's absolutely-positioned ModalClose (top-right). */}
       <Box sx={{ px: 3, pr: 6, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
+        {/* Wraps so a full manage row drops below the title instead of crushing it: every button
+            is flexShrink 0, so without wrap the title column shrank to one word per line. */}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+          <Typography level="h4" sx={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'anywhere' }}>
             {lake.name}
           </Typography>
           {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
