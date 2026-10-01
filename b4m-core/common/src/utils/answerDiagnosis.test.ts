@@ -408,7 +408,20 @@ describe('tools check', () => {
     };
     expect(statusOf(meta, 'tools')).toBe('warn');
     expect(detailOf(meta, 'tools')).toContain('web_search');
-    expect(detailOf(meta, 'tools')).toContain('1 succeeded and the model replied with what it got');
+    expect(detailOf(meta, 'tools')).toContain('1 succeeded');
+    expect(detailOf(meta, 'tools')).toContain('the model replied with what it got');
+  });
+
+  it('distinguishes succeeded calls from no-verdict calls in the detail', () => {
+    const meta: PromptMeta = {
+      functionCalls: [
+        { name: 'web_search', error: 'timeout' },
+        { name: 'math_evaluate', success: true },
+        { name: 'code_exec' },
+      ],
+    };
+    expect(detailOf(meta, 'tools')).toContain('1 succeeded');
+    expect(detailOf(meta, 'tools')).toContain('1 had no recorded verdict');
   });
 
   it('fails when every tool call failed', () => {
