@@ -114,7 +114,10 @@ export function withStaticRegistryBypass(
  * the widening here still buys the thing that matters - it is not in the scope every chat turn
  * resolves for every caller.
  */
-export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Promise<RetrievalLakeScope> {
+export async function resolveRetrievalLakeScope(
+  req: RetrievalScopeRequest,
+  opts: { staticRegistryBypass?: boolean } = {}
+): Promise<RetrievalLakeScope> {
   const user = req.user!;
   // Thin memoizing wrapper over the request-free resolver below - the two MUST NOT drift, which is
   // why this holds no resolution logic of its own. All it adds is per-request memoization:
@@ -122,6 +125,7 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
   // every consumer, rather than once per call.
   return resolveRetrievalLakeScopeForUser(user, {
     logger: req.logger,
+    staticRegistryBypass: opts.staticRegistryBypass,
     entitlementKeys: await getRequestEntitlements(req),
     // The resolver derives membership itself from user.id; serve that lookup from the request memo
     // so one request resolves membership once across toAccessContext and this scope. Any other id

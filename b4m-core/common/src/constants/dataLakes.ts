@@ -482,6 +482,16 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   canPreauthorize: boolean;
   /**
+   * Whether the CALLER's chat retrieval scope reaches this lake (always the caller, even when
+   * `?preauthorizableFor` relabels `canPreauthorize`). Set only by the GET /api/data-lakes route;
+   * absent means unknown (scope unresolved or degraded) and must be treated as retrievable.
+   *
+   * Session-agnostic: it ignores lakes a chat session admits on its own, via
+   * `preauthorizedLakeIds` or an attached file's lake, so such a lake can read `false` here and
+   * still be searched in that session. Drafts read `false` (retrieval excludes them).
+   */
+  retrievable?: boolean;
+  /**
    * Display name (name || username, never email) of the lake's creator. Populated ONLY for lakes
    * the caller does NOT own, and ONLY when the list projection was given a user lookup (the
    * manager list route) - the content-scope resolver and Slack omit it and pay for no extra

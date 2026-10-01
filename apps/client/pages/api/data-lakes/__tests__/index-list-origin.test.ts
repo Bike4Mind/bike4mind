@@ -35,6 +35,10 @@ vi.mock('@server/dataLakes/dataLakeScopes', () => ({
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+// The list route also labels retrievability; an incomplete scope leaves rows unlabeled.
+vi.mock('@server/dataLakes/resolveRetrievalLakeScope', () => ({
+  resolveRetrievalLakeScope: vi.fn().mockResolvedValue({ lakeViewComplete: false, lakes: [] }),
+}));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
     find: vi.fn().mockResolvedValue([

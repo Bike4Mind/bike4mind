@@ -14,6 +14,8 @@ import {
 import { CreateDataLakeRequestInput, BadRequestError, ForbiddenError } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
+import { labelLakeRetrievability } from '@server/dataLakes/labelLakeRetrievability';
 import { isValidObjectId } from '@server/utils/objectId';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
 
@@ -69,11 +71,20 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     }
 
     // Admins see all data lakes; non-admins see only those they can access (owner/org/tag).
-    const dataLakes = ctx.isAdmin
-      ? await dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger, preauthorizeForUserId })
-      : await dataLakeService.listDataLakes(ctx, { db });
+    // The retrievability label resolves the scope chat turns use, which carries no static-registry
+    // bypass (ChatCompletionProcess, resolveSessionLakeAccess). A label failure must not break the
+    // list (manager, key-mint and explorer all read it), so it degrades to unlabeled rows.
+    const [dataLakes, retrievalScope] = await Promise.all([
+      ctx.isAdmin
+        ? dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger, preauthorizeForUserId })
+        : dataLakeService.listDataLakes(ctx, { db }),
+      resolveRetrievalLakeScope(req, { staticRegistryBypass: false }).catch((err: unknown) => {
+        req.logger.warn('data-lakes list: retrieval scope unavailable, rows left unlabeled', { err });
+        return null;
+      }),
+    ]);
 
-    return res.json({ data: dataLakes });
+    return res.json({ data: retrievalScope ? labelLakeRetrievability(dataLakes, retrievalScope) : dataLakes });
   })
   // POST /api/data-lakes - create a new data lake
   .post(async (req: Request, res) => {
