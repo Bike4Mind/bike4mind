@@ -93,6 +93,7 @@ import {
   useRevokeLakeAccess,
   useReprocessFabFile,
   useScanDataLakeFindings,
+  useRuleOnDataLakeFinding,
   useUnderChunkedCount,
 } from './dataLakes';
 
@@ -2200,5 +2201,80 @@ describe('useScanDataLakeFindings', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('Rate limit exceeded. Try again in 120 seconds.');
+  });
+});
+
+describe('useRuleOnDataLakeFinding', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useRuleOnDataLakeFinding('lake1'), { wrapper });
+    return { result, invalidate };
+  };
+
+  const invalidatedKeys = (invalidate: { mock: { calls: unknown[][] } }) =>
+    invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey?: unknown })?.queryKey));
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+    (toast.warning as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it('posts a resolve with its note and re-reads every findings filter', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'f1' }, beliefRecorded: true } });
+    const { result, invalidate } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'resolve', resolution: 'fixed the number' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/f1', {
+      action: 'resolve',
+      resolution: 'fixed the number',
+    });
+    // The bare prefix, so a resolved row leaves an "Open" list and appears under "Resolved".
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(toast.success).toHaveBeenCalledWith('Finding resolved');
+  });
+
+  it('posts a null assignee to unassign', async () => {
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'f1' } } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'assign', assigneeUserId: null });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/f1', {
+      action: 'assign',
+      assigneeUserId: null,
+    });
+    expect(toast.success).toHaveBeenCalledWith('Assignment updated');
+  });
+
+  it('tells a curator when their note did not reach lake memory', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: { data: { id: 'f1' }, beliefRecorded: false, beliefSkipReason: 'lake-disabled' },
+    });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'dismiss', resolution: 'not a real conflict' });
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/not remembered/i));
+  });
+
+  it("surfaces the route's double-resolve refusal and refreshes the stale row", async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This finding has already been ruled on'));
+    const { result, invalidate } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ findingId: 'f1', action: 'resolve' }).catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('This finding has already been ruled on');
+    // The refusal means the cached `open` row is stale; the invalidate is what refreshes it.
+    expect(invalidatedKeys(invalidate)).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
   });
 });
