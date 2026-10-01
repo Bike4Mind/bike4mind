@@ -30,7 +30,7 @@ import {
   getLatestToolCallIdCanonical,
 } from './backend';
 import { Logger } from '@bike4mind/observability';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from './toolStreamingHelper';
 import {
   ensureToolPairingIntegrity,
   normalizeToolUseInputs,
@@ -1974,16 +1974,21 @@ export class AnthropicBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  thisToolHadArtifact = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
-                  await artifactGuard.emitArtifact(results, {
-                    inputTokens: 0,
-                    outputTokens: 0,
-                    toolsUsed,
-                    ...artifactInfo,
-                  });
-                });
+                await handleToolResultStreaming(
+                  outcome.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
+                    await artifactGuard.emitArtifact(results, {
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      toolsUsed,
+                      ...artifactInfo,
+                    });
+                  },
+                  declaredArtifactType(options.tools, outcome.name)
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that streamed,
                 // so the model never sees the markup it could echo into its final reply.
@@ -2386,11 +2391,16 @@ export class AnthropicBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  thisToolHadArtifact = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
-                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
-                });
+                await handleToolResultStreaming(
+                  outcome.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
+                    await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
+                  },
+                  declaredArtifactType(options.tools, outcome.name)
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that streamed,
                 // so the model never sees the markup it could echo into its final reply.

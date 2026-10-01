@@ -3,17 +3,19 @@ import { ARTIFACT_DELIVERED_PLACEHOLDER, ARTIFACT_REMOVED_PLACEHOLDER } from '@b
 import {
   handleToolResultStreaming,
   createRecursiveArtifactGuard,
+  declaredArtifactType,
   stripUnstreamedToolResult,
 } from './toolStreamingHelper';
+import type { ICompletionOptionTools } from './backend';
 
 const CHESS_ARTIFACT =
   '<artifact identifier="game-1" type="application/vnd.ant.chess" title="Chess Game">{"fen":"8/8/8/8/8/8/8/8 w - - 0 1"}</artifact>';
 const MERMAID_ARTIFACT =
   '<artifact identifier="flow" type="application/vnd.ant.mermaid" title="Flow">graph TD; A-->B</artifact>';
 
-const streamed = async (toolName: string, result: unknown) => {
+const streamed = async (toolName: string, result: unknown, artifactType?: string) => {
   const callback = vi.fn(async (_results: string[]) => {});
-  await handleToolResultStreaming(toolName, result, callback);
+  await handleToolResultStreaming(toolName, result, callback, artifactType);
   return callback.mock.calls.map(([results]) => results);
 };
 
@@ -329,5 +331,34 @@ describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole
 
     expect(received).toHaveLength(1);
     expect(received[0].text).toEqual(['Thanks for watching.']);
+  });
+});
+
+describe('a tool that declared artifactType at registration (externalTools)', () => {
+  const HTML_ARTIFACT = '<artifact identifier="panel" type="text/html" title="Panel"><p>rows</p></artifact>';
+  const tool = (name: string, artifactType?: string): ICompletionOptionTools => ({
+    toolFn: async () => '',
+    toolSchema: { name, description: 'stub', parameters: { type: 'object', properties: {} } },
+    ...(artifactType ? { artifactType } : {}),
+  });
+
+  it('looks the declared type up by tool name', () => {
+    const tools = [tool('plain'), tool('external_panel', 'text/html')];
+
+    expect(declaredArtifactType(tools, 'external_panel')).toBe('text/html');
+    expect(declaredArtifactType(tools, 'plain')).toBeUndefined();
+    expect(declaredArtifactType(tools, 'missing')).toBeUndefined();
+    expect(declaredArtifactType(undefined, 'external_panel')).toBeUndefined();
+  });
+
+  it('streams its declared type, and nothing without the declaration', async () => {
+    const result = `Here is the panel:\n${HTML_ARTIFACT}`;
+
+    expect(await streamed('external_panel', result, 'text/html')).toEqual([[result]]);
+    expect(await streamed('external_panel', result)).toEqual([]);
+  });
+
+  it('does not stream another type under its declaration', async () => {
+    expect(await streamed('external_panel', CHESS_ARTIFACT, 'text/html')).toEqual([]);
   });
 });
