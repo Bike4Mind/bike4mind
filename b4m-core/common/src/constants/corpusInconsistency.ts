@@ -207,11 +207,10 @@ const SUPERLATIVE_SUBJECT =
  * change to a rule two surfaces already depend on.
  */
 // Currency symbols (via Unicode property), currency codes/words, and magnitude suffixes.
-// - Keeps the digit-ending value invariant; magnitude suffix follows outside the value.
-// - Word-shaped units still carry the same token guard; `%` remains outside it.
-// - Currency may appear before or after the value; either side canonicalizes into `unit`.
+// Word-shaped units still carry the same token guard; `%` remains outside it. Currency may
+// appear before or after the value and canonicalizes into `unit`.
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*(?:(?<curpre>\p{Sc}|usd|eur|gbp|jpy|aud|cad|chf|cny|inr)\s*)?(?<val>[0-9](?:[0-9,.]*[0-9])?)(?:\s*(?<mag>[kKmMbB])(?=(?:[^A-Za-z]|$)))?(?:\s*(?<unit>%|(?:percent|ms|s|gb|mb|tb|x|usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|pounds?|yen|rupees?|yuan|won)(?!\w))|(?!\w))/iu;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*(?:(?<curpre>\p{Sc}|usd|eur|gbp|jpy|aud|cad|chf|cny|inr)\s*)?(?<val>[0-9](?:[0-9,.]*[0-9])?)(?:\s*(?<mag>[kKmMbB])(?=(?:[^A-Za-z]|$)))?(?:\s*(?<unit>%|(?:percent|ms|s|gb|mb|tb|x|usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|yen|rupees?|yuan)(?!\w))|(?!\w))/iu;
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
@@ -228,13 +227,11 @@ function canonicalUnit(unit?: string): string {
     if (raw === '\u00A3') return 'gbp'; // £
     if (raw === '\u00A5') return 'jpy'; // ¥
   }
-  if (/(^|\b)(usd|dollar|dollars)\b/i.test(raw)) return 'usd';
-  if (/(^|\b)(eur|euro|euros)\b/i.test(raw)) return 'eur';
-  if (/(^|\b)(gbp|pound|pounds)\b/i.test(raw)) return 'gbp';
-  if (/(^|\b)(jpy|yen)\b/i.test(raw)) return 'jpy';
-  if (/(^|\b)(inr|rupee|rupees)\b/i.test(raw)) return 'inr';
-  if (/(^|\b)(cny|yuan)\b/i.test(raw)) return 'cny';
-  // KRW not captured explicitly elsewhere; omit mapping to avoid unreachable code.
+  if (/\b(usd|dollar|dollars)\b/i.test(raw)) return 'usd';
+  if (/\b(eur|euro|euros)\b/i.test(raw)) return 'eur';
+  if (/\b(jpy|yen)\b/i.test(raw)) return 'jpy';
+  if (/\b(inr|rupee|rupees)\b/i.test(raw)) return 'inr';
+  if (/\b(cny|yuan)\b/i.test(raw)) return 'cny';
   if (/^(aud|cad|chf)$/i.test(raw)) return lower;
   return lower;
 }
@@ -269,7 +266,9 @@ function canonicalValue(value: string, mag?: string): string {
       scaled = numeric * 1e9;
       break;
   }
-  return String(scaled);
+  // Round to a stable precision to avoid float artifacts (e.g., 2.01k vs 2010).
+  const rounded = Number(scaled.toPrecision(12));
+  return String(rounded);
 }
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
@@ -447,21 +446,24 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
  * gets `uptime %` rather than `uptime`.
  */
 function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = false): InconsistencyFinding[] {
+  const isCurrency = (u: string): boolean => !!u && /^(usd|eur|gbp|jpy|inr|cny|aud|cad|chf)$/.test(u);
   return crossDocumentGroups(
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
       if (!match) return null;
       const [, label] = match;
-      const groups = (match as unknown as { groups?: Record<string, string | undefined> }).groups || {};
+      const groups = (match as RegExpExecArray & { groups?: Record<string, string | undefined> }).groups || {};
       const value = groups.val;
-      if (!value) return null; // regex always captures a value, but keep TS honest
+      if (!value) return null;
       const unitRaw = groups.unit || groups.curpre;
       const mag = groups.mag;
       const canonical = canonicalUnit(unitRaw);
       if (unitRequired && !canonical) return null;
+      const scaled = canonicalValue(value, mag);
+      const includeUnit = unitRequired || (!isCurrency(canonical) && !!canonical);
       return {
         subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
-        detail: `${canonicalValue(value, mag)}${canonical}`,
+        detail: includeUnit ? `${scaled}${canonical}` : `${scaled}`,
       };
     }),
     'metric-disagreement'
