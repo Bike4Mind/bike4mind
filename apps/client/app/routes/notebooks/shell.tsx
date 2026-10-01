@@ -26,7 +26,7 @@ const NotebookShell = () => {
   return (
     <NotebookFilepondProvider>
       {id ? <NotebookPage /> : <NewNotebookPage />}
-      <NotebookCitationHost>
+      <NotebookCitationHost sessionId={id}>
         <DataLakeChatSurface chat={<SessionContainer currentSessionId={id} isLoading={!!id && session.isPending} />} />
       </NotebookCitationHost>
     </NotebookFilepondProvider>
