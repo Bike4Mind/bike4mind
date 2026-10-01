@@ -1,15 +1,18 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 import {
   safeHostname,
   serpApiSearch,
   performWebSearch,
+  webSearchTool,
+  createWebSearchBudget,
+  MAX_WEB_SEARCHES_PER_TURN,
+  WEB_SEARCH_NOT_CONFIGURED_MSG,
   shouldIncludeImages,
   formatImageResults,
-  webSearchTool,
-  WEB_SEARCH_NOT_CONFIGURED_MSG,
 } from './index';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 const TEST_SECRET = 'websearch-index-test-secret';
 
@@ -57,6 +60,95 @@ describe('safeHostname', () => {
   it('returns the raw input when the URL is invalid (e.g. SerpAPI redirect path)', () => {
     const relative = '/goto?url=https%3A%2F%2Fexample.com%2F';
     expect(safeHostname(relative)).toBe(relative);
+  });
+});
+
+describe('webSearchTool - search budget', () => {
+  const buildTool = () => {
+    const context = {
+      db: {},
+      logger: { log: vi.fn() },
+      statusUpdate: vi.fn(),
+      onStart: vi.fn(),
+    } as unknown as ToolContext;
+    return webSearchTool.implementation(context) as ICompletionOptionTools;
+  };
+  const capped = (tool: ICompletionOptionTools, budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN)) =>
+    budget.apply([tool])[0].toolFn;
+
+  beforeEach(() => {
+    mockGetProvider.mockReset().mockResolvedValue('searxng');
+    mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
+    mockGetSerperKey.mockReset().mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ results: [{ url: 'https://example.com', title: 'Example', content: 'snippet' }] }),
+      }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('runs up to the budget, then tells the model to answer without searching', async () => {
+    const toolFn = capped(buildTool());
+
+    const results = await Promise.all(
+      Array.from({ length: MAX_WEB_SEARCHES_PER_TURN + 2 }, (_, i) => toolFn({ query: `q${i}` }))
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(MAX_WEB_SEARCHES_PER_TURN);
+    expect(results.slice(0, MAX_WEB_SEARCHES_PER_TURN).every(r => String(r).includes('example.com'))).toBe(true);
+    expect(results.slice(MAX_WEB_SEARCHES_PER_TURN).every(r => String(r).startsWith('Search limit reached'))).toBe(
+      true
+    );
+  });
+
+  it('leaves the unwrapped tool uncapped, as subagents and agent runs use it', async () => {
+    const tool = buildTool();
+    const toolFn = capped(tool);
+    for (let i = 0; i < MAX_WEB_SEARCHES_PER_TURN; i++) await toolFn({ query: `q${i}` });
+
+    for (let i = 0; i < MAX_WEB_SEARCHES_PER_TURN + 3; i++) {
+      await expect(tool.toolFn({ query: `sub${i}` })).resolves.toContain('example.com');
+    }
+  });
+
+  it('restores the full budget on reset, so a retried conversation can search again', async () => {
+    const budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+    const toolFn = capped(buildTool(), budget);
+    for (let i = 0; i < MAX_WEB_SEARCHES_PER_TURN; i++) await toolFn({ query: `q${i}` });
+    await expect(toolFn({ query: 'over' })).resolves.toMatch(/^Search limit reached/);
+
+    budget.reset();
+
+    await expect(toolFn({ query: 'retry' })).resolves.toContain('example.com');
+  });
+
+  it('leaves other tools untouched', () => {
+    const other = { ...buildTool(), toolSchema: { ...buildTool().toolSchema, name: 'web_fetch' } };
+    expect(createWebSearchBudget(1).apply([other])[0]).toBe(other);
+  });
+
+  it('resolves the provider once per tool build rather than once per search', async () => {
+    const toolFn = buildTool().toolFn;
+
+    await toolFn({ query: 'a' });
+    await toolFn({ query: 'b' });
+    await toolFn({ query: 'c' });
+
+    expect(mockGetProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-resolves the provider after a failed resolution instead of caching the rejection', async () => {
+    mockGetProvider.mockRejectedValueOnce(new Error('db down'));
+    const toolFn = buildTool().toolFn;
+
+    await expect(toolFn({ query: 'a' })).rejects.toThrow('db down');
+    await expect(toolFn({ query: 'b' })).resolves.toContain('example.com');
   });
 });
 
@@ -311,7 +403,13 @@ describe('webSearchTool.implementation(...).toolFn - signature threading through
     return {
       userId: 'u1',
       user: {} as ToolContext['user'],
-      logger: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as unknown as ToolContext['logger'],
+      logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        log: vi.fn(),
+      } as unknown as ToolContext['logger'],
       db: {} as ToolContext['db'],
       onStart: vi.fn().mockResolvedValue(undefined),
       statusUpdate: vi.fn().mockResolvedValue(undefined),
