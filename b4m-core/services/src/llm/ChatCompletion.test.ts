@@ -4071,7 +4071,7 @@ describe('ChatCompletionProcess', () => {
         entitlementKeys: string[],
         organizationIds: string[] | undefined,
         userId: string | undefined,
-        opts?: { restrictToTags?: string[] }
+        opts?: { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
       ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
@@ -4082,6 +4082,8 @@ describe('ChatCompletionProcess', () => {
       // widening), so a test can pin that the targeted exclusion measurement excludes exactly
       // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
       admittedPreauthorizedTags?: string[];
+      // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
+      userIsAdmin?: boolean;
       // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
       // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
       attachmentLakes?: unknown[];
@@ -4092,6 +4094,7 @@ describe('ChatCompletionProcess', () => {
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
+      (service as any).user.isAdmin = opts.userIsAdmin;
       if (opts.countGateExcludedLakesImpl) {
         mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
       }
@@ -4581,6 +4584,30 @@ describe('ChatCompletionProcess', () => {
           });
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
+
+        it.each([
+          [true, true],
+          [false, false],
+          [undefined, false],
+        ])(
+          'forwards the turn user admin flag (%s) to the identity count as callerMaySeeAllLakes=%s',
+          async (userIsAdmin, expected) => {
+            const countGateExcludedLakesImpl = vi.fn().mockReturnValue(0);
+            await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              retrievalTags: ['datalake:a'],
+              countGateExcludedLakesImpl,
+              userIsAdmin,
+            });
+            expect(countGateExcludedLakesImpl).toHaveBeenCalledWith(
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.objectContaining({ restrictToTags: ['datalake:a'], callerMaySeeAllLakes: expected })
+            );
+          }
+        );
 
         // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
         // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and

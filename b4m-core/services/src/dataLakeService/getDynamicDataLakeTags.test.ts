@@ -858,6 +858,34 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
     );
   });
 
+  it.each([
+    [{ callerMaySeeAllLakes: true }, true],
+    [{ callerMaySeeAllLakes: false }, false],
+    [{}, false],
+    [undefined, false],
+  ])('forwards callerMaySeeAllLakes from the per-call option (%j -> %s)', async (callOpts, expected) => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
+    await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeysResolved: true,
+      },
+      ['datalake:b'],
+      callOpts
+    );
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      [],
+      [],
+      ['org1'],
+      'u1',
+      expect.objectContaining({ callerMaySeeAllLakes: expected })
+    );
+  });
+
   it('returns the measured count, including a genuine zero', async () => {
     const res = await measureIdentityNamedExclusion(
       {
