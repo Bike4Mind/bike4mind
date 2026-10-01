@@ -299,7 +299,7 @@ const WORKERS_BOUNDARY_MESSAGE =
   'shared package) and workers import it.';
 const noWorkersImportInClient = [
   {
-    group: ['@workers/*', '@bike4mind/workers', '@bike4mind/workers/*', '**/apps/workers/**', '**/workers/src/**'],
+    group: ['@workers', '@bike4mind/workers', '**/apps/workers/**', '**/workers/src/**'],
     message: WORKERS_BOUNDARY_MESSAGE,
   },
 ];
@@ -318,20 +318,16 @@ const noUiImportsInWorkers = {
     { name: 'react-dom', message: WORKERS_NO_UI_MESSAGE },
     { name: 'next', message: WORKERS_NO_UI_MESSAGE },
   ],
-  // @/app and @pages too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client. The
-  // **/client/app entries catch the same UI code reached by a relative path; each alias is listed
-  // bare as well as with /*, since a gitignore-style `x/*` does not match `x` itself.
+  // @/app and @pages too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
+  // **/client/app catches the same UI code reached by a relative path. Each entry is bare because a
+  // gitignore-style `x` matches `x` and every `x/...`, while `x/*` would miss the bare directory.
   patterns: [
     {
       group: [
         '@client/app',
-        '@client/app/*',
         '@/app',
-        '@/app/*',
         '@pages',
-        '@pages/*',
         '**/client/app',
-        '**/client/app/**',
         'react/*',
         'react-dom/*',
         'next/*',
@@ -425,15 +421,16 @@ export default defineConfig([
     },
   },
 
-  // TypeScript configuration for all .ts/.tsx files
+  // TypeScript configuration for all .ts/.tsx files, plus apps/client's .mts/.cts, which the
+  // apps/workers boundary block below opts into linting.
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
   })),
 
   // TypeScript custom rules
   {
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
     rules: {
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
@@ -617,14 +614,6 @@ export default defineConfig([
     rules: {
       'no-restricted-imports': ['error', { patterns: [...noWorkersImportInClient] }],
     },
-  },
-  // Matching .mts/.cts above opts them into linting, and no other block parses them, so supply the
-  // TypeScript parser. no-undef is off for the reason typescript-eslint turns it off for .ts: tsc
-  // already checks undefined names, and the rule does not know Node's globals.
-  {
-    files: ['apps/client/**/*.{mts,cts}'],
-    languageOptions: { parser: tseslint.parser },
-    rules: { 'no-undef': 'off' },
   },
 
   // b4m-core/utils - restrict database imports
