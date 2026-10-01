@@ -76,6 +76,7 @@ import {
 import type { SessionActivity } from './SessionActivity';
 import { isValidSessionId, type SessionStore } from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
+import { SkillsPromptCache } from './skills/prompt';
 import type { SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
@@ -99,6 +100,7 @@ import {
   type SpawnOutcome,
   type SpawnPlacement,
   type SpawnRejected,
+  type SkillContext,
   type ToolContext,
   type ToolDefinition,
   type ToolReporter,
@@ -407,6 +409,8 @@ export class ChatService {
 
   /** Instructions and file tree per session, frozen so the cached system prompt never moves. */
   private readonly projectContext: ProjectContextCache;
+  /** The skill list per session, frozen for the same reason. Absent when there is no catalog. */
+  private readonly skillsPrompt?: SkillsPromptCache;
   /** Images a running call reported for the model, keyed by call id until its round is sent. */
   private readonly pendingImages = new Map<string, { mediaType: string; data: string }[]>();
 
@@ -423,6 +427,7 @@ export class ChatService {
 
   constructor(private readonly deps: ChatServiceDeps) {
     this.projectContext = new ProjectContextCache(deps.userInstructionsRoot);
+    this.skillsPrompt = deps.skills ? new SkillsPromptCache(deps.skills) : undefined;
   }
 
   listSessions(): Promise<ChatSessionSummary[]> {
@@ -1332,6 +1337,14 @@ export class ChatService {
       const memory: MemoryStore | undefined = session.project
         ? await memoryStoreFor(session.project.directory, defaultUserInstructionsRoot()).catch(() => undefined)
         : undefined;
+      // The same root the composer's `/name` path resolves against, so a skill the picker offers
+      // is a skill the model can call and no other. Null for a session with no project, which
+      // still reaches the user's global skills.
+      const skillRoot = session.project?.workingDirectory ?? null;
+      const skillCatalog = this.deps.skills;
+      const skills: SkillContext | undefined = skillCatalog
+        ? { available: () => skillCatalog.forModel(skillRoot) }
+        : undefined;
       const tools = toolsForRequest({
         modelId: session.model,
         roots,
@@ -1340,17 +1353,20 @@ export class ChatService {
         explore: !!explore,
         browser: !!browser,
         memory: !!memory,
+        skills: !!skills,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
       const project = session.mode === 'code' ? session.project : undefined;
       // Started before the wire messages are built so the instruction files are read alongside
       // them rather than adding a hop of their own; every later turn takes it from the cache.
       const contextBlock = this.projectContext.get(session.id, project?.workingDirectory, project?.directory);
+      const skillsBlock = this.skillsPrompt?.get(session.id, skillRoot) ?? Promise.resolve('');
       const wire = await toCompletionMessages(
         session,
         (attachment: ChatAttachment) => this.deps.attachments?.read(session.id, attachment.id) ?? Promise.resolve(null)
       );
       const projectContext = await contextBlock;
+      const skillsSection = await skillsBlock;
       wire.unshift(
         buildSystemMessage(
           roots,
@@ -1363,7 +1379,8 @@ export class ChatService {
           projectContext,
           !!browser,
           patchEdits,
-          !!memory
+          !!memory,
+          skillsSection
         )
       );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -1477,7 +1494,18 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, explore, browser, memory, patchEdits, title: session.title },
+          {
+            roots,
+            workingDirectory,
+            media,
+            host,
+            explore,
+            browser,
+            memory,
+            skills,
+            patchEdits,
+            title: session.title,
+          },
           sessionId,
           replyId,
           controller.signal
@@ -1794,6 +1822,7 @@ export class ChatService {
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
       memory: MemoryStore | undefined;
+      skills: SkillContext | undefined;
       /** Whether this turn's model edits with apply_patch rather than file_edit and file_write. */
       patchEdits: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
@@ -1803,7 +1832,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, memory, patchEdits } = scope;
+    const { roots, workingDirectory, media, host, explore, browser, memory, skills, patchEdits } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1897,6 +1926,7 @@ export class ChatService {
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
           ...(memory ? { memory } : {}),
+          ...(skills ? { skills } : {}),
           report,
         };
 
@@ -2778,7 +2808,13 @@ function buildSystemMessage(
   projectContext = '',
   browser = false,
   patchEdits = false,
-  memory = false
+  memory = false,
+  /**
+   * The user's own skills, listed by name and description; '' when there are none. Placed with
+   * the other guidance rather than beside the instruction files below it, because it is a list
+   * of tools this model has and not an instruction the user wrote.
+   */
+  skillsSection = ''
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2795,6 +2831,7 @@ function buildSystemMessage(
         ...(host ? HOST_GUIDANCE : []),
         ...(memory ? MEMORY_GUIDANCE : []),
         ...mcpGuidance(mcpServers),
+        ...(skillsSection ? [skillsSection] : []),
         '',
         DESKTOP_ARTIFACT_PROMPT,
         ...(projectContext ? ['', projectContext] : []),
@@ -2899,6 +2936,7 @@ function buildSystemMessage(
       ...(host ? HOST_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
       ...mcpGuidance(mcpServers),
+      ...(skillsSection ? [skillsSection] : []),
       '',
       DESKTOP_ARTIFACT_PROMPT,
       ...(projectContext ? ['', projectContext] : []),

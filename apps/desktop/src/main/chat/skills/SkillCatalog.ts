@@ -1,6 +1,11 @@
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
-import { CustomCommandStore, filterUserVisibleSkills, type CustomCommand } from '@bike4mind/cli/skills';
+import {
+  CustomCommandStore,
+  filterAIVisibleSkills,
+  filterUserVisibleSkills,
+  type CustomCommand,
+} from '@bike4mind/cli/skills';
 import type { SkillSummary, SkillsState } from '@shared/skills';
 import type { ProjectTrustStore } from './ProjectTrustStore';
 
@@ -35,8 +40,22 @@ interface Cached {
 
 export class SkillCatalog {
   private readonly cache = new Map<string, Cached>();
+  private trustRevision = 0;
 
   constructor(private readonly trust: ProjectTrustStore) {}
+
+  /**
+   * Bumped by `setTrusted`, and by nothing else.
+   *
+   * The skills a model is SHOWN are snapshotted per session, because the system prompt sits in
+   * the provider's cached prefix and must not move between rounds (see SkillsPromptCache). That
+   * snapshot would otherwise outlive the one change to this catalog a user makes mid-session and
+   * expects to see: trusting the project they are working in. This counter is what the snapshot
+   * keys on, so a trust decision reaches the next turn and an ordinary skill edit does not.
+   */
+  get revision(): number {
+    return this.trustRevision;
+  }
 
   /**
    * The skills for a session, and whether a bound project is being withheld.
@@ -56,6 +75,21 @@ export class SkillCatalog {
     };
   }
 
+  /**
+   * The skills the MODEL may see and run: AI-visible, and project skills only from a trusted
+   * project. Both the prompt section and the `skill` tool read this, so a skill the model is
+   * told about is exactly one it can call, and the not-AI-visible ones are absent from both.
+   *
+   * Distinct from `state`, which answers the composer's question: a skill may be the user's to
+   * invoke and not the model's (`disable-model-invocation`), or the model's and not the
+   * picker's (`user-invocable: false`).
+   */
+  async forModel(projectRoot: string | null): Promise<CustomCommand[]> {
+    const root = projectRoot ? resolve(projectRoot) : null;
+    const trusted = root ? await this.trust.isTrusted(root) : false;
+    return filterAIVisibleSkills(await this.load(root, trusted));
+  }
+
   /** One skill by name, for the send path. Undefined when it does not exist or is withheld. */
   async get(projectRoot: string | null, name: string): Promise<CustomCommand | undefined> {
     const root = projectRoot ? resolve(projectRoot) : null;
@@ -72,6 +106,7 @@ export class SkillCatalog {
     if (trusted) await this.trust.trust(root);
     else await this.trust.revoke(root);
     this.cache.clear();
+    this.trustRevision++;
   }
 
   private async load(root: string | null, trusted: boolean): Promise<CustomCommand[]> {

@@ -1,3 +1,4 @@
+import type { CustomCommand } from '@bike4mind/cli/skills';
 import type {
   ChatApprovalOption,
   ChatDiff,
@@ -192,8 +193,26 @@ export interface ToolContext {
    * arguments: the model names a memory, and nothing it can say chooses the folder.
    */
   memory?: MemoryStore;
+  /**
+   * The session's skills. Absent when the app has no catalog (tests), and then the `skill` tool
+   * is not declared at all.
+   */
+  skills?: SkillContext;
   /** Absent outside the chat loop; every tool treats it as optional. */
   report?: ToolReporter;
+}
+
+/**
+ * The skills this conversation may run, as the `skill` tool sees them.
+ *
+ * A function rather than a list because the catalog is scanned lazily and cached for seconds: a
+ * turn that never calls the tool never walks the skill directories. What it returns is already
+ * filtered - AI-visible only, and project skills only from a project the user trusted - so the
+ * tool has no filtering of its own to forget, and the list it refuses against is the same list
+ * the system prompt showed.
+ */
+export interface SkillContext {
+  available(): Promise<readonly CustomCommand[]>;
 }
 
 /** What one session looks like to the host-control tools. */

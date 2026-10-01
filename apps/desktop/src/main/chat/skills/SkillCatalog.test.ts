@@ -77,6 +77,42 @@ describe('SkillCatalog project trust', () => {
     expect(state.skills.some(skill => skill.name === 'deploy')).toBe(false);
   });
 
+  it('shows the model a trusted project skill, and an untrusted one to nobody', async () => {
+    const store = catalog();
+    expect((await store.forModel(project)).some(command => command.name === 'deploy')).toBe(false);
+
+    await store.setTrusted(project, true);
+    expect((await store.forModel(project)).some(command => command.name === 'deploy')).toBe(true);
+  });
+
+  it('keeps a not-model-invocable skill out of the model reach while leaving it in the picker', async () => {
+    const skillDir = join(project, '.claude', 'skills', 'private-notes');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(
+      join(skillDir, 'SKILL.md'),
+      ['---', 'description: Mine to run', 'disable-model-invocation: true', '---', '', 'Notes.'].join('\n'),
+      'utf8'
+    );
+
+    const store = catalog();
+    await store.setTrusted(project, true);
+
+    // Two different questions: the composer asks what the USER may invoke, the prompt and the
+    // skill tool ask what the MODEL may. This skill is the first and not the second.
+    expect((await store.state(project)).skills.some(skill => skill.name === 'private-notes')).toBe(true);
+    expect((await store.forModel(project)).some(command => command.name === 'private-notes')).toBe(false);
+  });
+
+  it('moves its revision only when trust changes, so a snapshot keyed on it holds otherwise', async () => {
+    const store = catalog();
+    const before = store.revision;
+    await store.forModel(project);
+    expect(store.revision).toBe(before);
+
+    await store.setTrusted(project, true);
+    expect(store.revision).not.toBe(before);
+  });
+
   it('offers no project skill at all to a session with no project', async () => {
     const store = catalog();
     await store.setTrusted(project, true);
