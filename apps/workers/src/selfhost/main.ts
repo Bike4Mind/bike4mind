@@ -180,10 +180,13 @@ async function main() {
     bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
   }
 
-  registerGitHubLakeQueues(worker, {
-    ingest: Resource.githubLakeIngestQueue.url,
-    revoke: Resource.githubLakeRevokeQueue.url,
-  });
+  // Read straight from env (not the Resource shim): the manifest marks both required, so the shim
+  // would throw here and crash-loop the worker on an install that upgraded without them.
+  registerGitHubLakeQueues(
+    worker,
+    { ingest: process.env.GITHUB_LAKE_INGEST_QUEUE, revoke: process.env.GITHUB_LAKE_REVOKE_QUEUE },
+    bootLogger
+  );
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the

@@ -7,6 +7,7 @@ vi.mock('@server/queueHandlers/githubLakeRevoke', () => ({ dispatch: revokeDispa
 import { registerGitHubLakeQueues } from './githubLakeQueues';
 
 const urls = { ingest: 'http://sqs/github-lake-ingest', revoke: 'http://sqs/github-lake-revoke' };
+const logger = { warn: vi.fn() };
 
 describe('registerGitHubLakeQueues', () => {
   beforeEach(() => {
@@ -17,7 +18,7 @@ describe('registerGitHubLakeQueues', () => {
 
   it('registers both queues one message at a time, with the hosted visibility and receive counts', () => {
     const worker = { registerQueueHandler: vi.fn() };
-    registerGitHubLakeQueues(worker, urls);
+    registerGitHubLakeQueues(worker, urls, logger);
     expect(worker.registerQueueHandler).toHaveBeenCalledWith(
       'githubLakeIngestQueue',
       urls.ingest,
@@ -31,9 +32,24 @@ describe('registerGitHubLakeQueues', () => {
     });
   });
 
+  it.each([
+    ['ingest', { ...urls, ingest: undefined }],
+    ['revoke', { ...urls, revoke: undefined }],
+  ])(
+    'warns and registers nothing when the %s queue is unset, so the rest of the worker keeps running',
+    (_, partial) => {
+      const worker = { registerQueueHandler: vi.fn() };
+      registerGitHubLakeQueues(worker, partial, logger);
+      expect(worker.registerQueueHandler).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('GITHUB_LAKE_INGEST_QUEUE/GITHUB_LAKE_REVOKE_QUEUE')
+      );
+    }
+  );
+
   it('gives each ingest run the hosted 10-minute budget instead of the worker deadline', async () => {
     const worker = { registerQueueHandler: vi.fn() };
-    registerGitHubLakeQueues(worker, urls);
+    registerGitHubLakeQueues(worker, urls, logger);
     const handler = worker.registerQueueHandler.mock.calls[0][2];
     vi.useFakeTimers();
     const event = { Records: [] } as unknown as SQSEvent;
@@ -54,7 +70,7 @@ describe('registerGitHubLakeQueues', () => {
 
   it('preserves an ingest rejection so the broker redelivers', async () => {
     const worker = { registerQueueHandler: vi.fn() };
-    registerGitHubLakeQueues(worker, urls);
+    registerGitHubLakeQueues(worker, urls, logger);
     ingestDispatch.mockRejectedValueOnce(new Error('rate limited'));
     await expect(worker.registerQueueHandler.mock.calls[0][2]({ Records: [] }, {})).rejects.toThrow('rate limited');
   });

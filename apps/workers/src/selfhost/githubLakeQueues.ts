@@ -1,4 +1,5 @@
 import type { Context, SQSEvent } from 'aws-lambda';
+import type { Logger } from '@bike4mind/observability';
 import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
 import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
 import type { SelfHostWorker } from './selfHostWorker';
@@ -13,11 +14,21 @@ const GITHUB_LAKE_INGEST_RUN_BUDGET_MS = 600_000;
  * infra/queues.ts (keep the receive counts in sync with their dlq.retry). Single-record batches
  * because the worker handles a batch sequentially under one visibility window, and both handlers
  * can run for minutes.
+ *
+ * Both URLs are optional here even though the manifest requires them for the connect path: an
+ * install whose .env.selfhost predates the two vars must keep the rest of the worker running.
  */
 export function registerGitHubLakeQueues(
   worker: Pick<SelfHostWorker, 'registerQueueHandler'>,
-  queueUrls: { ingest: string; revoke: string }
+  queueUrls: { ingest: string | undefined; revoke: string | undefined },
+  logger: Pick<Logger, 'warn'>
 ): void {
+  if (!queueUrls.ingest || !queueUrls.revoke) {
+    logger.warn(
+      'GITHUB_LAKE_INGEST_QUEUE/GITHUB_LAKE_REVOKE_QUEUE not configured; GitHub data-lake sync and revoke will not run'
+    );
+    return;
+  }
   worker.registerQueueHandler(
     'githubLakeIngestQueue',
     queueUrls.ingest,
