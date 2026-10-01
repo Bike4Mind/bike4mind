@@ -58,6 +58,15 @@ vi.mock('@server/utils/cloudwatch', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock('@bike4mind/observability', () => ({
+  Logger: vi.fn(function () {
+    return mockLogger;
+  }),
+}));
+
 import { handler, runAbandonedExecutionSweep } from './agentExecutionAbandonedSweep';
 import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
 
@@ -90,6 +99,33 @@ describe('agentExecutionAbandonedSweep - handler', () => {
 
     expect(result).toMatchObject({ status: 'OK', marked: 1, questsSettled: 1 });
     expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+  });
+
+  it('logs a non-empty sweep at error level so the ERROR subscription forwards it to Slack', async () => {
+    staleIds.push('exec1');
+    fakeQuests.push({ id: 'q1', agentExecutionId: 'exec1', status: 'pending' });
+
+    await handler();
+
+    // warn never reaches the Slack channel LiveOps triage reads; only ERROR lines do.
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      '[AgentExecutionAbandonedSweep] Marked abandoned',
+      expect.objectContaining({ candidates: 1, marked: 1 })
+    );
+  });
+
+  it('does not log at error level when every candidate settled before marking', async () => {
+    const { agentExecutionRepository } = await import('@bike4mind/database');
+    vi.mocked(agentExecutionRepository.markAbandoned).mockResolvedValueOnce([]);
+    staleIds.push('exec1');
+
+    await handler();
+
+    expect(mockLogger.error).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      '[AgentExecutionAbandonedSweep] Candidates settled before marking',
+      expect.objectContaining({ candidates: 1, marked: 0 })
+    );
   });
 
   it('emits both the settled count and the failure signal', async () => {

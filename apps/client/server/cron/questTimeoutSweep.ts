@@ -111,7 +111,10 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
       const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
       if (applied) {
         recovered++;
-        logger.warn('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+        // Error level, not warn: a stuck quest is a user-visible failure LiveOps must
+        // see in the Slack error channel, which is fed by the ERROR-level subscription
+        // on this function's log group (infra/logMonitor.ts).
+        logger.error('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
         await dispatchQuestCallback(quest.id, logger);
       }
     } catch (err) {
