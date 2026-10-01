@@ -43,9 +43,11 @@ export function listLakesAdapters(db: ToolDb) {
 }
 
 export function createLakeAdapters(db: ToolDb) {
-  const { dataLakes, dataLakeAccessGrants } = db;
+  const { dataLakes, dataLakeAccessGrants, lakeConfigChangeEvents } = db;
   if (!hasMethods(dataLakes, ['create']) || !hasMethods(dataLakeAccessGrants, ['upsertGrant'])) return null;
-  return { dataLakes, dataLakeAccessGrants };
+  // The audit sink stays optional here (unlike saveContentAdapters): a missing one costs only the
+  // History row for the create, which is no reason to refuse creating the lake.
+  return { dataLakes, dataLakeAccessGrants, lakeConfigChangeEvents };
 }
 
 /**

@@ -1,4 +1,10 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import type {
+  IDataLakeAccessGrantRepository,
+  IDataLakeDocument,
+  IDataLakeRepository,
+  LakeAuditPrincipal,
+  LakeConfigChangeField,
+} from '@bike4mind/common';
 import {
   CreateDataLakeRequestInput,
   DATA_LAKES,
@@ -11,17 +17,25 @@ import {
   collidesWithRegistryPrefix,
   findCollidingPrefixLakes,
 } from './tagPrefixCollision';
+import { diffLakeConfig } from './diffLakeConfig';
+import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 import type { z } from 'zod';
 
 type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
 
 interface CreateDataLakeAdapters {
-  db: {
+  db: LakeConfigAuditAdapters['db'] & {
     dataLakes: Pick<IDataLakeRepository, 'create' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'upsertGrant'>;
   };
-  logger?: { warn: (msg: string, ...args: unknown[]) => void };
+  logger?: LakeConfigAuditAdapters['logger'] & { warn: (msg: string, ...args: unknown[]) => void };
 }
+
+/**
+ * Left out of the `create` history row: the principal column already says who created the lake,
+ * and the org id and join meta-tag are internal ids an owner cannot act on.
+ */
+const CREATE_ROW_OMITTED_FIELDS = new Set<LakeConfigChangeField>(['createdByUserId', 'organizationId', 'datalakeTag']);
 
 /**
  * Builds the unique join meta-tag. Org-scoped lakes get `datalake:<org>:<slug>`;
@@ -155,7 +169,9 @@ export const createDataLake = async (
   // The lake's org scope. The route resolves this from the caller's active-switcher org and
   // authorization-validates it (resolveActiveOrg) before passing it here - the service trusts
   // it as an already-checked value and never re-derives it from the raw request body.
-  organizationId?: string
+  organizationId?: string,
+  /** Set by a route that accepts API-key auth, so a key-driven create is attributed to the key. */
+  auditPrincipal?: LakeAuditPrincipal
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, CreateDataLakeRequestInput);
 
@@ -216,6 +232,16 @@ export const createDataLake = async (
         { dataLakeId: dataLake.id, err: grantErr }
       );
     }
+
+    await recordLakeConfigChange(
+      {
+        actor: { userId, isAdmin: false, administeredOrgIds: [], auditPrincipal },
+        lake: dataLake,
+        action: 'create',
+        changes: diffLakeConfig({}, dataLake).filter(change => !CREATE_ROW_OMITTED_FIELDS.has(change.field)),
+      },
+      { db, logger }
+    );
 
     return dataLake;
   } catch (err) {
