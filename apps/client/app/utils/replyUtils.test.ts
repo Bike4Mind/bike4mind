@@ -11,6 +11,11 @@ import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
  * silent failure the whole path exists to replace, arrived at from the UI side.
  */
 describe('extractReplies', () => {
+  it('hides a trailing choices block while it is still streaming', () => {
+    const streaming = 'Pick one:\n1. A\n2. B\n\n```choices\n{"options":[{"label":"A","descr';
+    expect(extractReplies({ replies: [streaming] })).toEqual(['Pick one:\n1. A\n2. B']);
+  });
+
   it('renders a terminal-recovery reply written next to an empty replies array', () => {
     // Exactly the shape the settle pass leaves behind on a dispatch-time quest.
     expect(extractReplies({ reply: ABANDONED_REPLY, replies: [] })).toEqual([ABANDONED_REPLY]);

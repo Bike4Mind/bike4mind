@@ -1,4 +1,4 @@
-import { THINK_CLOSE_TAG, THINK_OPEN_TAG, visibleReplyText } from '@bike4mind/common';
+import { THINK_CLOSE_TAG, THINK_OPEN_TAG, extractChoicesBlock, visibleReplyText } from '@bike4mind/common';
 
 type ReplyBearingMessage = { reply?: string | null; replies?: string[] | undefined };
 
@@ -31,7 +31,8 @@ export function extractReplies(messageData: ReplyBearingMessage) {
     processedParts.push(cleaned);
   }
 
-  const combined = processedParts.join('');
+  // The server strips a trailing choices block on finalize; this hides it while it streams.
+  const combined = extractChoicesBlock(processedParts.join('')).text;
   return combined ? [combined] : [];
 }
 
