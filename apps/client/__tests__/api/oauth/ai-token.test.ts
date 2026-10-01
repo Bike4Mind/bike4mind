@@ -407,7 +407,9 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
       handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1])
     ).rejects.toBe(error);
     expect(mockAuditCreate).not.toHaveBeenCalled();
-    expect(req.logger.warn).not.toHaveBeenCalled();
+    // The handler's step-4 subjectSource grace warning fires on every request here, so assert
+    // only that the cap branch did not log - a blanket no-warn check is stale against it.
+    expect(req.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('cap reached'));
   });
 
   it('AC8: per-client rate limit exceeded → 429', async () => {
