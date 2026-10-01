@@ -216,7 +216,12 @@ import {
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
-import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
+import {
+  shouldOfferBlogTools,
+  shouldOfferDataLakeTools,
+  shouldOfferDelegation,
+  shouldOfferSkillTool,
+} from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -227,6 +232,7 @@ import {
   ABSTENTION_PROMPT,
   ELISION_WARNING,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DATA_LAKE_TOOL_NAMES,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -683,7 +689,25 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
   paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
+  // The Smart Tools toggle exposes only the save tool; it cannot name a target lake without the
+  // list, or make one without the create.
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'list_my_data_lakes');
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'create_data_lake');
   return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
+ * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
+ * so neither source can re-enable what the other denies. Undefined when both are empty, matching
+ * how `sessionDisabledTools` was passed before.
+ */
+export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+  const merged = new Set([
+    ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
+    ...(requestDeniedTools ?? []),
+  ]);
+  return merged.size > 0 ? [...merged] : undefined;
 }
 
 /**
@@ -753,9 +777,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
- * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
+ * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
+ * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -766,7 +791,14 @@ export function attachmentHasIndexedContent(
  * which is the whole point of the feature for local models. Listing them here would silently
  * defeat it.
  */
-export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
+export const AUTO_ADDED_TOOL_NAMES = [
+  'blog_draft',
+  'blog_publish',
+  'blog_edit',
+  'navigate_view',
+  'skill',
+  ...DATA_LAKE_TOOL_NAMES,
+];
 
 /**
  * Reconciliation delta with the zero-balance floor. Pre-reservation (the only
@@ -1757,6 +1789,8 @@ export class ChatCompletionProcess {
             `💾 [saveQuest] Saving quest ${quest.id} with ${quest.researchModeResults.length} Research Mode results`
           );
         }
+        // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
+        // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
         const result = await this.db.quests.update(quest);
         return result;
       });
@@ -1959,6 +1993,9 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      // Read at every denylist site below instead of `session.disabledTools`: the final pass after
+      // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
+      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -2053,7 +2090,7 @@ export class ChatCompletionProcess {
       const resolvedTools = resolveEnabledTools({
         requestTools: enabledTools,
         sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
-        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        sessionDisabledTools: deniedTools,
         hasAttachedKnowledge,
         hasAccessibleDataLake,
         skipAutoOffers,
@@ -2661,6 +2698,18 @@ export class ChatCompletionProcess {
         ) {
           enabledTools.push('skill');
         }
+
+        if (
+          await shouldOfferDataLakeTools({
+            message,
+            priorToolNames,
+            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
+          })
+        ) {
+          for (const tool of DATA_LAKE_TOOL_NAMES) {
+            if (!enabledTools.includes(tool)) enabledTools.push(tool);
+          }
+        }
       }
 
       // Local (Ollama) models run on modest hardware with small context budgets and
@@ -2776,8 +2825,7 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
         skipAutoOffers,
-        knowledgeSearchDisabled:
-          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
+        knowledgeSearchDisabled: deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) ?? false,
         defaultAdminSettings,
         // The same mapping the tool build uses below, so the session -> filter translation cannot
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
@@ -2979,7 +3027,7 @@ export class ChatCompletionProcess {
         // Also enforced over the returned list below; passed here as well because two things the
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
-        sessionDisabledTools: session.disabledTools,
+        sessionDisabledTools: deniedTools,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3015,8 +3063,8 @@ export class ChatCompletionProcess {
       // delegate_to_agent), so strip any session-forbidden tools here too - this
       // closes loopholes like a research subagent web-searching on a "curated
       // sources only" surface.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0 && allTools) {
-        const denied = new Set(session.disabledTools);
+      if (deniedTools && allTools) {
+        const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
@@ -3025,7 +3073,15 @@ export class ChatCompletionProcess {
       // the user explicitly enabled, dropping the auto/admin-added extras
       // (blog_draft, skill, navigate_view, blog_publish/edit) unless selected.
       if (modelInfo.backend === ModelBackend.Ollama && allTools) {
-        const userSelected = new Set<string>(parsedBody.tools ?? []);
+        // Companions of a selected tool count as selected (resolveEnabledTools' pairing), so the
+        // Smart Tools save-to-data-lake toggle keeps its list/create partners on this backend too.
+        const userSelected = new Set<string>(
+          resolveEnabledTools({
+            requestTools: [...(parsedBody.tools ?? [])],
+            hasAttachedKnowledge: false,
+            skipAutoOffers: true,
+          })
+        );
         const before = allTools.length;
         allTools = allTools.filter(
           t => !AUTO_ADDED_TOOL_NAMES.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)
@@ -3164,8 +3220,7 @@ export class ChatCompletionProcess {
       // denies it, or a model offered no tools at all. Without this, every turn of every
       // lake-holding caller on a non-tool model logs a warning and drowns the real case.
       const knowledgeToolWithheldByConfig =
-        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
-        offeredToolNames.length === 0;
+        deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) || offeredToolNames.length === 0;
       if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !skipAutoOffers) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`
@@ -4187,50 +4242,9 @@ export class ChatCompletionProcess {
         ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
-      // Check if Research Mode is enabled and handle parallel processing
-      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
-        logger.info(
-          `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
-        );
-
-        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
-
-        // Handle Research Mode parallel processing
-        const researchResults = await researchModeService.processResearchMode(
-          researchMode,
-          messages,
-          options as ICompletionOptions,
-          async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
-            // Handle streaming for each configuration
-            this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
-          }
-        );
-
-        // Update quest with Research Mode results
-        quest.researchModeResults = researchResults;
-        quest.status = 'done';
-
-        logger.info(`🔬 [Research Mode] Saving quest with results:`, {
-          questId: quest.id,
-          resultsCount: researchResults.length,
-          results: researchResults.map(r => ({
-            configId: r.configurationId,
-            success: r.success,
-            responseLength: r.response?.length || 0,
-          })),
-        });
-
-        await saveQuest(quest);
-
-        // Send final status update to complete the Research Mode processing
-        await this.sendStatusUpdate(quest, null, { immediate: true });
-
-        logger.info(`🔬 [Research Mode] Completed parallel processing`);
-
-        return;
-      }
-
-      // Create an AbortController to allow cancelling the request
+      // Create an AbortController to allow cancelling the request. Set up before the Research
+      // Mode branch below, which returns early: both paths share one controller and one watcher,
+      // and the holder assignment is what lets tools on the research path see the turn signal.
       const abortController = new AbortController();
       // Make the signal available to subagents via the closure captured by buildTools
       abortSignalHolder.signal = abortController.signal;
@@ -4294,6 +4308,60 @@ export class ChatCompletionProcess {
 
       // Start the cancellation watcher
       startCancellationWatcher();
+
+      // Check if Research Mode is enabled and handle parallel processing
+      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
+        logger.info(
+          `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
+        );
+
+        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
+
+        // Handle Research Mode parallel processing
+        const researchResults = await researchModeService.processResearchMode(
+          researchMode,
+          messages,
+          options as ICompletionOptions,
+          async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
+            // Handle streaming for each configuration
+            this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
+          },
+          abortController.signal
+        );
+
+        // Update quest with Research Mode results. A Stop makes the cancellation watcher
+        // abort the controller, so the terminal status has to reflect that rather than
+        // unconditionally claiming the turn finished.
+        quest.researchModeResults = researchResults;
+        quest.status = successStatus();
+
+        // This early return skips the normal-path cleanup below, so drop the controller entry
+        // and the watcher here; the outer finally only clears the interval.
+        cleanupAbortController();
+        if (cancelWatcherInterval) {
+          clearInterval(cancelWatcherInterval);
+          cancelWatcherInterval = null;
+        }
+
+        logger.info(`🔬 [Research Mode] Saving quest with results:`, {
+          questId: quest.id,
+          resultsCount: researchResults.length,
+          results: researchResults.map(r => ({
+            configId: r.configurationId,
+            success: r.success,
+            responseLength: r.response?.length || 0,
+          })),
+        });
+
+        await saveQuest(quest);
+
+        // Send final status update to complete the Research Mode processing
+        await this.sendStatusUpdate(quest, null, { immediate: true });
+
+        logger.info(`🔬 [Research Mode] Completed parallel processing`);
+
+        return;
+      }
 
       // (P2b) Resolve the overlapped rapid reply lookup before streaming begins - by now it
       // has run concurrently with all of context assembly, so this await is effectively free.

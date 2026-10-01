@@ -43,6 +43,7 @@ export const generateTools = (
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
+    organizationId,
     questId,
     getAbortSignal,
   }: {
@@ -56,6 +57,7 @@ export const generateTools = (
     sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
     sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
+    organizationId?: ToolContext['organizationId'];
     questId?: ToolContext['questId'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
@@ -106,6 +108,7 @@ export const generateTools = (
     sessionReaderConsentDatalakeTags,
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
+    organizationId,
     codeMinifier,
     availableModels,
     onToolLlmUsage,

@@ -13,7 +13,7 @@ interface VerifyEmailChangeAdapters {
   db: {
     users: {
       findByPendingEmailToken: (token: string) => Promise<IUserDocument | null>;
-      update: (user: IUserDocument) => Promise<unknown>;
+      update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
 }
@@ -47,19 +47,18 @@ export const verifyEmailChange = async (
     throw new BadRequestError('Email change token has expired. Please request a new email change.');
   }
 
-  // Mark token as used FIRST (prevents race conditions)
-  user.pendingEmailUsed = true;
-  user.email = user.pendingEmail;
-
-  // Clear pending email fields
-  user.pendingEmail = null;
-  user.pendingEmailToken = null;
-  user.pendingEmailSentAt = null;
-  user.pendingEmailExpires = null;
-
-  // Since email changed, mark as verified with current timestamp
-  user.emailVerified = true;
-  user.emailVerifiedAt = new Date();
-
-  await db.users.update(user);
+  await db.users.update({
+    id: user.id,
+    // Single-use: burned in the same write that applies the change
+    pendingEmailUsed: true,
+    email: user.pendingEmail,
+    // Clear pending email fields
+    pendingEmail: null,
+    pendingEmailToken: null,
+    pendingEmailSentAt: null,
+    pendingEmailExpires: null,
+    // Since email changed, mark as verified with current timestamp
+    emailVerified: true,
+    emailVerifiedAt: new Date(),
+  });
 };

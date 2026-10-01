@@ -6,6 +6,7 @@ import {
   ISessionRepository,
   IUserRepository,
   IUserShare,
+  RepositoryUpdate,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -113,7 +114,9 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
   // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
   // in-repo repo is a concrete BaseRepository that provides it.
-  await dbModel.updateGuarded!(document);
+  // Typed as one repository: a union of the three repos' overloaded `updateGuarded`s is not callable.
+  const guarded: { updateGuarded?: RepositoryUpdate<typeof document> } = dbModel;
+  await guarded.updateGuarded!(document);
 
   return document;
 };

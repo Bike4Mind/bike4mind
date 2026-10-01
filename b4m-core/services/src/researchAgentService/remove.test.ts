@@ -52,7 +52,7 @@ describe('researchAgentService - remove', () => {
     expect(result.deletedAt).toBeDefined();
     expect(mockResearchAgentRepo.findByIdAndUserId).toHaveBeenCalledWith(agentId, mockUser.id);
     expect(mockResearchAgentRepo.update).toHaveBeenCalledWith({
-      ...existingAgent,
+      id: agentId,
       deletedAt: expect.any(Date),
     });
     expect(mockResearchTaskRepo.updateManyByResearchAgentId).toHaveBeenCalledWith(agentId, {

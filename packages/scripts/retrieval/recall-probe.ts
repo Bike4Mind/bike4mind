@@ -402,8 +402,8 @@ async function readSetting(name: string): Promise<string | null> {
  * BOTH BRANCHES FIGHT THE SAME SOFT-DELETE ASYMMETRY, which is invisible at the call site.
  * `AdminSettingsSchema.plugin(softDeletePlugin)` (`AdminSettingsModel.ts:47`) replaces `deleteOne`
  * with an `updateOne` that stamps `deletedAt` (`db-core/src/utils/mongo.ts:412`), and the plugin
- * filters `find`/`findOne` on `deletedAt: null` but hooks NEITHER `updateOne` NOR
- * `findOneAndUpdate`. A plain `deleteOne` here would therefore leave a tombstoned row that still
+ * filters `find`/`findOne` on `deletedAt: null` but its update hook skips upserts that leave
+ * `deletedAt` alone. A plain `deleteOne` here would therefore leave a tombstoned row that still
  * carries the sweep's last value: `readSetting` reports it unset, so the next run captures a false
  * baseline; the upsert below would match the tombstone without clearing `deletedAt`, so every
  * subsequent configuration writes into a document `AdminSettingsCache` cannot see and every row in
@@ -412,7 +412,8 @@ async function readSetting(name: string): Promise<string | null> {
  * from the admin UI on any stage this ran against.
  *
  * `hardDelete` really removes the row; `deletedAt: null` on the upsert recovers one left by an
- * older run of this script.
+ * older run of this script. That needs `includeDeleted`: the hook guards an upsert that names
+ * `deletedAt`, so without it the tombstone would not match and the insert would hit E11000.
  */
 async function writeSetting(name: string, value: string | null): Promise<void> {
   if (value === null) {
@@ -422,7 +423,7 @@ async function writeSetting(name: string, value: string | null): Promise<void> {
       { settingName: name },
       { $set: { settingValue: value, deletedAt: null } },
       { upsert: true }
-    );
+    ).setOptions({ includeDeleted: true });
   }
   invalidateSettingsCache();
   invalidateScopedSettingsCache();

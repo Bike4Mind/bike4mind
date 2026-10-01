@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository, pendingOtcTokenRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
@@ -25,7 +26,7 @@ const createUserSchema = z.object({
 
 type CreateUserInput = z.infer<typeof createUserSchema>;
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler<{}, unknown, CreateUserInput>(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

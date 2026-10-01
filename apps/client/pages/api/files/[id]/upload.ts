@@ -18,7 +18,7 @@ import type { Request, Response } from 'express';
  * (the storage upload takes a Buffer) and marks the FabFile complete - the PUT completing proves
  * the object landed. The MinIO ObjectCreated webhook still fires to enqueue chunking; marking
  * complete here (not only in the webhook) is what lets the safety-net scan
- * (server/worker/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
+ * (server/s3/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
  * status:'complete' files.
  *
  * Auth is normal baseApi (the caller is the logged-in user / API key), so no capability token is

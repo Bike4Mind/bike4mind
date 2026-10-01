@@ -6,6 +6,12 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 
+/**
+ * `additionalInfo.code` on the BadRequestError createDataLake throws for a taken or reserved tag
+ * prefix, so a caller that can mint another prefix (create_data_lake) keys off it, not the message.
+ */
+export const TAG_PREFIX_UNAVAILABLE_CODE = 'TAG_PREFIX_UNAVAILABLE';
+
 type PrefixScopeLake = Pick<IDataLakeDocument, 'id' | 'name' | 'fileTagPrefix' | 'createdByUserId'>;
 
 interface PrefixCollisionAdapters {

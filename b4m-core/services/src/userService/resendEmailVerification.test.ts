@@ -44,13 +44,13 @@ describe('resendEmailVerification', () => {
     await resendEmailVerification(baseParams, mockAdapters);
 
     expect(mockAdapters.db.users.findById).toHaveBeenCalledWith(baseParams.userId);
-    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        emailVerificationToken: expect.any(String),
-        emailVerificationSentAt: expect.any(Date),
-        emailVerificationExpires: expect.any(Date),
-      })
-    );
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith({
+      id: baseParams.userId,
+      emailVerificationToken: expect.any(String),
+      emailVerificationSentAt: expect.any(Date),
+      emailVerificationExpires: expect.any(Date),
+      emailVerificationUsed: null,
+    });
     expect(mockAdapters.mailer.sendEmailVerificationEmail).toHaveBeenCalledWith(
       expect.objectContaining({ email: mockUser.email }),
       expect.any(String)

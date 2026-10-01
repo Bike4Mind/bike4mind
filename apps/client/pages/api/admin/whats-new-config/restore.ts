@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
@@ -15,7 +16,7 @@ const RestoreRequestSchema = z.object({
   index: z.int().min(0),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: RESTORE_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .post(async (req: Request, res: Response) => {
     // Check if user is admin

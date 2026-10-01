@@ -97,6 +97,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "GITHUB_LAKE_APP_WEBHOOK_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "GITHUB_ZAP_REF": {
       "type": "sst.sst.Secret"
       "value": string
@@ -438,6 +442,10 @@ declare module "sst" {
       "type": "sst.aws.Queue"
       "url": string
     }
+    "githubLakeRevokeQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeTaxonomyQueueDLQ": {
       "type": "sst.aws.Queue"
       "url": string
@@ -460,6 +468,7 @@ declare module "sst" {
       "email-job": string
       "fab-file-chunk": string
       "fab-file-vectorize": string
+      "github-lake-revoke": string
       "github-webhook": string
       "image-edit": string
       "image-generation": string
@@ -678,6 +687,7 @@ declare module "sst" {
       "emailJobQueue": string
       "fabFileChunkQueue": string
       "fabFileVectorizeQueue": string
+      "githubLakeRevokeQueue": string
       "githubWebhookQueue": string
       "imageEditQueue": string
       "imageGenerationQueue": string

@@ -29,8 +29,22 @@ import { getRequestMembershipOrgIds } from './requestMembership';
  * to one of these orgs. Resolved once here (non-admins only) so every management gate agrees.
  */
 export async function toAccessContext(req: EntitlementRequest): Promise<AccessContext> {
+  return buildAccessContext(req, !!req.user!.isAdmin);
+}
+
+/**
+ * The caller's MEMBER reach: the same context with the platform-admin bypass off, and the
+ * entitlement and org-admin sets an admin context skips resolved for real. For a door that
+ * must answer "what can this user reach as a member" even for an admin (the public
+ * `GET /api/v1/data-lakes` list), where flipping `isAdmin` on a `toAccessContext` result would
+ * silently drop every entitlement-granted lake.
+ */
+export async function toMemberAccessContext(req: EntitlementRequest): Promise<AccessContext> {
+  return buildAccessContext(req, false);
+}
+
+async function buildAccessContext(req: EntitlementRequest, isAdmin: boolean): Promise<AccessContext> {
   const user = req.user!;
-  const isAdmin = !!user.isAdmin;
   return {
     userId: user.id,
     isAdmin,

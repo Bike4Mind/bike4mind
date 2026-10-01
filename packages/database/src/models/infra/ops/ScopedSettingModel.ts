@@ -96,8 +96,8 @@ class ScopedSettingsRepository extends BaseRepository<IScopedSetting> implements
   }
 
   async upsertOverride(write: ScopedOverrideWrite): Promise<IScopedSetting> {
-    // findOneAndUpdate is not covered by softDeletePlugin's find/findOne pre-hooks, so the
-    // `deletedAt: null` filter is explicit here: it excludes a prior tombstone at this address from
+    // softDeletePlugin's update hook skips upserts (so a unique-keyed upsert cannot E11000 on a
+    // tombstone), so the `deletedAt: null` filter is explicit here: it excludes a prior tombstone at this address from
     // matching (the partial unique index already excludes it from the collision check), so upsert
     // inserts a fresh row instead of colliding with it, exactly the case
     // ScopedSettingModel.integration.test.ts guards for the raw model.

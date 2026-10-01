@@ -21,6 +21,7 @@ const repos = vi.hoisted(() => ({
   findGrant: vi.fn(),
   upsertGrant: vi.fn(),
   removeGrant: vi.fn(),
+  updateLake: vi.fn(),
   findAllByEmailsOrUsernames: vi.fn(),
   record: vi.fn(),
   toAccessContext: vi.fn(),
@@ -40,7 +41,8 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: repos.toAccessContext }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { findById: repos.findById, findBySlug: repos.findBySlug },
+  withTransaction: (fn: () => unknown) => fn(),
+  dataLakeRepository: { findById: repos.findById, findBySlug: repos.findBySlug, update: repos.updateLake },
   dataLakeAccessGrantRepository: {
     listByLake: repos.listByLake,
     listByPrincipal: repos.listByPrincipal,
@@ -87,6 +89,7 @@ describe('/api/data-lakes/[id]/grants read counts', () => {
     repos.findGrant.mockResolvedValue(null);
     repos.upsertGrant.mockResolvedValue({});
     repos.removeGrant.mockResolvedValue(true);
+    repos.updateLake.mockResolvedValue(LAKE);
     repos.findAllByEmailsOrUsernames.mockResolvedValue([{ id: 'u2' }]);
     repos.record.mockResolvedValue({});
   });

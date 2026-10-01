@@ -114,6 +114,6 @@ export const updateShareableFiles = async (
 
     for (const user of project.users) push(user.userId, user.permissions);
 
-    await db.fabFiles.update(file);
+    await db.fabFiles.update({ id: file.id, users: file.users });
   }
 };

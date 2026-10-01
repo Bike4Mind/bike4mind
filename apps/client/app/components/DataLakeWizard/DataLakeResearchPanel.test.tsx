@@ -475,6 +475,39 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/1 could not be judged/);
     });
 
+    it('shows where the hits went on a run the judge breaker stopped', () => {
+      renderPanel({
+        runs: [
+          run({
+            status: 'failed',
+            stopReason: 'judge_unavailable',
+            error:
+              'The relevance judge (some-model) failed on every candidate it tried (3), so nothing was proposed: model access denied',
+            totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-run-stop-reason').textContent).toBe(
+        'Stopped: the relevance judge was unavailable'
+      );
+      const summary = screen.getByTestId('datalake-research-run-totals').textContent ?? '';
+      expect(summary).toMatch(/3 could not be judged/);
+      expect(summary).toMatch(/7 not judged \(the judge was unavailable, so the run stopped\)/);
+    });
+
+    it('shows totals on a failed run that stopped for another reason after a judge failure', () => {
+      renderPanel({
+        runs: [
+          run({
+            status: 'failed',
+            stopReason: 'exhausted',
+            totals: { ...emptyResearchRunTotals(), searchHits: 10, filteredBySource: 8, judgeFailed: 2 },
+          }),
+        ],
+      });
+      expect(screen.getByTestId('datalake-research-run-totals').textContent).toMatch(/2 could not be judged/);
+    });
+
     it('names the model that judged a run', () => {
       renderPanel({ runs: [run({ judgeModel: 'gpt-4.1-mini' })] });
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();

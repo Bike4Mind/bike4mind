@@ -94,6 +94,7 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      deniedTools,
       systemPrompt,
       tools,
       projectId,
@@ -336,11 +337,26 @@ export class ChatCompletionInvoke {
             // succeeds (or fails for a different, uncoded reason) still reports the old code.
             // Two clears, both needed: this one is what the caller sees, because the function
             // returns this local `q` and not the update's result. It does NOT reach the database
-            // (`q` is a plain object, so the key survives with an `undefined` value and lands in
-            // the `$set` as an absence), which is what the `unset` option below is for. `null` is
-            // not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
+            // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
+            // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
-            await this.db.quests.update(q, { unset: ['errorCode'] });
+            await this.db.quests.update(
+              {
+                id: q.id,
+                type: q.type,
+                reply: q.reply,
+                replies: q.replies,
+                questMasterReply: q.questMasterReply,
+                images: q.images,
+                prompt: q.prompt,
+                fabFileIds: q.fabFileIds,
+                timestamp: q.timestamp,
+                status: q.status,
+                promptMeta: q.promptMeta,
+                agentIds: q.agentIds,
+              },
+              { unset: ['errorCode'] }
+            );
             return q;
           })
         : this.db.quests.create({
@@ -436,6 +452,7 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        deniedTools,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
@@ -479,7 +496,12 @@ export class ChatCompletionInvoke {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        promptMeta: quest.promptMeta,
+        type: quest.type,
+        reply: quest.reply,
+      });
     }
     return quest;
   }

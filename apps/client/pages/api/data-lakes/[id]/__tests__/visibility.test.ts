@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   setLakeVisibility: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: ['org-1'] })),
   resolveActiveOrg: vi.fn(async () => 'org-1'),
+  inTransaction: [] as string[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the sibling endpoint tests).
@@ -28,6 +29,14 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.inTransaction.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction.push('exit');
+    }
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than omitted
@@ -57,6 +66,7 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('POST /api/data-lakes/[id]/visibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.inTransaction.length = 0;
     h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', createdByUserId: 'u1', status: 'active' });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.setLakeVisibility.mockResolvedValue({ id: 'lake-oid-1', isPublic: false, organizationId: 'org-1' });
@@ -85,6 +95,21 @@ describe('POST /api/data-lakes/[id]/visibility', () => {
         }),
       })
     );
+  });
+
+  it('runs the gates and the write inside ONE transaction, so a retry re-reads the grants', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.inTransaction.push('gate');
+      return { id: 'lake-oid-1', createdByUserId: 'u1', status: 'active' };
+    });
+    h.setLakeVisibility.mockImplementation(async () => {
+      h.inTransaction.push('write');
+      return {};
+    });
+    const { res } = makeRes();
+    await call(req({ visibility: 'private' }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'gate', 'write', 'exit']);
   });
 
   it('passes the validated active org as the promotion target, not the client-supplied one', async () => {

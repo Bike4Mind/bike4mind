@@ -18,6 +18,8 @@ import {
   questExportQueueSubscription,
   dataLakeCleanupQueueSubscription,
   driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   videoGenerationQueueSubscription,
@@ -43,7 +45,7 @@ import { imageProcessor } from './functions';
 
 // Log handler function for processing CloudWatch logs and sending to Slack
 const logHandler = new sst.aws.Function('logHandler', {
-  handler: 'apps/client/server/events/logToSlack.ingest',
+  handler: 'apps/workers/src/events/logToSlack.ingest',
   runtime: 'nodejs24.x',
   link: [...allSecrets, sreJobQueue],
   vpc: lambdaVpc,
@@ -147,6 +149,8 @@ const individualLogGroups = $util.all([
   questExportQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   dataLakeCleanupQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   driveDisconnectPurgeQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  githubLakeIngestQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  githubLakeRevokeQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   dataLakeTaxonomyQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   dataLakeResearchQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   videoGenerationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),

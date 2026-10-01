@@ -20,6 +20,9 @@ import {
   IOrganizationRepository,
   ILakeAccessEventRepository,
   IScopedSettingsRepository,
+  ILakeMembershipRemovalRepository,
+  ILakeConfigChangeEventRepository,
+  ILakeMembershipChangeEventRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -130,7 +133,16 @@ export interface ToolContext {
       // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
       // rather than silently degrade to bare creator provenance.
       | 'findIdsCreatedBy'
-    >;
+    > &
+      // The data-lake write tools (list_my_data_lakes, create_data_lake, save_content_to_data_lake).
+      // Optional per method so a read-only host still type-checks; those tools refuse cleanly when
+      // one is missing (see dataLakeContent/adapters.ts).
+      Partial<
+        Pick<
+          IDataLakeRepository,
+          'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+        >
+      >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
      * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch;
@@ -169,7 +181,17 @@ export interface ToolContext {
      *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
      * Optional here - absent means both features resolve lake access with no grant arm.
      */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'> &
+      // Manage-gate grant snapshot and the new lake's owner-grant seed, for the data-lake write tools.
+      Partial<Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>>;
+    /**
+     * The rest of what the data-lake write tools need (addFileToDataLake's restore lookup and its
+     * config/membership audit sinks). Optional - absent, those tools report themselves unavailable
+     * on this surface instead of writing without an audit trail.
+     */
+    lakeMembershipRemovals?: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
+    lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
+    lakeMembershipChangeEvents?: Pick<ILakeMembershipChangeEventRepository, 'record'>;
     /**
      * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
@@ -188,6 +210,12 @@ export interface ToolContext {
    * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
    */
   entitlementKeys?: string[];
+  /**
+   * The turn's active organization, already authorization-validated upstream on the web and
+   * public API paths (resolveActiveOrg) but NOT on every host (Slack), so a tool that scopes a
+   * write by it must re-check membership itself - see create_data_lake. Absent = personal context.
+   */
+  organizationId?: string;
   /**
    * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
    * resolved from the session and threaded down via the tool-builder deps (mirrors
@@ -339,15 +367,9 @@ export interface ToolContext {
    * delegate_to_agent / coordinate_task path already uses.
    *
    * IT CAN RETURN UNDEFINED EVEN WHEN THE HOST PASSED A GETTER, so treat a missing signal as
-   * normal rather than as a bug. Three cases, and the third is the surprising one:
+   * normal rather than as a bug. Two cases:
    *   - the host wires no controller at all (see below);
    *   - the holder is not filled yet (a tool somehow invoked during tool setup);
-   *   - ChatCompletionProcess's Research Mode branch, which returns before it ever assigns
-   *     the holder, yet hands `allTools` - these same tool instances - to ResearchModeService.
-   *     That service takes no signal today and the cancellation watcher starts after the
-   *     branch returns, so Research Mode has no cancellation of any kind; tool sub-calls on
-   *     that path stay uninterruptible across every parallel configuration. Fixing it means
-   *     giving Research Mode a controller and a watcher of its own, not changing this contract.
    *
    * Absent entirely on hosts with no per-turn controller to hand over - the top-level
    * agent-executor loop, which cancels via a polled `AgentExecution` abort flag rather than an

@@ -19,7 +19,7 @@ slackEventBus.subscribe('slack-completion-start', slackQuestProcessor.arn, {
 eventBus.subscribe(
   'create-memento',
   {
-    handler: 'apps/client/server/events/createMemento.handler',
+    handler: 'apps/workers/src/events/createMemento.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, eventBus],
     environment: {

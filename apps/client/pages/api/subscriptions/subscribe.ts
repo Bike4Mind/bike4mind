@@ -55,7 +55,7 @@ const handler = baseApi()
         type: CustomerType.User,
       });
       req.user.stripeCustomerId = customer.id;
-      await userRepository.update(req.user);
+      await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
     } else {
       // Recreate the customer if missing from Stripe (we recently switched Stripe accounts).
       try {
@@ -68,7 +68,7 @@ const handler = baseApi()
             type: CustomerType.User,
           });
           req.user.stripeCustomerId = customer.id;
-          await userRepository.update(req.user);
+          await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
         } else {
           throw error;
         }

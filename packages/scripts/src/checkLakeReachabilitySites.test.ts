@@ -255,7 +255,7 @@ type ReachabilityHit = { location: string; path: string; line: number; text: str
  * Sites gives: that mount is a separate repo and is not always present. `infra` and the repo-root
  * `scripts` are here and not in the sibling guard, so a copy written outside the packages is visible.
  */
-const SCAN_ROOTS = ['apps/client', 'b4m-core', 'packages', 'infra', 'scripts'];
+const SCAN_ROOTS = ['apps/client', 'apps/workers', 'b4m-core', 'packages', 'infra', 'scripts'];
 
 /**
  * Every `[cC]hunkCount` mention under SCAN_ROOTS, as `path:line:text`.

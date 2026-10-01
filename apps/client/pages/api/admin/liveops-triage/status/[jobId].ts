@@ -4,6 +4,7 @@
  * GET /api/admin/liveops-triage/status/[jobId] - Get job status
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ForbiddenError, BadRequestError, NotFoundError } from '@server/utils/errors';
@@ -15,7 +16,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 // Validate MongoDB ObjectId format
 const JobIdSchema = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid job ID format');
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: 30, windowMs: ONE_MINUTE_MS })) // 30 requests/min for polling
   .get(async (req, res) => {
     // Check admin access

@@ -62,7 +62,7 @@ describe('organizationService - leave', () => {
           shareable: {
             findAccessibleById: vi.fn().mockResolvedValue(freshOrg()),
           },
-          update: vi.fn().mockResolvedValue(undefined),
+          removeMember: vi.fn().mockResolvedValue(undefined),
         },
         users: {
           update: vi.fn().mockResolvedValue(undefined),
@@ -91,7 +91,8 @@ describe('organizationService - leave', () => {
     const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockMemberUser, 'org1');
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(result).toEqual(
       expect.objectContaining({
         users: [secondUserShare],
         userDetails: [
@@ -177,9 +178,7 @@ describe('organizationService - leave', () => {
     const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(result.adminUserIds).toEqual(['other-admin']);
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({ adminUserIds: ['other-admin'] })
-    );
+    expect(result).toEqual(expect.objectContaining({ adminUserIds: ['other-admin'] }));
   });
 
   it('clears the manager appointment when the departing member held it', async () => {
@@ -191,7 +190,7 @@ describe('organizationService - leave', () => {
     const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
     expect(result.managerId).toBeNull();
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(expect.objectContaining({ managerId: null }));
+    expect(result).toEqual(expect.objectContaining({ managerId: null }));
   });
 
   it('leaves a manager appointment held by somebody else alone', async () => {
@@ -231,12 +230,12 @@ describe('organizationService - leave', () => {
     await expect(leave(mockMemberUser as IUserDocument, { id: 'nonexistent-org' }, mockAdapters)).rejects.toThrow(
       NotFoundError
     );
-    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
   });
 
   it('throws BadRequestError when a user tries to leave their own organization', async () => {
     await expect(leave(mockOwnerUser as IUserDocument, { id: 'org1' }, mockAdapters)).rejects.toThrow(BadRequestError);
-    expect(mockAdapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(mockAdapters.db.organizations.removeMember).not.toHaveBeenCalled();
   });
 
   it('validates and secures parameters', async () => {
@@ -249,16 +248,14 @@ describe('organizationService - leave', () => {
     await leave(mockMemberUser as IUserDocument, leaveParams, mockAdapters);
 
     expect(mockAdapters.db.organizations.shareable.findAccessibleById).toHaveBeenCalledWith(mockMemberUser, 'org1');
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalled();
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
   });
 
   it('initializes userDetails as an empty array when it is null', async () => {
     mockAdapters.db.organizations.shareable.findAccessibleById.mockResolvedValue(freshOrg({ userDetails: null }));
 
-    await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+    const result = await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
 
-    expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
-      expect.objectContaining({ userDetails: [], users: [secondUserShare] })
-    );
+    expect(result).toEqual(expect.objectContaining({ userDetails: [], users: [secondUserShare] }));
   });
 });

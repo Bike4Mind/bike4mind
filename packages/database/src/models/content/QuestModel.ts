@@ -775,7 +775,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   ): Promise<IChatHistoryItemDocument | null> {
     const { id, ...updateData } = data;
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    // deletedAt is explicit: softDeletePlugin does not hook _plainUpdate's findOneAndUpdate.
+    // deletedAt: null is explicit for readability; without it the softDeletePlugin update hook
+    // would add the same guard.
     return this._plainUpdate({ _id: convertId(id), sessionId, deletedAt: null }, updateData as Record<string, unknown>);
   }
 
@@ -1052,6 +1053,38 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
           },
         ])
       : await this.model.updateOne(filter, { $set: fields });
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Set only `promptMeta.performance.clientFirstTokenTime`. The client posts it while the quest is
+   * still streaming, so a read-modify-write of the whole `promptMeta` would clobber whatever the
+   * pipeline saved in between. Returns whether a quest matched.
+   *
+   * Goes through an update pipeline, not a dotted `$set`, for the same reason as `settleIfUnfinished`:
+   * a null `promptMeta` (or `performance`) makes the dotted path error, while `$mergeObjects` treats
+   * a null or missing operand as empty.
+   */
+  async setClientFirstTokenTime(id: string, clientFirstTokenTime: number): Promise<boolean> {
+    const result = await this.model.updateOne({ _id: id }, [
+      {
+        $set: {
+          promptMeta: {
+            $mergeObjects: [
+              '$promptMeta',
+              {
+                performance: {
+                  $mergeObjects: [
+                    '$promptMeta.performance',
+                    { clientFirstTokenTime: { $literal: clientFirstTokenTime } },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    ]);
     return result.matchedCount > 0;
   }
 

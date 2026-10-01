@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
@@ -21,7 +22,7 @@ const bodySchema = z.object({
   allowedGroupTypes: z.array(z.string()).max(20),
 });
 
-const handler = baseApi().put(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).put(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     ensureAdmin(req.user?.isAdmin);
     const organizationId = req.query.id;

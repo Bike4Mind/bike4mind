@@ -73,9 +73,15 @@ describe('updateFabFile (upload moderation gate)', () => {
     // cleared the returned object but wrote the stale fileUrl to the DB first, so a
     // subsequent read would resurrect a working URL for a non-serveable image.
     expect(dbUpdate).toHaveBeenCalledOnce();
-    const persisted = dbUpdate.mock.calls[0][0];
-    expect(persisted.fileUrl).toBeUndefined();
-    expect(persisted.fileUrlExpireAt).toBeUndefined();
+    const [persisted, options] = dbUpdate.mock.calls[0];
+    expect(persisted).toEqual({
+      id: 'file-1',
+      notes: 'a note',
+      systemPriority: undefined,
+      updatedAt: expect.any(Date),
+    });
+    // A `$set` of undefined is dropped by Mongoose, so the clear has to travel as an explicit unset.
+    expect(options).toEqual({ unset: ['fileUrl', 'fileUrlExpireAt'] });
   });
 
   it('strips fileUrl/fileUrlExpireAt on an edit for a blocked image', async () => {
@@ -101,6 +107,7 @@ describe('updateFabFile (upload moderation gate)', () => {
 
     expect(result.fileUrl).toBe('https://s3.example.com/stale-signed-url');
     expect(result.fileUrlExpireAt).toBeInstanceOf(Date);
+    expect(dbUpdate.mock.calls[0][1]).toBeUndefined();
   });
 
   // isImageServeable now gates on moderationStatus alone (no mimeType special-case):

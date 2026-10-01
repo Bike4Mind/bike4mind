@@ -161,7 +161,12 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
           researchTask.status = ResearchTaskStatus.FAILED;
           researchTask.statusFailedMessage = (processingError as Error).message || 'Processing failed in queue handler';
           researchTask.statusFailedAt = new Date();
-          await researchTaskRepository.update(researchTask);
+          await researchTaskRepository.update({
+            id: researchTask.id,
+            status: researchTask.status,
+            statusFailedMessage: researchTask.statusFailedMessage,
+            statusFailedAt: researchTask.statusFailedAt,
+          });
           logger.log(`Task ${researchTaskId} status reset to FAILED`);
         }
       } catch (updateError) {

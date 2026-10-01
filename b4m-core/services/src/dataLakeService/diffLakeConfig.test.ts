@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLake } from '@bike4mind/common';
-import { LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
+import { LAKE_CONFIG_FIELD_AUDIT, LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
 import { diffLakeConfig, grantChange, ownershipChange } from './diffLakeConfig';
 
 const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
@@ -16,6 +16,11 @@ const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
 describe('diffLakeConfig', () => {
   it('records nothing for an identical document - the whole reason a diff exists', () => {
     expect(diffLakeConfig(lake(), lake())).toEqual([]);
+  });
+
+  it('never audits the purge claim id - an internal lifecycle token, not config', () => {
+    expect(LAKE_CONFIG_FIELD_AUDIT.purgeClaimId).toBe('excluded');
+    expect(diffLakeConfig(lake(), lake({ purgeClaimId: 'claim-a' }))).toEqual([]);
   });
 
   it('emits only the field that moved, not every field it compared', () => {

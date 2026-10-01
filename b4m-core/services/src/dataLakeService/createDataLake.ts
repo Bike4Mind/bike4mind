@@ -6,7 +6,11 @@ import {
   normalizeEntitlementKey,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
-import { collidesWithRegistryPrefix, findCollidingPrefixLakes } from './tagPrefixCollision';
+import {
+  TAG_PREFIX_UNAVAILABLE_CODE,
+  collidesWithRegistryPrefix,
+  findCollidingPrefixLakes,
+} from './tagPrefixCollision';
 import type { z } from 'zod';
 
 type CreateDataLakeParams = z.infer<typeof CreateDataLakeRequestInput>;
@@ -127,7 +131,8 @@ async function assertPrefixAvailable(
 ): Promise<void> {
   if (collidesWithRegistryPrefix(rawPrefix)) {
     throw new BadRequestError(
-      `Tag prefix "${rawPrefix}" is reserved by a built-in knowledge base - choose a different prefix.`
+      `Tag prefix "${rawPrefix}" is reserved by a built-in knowledge base - choose a different prefix.`,
+      { code: TAG_PREFIX_UNAVAILABLE_CODE }
     );
   }
   const [clash] = await findCollidingPrefixLakes(db, rawPrefix, { createdByUserId: userId, organizationId });
@@ -137,7 +142,8 @@ async function assertPrefixAvailable(
     // here would turn this into a guess-confirm oracle for lakes they cannot read.
     const naming = clash.createdByUserId === userId ? ` ("${clash.name}")` : ' in this organization';
     throw new BadRequestError(
-      `Tag prefix "${rawPrefix}" overlaps an existing data lake${naming} - choose a different prefix.`
+      `Tag prefix "${rawPrefix}" overlaps an existing data lake${naming} - choose a different prefix.`,
+      { code: TAG_PREFIX_UNAVAILABLE_CODE }
     );
   }
 }
@@ -226,7 +232,8 @@ export const createDataLake = async (
       const keyPattern = (err as { keyPattern?: Record<string, unknown> }).keyPattern;
       if (keyPattern && 'fileTagPrefix' in keyPattern) {
         throw new BadRequestError(
-          `Tag prefix "${params.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`
+          `Tag prefix "${params.fileTagPrefix}" overlaps an existing data lake - choose a different prefix.`,
+          { code: TAG_PREFIX_UNAVAILABLE_CODE }
         );
       }
     }

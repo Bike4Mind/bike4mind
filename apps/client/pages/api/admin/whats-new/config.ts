@@ -4,7 +4,7 @@ import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { logAuditEvent, AdminConfigAuditEvents } from '@server/utils/auditLog';
 import { AdminSettings } from '@bike4mind/database';
-import { WhatsNewSyncConfigSchema, type WhatsNewSyncConfig } from '@bike4mind/common';
+import { ApiKeyScope, WhatsNewSyncConfigSchema, type WhatsNewSyncConfig } from '@bike4mind/common';
 import { getWhatsNewEnvInfo } from '@server/utils/whatsNewEnv';
 import { validateDistributionUrl } from '@server/services/whatsNewForkFetcher';
 
@@ -40,7 +40,7 @@ export interface SyncConfigResponse {
  *   autoSyncEnabled: boolean
  * }
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: 30,

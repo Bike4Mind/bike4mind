@@ -269,20 +269,35 @@ export async function completeGitHubLakeConnection(params: {
  * Releases a connection. The installation is account-wide and may serve other lakes, so the App is
  * uninstalled only with its last binding; otherwise it keeps read access to this repository until
  * the account owner deselects it on GitHub (an App cannot drop one repository from its own install),
- * which `installationRetained` tells the caller. Uninstall runs before the row is deleted so a
- * GitHub failure leaves the connection in place to retry instead of an orphaned install.
+ * which `installationRetained` tells the caller. A sole binding uninstalls before its row is deleted
+ * so a GitHub failure leaves the connection in place to retry instead of an orphaned install; the
+ * concurrent-release branch below cannot, so its retry goes through uninstallIfUnbound instead.
  */
 export async function releaseGitHubLakeConnection(
   connection: IOrgGitHubLakeConnectionDocument,
   config: GitHubLakeAppConfig | null
 ): Promise<{ installationRetained: boolean }> {
   const bindings = await orgGitHubLakeConnectionRepository.findByInstallationId(connection.installationId);
-  const installationRetained = bindings.some(binding => binding.id !== connection.id);
-  if (!installationRetained) {
+  if (!bindings.some(binding => binding.id !== connection.id)) {
     await deleteInstallation(requireGitHubLakeAppConfig(config), connection.installationId);
+    await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
+    return { installationRetained: false };
   }
   await orgGitHubLakeConnectionRepository.release(connection.id, connection.organizationId);
-  return { installationRetained };
+  // Concurrent releases of an installation's last bindings (the revoke queue's installation.deleted
+  // fan-out) each see the other and skip the uninstall, so recount after our own delete: the last one
+  // out still uninstalls. The row is already gone if that uninstall fails, so the revoke retry
+  // re-enters by installation id (revokeGitHubLakeConnection).
+  const uninstalled = await uninstallIfUnbound(connection.installationId, config);
+  return { installationRetained: !uninstalled };
+}
+
+/** deleteInstallation treats GitHub's 404 as success, so a repeat call for the same install is safe. */
+async function uninstallIfUnbound(installationId: number, config: GitHubLakeAppConfig | null): Promise<boolean> {
+  const remaining = await orgGitHubLakeConnectionRepository.findByInstallationId(installationId);
+  if (remaining.length > 0) return false;
+  await deleteInstallation(requireGitHubLakeAppConfig(config), installationId);
+  return true;
 }
 
 /**
@@ -295,7 +310,8 @@ export async function releaseGitHubLakeConnection(
 export async function disconnectGitHubLakeConnection(
   lake: IDataLakeDocument,
   connection: IOrgGitHubLakeConnectionDocument,
-  logger: PurgeConnectionLogger
+  logger: PurgeConnectionLogger,
+  { reenableOnPurgeFailure = true }: { reenableOnPurgeFailure?: boolean } = {}
 ): Promise<{ installationRetained: boolean }> {
   // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
   const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
@@ -307,17 +323,47 @@ export async function disconnectGitHubLakeConnection(
   }
   await purgeConnectionIngestedFiles(
     lake,
-    () => fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
+    () =>
+      fabFileRepository.findByGitHubConnectionIdInDataLake(connection.id, lake.datalakeTag, { includeDeleted: true }),
     {
       connectionId: connection.id,
       label: 'GitHub lake disconnect',
       logger,
       // Restore, don't force: an archived lake's connection was already disabled and must stay so.
-      restore: disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
+      restore: reenableOnPurgeFailure && disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
     }
   );
   // The App config is only needed to uninstall; a retained installation releases without it.
   return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+}
+
+/**
+ * The revoke door (githubLakeRevoke queue, fed by the App's webhook): the same teardown as a
+ * disconnect, resolved globally because GitHub names an installation, never an org. Idempotent for
+ * redeliveries; a live sync's ConflictError is left to throw so SQS retries it.
+ */
+export async function revokeGitHubLakeConnection(
+  { connectionId, installationId }: { connectionId: string; installationId: number },
+  logger: PurgeConnectionLogger
+): Promise<void> {
+  const connection = await orgGitHubLakeConnectionRepository.findById(connectionId);
+  if (!connection) {
+    // Either a redelivery, or a retry of a concurrent release that deleted the row and then failed
+    // its uninstall (releaseGitHubLakeConnection): finish that uninstall if nothing binds it anymore.
+    const uninstalled = await uninstallIfUnbound(installationId, getGitHubLakeAppConfig());
+    logger.info('GitHub lake revoke: connection already released', { connectionId, installationId, uninstalled });
+    return;
+  }
+  const lake = await dataLakeRepository.findById(connection.targetDataLakeId);
+  if (!lake) {
+    // The lake's own delete sweep (dataLakeCleanup.ts) owns purging its files; only the
+    // connection/installation claim remains to release here.
+    await releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
+    return;
+  }
+  // No re-enable on a failed purge: the App has lost access, so a sync could only fail; the disabled
+  // row stays for the SQS retry, and disableIfNoLiveSyncClaim accepts an already-disabled row.
+  await disconnectGitHubLakeConnection(lake, connection, logger, { reenableOnPurgeFailure: false });
 }
 
 /**
