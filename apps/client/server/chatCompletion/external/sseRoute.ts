@@ -1,4 +1,4 @@
-import express, { type Request, type Response, type Express } from 'express';
+import express, { type Request, type Response, type Express, type NextFunction } from 'express';
 import {
   CompletionRequestSchema,
   LEGACY_REQUEST_ID_HEADER,
@@ -33,6 +33,7 @@ import { resolveContractAuth } from '@server/cli/resolveContractAuth';
 import { createCompletionContract } from '@bike4mind/common';
 import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { Config } from '@server/utils/config';
+import { createMethodGuard } from '@server/utils/allowedMethods';
 import { z } from 'zod';
 
 /**
@@ -50,6 +51,7 @@ import { z } from 'zod';
  */
 
 const COMPLETIONS_ENDPOINT = '/api/ai/v1/completions';
+const checkCompletionsMethod = createMethodGuard([createCompletionContract.method]);
 
 // Periodic SSE comment so an intermediary (CloudFront / socket layer) doesn't close the
 // connection during a token-less gap (e.g. extended thinking). Matches the v1 cadence.
@@ -291,5 +293,21 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     } finally {
       clearInterval(heartbeat);
     }
+  });
+
+  // Express answers an unregistered verb with a bare 404, but the contract documents a 405 with
+  // `Allow` (openapi/registerContract.ts) - the same one baseApi and defineLambdaRoute serve.
+  app.all(COMPLETIONS_ENDPOINT, (req: Request, res: Response, next: NextFunction) => {
+    const result = checkCompletionsMethod(req.method);
+    if (result.allowed) return next();
+    const headers = flattenHeaders(req.headers);
+    const requestId = resolveRequestId(
+      headers[REQUEST_ID_HEADER.toLowerCase()],
+      headers[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
+    );
+    res
+      .status(405)
+      .set({ Allow: result.allowHeader, [REQUEST_ID_HEADER]: requestId })
+      .json({ error: result.message, request_id: requestId });
   });
 }

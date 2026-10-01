@@ -265,3 +265,21 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
   // so a rename there breaks this rather than silently publishing a dead code.
   errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
 });
+
+/**
+ * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
+ * throws when an API key lacks a route's scopes. It names what the ROUTE requires,
+ * never what the key holds, so a caller knows which scope to mint a key with.
+ * Values are `ApiKeyScope` strings; plain `z.string()` because the enum's module is
+ * not import-safe for the install-only openapi job (see the import note above).
+ */
+export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
+  required_scopes: z
+    .array(z.string())
+    .optional()
+    .describe('API key scopes this route accepts. Holding any one of them satisfies it.'),
+  also_required_scopes: z
+    .array(z.string())
+    .optional()
+    .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
+});
