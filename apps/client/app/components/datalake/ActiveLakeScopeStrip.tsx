@@ -34,8 +34,11 @@ export default function ActiveLakeScopeStrip({
   const { copy } = useDataLakeSurface();
   // A lake chat cannot search is selected but grounds nothing, so it gets its own group rather than
   // a chip under "Grounded on".
-  const groundedLakes = lakes.filter(lake => !isUnsearchable(lake, session, viewerUserId));
-  const unsearchableLakes = lakes.filter(lake => isUnsearchable(lake, session, viewerUserId));
+  const groundedLakes: typeof lakes = [];
+  const unsearchableLakes: typeof lakes = [];
+  for (const lake of lakes) {
+    (isUnsearchable(lake, session, viewerUserId) ? unsearchableLakes : groundedLakes).push(lake);
+  }
   const showGrounded = lakes.length === 0 || groundedLakes.length > 0;
   const allUnsearchable = !showGrounded;
 
