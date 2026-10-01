@@ -121,6 +121,7 @@ describe('driveConnectionPollInterval', () => {
     driveFolderId: 'fld_1',
     folderName: 'Q3-Reports',
     status: 'connected',
+    syncStale: false,
     enabled: true,
     lastError: null,
     lastUsedAt: null,
@@ -138,6 +139,18 @@ describe('driveConnectionPollInterval', () => {
 
   it('polls fast while a sync is actively in flight', () => {
     expect(driveConnectionPollInterval(connection({ status: 'syncing' }))).toBe(DRIVE_CONNECTION_ACTIVE_POLL_MS);
+  });
+
+  it('drops to the idle cadence for a stalled sync, which will not change until someone clicks Re-sync', () => {
+    expect(driveConnectionPollInterval(connection({ status: 'syncing', syncStale: true }))).toBe(
+      DRIVE_CONNECTION_IDLE_POLL_MS
+    );
+  });
+
+  it('keeps the active cadence for a stalled sync that is also disconnecting', () => {
+    expect(driveConnectionPollInterval(connection({ status: 'syncing', syncStale: true, disconnecting: true }))).toBe(
+      DRIVE_CONNECTION_ACTIVE_POLL_MS
+    );
   });
 
   it('polls fast while a queued disconnect purge is running, so the connection clears promptly', () => {

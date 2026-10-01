@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, fabFileRepository, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  fabFileRepository,
+  isDriveSyncClaimLive,
+  orgGoogleDriveConnectionRepository,
+} from '@bike4mind/database';
 import { isDriveDisconnectStalled } from '@bike4mind/common';
 import type { IDataLakeDocument, IOrgGoogleDriveConnectionDocument } from '@bike4mind/common';
 import type { DriveDisconnectPurgePayload } from '@server/queueHandlers/driveDisconnectPurge';
@@ -25,6 +30,7 @@ function toSafeConnection(c: IOrgGoogleDriveConnectionDocument, fileCount: numbe
     driveFolderId: c.driveFolderId,
     folderName: c.folderName ?? null,
     status: c.status,
+    syncStale: c.status === 'syncing' && !isDriveSyncClaimLive(c),
     enabled: c.enabled,
     lastError: c.lastError ?? null,
     lastUsedAt: c.lastUsedAt ?? null,
