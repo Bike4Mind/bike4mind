@@ -12,6 +12,9 @@ export const secrets = {
   // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
   // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
   // installation. The private key is the PEM, newlines kept or escaped as \n.
+  // App settings: Callback URL <app origin>/data-lakes/github/callback (the SPA page that finishes a
+  // connect), "Request user authorization (OAuth) during installation" on, "Redirect on update" on.
+  // GitHub greys out the Setup URL once OAuth-during-install is on, so it needs no value.
   GITHUB_LAKE_APP_CLIENT_ID: new sst.Secret('GITHUB_LAKE_APP_CLIENT_ID', 'not-configured'),
   GITHUB_LAKE_APP_CLIENT_SECRET: new sst.Secret('GITHUB_LAKE_APP_CLIENT_SECRET', 'not-configured'),
   GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),

@@ -109,6 +109,8 @@ describe('POST /api/data-lakes/github-callback', () => {
     await run(makeReq(VALID_BODY), res);
     expect(status).toHaveBeenCalledWith(201);
     expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', accountLogin: 'acme' } });
+    // Fresh connection: its first sync is only enqueued, so it has ingested nothing yet.
+    expect(h.toGitHubLakeConnectionResponse).toHaveBeenCalledWith(expect.anything(), 0);
   });
 
   it('clears the nonce cookie on success', async () => {
