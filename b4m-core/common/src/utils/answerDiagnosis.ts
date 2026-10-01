@@ -466,14 +466,19 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
     const names = failed.map(call => call.name).filter((n): n is string => !!n);
     const named = names.length > 0 ? ` (${names.join(', ')})` : '';
     const allFailed = failed.length === calls.length;
-    const succeeded = calls.length - failed.length;
+    const explicitlySucceeded = calls.filter(call => call.success === true).length;
+    const otherCount = calls.length - failed.length - explicitlySucceeded;
+    const successPhrase =
+      explicitlySucceeded > 0
+        ? `${explicitlySucceeded} succeeded${otherCount > 0 ? ` and ${otherCount} had no recorded verdict` : ''}`
+        : `${otherCount} had no recorded verdict`;
     return {
       id: 'tools',
       label,
       status: allFailed ? 'fail' : 'warn',
       detail: allFailed
         ? `${failed.length === 1 ? 'The only tool call' : `All ${failed.length} tool calls`} failed${named}.`
-        : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}, but ${succeeded} succeeded and the model replied with what it got.`,
+        : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}, but ${successPhrase} and the model replied with what it got.`,
       remedy: allFailed
         ? 'Retry the question; the answer was built with none of what those tools would have returned.'
         : 'Retry if the answer seems incomplete; otherwise the successful calls may have been enough.',

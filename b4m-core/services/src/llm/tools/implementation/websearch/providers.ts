@@ -73,12 +73,16 @@ interface CachedSearch {
 
 const searchCache = new Map<string, CachedSearch>();
 
-function searchCacheKey(query: string, numResults: number): string {
-  return `${query.trim().toLowerCase()}::${numResults}`;
+function searchCacheKey(query: string, numResults: number, placeSearch?: boolean): string {
+  return `${query.trim().toLowerCase()}::${numResults}${placeSearch ? '::places' : ''}`;
 }
 
-function searchCacheGet(query: string, numResults: number): WebSearchProviderResult[] | undefined {
-  const key = searchCacheKey(query, numResults);
+function searchCacheGet(
+  query: string,
+  numResults: number,
+  placeSearch?: boolean
+): WebSearchProviderResult[] | undefined {
+  const key = searchCacheKey(query, numResults, placeSearch);
   const entry = searchCache.get(key);
   if (!entry) return undefined;
   if (Date.now() > entry.expiresAt) {
@@ -88,12 +92,17 @@ function searchCacheGet(query: string, numResults: number): WebSearchProviderRes
   return entry.results;
 }
 
-function searchCacheSet(query: string, numResults: number, results: WebSearchProviderResult[]): void {
+function searchCacheSet(
+  query: string,
+  numResults: number,
+  results: WebSearchProviderResult[],
+  placeSearch?: boolean
+): void {
   if (searchCache.size >= SEARCH_CACHE_MAX_ENTRIES) {
     const firstKey = searchCache.keys().next().value;
     if (firstKey !== undefined) searchCache.delete(firstKey);
   }
-  searchCache.set(searchCacheKey(query, numResults), {
+  searchCache.set(searchCacheKey(query, numResults, placeSearch), {
     results,
     expiresAt: Date.now() + SEARCH_CACHE_TTL_MS,
   });
@@ -812,8 +821,8 @@ export async function resolveWebSearchProvider(
 /**
  * Returns [primary, fallback] providers. The fallback is the other provider when both are
  * configured, or null when only one (or neither) is available. An explicit admin choice
- * ('serpapi' | 'searxng') still forces that one as primary; the other becomes fallback only
- * under 'auto'.
+ * ('serpapi' | 'searxng') forces that one as primary; the other becomes the fallback in
+ * every mode, not only 'auto'.
  */
 export async function resolveWebSearchProviders(
   adapters: GetEffectiveApiKeyAdapters

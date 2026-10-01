@@ -270,16 +270,18 @@ export async function performWebSearch(
   try {
     const searchOptions = params.include_places ? { locationInQuery: true } : undefined;
     const numResults = params.num_results ?? 3;
+    const isPlaceSearch = !!params.include_places;
 
     // Layer 3: check cache before hitting the provider
-    const cached = searchCacheGet(params.query, numResults);
-    const results = cached
-      ? (() => {
-          Logger.globalInstance.log('🔍 WebSearch Tool: cache hit', { query: params.query });
-          return cached;
-        })()
-      : await searchWithFailover(provider, resolvedFallback, params.query, numResults, searchOptions);
-    if (!cached && results.length > 0) searchCacheSet(params.query, numResults, results);
+    const cached = searchCacheGet(params.query, numResults, isPlaceSearch);
+    let results: WebSearchProviderResult[];
+    if (cached) {
+      Logger.globalInstance.log('🔍 WebSearch Tool: cache hit', { query: params.query });
+      results = cached;
+    } else {
+      results = await searchWithFailover(provider, resolvedFallback, params.query, numResults, searchOptions);
+      if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
+    }
     Logger.globalInstance.log(`📊 WebSearch Tool: found ${results.length} results${cached ? ' (cached)' : ''}`);
 
     // An unconfigured/placeholder signing secret can never produce a verifiable image URL - every
@@ -397,16 +399,18 @@ export const webSearchTool: ToolDefinition = {
         // Layer 1: catch errors and return a message instead of throwing, so the tool
         // records as success and the model composes from whatever else it has.
         try {
-          const [primary, fallback] = await providersPromise;
-          const primaryPromise = primary ? Promise.resolve(primary) : Promise.resolve(null);
-          const fallbackPromise = fallback ? Promise.resolve(fallback) : Promise.resolve(null);
+          const [resolved, fallback] = await providersPromise;
+          // When the primary is unconfigured, promote the fallback so performWebSearch
+          // actually tries it instead of returning "not configured".
+          const effective = resolved ?? fallback;
+          const effectiveFallback = resolved ? fallback : null;
 
           const { formattedResults, citables } = await performWebSearch(
             { db: context.db },
             params,
             config?.imageUrlSigningSecret,
-            primaryPromise,
-            fallbackPromise
+            Promise.resolve(effective),
+            Promise.resolve(effectiveFallback)
           );
           context.logger.log('🔍 WebSearch Tool: search timing', {
             callNumber,
@@ -429,6 +433,12 @@ export const webSearchTool: ToolDefinition = {
 
           return formattedResults;
         } catch (error) {
+          // Re-throw programming errors so they surface in logs and diagnosis rather than
+          // being silently swallowed as "search failed". Only degrade gracefully for
+          // expected failures: network errors, provider timeouts, and provider HTTP errors.
+          if (error instanceof TypeError || error instanceof RangeError || error instanceof SyntaxError) {
+            throw error;
+          }
           const durationMs = Date.now() - startedAt;
           context.logger.error('🔍 WebSearch Tool: all providers failed, degrading gracefully', {
             callNumber,
