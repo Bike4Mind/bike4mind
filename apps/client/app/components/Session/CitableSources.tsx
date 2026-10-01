@@ -9,7 +9,7 @@ import {
   CompareArrowsRounded as ConflictIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -74,6 +74,34 @@ const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, strin
   return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
 };
 
+/**
+ * Label (and optional full-list tooltip) for an internal chip's origin.
+ *
+ * Falls back to DATA_LAKE because legacy chips and agent-scoped chips carry no `sourceOrigin`.
+ * Labels are deliberately not viewer-relative: `owned` is relative to the conversation owner whose
+ * retrieval made the chip, and share viewers see the same chip.
+ *
+ * `metadata` is an open bag read from stored docs, so the origin is narrowed from `unknown` and a
+ * malformed value falls back rather than throwing inside the reply.
+ */
+const internalLabelOf = (source: CitableSource): { label: string; title?: string } => {
+  const origin: unknown = source.metadata?.sourceOrigin;
+  if (typeof origin === 'object' && origin !== null) {
+    const { kind, lakes, owned } = origin as Record<string, unknown>;
+    if (kind === 'lake' && Array.isArray(lakes)) {
+      const names = lakes.flatMap((lake: unknown) => {
+        const name = typeof lake === 'object' && lake !== null ? (lake as Record<string, unknown>).name : undefined;
+        return typeof name === 'string' && name ? [name] : [];
+      });
+      if (names.length === 1) return { label: names[0] };
+      if (names.length > 1) return { label: `${names[0]} +${names.length - 1}`, title: names.join(', ') };
+    } else if (kind === 'library' && typeof owned === 'boolean') {
+      return { label: owned ? PERSONAL_LIBRARY : SHARED_LIBRARY };
+    }
+  }
+  return { label: DATA_LAKE };
+};
+
 const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
   source,
   conflictingTitles,
@@ -91,10 +119,11 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
 
   // Extract hostname for display if URL exists
   let hostname = '';
+  let hostnameTitle: string | undefined;
   let faviconUrl: string | null = null;
   if (isInternal) {
     // Show a friendly label for internal deep-links instead of the raw path
-    hostname = DATA_LAKE;
+    ({ label: hostname, title: hostnameTitle } = internalLabelOf(source));
   } else {
     try {
       if (source.url) {
@@ -241,16 +270,19 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
           >
             {source.title}
             {hostname && (
-              <Typography
-                component="span"
-                level="body-xs"
-                sx={{
-                  color: 'text.tertiary',
-                  ml: 1,
-                }}
-              >
-                {hostname}
-              </Typography>
+              <Tooltip size="sm" placement="top" title={hostnameTitle}>
+                <Typography
+                  component="span"
+                  level="body-xs"
+                  data-testid={isInternal ? 'citable-source-origin-label' : undefined}
+                  sx={{
+                    color: 'text.tertiary',
+                    ml: 1,
+                  }}
+                >
+                  {hostname}
+                </Typography>
+              </Tooltip>
             )}
           </Typography>
           {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
