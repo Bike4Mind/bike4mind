@@ -299,14 +299,14 @@ const WORKERS_BOUNDARY_MESSAGE =
   'shared package) and workers import it.';
 const noWorkersImportInClient = [
   {
-    group: ['@workers/*', '@bike4mind/workers', '@bike4mind/workers/*', '**/apps/workers/**', '**/workers/src/**'],
+    group: ['@workers', '@bike4mind/workers', '**/apps/workers/**', '**/workers/src/**'],
     message: WORKERS_BOUNDARY_MESSAGE,
   },
 ];
 
 // apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
 // way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
-// anything. Scoped to @client/app/* specifically (not @client/* broadly), since apps/workers
+// anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
 // legitimately imports non-UI apps/client code (e.g. @client/lib/entitlements/registry) through the
 // same bridge described above.
 const WORKERS_NO_UI_MESSAGE =
@@ -318,10 +318,21 @@ const noUiImportsInWorkers = {
     { name: 'react-dom', message: WORKERS_NO_UI_MESSAGE },
     { name: 'next', message: WORKERS_NO_UI_MESSAGE },
   ],
-  // @/app/* and @pages/* too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
+  // @/app and @pages too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
+  // **/client/app catches the same UI code reached by a relative path. Each entry is bare because a
+  // gitignore-style `x` matches `x` and every `x/...`, while `x/*` would miss the bare directory.
   patterns: [
     {
-      group: ['@client/app/*', '@/app/*', '@pages/*', 'react/*', 'react-dom/*', 'next/*', '@mui/*'],
+      group: [
+        '@client/app',
+        '@/app',
+        '@pages',
+        '**/client/app',
+        'react/*',
+        'react-dom/*',
+        'next/*',
+        '@mui/*',
+      ],
       message: WORKERS_NO_UI_MESSAGE,
     },
   ],
@@ -410,15 +421,16 @@ export default defineConfig([
     },
   },
 
-  // TypeScript configuration for all .ts/.tsx files
+  // TypeScript configuration for all .ts/.tsx files, plus apps/client's .mts/.cts, which the
+  // apps/workers boundary block below opts into linting.
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
   })),
 
   // TypeScript custom rules
   {
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
     rules: {
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
@@ -590,6 +602,17 @@ export default defineConfig([
           ],
         },
       ],
+    },
+  },
+
+  // The apps/workers import boundary for apps/client config and script files, which neither block
+  // above matches (see noWorkersImportInClient). No other block sets no-restricted-imports for
+  // these extensions, so last-rule-wins drops nothing here. The rule sees ESM imports only, not a
+  // CommonJS require().
+  {
+    files: ['apps/client/**/*.{mjs,mts,cjs,cts}'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [...noWorkersImportInClient] }],
     },
   },
 
