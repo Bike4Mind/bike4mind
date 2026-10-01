@@ -16,12 +16,13 @@ import { getServerErrorField } from '@client/app/utils/error';
 import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
 
 /**
- * Why re-sync is off right now, or undefined when it can run. Approximates sync.ts's 409s: the server also admits a 'syncing' row whose claim went stale, which this response cannot show. 'error' stays
- * re-syncable on purpose: claimForSync admits it so a re-sync can retry once access is restored.
+ * Why re-sync is off right now, or undefined when it can run. Mirrors sync.ts's 409s, including its
+ * admitting a 'syncing' row whose claim went stale (syncStale), which nothing else would ever reset.
+ * 'error' stays re-syncable on purpose: claimForSync admits it so a re-sync can retry once access is restored.
  */
 function resyncBlockedReason(connection: LakeGitHubConnection): string | undefined {
   if (!connection.enabled) return 'This connection is paused while the lake is archived.';
-  if (connection.status === 'syncing') return 'A sync is already running.';
+  if (connection.status === 'syncing' && !connection.syncStale) return 'A sync is already running.';
   return undefined;
 }
 

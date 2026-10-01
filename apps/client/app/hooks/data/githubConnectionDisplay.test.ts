@@ -7,6 +7,7 @@ const conn = (over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}
   enabled: true,
   lastError: null,
   repositoryFullName: 'acme/docs',
+  syncStale: false,
   ...over,
 });
 
@@ -48,6 +49,19 @@ describe('describeGitHubConnection', () => {
     expect(describeGitHubConnection(conn({ status: 'syncing', lastError: 'Rate limited.' }))).toMatchObject({
       label: 'Syncing',
       color: 'primary',
+    });
+  });
+
+  it('reads a syncing connection whose claim has gone stale as stalled, not as actively syncing', () => {
+    const { label, title, color } = describeGitHubConnection(conn({ status: 'syncing', syncStale: true }));
+    expect(label).toBe('Sync stalled');
+    expect(title).toBe('GitHub repository acme/docs: the last sync stopped responding. Re-sync to restart it.');
+    expect(color).toBe('warning');
+  });
+
+  it('reads an archived lake as paused even when its stalled sync would otherwise show as stalled', () => {
+    expect(describeGitHubConnection(conn({ enabled: false, status: 'syncing', syncStale: true }))).toMatchObject({
+      label: 'Paused',
     });
   });
 

@@ -42,6 +42,7 @@ const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnecti
   lastError: null,
   defaultBranch: 'main',
   lastSyncedAt: null,
+  syncStale: false,
   fileCount: 3,
   ...over,
 });
@@ -161,6 +162,13 @@ describe('GitHubConnectAction', () => {
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent(label);
     expect(screen.getByTestId('github-resync-btn')).toBeDisabled();
+  });
+
+  it('offers re-sync and reads Sync stalled once a syncing claim has gone stale', () => {
+    h.connection.current = connected({ status: 'syncing', syncStale: true });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Sync stalled');
+    expect(screen.getByTestId('github-resync-btn')).toBeEnabled();
   });
 
   it('keeps re-sync available after the App lost access, so restoring access can recover', () => {

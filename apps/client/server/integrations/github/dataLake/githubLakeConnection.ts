@@ -1,5 +1,10 @@
 import type { Response } from 'express';
-import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  fabFileRepository,
+  isGitHubLakeSyncClaimLive,
+  orgGitHubLakeConnectionRepository,
+} from '@bike4mind/database';
 import {
   acceptsConnectorContent,
   isLakeIngestable,
@@ -74,6 +79,7 @@ export function toGitHubLakeConnectionResponse(
     lastError: conn.lastError ?? null,
     defaultBranch: conn.defaultBranch ?? null,
     lastSyncedAt: conn.lastSyncedAt ?? null,
+    syncStale: conn.status === 'syncing' && !isGitHubLakeSyncClaimLive(conn),
     fileCount,
   };
 }

@@ -35,6 +35,7 @@ const connection = {
   status: 'connected',
   enabled: true,
   lastError: null,
+  syncStale: false,
 };
 
 beforeEach(() => {

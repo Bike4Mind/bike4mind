@@ -7,6 +7,7 @@ type DescribableGitHubConnection = {
   enabled: boolean;
   lastError: string | null;
   repositoryFullName: string;
+  syncStale: boolean;
 };
 
 /**
@@ -31,6 +32,13 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
       label: 'Sync failed',
       title: `GitHub repository ${repo}: sync failed${detail}. Re-sync to retry, or reconnect if access was removed.`,
       color: 'danger',
+    };
+  }
+  if (connection.status === 'syncing' && connection.syncStale) {
+    return {
+      label: 'Sync stalled',
+      title: `GitHub repository ${repo}: the last sync stopped responding. Re-sync to restart it.`,
+      color: 'warning',
     };
   }
   // A run is in flight, so any lastError belongs to the previous one.

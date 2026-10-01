@@ -54,6 +54,7 @@ describe('gitHubConnectionPollInterval', () => {
     lastError: null,
     defaultBranch: 'main',
     lastSyncedAt: null,
+    syncStale: false,
     fileCount: 0,
     ...overrides,
   });
@@ -65,6 +66,12 @@ describe('gitHubConnectionPollInterval', () => {
 
   it('polls fast while a sync is actively in flight', () => {
     expect(gitHubConnectionPollInterval(connection({ status: 'syncing' }))).toBe(GITHUB_CONNECTION_ACTIVE_POLL_MS);
+  });
+
+  it('polls at an idle cadence once a syncing claim has gone stale, since nothing is actively running', () => {
+    expect(gitHubConnectionPollInterval(connection({ status: 'syncing', syncStale: true }))).toBe(
+      GITHUB_CONNECTION_IDLE_POLL_MS
+    );
   });
 
   it('polls at an idle cadence once connected', () => {

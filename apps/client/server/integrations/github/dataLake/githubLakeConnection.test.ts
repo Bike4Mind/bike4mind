@@ -144,6 +144,7 @@ describe('toGitHubLakeConnectionResponse', () => {
       lastError: 'Repository access was removed',
       defaultBranch: 'main',
       lastSyncedAt,
+      syncStale: false,
       fileCount: 5,
     });
   });
@@ -156,7 +157,39 @@ describe('toGitHubLakeConnectionResponse', () => {
       lastError: null,
       defaultBranch: null,
       lastSyncedAt: null,
+      syncStale: false,
     });
+  });
+
+  // @bike4mind/database is mocked above with importOriginal and only overrides specific repository
+  // methods, so isGitHubLakeSyncClaimLive itself is the real implementation here.
+  it('marks a syncing row syncStale once its claim is older than the 20-minute window', () => {
+    const conn = {
+      ...base,
+      status: 'syncing',
+      syncClaimedAt: new Date(Date.now() - 21 * 60 * 1000),
+      activeIngestBatchId: null,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: true });
+  });
+
+  it('does not mark a syncing row syncStale while its claim is fresh', () => {
+    const conn = {
+      ...base,
+      status: 'syncing',
+      syncClaimedAt: new Date(Date.now() - 60 * 1000),
+      activeIngestBatchId: null,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+  });
+
+  it('never reads a connected row as syncStale, regardless of an old syncClaimedAt', () => {
+    const conn = {
+      ...base,
+      status: 'connected',
+      syncClaimedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
   });
 });
 

@@ -20,6 +20,8 @@ export type LakeGitHubConnection = {
   lastError: string | null;
   defaultBranch: string | null;
   lastSyncedAt: string | null;
+  /** 'syncing' whose claim went stale (a crashed run): re-syncable, and not worth fast-polling. */
+  syncStale: boolean;
   /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
 };
@@ -32,7 +34,9 @@ export const GITHUB_CONNECTION_IDLE_POLL_MS = 20_000;
 
 export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | null | undefined): number | false {
   if (!connection) return false;
-  return connection.status === 'syncing' ? GITHUB_CONNECTION_ACTIVE_POLL_MS : GITHUB_CONNECTION_IDLE_POLL_MS;
+  return connection.status === 'syncing' && !connection.syncStale
+    ? GITHUB_CONNECTION_ACTIVE_POLL_MS
+    : GITHUB_CONNECTION_IDLE_POLL_MS;
 }
 
 /**

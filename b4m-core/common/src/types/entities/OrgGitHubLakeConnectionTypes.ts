@@ -59,6 +59,11 @@ export interface IOrgGitHubLakeConnectionResponse {
   lastError: string | null;
   defaultBranch: string | null;
   lastSyncedAt: Date | null;
+  /**
+   * 'syncing' whose claim went stale (a crashed run). Nothing resets such a row on its own, but the
+   * sync route admits it, so the client offers Re-sync instead of waiting on it.
+   */
+  syncStale: boolean;
   /** Files this connection has ingested into the lake - what a disconnect permanently deletes. */
   fileCount: number;
 }
