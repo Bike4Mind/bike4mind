@@ -60,6 +60,12 @@ function originOf(raw: string): string {
   }
 }
 
+/** Strips C0/C1 control chars so a server-supplied string can't inject terminal escape sequences. */
+function stripControlChars<T extends string | undefined>(raw: T): T {
+  // eslint-disable-next-line no-control-regex -- intentional: removing control chars
+  return (raw === undefined ? raw : raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')) as T;
+}
+
 function hostOf(raw: string): string {
   try {
     return new URL(raw).host;
@@ -113,7 +119,13 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         // Step 1: Initiate device flow
         setStatus('initiating');
         const deviceFlowResponse = await oauth.initiateDeviceFlow();
-        setDeviceFlow(deviceFlowResponse);
+        // Sanitized at intake so the trust check, the opener and the screen all see the same string.
+        setDeviceFlow({
+          ...deviceFlowResponse,
+          verification_uri: stripControlChars(deviceFlowResponse.verification_uri),
+          verification_uri_complete: stripControlChars(deviceFlowResponse.verification_uri_complete),
+          user_code: stripControlChars(deviceFlowResponse.user_code),
+        });
         setStatus('waiting');
         setStatusMessage('Waiting for authorization...');
 
@@ -150,7 +162,13 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         // the success screen falls back to the user ID until (unless) this resolves.
         new ApiClient(apiUrl, configStore)
           .get<{ user?: { email?: string; username?: string } }>('/api/identify')
-          .then(res => setAccount({ userId, email: res?.user?.email, username: res?.user?.username }))
+          .then(res =>
+            setAccount({
+              userId,
+              email: stripControlChars(res?.user?.email),
+              username: stripControlChars(res?.user?.username),
+            })
+          )
           .catch(() => {});
       } catch (err) {
         setStatus('error');
@@ -243,9 +261,11 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         <>
           <Box marginBottom={1}>
             <Text color="red" bold>
-              {untrustedUri && isOnApiOrigin(untrustedUri, apiUrl)
-                ? `Not opening browser: verification URL ${originOf(untrustedUri)} is not https (plain http is only auto-opened on localhost). Only continue if you trust it.`
-                : `Not opening browser: verification URL origin ${originOf(untrustedUri ?? '')} does not match the configured server ${originOf(apiUrl)}. Only continue if you trust it.`}
+              {!untrustedUri
+                ? 'Not opening browser: the server did not return a verification URL.'
+                : isOnApiOrigin(untrustedUri, apiUrl)
+                  ? `Not opening browser: verification URL ${originOf(untrustedUri)} is not https (plain http is only auto-opened on localhost). Only continue if you trust it.`
+                  : `Not opening browser: verification URL origin ${originOf(untrustedUri)} does not match the configured server ${originOf(apiUrl)}. Only continue if you trust it.`}
             </Text>
           </Box>
           <Box marginBottom={1}>

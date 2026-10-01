@@ -156,8 +156,27 @@ describe('LoginFlow', () => {
     );
 
     await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    expect((lastFrame() ?? '').replace(/\s+/g, ' ')).toContain('the server did not return a verification URL');
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it('strips terminal control characters from server-supplied display strings', async () => {
+    const flow = deviceFlowFor('https://evil.example.com');
+    oauth.initiateDeviceFlow.mockResolvedValue({
+      ...flow,
+      verification_uri: `${flow.verification_uri}\u001b]0;pwned\u0007`,
+      user_code: '\u001b[2JABCD-1234',
+    });
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('ABCD-1234'));
+    expect(lastFrame()).not.toContain('\u001b]0;pwned');
+    expect(lastFrame()).not.toContain('\u001b[2J');
+    expect(lastFrame()).toContain(']0;pwned');
   });
 
   it('opens a localhost dev URL on the matching origin', async () => {
