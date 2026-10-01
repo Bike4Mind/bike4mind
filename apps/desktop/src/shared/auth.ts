@@ -17,7 +17,7 @@ export interface EnvironmentSelection {
 export interface ResolvedEnvironment {
   preset: EnvironmentPresetId;
   url: string;
-  /** Human label for the picker ("Production", "Local Dev", "Self-Hosted"). */
+  /** Human label for the picker ("Production", "Local Dev", "Remote"). */
   label: string;
 }
 

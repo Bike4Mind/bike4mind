@@ -40,14 +40,23 @@ export function profilePhotoCacheKey(userId: string, source: string): string {
 }
 
 /**
+ * The backend's own file proxy, which serves bucket keys on deployments that front no CDN.
+ *
+ * Must stay in sync with `LOCAL_FILE_PROXY_BASE` in apps/client/server/utils/appFileProxy.ts,
+ * the value an operator is expected to put in `NEXT_PUBLIC_CDN_URL` on such a stack.
+ */
+export const LOCAL_FILE_PROXY_BASE = '/api/app-files/serve';
+
+/**
  * Where the bytes are actually downloaded from.
  *
  * `source` is a bucket key, and the deployment's CDN base is what turns one into a URL - the
  * same resolution `apps/client/app/utils/s3.ts` does for the web app. A `profile-photos/` key
  * needs no prefix rewrite (unlike `organizations/` or `admin/logos/`), so the base and the key
- * simply join. Hosted deployments advertise an absolute CDN; self-host and personal dev stages
- * advertise the relative `/api/app-files/serve` proxy. Returns null when nothing can be built,
- * which is the "no photo" outcome rather than an error.
+ * simply join. Hosted deployments advertise an absolute CDN. Self-host and personal dev stages
+ * are *meant* to advertise the relative proxy above, but only do so when the operator set
+ * `NEXT_PUBLIC_CDN_URL`; the caller supplies that fallback, so an empty base here means the
+ * caller has no base at all. Returns null then, which is the "no photo" outcome, not an error.
  *
  * A source that is already absolute is returned untouched: some older rows hold a full URL.
  */

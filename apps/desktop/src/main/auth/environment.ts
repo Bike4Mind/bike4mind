@@ -14,12 +14,15 @@ export function hostedAvailable(): boolean {
   return bakedDefaultApiUrl() !== '';
 }
 
-/** Mirrors the CLI's `getEnvironmentName`, so the two clients label a backend the same way. */
+/**
+ * Mirrors the CLI's `getEnvironmentName` resolution order. The names match except for a custom
+ * URL, which the desktop calls "Remote" where the CLI still says "Self-Hosted".
+ */
 function labelFor(endpoint: Extract<ApiEndpoint, { status: 'configured' }>): string {
   if (endpoint.source === 'baked-default') return 'Production';
   if (endpoint.source === 'dev-default') return 'Local Dev';
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(endpoint.url)) return 'Local Dev';
-  return 'Self-Hosted';
+  return 'Remote';
 }
 
 /**

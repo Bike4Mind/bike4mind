@@ -65,7 +65,7 @@ export function EnvironmentPicker({ state, disabled }: EnvironmentPickerProps) {
             Production{state.hostedAvailable ? '' : ' (not set in this build)'}
           </Option>
           <Option value="local">Local Dev</Option>
-          <Option value="custom">Self-hosted URL</Option>
+          <Option value="custom">Remote URL</Option>
         </Select>
         <FormHelperText data-testid="environment-active-text">
           {active ? (

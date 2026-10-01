@@ -49,9 +49,9 @@ describe('the environment picker', () => {
     expect(
       markup(<EnvironmentPicker state={stateFor('hosted', 'https://app.bike4mind.com', 'Production')} />)
     ).toContain('Switch to Production');
-    expect(
-      markup(<EnvironmentPicker state={stateFor('custom', 'https://b4m.example.com', 'Self-Hosted')} />)
-    ).toContain('Switch to this URL');
+    expect(markup(<EnvironmentPicker state={stateFor('custom', 'https://b4m.example.com', 'Remote')} />)).toContain(
+      'Switch to this URL'
+    );
     expect(markup(<EnvironmentPicker state={local} />)).not.toContain('Use this server');
   });
 
@@ -64,7 +64,7 @@ describe('the environment picker', () => {
   });
 
   it('keeps the custom preset editable', () => {
-    const html = markup(<EnvironmentPicker state={stateFor('custom', 'https://b4m.example.com', 'Self-Hosted')} />);
+    const html = markup(<EnvironmentPicker state={stateFor('custom', 'https://b4m.example.com', 'Remote')} />);
     expect(html).toContain('data-testid="environment-url-input"');
     expect(html).toContain('value="https://b4m.example.com"');
   });

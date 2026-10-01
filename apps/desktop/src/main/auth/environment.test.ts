@@ -30,11 +30,11 @@ describe('resolveEnvironment', () => {
     });
   });
 
-  it('labels a self-hosted custom URL distinctly from a local one', () => {
-    const selfHosted = resolveEnvironment({ preset: 'custom', customUrl: 'https://b4m.internal' }, false);
+  it('labels a remote custom URL distinctly from a local one', () => {
+    const remote = resolveEnvironment({ preset: 'custom', customUrl: 'https://b4m.internal' }, false);
     const localCustom = resolveEnvironment({ preset: 'custom', customUrl: 'http://127.0.0.1:3000' }, false);
 
-    expect(selfHosted).toMatchObject({ environment: { label: 'Self-Hosted' } });
+    expect(remote).toMatchObject({ environment: { label: 'Remote' } });
     expect(localCustom).toMatchObject({ environment: { label: 'Local Dev' } });
   });
 

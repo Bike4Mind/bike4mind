@@ -16,7 +16,7 @@ import type {
 } from '@shared/auth';
 import { hostedAvailable, normalizeSelection, resolveEnvironment, validateSelection } from './environment';
 import { classifyIdentifyFailure } from './identifyFailure';
-import { fetchProfilePhoto, type ProfilePhotoCache } from './profilePhoto';
+import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
 import { msUntilProactiveRefresh, msUntilRefreshRetry } from './refreshSchedule';
 import type { TokenVault } from './tokenVault';
 
@@ -402,10 +402,17 @@ export class AuthService {
   }
 
   /**
-   * The deployment's CDN base, which is what turns a stored photo key into a URL. Absolute on
-   * hosted stages, the relative `/api/app-files/serve` proxy on self-host, and empty when the
-   * lookup fails - in which case a key-shaped photoUrl simply cannot be placed, and the panel
-   * keeps its initials.
+   * The deployment's CDN base, which is what turns a stored photo key into a URL.
+   *
+   * Hosted stages advertise an absolute CDN. A self-host or personal dev stage is supposed to
+   * advertise the local file proxy instead, but only does so when its operator set
+   * `NEXT_PUBLIC_CDN_URL`; left unset, serverConfig answers with an empty string and every
+   * photo on that deployment silently falls back to initials. So an answered-but-empty
+   * `cdnUrl` resolves to the proxy, which is where such a stack serves bucket keys from.
+   *
+   * A lookup that *failed* is treated differently and stays empty: it says nothing about how
+   * the deployment serves files, and it is not cached either, so the next environment switch
+   * asks again rather than inheriting a guess made during an outage.
    */
   private async resolveCdnUrl(api: AuthenticatedApiClient): Promise<string> {
     const environmentUrl = this.endpointUrl();
@@ -413,7 +420,7 @@ export class AuthService {
 
     let cdnUrl = '';
     try {
-      cdnUrl = (await api.get<ServerConfigResponse>('/api/settings/serverConfig'))?.cdnUrl ?? '';
+      cdnUrl = (await api.get<ServerConfigResponse>('/api/settings/serverConfig'))?.cdnUrl || LOCAL_FILE_PROXY_BASE;
     } catch (err) {
       this.deps.logger.warn(`AUTH: serverConfig lookup failed: ${err instanceof Error ? err.message : 'unknown'}`);
       return '';

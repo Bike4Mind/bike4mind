@@ -2,13 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthenticatedApiClient, DeviceFlowClient } from '@bike4mind/client-auth';
 import type { AuthState } from '@shared/auth';
 import { AuthService, DESKTOP_OAUTH_CLIENT_ID, readPhotoSource, toDesktopUser } from './AuthService';
+import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
 import { TokenVault, type SecretCipher, type VaultFile } from './tokenVault';
+
+// The download itself is MediaApiClient's and tested there; what matters here is the base the
+// service hands it, which is the only thing standing between a self-host account and initials.
+vi.mock('./profilePhoto', async () => {
+  const actual = await vi.importActual<typeof import('./profilePhoto')>('./profilePhoto');
+  return { ...actual, fetchProfilePhoto: vi.fn().mockResolvedValue(null) };
+});
 
 const BAKED = 'B4M_DEFAULT_API_URL';
 const HOSTED = 'https://b4m.example.com';
 
 afterEach(() => {
   delete process.env[BAKED];
+  vi.mocked(fetchProfilePhoto).mockClear();
   vi.restoreAllMocks();
 });
 
@@ -60,11 +69,26 @@ function fakeDeviceFlow(overrides: Partial<DeviceFlowClient> = {}) {
   return client as unknown as DeviceFlowClient & typeof client;
 }
 
+/** Enough of the cache to get past the service's "is there one?" guard; the fetch is mocked. */
+function photoCache(): ProfilePhotoCache {
+  return { lookup: vi.fn().mockResolvedValue(null), store: vi.fn(), clear: vi.fn() } as unknown as ProfilePhotoCache;
+}
+
+/** A photo source on the identity response is what sends the service looking for a CDN base. */
+function identifyWithPhoto(cdnUrl: unknown) {
+  return vi.fn(async (path: string) =>
+    path === '/api/settings/serverConfig'
+      ? { cdnUrl }
+      : { user: { id: 'user-1', email: 'rider@example.com', photoUrl: 'profile-photos/user-1/a.png' } }
+  );
+}
+
 function build(options: {
   device?: ReturnType<typeof fakeDeviceFlow>;
   get?: ReturnType<typeof vi.fn>;
   vault?: TokenVault;
   openExternal?: (url: string) => Promise<void>;
+  profilePhotos?: ProfilePhotoCache;
 }) {
   const device = options.device ?? fakeDeviceFlow();
   const get = options.get ?? vi.fn().mockResolvedValue({ user: { id: 'user-1', email: 'rider@example.com' } });
@@ -81,6 +105,7 @@ function build(options: {
     onStateChanged: state => states.push(state),
     createDeviceFlowClient: () => device,
     createApiClient: () => ({ get }) as unknown as AuthenticatedApiClient,
+    profilePhotos: options.profilePhotos,
   });
 
   return { service, device, get, vault, states, openExternal };
@@ -212,6 +237,61 @@ describe('AuthService', () => {
 
     expect(service.getState()).toMatchObject({ status: 'signed-out', user: undefined });
     expect(await vault.getTokens(HOSTED)).toBeNull();
+
+    service.dispose();
+  });
+
+  /**
+   * The bug this covers: a self-host stack whose operator never set `NEXT_PUBLIC_CDN_URL`
+   * answers serverConfig with an empty `cdnUrl`, which used to end the photo lookup there.
+   */
+  it('falls back to the local file proxy when the deployment advertises no CDN', async () => {
+    process.env[BAKED] = HOSTED;
+    const { service } = build({ get: identifyWithPhoto(''), profilePhotos: photoCache() });
+
+    await service.initialize();
+    await service.signIn();
+
+    await vi.waitFor(() =>
+      expect(fetchProfilePhoto).toHaveBeenCalledWith(expect.objectContaining({ cdnUrl: LOCAL_FILE_PROXY_BASE }))
+    );
+
+    service.dispose();
+  });
+
+  it('prefers an advertised CDN over the proxy fallback', async () => {
+    process.env[BAKED] = HOSTED;
+    const { service } = build({
+      get: identifyWithPhoto('https://cdn.example.com'),
+      profilePhotos: photoCache(),
+    });
+
+    await service.initialize();
+    await service.signIn();
+
+    await vi.waitFor(() =>
+      expect(fetchProfilePhoto).toHaveBeenCalledWith(expect.objectContaining({ cdnUrl: 'https://cdn.example.com' }))
+    );
+
+    service.dispose();
+  });
+
+  /**
+   * A lookup that never answered says nothing about how the deployment serves files, so it
+   * gets no guess - and nothing is cached, so the next attempt asks again.
+   */
+  it('guesses no base at all when the serverConfig lookup fails', async () => {
+    process.env[BAKED] = HOSTED;
+    const get = vi.fn(async (path: string) => {
+      if (path === '/api/settings/serverConfig') throw new Error('network down');
+      return { user: { id: 'user-1', photoUrl: 'profile-photos/user-1/a.png' } };
+    });
+    const { service } = build({ get, profilePhotos: photoCache() });
+
+    await service.initialize();
+    await service.signIn();
+
+    await vi.waitFor(() => expect(fetchProfilePhoto).toHaveBeenCalledWith(expect.objectContaining({ cdnUrl: '' })));
 
     service.dispose();
   });
