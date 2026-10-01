@@ -41,7 +41,7 @@ export async function dispatchQuestCallback(questId: string, logger: Logger): Pr
     claimedEventId = await questRepository.claimCallbackDispatch(questId);
     if (!claimedEventId) return;
 
-    const message: GenerationCallbackMessage = { questId };
+    const message: GenerationCallbackMessage = { questId, eventId: claimedEventId };
     await new SQSService().sendMessage(queueUrl, message);
     logger.info('Generation callback dispatched', { questId });
   } catch (error) {

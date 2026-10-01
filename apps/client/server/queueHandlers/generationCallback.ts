@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { SQSEvent } from 'aws-lambda';
-import { questRepository, sessionRepository, userApiKeyRepository } from '@bike4mind/database';
+import { questRepository, sessionRepository, userApiKeyRepository, TERMINAL_QUEST_STATUSES } from '@bike4mind/database';
 import { ApiKeyStatus, GENERATION_CALLBACK_EVENT_TYPE, type IQuestCallback } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
@@ -36,10 +36,12 @@ type AttemptResult =
  * server/generationCallback/dispatchQuestCallback.ts.
  *
  * Everything is re-read per attempt, so a retry signs with the key's current secret and a
- * key revoked mid-retry stops the delivery. A retryable failure throws for SQS redelivery, and so
- * does the last one after recording `failed` (so the quest never reads as still in flight): only a
- * throw lets SQS redrive the message to the DLQ (see queueHandlers/utils.ts). A permanent failure
- * records `failed` and returns, since a DLQ replay could not fix it either.
+ * key revoked mid-retry stops the delivery. A message whose eventId no longer matches the
+ * callback is from a superseded arm and is dropped without recording anything; a quest that is no
+ * longer terminal was re-run, so its callback records `failed`. A retryable failure throws for SQS
+ * redelivery, and so does the last one after recording `failed` (so the quest never reads as still
+ * in flight): only a throw lets SQS redrive the message to the DLQ (see queueHandlers/utils.ts). A
+ * permanent failure records `failed` and returns, since a DLQ replay could not fix it either.
  */
 export const dispatch = dispatchWithLogger(async (event: SQSEvent, _context, logger) => {
   const message = GenerationCallbackMessageSchema.parse(JSON.parse(event.Records[0].body));
@@ -52,18 +54,30 @@ export const dispatch = dispatchWithLogger(async (event: SQSEvent, _context, log
     logger.warn('No dispatched callback on quest; skipping', { state: callback?.state });
     return;
   }
+  // A retry can re-arm the callback (fresh eventId) while an earlier claim's message is still in
+  // flight; a message from a superseded arm must not record or deliver against the new one.
+  if (callback.eventId !== message.eventId) {
+    logger.warn('Callback re-armed since this message was enqueued; skipping', {
+      messageEventId: message.eventId,
+      callbackEventId: callback.eventId,
+    });
+    return;
+  }
 
   const result = await attemptDelivery(message.questId, callback, logger);
 
   if (result.kind === 'delivered') {
-    await questRepository.recordCallbackAttempt(message.questId, { state: 'delivered', statusCode: result.statusCode });
+    await questRepository.recordCallbackAttempt(message.questId, message.eventId, {
+      state: 'delivered',
+      statusCode: result.statusCode,
+    });
     logger.info('Generation callback delivered', { statusCode: result.statusCode });
     return;
   }
 
   if (result.kind === 'retryable') {
     const isFinal = isFinalDeliveryAttempt(event, GENERATION_CALLBACK_MAX_RECEIVE_COUNT);
-    await questRepository.recordCallbackAttempt(message.questId, {
+    await questRepository.recordCallbackAttempt(message.questId, message.eventId, {
       state: isFinal ? 'failed' : 'dispatched',
       statusCode: result.statusCode,
       error: result.error,
@@ -73,7 +87,7 @@ export const dispatch = dispatchWithLogger(async (event: SQSEvent, _context, log
     throw new RetryableError(result.error);
   }
 
-  await questRepository.recordCallbackAttempt(message.questId, {
+  await questRepository.recordCallbackAttempt(message.questId, message.eventId, {
     state: 'failed',
     statusCode: result.statusCode,
     error: result.error,
@@ -94,6 +108,12 @@ async function attemptDelivery(
 
   const quest = await questRepository.findById(questId);
   if (!quest) return { kind: 'permanent', error: 'Quest no longer exists' };
+  // The claim only happens on a terminal quest (claimCallbackDispatch), so a non-terminal status
+  // here means the quest was re-run after this callback was dispatched; its original outcome no
+  // longer exists, and a DLQ replay could never produce a different quest to deliver.
+  if (!quest.status || !TERMINAL_QUEST_STATUSES.includes(quest.status)) {
+    return { kind: 'permanent', error: 'Quest is no longer settled; it was re-run after this callback was dispatched' };
+  }
 
   try {
     await assertUrlAllowed(callback.url);

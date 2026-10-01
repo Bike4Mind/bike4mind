@@ -88,11 +88,9 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ id: 'quest1', type: 'message', errorCode: undefined }),
-      { unset: ['status', 'errorCode'] }
-    );
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1', type: 'message' }), {
+      unset: ['status', 'errorCode'],
+    });
   });
 
   it('writes only the reset fields when retrying a quest', async () => {

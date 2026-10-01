@@ -222,18 +222,23 @@ describe('questRepository.recordCallbackAttempt', () => {
     const quest = await Quest.create(seed({ status: 'done' }));
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
-    await questRepository.claimCallbackDispatch(id);
-    return id;
+    const eventId = await questRepository.claimCallbackDispatch(id);
+    if (!eventId) throw new Error('claim failed');
+    return { id, eventId };
   }
 
   it('allows a delivered replay from a failed state', async () => {
-    const id = await dispatchedQuestId();
-    await questRepository.recordCallbackAttempt(id, { state: 'failed', statusCode: 500, error: 'connection reset' });
+    const { id, eventId } = await dispatchedQuestId();
+    await questRepository.recordCallbackAttempt(id, eventId, {
+      state: 'failed',
+      statusCode: 500,
+      error: 'connection reset',
+    });
 
     let callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('failed');
 
-    await questRepository.recordCallbackAttempt(id, { state: 'delivered', statusCode: 200 });
+    await questRepository.recordCallbackAttempt(id, eventId, { state: 'delivered', statusCode: 200 });
 
     callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('delivered');
@@ -246,18 +251,22 @@ describe('questRepository.recordCallbackAttempt', () => {
     const quest = await Quest.create(seed({ status: 'done' }));
     const id = quest._id.toString();
     await questRepository.armCallback(id, CALLBACK);
+    const armed = await questRepository.findCallbackById(id);
+    if (!armed) throw new Error('arm failed');
 
-    await expect(questRepository.recordCallbackAttempt(id, { state: 'delivered' })).resolves.not.toThrow();
+    await expect(
+      questRepository.recordCallbackAttempt(id, armed.eventId, { state: 'delivered' })
+    ).resolves.not.toThrow();
 
     const callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('pending');
   });
 
   it('truncates a lastError longer than 500 chars to exactly 500', async () => {
-    const id = await dispatchedQuestId();
+    const { id, eventId } = await dispatchedQuestId();
     const longError = 'x'.repeat(600);
 
-    await questRepository.recordCallbackAttempt(id, { state: 'failed', error: longError });
+    await questRepository.recordCallbackAttempt(id, eventId, { state: 'failed', error: longError });
 
     const callback = await questRepository.findCallbackById(id);
     expect(callback?.lastError).toHaveLength(500);
@@ -265,13 +274,29 @@ describe('questRepository.recordCallbackAttempt', () => {
   });
 
   it('does not set completedAt for a dispatched-state attempt (retry diagnostics only)', async () => {
-    const id = await dispatchedQuestId();
-    await questRepository.recordCallbackAttempt(id, { state: 'dispatched', statusCode: 503 });
+    const { id, eventId } = await dispatchedQuestId();
+    await questRepository.recordCallbackAttempt(id, eventId, { state: 'dispatched', statusCode: 503 });
 
     const callback = await questRepository.findCallbackById(id);
     expect(callback?.state).toBe('dispatched');
     expect(callback?.lastStatusCode).toBe(503);
     expect(callback?.completedAt).toBeUndefined();
+  });
+
+  it('is a no-op against a stale eventId (state unchanged after a re-arm)', async () => {
+    const { id, eventId: staleEventId } = await dispatchedQuestId();
+    await questRepository.releaseCallbackDispatch(id, staleEventId);
+    await questRepository.armCallback(id, CALLBACK);
+    const freshEventId = await questRepository.claimCallbackDispatch(id);
+    if (!freshEventId) throw new Error('re-claim failed');
+
+    await expect(
+      questRepository.recordCallbackAttempt(id, staleEventId, { state: 'delivered', statusCode: 200 })
+    ).resolves.not.toThrow();
+
+    const callback = await questRepository.findCallbackById(id);
+    expect(callback?.state).toBe('dispatched');
+    expect(callback?.eventId).toBe(freshEventId);
   });
 });
 

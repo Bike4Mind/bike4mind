@@ -781,9 +781,10 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
  * The statuses that mean a quest will never be written to again. Anything else
  * (`pending`, `running`) is still claiming to be live, and is what a settle pass
  * is allowed to take over. Shared by the two halves of that pass so its read and
- * its write cannot drift on what "unfinished" means.
+ * its write cannot drift on what "unfinished" means. Exported so the generation
+ * callback handler can check a quest is still settled before delivering against it.
  */
-const TERMINAL_QUEST_STATUSES = ['done', 'stopped'];
+export const TERMINAL_QUEST_STATUSES: readonly NonNullable<IChatHistoryItemDocument['status']>[] = ['done', 'stopped'];
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1265,10 +1266,12 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   /**
    * Record one delivery attempt. `delivered` / `failed` are final; a retryable failure keeps
    * `dispatched` and only updates the diagnostics. Matches `failed` too, so a DLQ replay of an
-   * exhausted callback can record its outcome.
+   * exhausted callback can record its outcome. Scoped to the claimed `eventId`, mirroring
+   * releaseCallbackDispatch, so a stale message cannot record against a re-armed callback.
    */
   async recordCallbackAttempt(
     id: string,
+    eventId: string,
     attempt: {
       state: Extract<QuestCallbackState, 'dispatched' | 'delivered' | 'failed'>;
       statusCode?: number;
@@ -1277,7 +1280,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   ): Promise<void> {
     const isFinal = attempt.state !== 'dispatched';
     await this.model.updateOne(
-      { _id: id, 'callback.state': { $in: ['dispatched', 'failed'] } },
+      { _id: id, 'callback.eventId': eventId, 'callback.state': { $in: ['dispatched', 'failed'] } },
       {
         $set: {
           'callback.state': attempt.state,

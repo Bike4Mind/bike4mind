@@ -28,6 +28,7 @@ vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findById: h.sessionFindById,
   },
+  TERMINAL_QUEST_STATUSES: ['done', 'stopped'],
 }));
 
 vi.mock('@server/utils/ssrfProtection', async importOriginal => {
@@ -55,7 +56,7 @@ function makeEvent(body: Record<string, unknown>, approximateReceiveCount = '1')
   } as unknown as SQSEvent;
 }
 
-const MESSAGE = { questId: 'quest-1' };
+const MESSAGE = { questId: 'quest-1', eventId: 'event-1' };
 
 const CALLBACK_DISPATCHED = {
   url: 'https://receiver.example.com/hook',
@@ -116,7 +117,7 @@ describe('generationCallback dispatch', () => {
 
     await dispatch(makeEvent(MESSAGE), {} as never, logger);
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', { state: 'delivered', statusCode: 200 });
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', { state: 'delivered', statusCode: 200 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -142,7 +143,7 @@ describe('generationCallback dispatch', () => {
 
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).rejects.toThrow();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'dispatched',
       statusCode: 503,
       error: expect.any(String),
@@ -156,7 +157,7 @@ describe('generationCallback dispatch', () => {
       dispatch(makeEvent(MESSAGE, String(GENERATION_CALLBACK_MAX_RECEIVE_COUNT)), {} as never, logger)
     ).rejects.toThrow();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: 503,
       error: expect.any(String),
@@ -168,7 +169,7 @@ describe('generationCallback dispatch', () => {
 
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: 404,
       error: expect.any(String),
@@ -180,7 +181,7 @@ describe('generationCallback dispatch', () => {
 
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: status,
       error: expect.any(String),
@@ -192,7 +193,7 @@ describe('generationCallback dispatch', () => {
 
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).rejects.toThrow();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'dispatched',
       statusCode: status,
       error: expect.any(String),
@@ -233,7 +234,7 @@ describe('generationCallback dispatch', () => {
 
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: 302,
       error: expect.any(String),
@@ -247,7 +248,7 @@ describe('generationCallback dispatch', () => {
 
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).rejects.toThrow();
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'dispatched',
       statusCode: undefined,
       error: expect.any(String),
@@ -262,7 +263,7 @@ describe('generationCallback dispatch', () => {
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: undefined,
       error: expect.any(String),
@@ -280,7 +281,7 @@ describe('generationCallback dispatch', () => {
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: undefined,
       error: expect.any(String),
@@ -295,7 +296,7 @@ describe('generationCallback dispatch', () => {
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: undefined,
       error: expect.any(String),
@@ -341,7 +342,7 @@ describe('generationCallback dispatch', () => {
 
     await dispatch(makeEvent(MESSAGE), {} as never, logger);
 
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', { state: 'delivered', statusCode: 200 });
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', { state: 'delivered', statusCode: 200 });
   });
 
   it('fails permanently without calling fetch when assertUrlAllowed throws SsrfError', async () => {
@@ -352,7 +353,7 @@ describe('generationCallback dispatch', () => {
     await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', {
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
       state: 'failed',
       statusCode: undefined,
       error: expect.any(String),
@@ -379,5 +380,47 @@ describe('generationCallback dispatch', () => {
     };
     expect(sentBody.promptMeta.functionCalls[0]).not.toHaveProperty('returnValue');
     expect(sentBody.promptMeta.functionCalls[0]).toMatchObject({ name: 'search' });
+  });
+
+  it('is a no-op when the message eventId no longer matches the callback (re-armed since enqueue)', async () => {
+    h.findCallbackById.mockResolvedValue({ ...CALLBACK_DISPATCHED, eventId: 'event-2' });
+    const fetchMock = vi.fn();
+    stubFetch(fetchMock);
+
+    await dispatch(makeEvent(MESSAGE), {} as never, logger);
+
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.recordCallbackAttempt).not.toHaveBeenCalled();
+  });
+
+  it('records failed without fetching when the quest is no longer terminal (re-run after dispatch)', async () => {
+    h.findById.mockResolvedValue(makeQuest({ status: 'running' }));
+    const fetchMock = vi.fn();
+    stubFetch(fetchMock);
+
+    await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
+      state: 'failed',
+      statusCode: undefined,
+      error: 'Quest is no longer settled; it was re-run after this callback was dispatched',
+    });
+  });
+
+  it('records failed without fetching when the quest status is undefined (re-run after dispatch)', async () => {
+    h.findById.mockResolvedValue(makeQuest({ status: undefined }));
+    const fetchMock = vi.fn();
+    stubFetch(fetchMock);
+
+    await expect(dispatch(makeEvent(MESSAGE, '1'), {} as never, logger)).resolves.toBeUndefined();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.recordCallbackAttempt).toHaveBeenCalledWith('quest-1', 'event-1', {
+      state: 'failed',
+      statusCode: undefined,
+      error: 'Quest is no longer settled; it was re-run after this callback was dispatched',
+    });
   });
 });

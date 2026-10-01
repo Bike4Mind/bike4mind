@@ -69,7 +69,7 @@ describe('dispatchQuestCallback', () => {
     expect(h.releaseCallbackDispatch).not.toHaveBeenCalled();
   });
 
-  it('sends {questId} to the linked generationCallbackQueue url when the claim succeeds', async () => {
+  it('sends {questId, eventId} to the linked generationCallbackQueue url when the claim succeeds', async () => {
     h.claimCallbackDispatch.mockResolvedValue('quest_quest-1_event');
     h.sendMessage.mockResolvedValue('message-id-1');
     const logger = makeLogger();
@@ -78,7 +78,7 @@ describe('dispatchQuestCallback', () => {
 
     expect(h.sendMessage).toHaveBeenCalledWith(
       'https://sqs.us-east-2.amazonaws.com/123456789012/generationCallbackQueue',
-      { questId: 'quest-1' }
+      { questId: 'quest-1', eventId: 'quest_quest-1_event' }
     );
     expect(h.releaseCallbackDispatch).not.toHaveBeenCalled();
   });
