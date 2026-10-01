@@ -1,6 +1,7 @@
 import { glob, lstat, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
+import { envReadPrompt, readsEnvFile } from './envFiles';
 import { resolveWithinRoots } from './paths';
 import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
@@ -208,6 +209,8 @@ export const fileRead: ToolDefinition = {
       required: ['path'],
     },
   },
+  needsApproval: (input, context) => readsEnvFile(input.path, context),
+  approval: (input, context) => envReadPrompt('file_read', input.path, context),
   async run(input, context) {
     const target = await resolveWithinRoots(requireString(input, 'path'), context.roots, context.workingDirectory);
     const info = await stat(target);
@@ -509,6 +512,10 @@ export const grepSearch: ToolDefinition = {
       required: ['pattern'],
     },
   },
+  // Only a search aimed at one file by name: a folder search skips gitignored files, which is
+  // where a `.env` nearly always is.
+  needsApproval: (input, context) => readsEnvFile(input.path, context),
+  approval: (input, context) => envReadPrompt('grep_search', input.path, context),
   async run(input, context) {
     const requested = typeof input.path === 'string' && input.path ? input.path : defaultBase(context);
     const base = await resolveWithinRoots(requested, context.roots, context.workingDirectory);

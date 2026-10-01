@@ -85,11 +85,13 @@ import type { ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
-import { assessApprovalRisk, spendsCredits } from './tools/riskAssessment';
+import { DoomLoopTracker } from './tools/doomLoop';
+import { spendsCredits } from './tools/riskAssessment';
 import {
   capOutput,
   outputCapFor,
   type ApprovalOption,
+  type ApprovalAlways,
   type ApprovalPrompt,
   type BrowserContext,
   type BrowserProvider,
@@ -370,6 +372,7 @@ export class ChatService {
 
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
+  private readonly doomLoop = new DoomLoopTracker();
 
   /**
    * One in-flight next-prompt guess per session; the value aborts it.
@@ -769,6 +772,7 @@ export class ChatService {
   async deleteSession(sessionId: string): Promise<void> {
     this.stop(sessionId);
     this.deps.approvals?.forgetSession(sessionId);
+    this.doomLoop.forget(sessionId);
     await this.deps.background?.killSession(sessionId);
     await this.deps.browser?.closeSession(sessionId);
     await this.deps.attachments?.deleteSession(sessionId);
@@ -1847,6 +1851,7 @@ export class ChatService {
           input: parseArguments(request.arguments),
           status: 'running',
         };
+        const looping = this.doomLoop.record(sessionId, call.name, call.input);
 
         // Built-ins are resolved FIRST and MCP tools only after, so no server can shadow one
         // even if the `mcp__` namespacing in mcp/names.ts were ever to let a name through.
@@ -1938,7 +1943,7 @@ export class ChatService {
 
         // Asked BEFORE 'running' is announced, so the UI never shows a command as under way
         // while it is still waiting on the user, and nothing has run if they say no.
-        const gated = await this.awaitApproval(tool, call, context, sessionId, messageId, signal);
+        const gated = await this.awaitApproval(tool, call, context, sessionId, messageId, signal, looping);
         if (gated.settled) return gated.settled;
         // The user's choice becomes part of the call, so every later reader of this row - the
         // transcript, the stored session, the model on its next turn - sees what actually ran.
@@ -2445,7 +2450,8 @@ export class ChatService {
     context: ToolContext,
     sessionId: string,
     messageId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    looping: boolean
   ): Promise<ApprovalOutcome> {
     const gate = this.deps.approvals;
     if (!gate || !tool.approval) return { input: call.input };
@@ -2472,24 +2478,40 @@ export class ChatService {
     // A redirect option is never offered as a standing answer, so it is never looked up as one
     // either - only the options that actually run the call can have been remembered.
     const runnable = (prompt.choice?.options ?? []).filter(option => !option.redirect);
+    const mode = await this.deps.store.approvalMode(sessionId);
+    // The same call a third time in a row is asked about in 'auto' whatever was allowed before:
+    // the model is more likely stuck than making progress, and this is the point to find out.
+    const stuck = looping && mode === 'auto';
 
     // An irreversible tool is asked every time, whatever was answered before: the standing set
     // is keyed on what a call WOULD do, and for something with no undo that is not a good
     // enough reason to skip asking. The gate refuses to record one for these either.
-    if (!prompt.irreversible) {
+    if (!prompt.irreversible && !stuck) {
       const standing = gate.isStanding(
         sessionId,
         prompt.key,
         runnable.map(option => option.id)
       );
       if (standing) return { input: applyOption(call.input, findOption(prompt, standing.optionId), standing.value) };
+
+      // A shell command whose every sub-command was allowed before, by prefix, runs - but not
+      // past a directory outside the project that the user has not allowed too.
+      const always = prompt.always;
+      if (
+        always &&
+        !prompt.askInAuto &&
+        gate.coversCommands(sessionId, always) &&
+        gate.uncoveredDirectories(sessionId, always.directories).length === 0
+      ) {
+        return { input: call.input };
+      }
     }
 
     // Consulted AFTER tool.approval() ran, so a call that is refused outright - a path outside
     // every granted root - is still refused rather than waved through by a loose mode. A mode
     // loose enough to skip the question takes the card's primary action, which is the one the
     // user would have been shown pre-selected.
-    if (await this.autoApproves(sessionId, call, prompt, context)) {
+    if (this.autoApproves(mode, sessionId, call, prompt, stuck)) {
       return { input: applyOption(call.input, runnable[0]) };
     }
 
@@ -2511,12 +2533,16 @@ export class ChatService {
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
+            ...(prompt.always && describeAlways(prompt.always)
+              ? { approvalAlways: describeAlways(prompt.always) }
+              : {}),
             ...(choice ? { approvalChoice: choice } : {}),
           },
         });
       },
       {
         remember: !prompt.irreversible,
+        ...(prompt.always ? { always: prompt.always } : {}),
         // Only the options that RUN the call may become standing. The card offers no "always"
         // beside a redirect, and this is the second lock on that door: a redirect is an
         // instruction about one call, never a policy for every later one.
@@ -2560,26 +2586,31 @@ export class ChatService {
   /**
    * Whether this conversation's approval mode lets this particular call go ahead unasked.
    *
-   * Read from the store rather than from the session captured when the turn started, so a user
-   * who lowers the mode mid-reply is obeyed by the very next tool call rather than after it.
+   * The mode is read from the store by the caller rather than from the session captured when
+   * the turn started, so a user who lowers it mid-reply is obeyed by the very next tool call.
    *
    * The two exclusions hold in every mode, 'full' included. An irreversible call is asked
    * because there is nothing to undo it with, and a credit-spending call is asked because cost
    * is a different axis from filesystem risk: deciding the agent may edit files and run the
    * shell says nothing about whether the user wants to pay for an image.
+   *
+   * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
+   * repeat of the last two calls, a read of a `.env` file, a script that does not parse, or a
+   * path outside the project that the user has not already allowed.
    */
-  private async autoApproves(
+  private autoApproves(
+    mode: ChatApprovalMode,
     sessionId: string,
     call: ChatToolCall,
     prompt: ApprovalPrompt,
-    context: ToolContext
-  ): Promise<boolean> {
+    stuck: boolean
+  ): boolean {
     if (prompt.irreversible || spendsCredits(call.name)) return false;
-
-    const mode = await this.deps.store.approvalMode(sessionId);
     if (mode === 'ask') return false;
     if (mode === 'full') return true;
-    return (await assessApprovalRisk(call.name, call.input, prompt, context)) === 'contained';
+    if (stuck || prompt.askInAuto) return false;
+    const directories = prompt.always?.directories ?? [];
+    return (this.deps.approvals?.uncoveredDirectories(sessionId, directories) ?? directories).length === 0;
   }
 
   private pickModel(models: readonly ChatModelOption[]): string | null {
@@ -3308,6 +3339,16 @@ function worktreePreamble(projectDirectory: string, workspace: { branch: string;
 interface ApprovalOutcome {
   settled?: ChatToolCall;
   input: Record<string, unknown>;
+}
+
+/** What ticking "always" on a shell card will cover, in the words the checkbox shows. */
+function describeAlways(always: ApprovalAlways): string | undefined {
+  const patterns = [...new Set(always.commands.map(command => command.pattern))];
+  if (patterns.length === 0 && always.directories.length === 0) return undefined;
+  const shown = patterns.slice(0, 3).map(pattern => `\`${pattern}\``);
+  if (patterns.length > 3) shown.push(`${patterns.length - 3} more`);
+  const directories = always.directories.map(directory => `${directory}/*`);
+  return `Always allow ${[...shown, ...directories].join(', ')} in this conversation`;
 }
 
 function findOption(prompt: ApprovalPrompt, optionId: string | undefined): ApprovalOption | undefined {

@@ -129,6 +129,8 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
+  /** Set with `approvalId` on a shell call: what ticking "always" will cover, ready to display. */
+  approvalAlways?: string;
   /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before
@@ -654,10 +656,10 @@ export type ChatSessionMode = 'chat' | 'code';
  * `bash_execute` says nothing about whether the user wants to spend credits on an image.
  *
  *  - 'ask'  every gated tool asks. The behaviour this client had before modes existed.
- *  - 'auto' a gated call runs unasked only when it is provably confined: see
- *           main/chat/tools/riskAssessment.ts, which is the whole definition of "safe" here.
- *           Anything it cannot prove - including any tool it does not know, such as one from
- *           an MCP server - falls back to asking.
+ *  - 'auto' everything runs unasked except a call with a named reason to stop: a shell
+ *           command naming a path outside the granted folders (or one that does not parse), a
+ *           read of a `.env` file, or the same call a third time in a row. Modelled on
+ *           opencode's permission defaults; see ChatService.autoApproves.
  *  - 'full' no gate at all for the filesystem and the shell. A command can then read any file
  *           this user can read and reach the internet with nobody looking. Chosen per
  *           conversation, never inherited by a spawned one, and reset to 'ask' on relaunch.

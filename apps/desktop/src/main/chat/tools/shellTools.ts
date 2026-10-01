@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { BackgroundProcessInfo } from '@shared/chat';
 import type { OutputStream } from './outputBuffer';
-import { resolveWithinRoots } from './paths';
+import { realpathNearest, resolveWithinRoots } from './paths';
+import { scanShell } from './shellScan';
 import { commandEnv, launchCommand } from './commandLaunch';
 import type { SandboxedCommand } from './sandbox';
 import {
@@ -375,6 +377,59 @@ export async function resolveCwd(
   return roots[0];
 }
 
+/**
+ * The prompt for a shell command, shared by bash_execute and bash_background.
+ *
+ * The script is parsed here rather than at decision time so the card can say what "always" will
+ * cover, and so one reading of the command serves both. A script that does not parse, or a `cwd`
+ * outside every granted root, is asked about even where commands otherwise run unasked.
+ */
+export async function shellApproval(
+  tool: 'bash_execute' | 'bash_background',
+  input: Record<string, unknown>,
+  context: ToolContext
+): Promise<ApprovalPrompt> {
+  const command = typeof input.command === 'string' ? input.command : '';
+  const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+
+  // Here as well as in run() so the user is never asked to approve a command that is going to
+  // be refused anyway - a throw from approval() settles the call without a card.
+  const wrapped = doubleWrapRefusal(command);
+  if (wrapped) throw new Error(wrapped);
+
+  const detail = [
+    cwd ? `$ ${command}\n\nin ${cwd}` : `$ ${command}`,
+    ...(tool === 'bash_background' ? ['', 'Keeps running in the background until stopped.'] : []),
+  ].join('\n');
+  // Keyed on both, and on the exact text, and in a namespace per tool: "always allow" must not
+  // carry from `git status` to a longer command sharing that prefix, from one directory to
+  // another, or from a 60-second run to leaving the same command running all afternoon. NUL
+  // separates the fields because it is the one byte neither of them can contain.
+  const key = `${tool}\x00${cwd}\x00${command}`;
+
+  let startDirectory: string;
+  const directories: string[] = [];
+  try {
+    startDirectory = await realpathNearest(await resolveCwd(input, context.roots, context.workingDirectory));
+  } catch {
+    startDirectory = context.workingDirectory ?? context.roots[0] ?? process.cwd();
+    directories.push(resolve(startDirectory, cwd));
+  }
+
+  const scan = await scanShell(command, startDirectory, context.roots).catch(() => null);
+  if (!scan) return { detail, key, askInAuto: true };
+
+  return {
+    detail,
+    key,
+    always: {
+      namespace: tool,
+      commands: scan.commands.map(({ text, always }) => ({ text, pattern: always })),
+      directories: [...new Set([...directories, ...scan.directories])],
+    },
+  };
+}
+
 /** Exported so tests can shrink the grace period. */
 export const bashExecuteRunOptions: RunOptions = {};
 
@@ -423,8 +478,8 @@ export const bashExecute: ToolDefinition = {
       '',
       'Pass `cwd` to run somewhere other than the default folder rather than opening with a `cd`.',
       '',
-      'The user is shown the exact command and must approve it before it runs, so state plainly',
-      'what you are about to do and why. A denial is an answer, not an error to work around: do',
+      "Depending on the user's approval setting, they may be shown the exact command and asked to",
+      'approve it before it runs, so state plainly what you are about to do and why. A denial is an answer, not an error to work around: do',
       'not rephrase the same command to get past it.',
       '',
       'The command runs as the user, with their full environment: their PATH, git credentials,',
@@ -471,22 +526,8 @@ export const bashExecute: ToolDefinition = {
     },
   },
 
-  approval(input: Record<string, unknown>): ApprovalPrompt {
-    const command = typeof input.command === 'string' ? input.command : '';
-    const cwd = typeof input.cwd === 'string' ? input.cwd : '';
-
-    // Here as well as in run() so the user is never asked to approve a command that is going to
-    // be refused anyway - a throw from approval() settles the call without a card.
-    const wrapped = doubleWrapRefusal(command);
-    if (wrapped) throw new Error(wrapped);
-
-    return {
-      detail: cwd ? `$ ${command}\n\nin ${cwd}` : `$ ${command}`,
-      // Keyed on both, and on the exact text: "always allow" must not carry from `git status`
-      // to a longer command sharing that prefix, nor from one directory to another. NUL
-      // separates the fields because it is the one byte neither of them can contain.
-      key: `bash_execute\x00${cwd}\x00${command}`,
-    };
+  approval(input: Record<string, unknown>, context: ToolContext): Promise<ApprovalPrompt> {
+    return shellApproval('bash_execute', input, context);
   },
 
   async run(input, context) {

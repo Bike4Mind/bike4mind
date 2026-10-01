@@ -238,7 +238,7 @@ function ApprovalPrompt({
               onClick={() => onRespond(approvalId, { decision: 'always' })}
               data-testid="chat-tool-approve-always"
             >
-              Always in this chat
+              {call.approvalAlways ?? 'Always in this chat'}
             </Button>
           )}
           <Button

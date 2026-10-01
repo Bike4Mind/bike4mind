@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ApprovalGate } from './ApprovalGate';
+import { ApprovalGate, patternMatches } from './ApprovalGate';
+import type { ApprovalAlways } from './types';
 
 /**
  * The gate keeps no cross-session view of what is waiting: an approval is answered in the
@@ -55,5 +56,60 @@ describe('ApprovalGate', () => {
   it('offers no way to list what other conversations are waiting on', () => {
     const gate = new ApprovalGate() as unknown as Record<string, unknown>;
     expect(gate.pendingApprovals).toBeUndefined();
+  });
+
+  describe('always allow by prefix', () => {
+    const always = (patterns: string[], texts: string[], directories: string[] = []): ApprovalAlways => ({
+      namespace: 'bash_execute',
+      commands: patterns.map((pattern, index) => ({ pattern, text: texts[index] })),
+      directories,
+    });
+
+    async function allow(gate: ApprovalGate, remembered: ApprovalAlways) {
+      const controller = new AbortController();
+      let approvalId = '';
+      const answer = gate.request('s', 'key', controller.signal, id => (approvalId = id), { always: remembered });
+      gate.resolve(approvalId, { decision: 'always' });
+      await answer;
+    }
+
+    it('matches a trailing star against the bare command too', () => {
+      expect(patternMatches('git commit *', 'git commit')).toBe(true);
+      expect(patternMatches('git commit *', 'git commit -m "a b"')).toBe(true);
+      expect(patternMatches('git commit *', 'git commits')).toBe(false);
+      expect(patternMatches('ls *', 'lsof -i')).toBe(false);
+      expect(patternMatches('git commit *', 'git status')).toBe(false);
+    });
+
+    it('covers a later compound command only when every sub-command matches', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['git commit *'], ['git commit -m x']));
+
+      const covered = always(['git commit *', 'git commit *'], ['git commit -m a', 'git commit -m b']);
+      expect(gate.coversCommands('s', covered)).toBe(true);
+      const mixed = always(['git commit *', 'rm *'], ['git commit -m a', 'rm -rf x']);
+      expect(gate.coversCommands('s', mixed)).toBe(false);
+      expect(gate.coversCommands('other', covered)).toBe(false);
+    });
+
+    it('keeps the two shell tools apart', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['npm run dev *'], ['npm run dev']));
+      const background = { ...always(['npm run dev *'], ['npm run dev']), namespace: 'bash_background' };
+      expect(gate.coversCommands('s', background)).toBe(false);
+    });
+
+    it('remembers a directory for everything beneath it', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['cat *'], ['cat /etc/hosts'], ['/etc']));
+      expect(gate.uncoveredDirectories('s', ['/etc', '/etc/ssl', '/etcetera', '/var'])).toEqual(['/etcetera', '/var']);
+    });
+
+    it('forgets everything when the conversation is deleted', async () => {
+      const gate = new ApprovalGate();
+      await allow(gate, always(['ls *'], ['ls']));
+      gate.forgetSession('s');
+      expect(gate.coversCommands('s', always(['ls *'], ['ls']))).toBe(false);
+    });
   });
 });

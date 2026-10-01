@@ -26,8 +26,8 @@ describe('approval mode copy', () => {
   });
 
   it('does not promise that approve-for-me checks everything', () => {
-    expect(approvalModeOption('auto').description).toMatch(/only ask/i);
-    expect(approvalModeOption('auto').description).toMatch(/potentially unsafe/i);
+    expect(approvalModeOption('auto').description).toMatch(/everything except/i);
+    expect(approvalModeOption('auto').description).toMatch(/outside this project/i);
   });
 
   /** The two axes the popover has to keep visibly apart, plus the two scoping rules. */
@@ -42,12 +42,12 @@ describe('approval mode copy', () => {
 
   /**
    * The other half of the honesty requirement, and the one that is easy to lose: 'auto' reads
-   * as "unsafe things still ask", and package-manager scripts run repository code unasked. The
-   * copy has to say so, so the saying of it is asserted and not left to the next copy edit.
+   * as "unsafe things still ask", and builds, installs and network calls run unasked. The copy
+   * has to say so, so the saying of it is asserted and not left to the next copy edit.
    */
-  it('admits that approve-for-me runs the project scripts unasked', () => {
+  it('admits that approve-for-me runs most commands unasked', () => {
     const notes = APPROVAL_MODE_FOOTNOTES.join(' ');
-    expect(notes).toMatch(/test, lint and typecheck scripts without asking/i);
+    expect(notes).toMatch(/every other command and edit without asking/i);
   });
 
   it('falls back to asking for a mode it does not recognise', () => {

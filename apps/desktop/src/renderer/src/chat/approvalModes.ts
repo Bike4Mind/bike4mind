@@ -33,7 +33,8 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
   {
     mode: 'auto',
     label: 'Approve for me',
-    description: 'Only ask for actions detected as potentially unsafe',
+    description:
+      'Runs everything except commands that reach outside this project, reads of .env files and repeated calls',
     tone: 'neutral',
   },
   {
@@ -51,15 +52,15 @@ export const APPROVAL_MODE_OPTIONS: readonly ApprovalModeOption[] = [
  * user picks, and hanging them off the orange row would read as reassurance attached to the one
  * option that has none to offer.
  *
- * The script-runner line is the one that is not a limit, and it is here for the opposite reason:
- * 'auto' reads as "unsafe things still ask", and a project's test script running unasked is the
- * one place that is not what it sounds like. Stating the gap where the reassurance is read is
- * the only place stating it is any use.
+ * The first two 'auto' lines are the ones that are not a limit, and they are here for the
+ * opposite reason: 'auto' runs nearly everything, and the path check only sees paths written in
+ * the command. Stating the gap where the reassurance is read is the only place stating it is any
+ * use.
  */
 export const APPROVAL_MODE_FOOTNOTES: readonly string[] = [
-  'In every mode, commands run as you and are not confined to the folders you have shared; file edits are.',
-  '"Approve for me" runs this project\'s own test, lint and typecheck scripts without asking, whatever those scripts do.',
-  '"Approve for me" also runs read-only GitHub CLI commands, which reach GitHub as you.',
+  'Commands run as you and are not confined to the folders you have shared; file edits are. "Approve for me" asks about the paths it can see a command name, which a script can still build at run time.',
+  '"Approve for me" runs every other command and edit without asking, including builds, installs and network calls, as you.',
+  '"Approve for me" asks before a command names a path outside your folders, before a .env file is read, and when the same call is made three times in a row.',
   'Image, speech and music generation always ask, in every mode, because they spend credits.',
   'Deleting a conversation always asks, in every mode, because it cannot be undone.',
   'Full access lasts until you quit: a conversation left on it reopens on "Ask for approval".',

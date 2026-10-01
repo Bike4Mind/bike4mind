@@ -343,6 +343,26 @@ export interface ApprovalPrompt {
    * input before `run` sees it.
    */
   choice?: ApprovalChoice;
+  /**
+   * Asked in 'auto' as well as 'ask' (only 'full' runs it). For a call that is allowed by
+   * default but has a specific reason to stop first: a shell command naming a path outside the
+   * project, or a read of a `.env` file.
+   */
+  askInAuto?: true;
+  /**
+   * For a shell command: what "always allow" remembers. Each sub-command of the script is
+   * covered by a prefix pattern, and each directory outside the project by the directory.
+   */
+  always?: ApprovalAlways;
+}
+
+export interface ApprovalAlways {
+  /** The tool the patterns belong to: allowing `npm run dev *` for one tool is not allowing it for the other. */
+  namespace: string;
+  /** One per sub-command, as written; matched against remembered `patterns`. */
+  commands: readonly { text: string; pattern: string }[];
+  /** Directories outside every granted root that the command reaches. */
+  directories: readonly string[];
 }
 
 /** See ChatApprovalOption: this is that, plus what main does with the answer. */

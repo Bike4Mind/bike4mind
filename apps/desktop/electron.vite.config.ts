@@ -1,11 +1,32 @@
-import { resolve } from 'node:path';
+import { copyFileSync, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { join, resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig, externalizeDepsPlugin, loadEnv } from 'electron-vite';
+import type { Plugin } from 'vite';
 
 const sharedDir = resolve(__dirname, 'src/shared');
 // See the shim's own header: @bike4mind/common's barrel statically imports node:crypto,
 // which a sandboxed renderer cannot resolve.
 const nodeCryptoShim = resolve(__dirname, 'src/renderer/src/shims/nodeCrypto.ts');
+
+/**
+ * Puts the tree-sitter wasm binaries beside the main bundle, in `wasm/`. The shell parser reads
+ * them at runtime by file path, so a bundler that never sees an import for them would otherwise
+ * leave a packaged app with a parser that cannot start.
+ */
+function copyTreeSitterWasm(): Plugin {
+  const require = createRequire(join(__dirname, 'package.json'));
+  const assets = ['web-tree-sitter/tree-sitter.wasm', 'tree-sitter-bash/tree-sitter-bash.wasm'];
+  return {
+    name: 'copy-tree-sitter-wasm',
+    writeBundle(options) {
+      const target = join(options.dir ?? resolve(__dirname, 'out/main'), 'wasm');
+      mkdirSync(target, { recursive: true });
+      for (const asset of assets) copyFileSync(require.resolve(asset), join(target, asset.split('/').pop() as string));
+    },
+  };
+}
 
 /**
  * One of the brand values supplied at build time and never committed. Precedence is the
@@ -44,7 +65,10 @@ export default defineConfig(({ mode }) => {
       // this app never calls, because the packaged tree is computed from package.json, not
       // from what the bundle reaches. `@bike4mind/observability` has no dependencies of its
       // own and is bundled with it so the emitted chunk has no undeclared external left.
-      plugins: [externalizeDepsPlugin({ exclude: ['@bike4mind/utils', '@bike4mind/observability'] })],
+      plugins: [
+        externalizeDepsPlugin({ exclude: ['@bike4mind/utils', '@bike4mind/observability'] }),
+        copyTreeSitterWasm(),
+      ],
     },
     preload: {
       resolve: { alias: { '@shared': sharedDir } },

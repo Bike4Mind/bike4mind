@@ -110,6 +110,7 @@ describe('ChatService with an MCP server', () => {
 
   it('holds an MCP tool at the same gate a bash command uses', async () => {
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, 'say hello');
     await vi.waitUntil(() => streams.length === 1, { timeout: 10_000, interval: 5 });
 
@@ -128,6 +129,7 @@ describe('ChatService with an MCP server', () => {
 
   it('feeds an approved MCP tool result back into the turn', async () => {
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, 'say hello');
     await vi.waitUntil(() => streams.length === 1, { timeout: 10_000, interval: 5 });
 
@@ -147,6 +149,7 @@ describe('ChatService with an MCP server', () => {
 
   it('reports a failing MCP tool to the model without ending the turn', async () => {
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, 'break it');
     await vi.waitUntil(() => streams.length === 1, { timeout: 10_000, interval: 5 });
 
@@ -160,6 +163,7 @@ describe('ChatService with an MCP server', () => {
 
   it('does not let the server reach a built-in by declaring its name', async () => {
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, 'try it');
     await vi.waitUntil(() => streams.length === 1, { timeout: 10_000, interval: 5 });
 
@@ -178,6 +182,7 @@ describe('ChatService with an MCP server', () => {
 
   it('declines an MCP tool the user refuses, and runs nothing', async () => {
     const { id } = await service.createSession();
+    await service.setApprovalMode(id, 'ask');
     await service.send(id, 'say hello');
     await vi.waitUntil(() => streams.length === 1, { timeout: 10_000, interval: 5 });
 

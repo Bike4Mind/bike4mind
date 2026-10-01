@@ -12,7 +12,7 @@ import type { ChatApprovalMode } from '@shared/chat';
  *
  * 'auto' until they have picked anything, and 'auto' again whenever the file cannot be read.
  * That is the floor rather than a fallback: it is the mode the app now starts in, and every
- * call it lets through has been proven confined by main/chat/tools/riskAssessment.ts.
+ * call it lets through is one nothing in ChatService.autoApproves had a reason to stop.
  *
  * 'full' is never remembered. It is already scoped to the run of the app it was chosen in - see
  * SessionStore's `normalizeApprovalMode` - so a new conversation inheriting it would outlive

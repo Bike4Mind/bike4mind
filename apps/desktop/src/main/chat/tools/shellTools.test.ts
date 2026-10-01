@@ -93,9 +93,11 @@ describe('bash_execute', () => {
       await expect(bashExecute.run({ command }, context)).rejects.toThrow(/second shell/);
     });
 
-    it('is refused before the user is asked, not after', () => {
+    it('is refused before the user is asked, not after', async () => {
       const asContext = context as unknown as ToolContext;
-      expect(() => bashExecute.approval?.({ command: "bash -lc 'echo hi'" }, asContext)).toThrow(/second shell/);
+      await expect(bashExecute.approval?.({ command: "bash -lc 'echo hi'" }, asContext)).rejects.toThrow(
+        /second shell/
+      );
     });
 
     it.each([
@@ -219,6 +221,20 @@ describe('bash_execute', () => {
 
     expect(first?.detail).toContain('git status');
     expect(first?.key).not.toBe(second?.key);
+  });
+
+  it('derives what always-allow covers, and asks when the script does not parse', async () => {
+    const parsed = await bashExecute.approval?.({ command: 'git commit -m x && ls -la', cwd: root }, context);
+    expect(parsed?.always?.commands.map(command => command.pattern)).toEqual(['git commit *', 'ls *']);
+    expect(parsed?.askInAuto).toBeUndefined();
+
+    const broken = await bashExecute.approval?.({ command: 'if then fi ((', cwd: root }, context);
+    expect(broken?.askInAuto).toBe(true);
+  });
+
+  it('lists a cwd outside every root as a directory to ask about', async () => {
+    const prompt = await bashExecute.approval?.({ command: 'ls', cwd: '/etc' }, context);
+    expect(prompt?.always?.directories).toEqual(['/etc']);
   });
 });
 

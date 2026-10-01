@@ -143,7 +143,7 @@ describe('ChatService approval gate', () => {
     ).resolves.toMatchObject({ content: 'Understood, I will not run that.' });
   });
 
-  it('stops asking for a command the user allowed always, and still asks for a different one', async () => {
+  it('stops asking for a command the user allowed always, and still asks for a different program', async () => {
     const id = await askingSession();
     await service.send(id, 'run it twice');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
@@ -160,7 +160,7 @@ describe('ChatService approval gate', () => {
     await vi.waitUntil(() => streams.length === 3, { timeout: 5000, interval: 10 });
     expect(toolEvents('awaiting-approval')).toHaveLength(1);
 
-    streams[2].write(bashTurn('call_3', 'echo something-else'));
+    streams[2].write(bashTurn('call_3', 'ls -la'));
     streams[2].write(frame('[DONE]'));
     await vi.waitUntil(() => toolEvents('awaiting-approval').length === 2, { timeout: 3000, interval: 5 });
   });

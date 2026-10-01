@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { sep } from 'node:path';
 import type { ChatApprovalAnswer } from '@shared/chat';
+import type { ApprovalAlways } from './types';
 
 /**
  * A pending approval expires rather than waiting forever. The reply keeps streaming in main
@@ -33,7 +35,30 @@ function standingKey(key: string, optionId: string | undefined): string {
   return optionId ? `${key}#${optionId}` : key;
 }
 
+/**
+ * Whether a remembered shell pattern covers one command. A trailing ` *` also matches the bare
+ * command, so `git commit *` covers `git commit` as well as `git commit -m x`, and every other
+ * character is literal: a pattern is derived from a command, never typed by anyone.
+ */
+export function patternMatches(pattern: string, command: string): boolean {
+  const bare = pattern.endsWith(' *') ? pattern.slice(0, -2) : null;
+  const escaped = (text: string) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  const source = bare === null ? escaped(pattern) : `${escaped(bare)}( .*)?`;
+  return new RegExp(`^${source}$`, 's').test(command);
+}
+
+function withinDirectory(directory: string, candidate: string): boolean {
+  return candidate === directory || candidate.startsWith(directory.endsWith(sep) ? directory : directory + sep);
+}
+
+interface StandingShell {
+  patterns: Set<string>;
+  directories: Set<string>;
+}
+
 export interface ApprovalRequestOptions {
+  /** What a shell command's 'always' remembers, on top of the exact-call key. */
+  always?: ApprovalAlways;
   /**
    * Whether an 'always' answer may be recorded as a standing approval. False on an
    * irreversible tool, where a single click must never cover a later, different call.
@@ -65,14 +90,18 @@ export interface ApprovalGateListener {
  *
  * This is the whole boundary for shell execution. Commands run as the user with nothing
  * confining them, so the thing standing between a crafted prompt and `cat` of some unrelated
- * file is the user reading the command here before it runs. Auto-approving is deliberately not an
- * option: 'always' is scoped to one exact request in one conversation and dies with the process.
+ * file is the user reading the command here before it runs. 'always' is scoped to one
+ * conversation and dies with the process: to the exact request, plus for a shell command the
+ * prefix patterns (`git commit *`) it was derived into.
  */
 export class ApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
 
   /** sessionId -> standing key -> the answer to replay. In memory only, by design. */
   private readonly standing = new Map<string, Map<string, StandingApproval>>();
+
+  /** sessionId -> the shell patterns and directories the user said "always" to. */
+  private readonly standingShell = new Map<string, StandingShell>();
 
   constructor(private readonly listener?: ApprovalGateListener) {}
 
@@ -91,6 +120,24 @@ export class ApprovalGate {
       if (found) return found;
     }
     return null;
+  }
+
+  /** Whether every sub-command of this script has been allowed before. */
+  coversCommands(sessionId: string, always: ApprovalAlways): boolean {
+    const standing = this.standingShell.get(sessionId);
+    if (!standing || always.commands.length === 0) return false;
+    const own = [...standing.patterns]
+      .filter(entry => entry.startsWith(`${always.namespace}\x00`))
+      .map(entry => entry.slice(always.namespace.length + 1));
+    return always.commands.every(({ text }) => own.some(pattern => patternMatches(pattern, text)));
+  }
+
+  /** The directories among these that the user has not said "always" to. */
+  uncoveredDirectories(sessionId: string, directories: readonly string[]): string[] {
+    const standing = this.standingShell.get(sessionId);
+    return directories.filter(
+      directory => !standing || ![...standing.directories].some(allowed => withinDirectory(allowed, directory))
+    );
   }
 
   /**
@@ -126,7 +173,10 @@ export class ApprovalGate {
           remember &&
           answer.decision === 'always' &&
           (!options.rememberable || (!!answer.optionId && options.rememberable.includes(answer.optionId)));
-        if (keep) this.remember(sessionId, standingKey(key, answer.optionId), answer);
+        if (keep) {
+          this.remember(sessionId, standingKey(key, answer.optionId), answer);
+          if (options.always) this.rememberShell(sessionId, options.always);
+        }
         if (announced) this.listener?.settled(sessionId);
         resolve(answer.decision === 'always' && !keep ? { ...answer, decision: 'once' } : answer);
       };
@@ -157,6 +207,7 @@ export class ApprovalGate {
   /** Deleting a conversation drops both its in-flight asks and anything it had standing. */
   forgetSession(sessionId: string): void {
     this.standing.delete(sessionId);
+    this.standingShell.delete(sessionId);
     for (const [approvalId, entry] of this.pending) {
       if (entry.sessionId === sessionId) {
         entry.settle({ decision: 'deny' });
@@ -169,6 +220,14 @@ export class ApprovalGate {
     for (const entry of this.pending.values()) entry.settle({ decision: 'deny' });
     this.pending.clear();
     this.standing.clear();
+    this.standingShell.clear();
+  }
+
+  private rememberShell(sessionId: string, always: ApprovalAlways): void {
+    const standing = this.standingShell.get(sessionId) ?? { patterns: new Set(), directories: new Set() };
+    for (const { pattern } of always.commands) standing.patterns.add(`${always.namespace}\x00${pattern}`);
+    for (const directory of always.directories) standing.directories.add(directory);
+    this.standingShell.set(sessionId, standing);
   }
 
   private remember(sessionId: string, key: string, answer: ChatApprovalAnswer): void {

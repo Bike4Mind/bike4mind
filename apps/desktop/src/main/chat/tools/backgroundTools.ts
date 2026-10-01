@@ -1,5 +1,5 @@
 import type { BackgroundProcessInfo } from '@shared/chat';
-import { doubleWrapRefusal, refusalReason, resolveCwd } from './shellTools';
+import { doubleWrapRefusal, refusalReason, resolveCwd, shellApproval } from './shellTools';
 import {
   capOutput,
   optionalNumber,
@@ -65,8 +65,8 @@ export const bashBackground: ToolDefinition = {
       'no outer layer of quoting. A command starting with such a wrapper is refused rather than run.',
       'Pass `cwd` to start it somewhere other than the default folder rather than opening with a `cd`.',
       '',
-      'The user is shown the exact command and must approve it, exactly as with bash_execute,',
-      'and they are told it will keep running. It runs as the user with their full environment, like',
+      "Depending on the user's approval setting, they may be asked to approve the exact command,",
+      'exactly as with bash_execute, and they are told it will keep running. It runs as the user with their full environment, like',
       'bash_execute.',
       '',
       `The call waits about ${SETTLE_MS / 1000}s and returns whatever the command printed in that`,
@@ -100,25 +100,8 @@ export const bashBackground: ToolDefinition = {
     },
   },
 
-  approval(input: Record<string, unknown>): ApprovalPrompt {
-    const command = typeof input.command === 'string' ? input.command : '';
-    const cwd = typeof input.cwd === 'string' ? input.cwd : '';
-
-    // Same reason as bash_execute: refused before the card rather than after it.
-    const wrapped = doubleWrapRefusal(command);
-    if (wrapped) throw new Error(wrapped);
-
-    return {
-      detail: [
-        `$ ${command}`,
-        ...(cwd ? ['', `in ${cwd}`] : []),
-        '',
-        'Keeps running in the background until stopped.',
-      ].join('\n'),
-      // A DIFFERENT namespace from bash_execute on purpose: approving `npm run dev` for one
-      // 60-second run must not silently also approve leaving it running all afternoon.
-      key: `bash_background\x00${cwd}\x00${command}`,
-    };
+  approval(input: Record<string, unknown>, context: ToolContext): Promise<ApprovalPrompt> {
+    return shellApproval('bash_background', input, context);
   },
 
   async run(input, context) {
