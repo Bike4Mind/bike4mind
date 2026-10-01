@@ -95,6 +95,8 @@ export interface UploadProgress {
    * target lake, never assumed - absent means a fallback lake, which always serves.
    */
   lakeStatus?: DataLakeStatus;
+  /** Id of that same lake, so the Complete screen can publish a draft in place. Set beside lakeStatus. */
+  lakeId?: string;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────

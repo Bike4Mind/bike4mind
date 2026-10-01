@@ -704,6 +704,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
 
     await user.click(screen.getByTestId('datalake-manager-lake-mine'));
     await user.click(screen.getByTestId('datalake-delete-active-btn-mine'));
+    await user.click(screen.getByTestId('datalake-delete-confirm-btn'));
 
     // Same lifecycle action the archived row's Delete button calls - deleteDataLake has no
     // archived-status precondition, so this reaches the same recoverable soft-delete.

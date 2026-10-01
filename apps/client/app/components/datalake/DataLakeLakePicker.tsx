@@ -27,7 +27,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
-import { lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
+import { isDraftLake, lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
 /**
@@ -347,6 +347,20 @@ export default function DataLakeLakePicker({
                           {lakeVisibilityLabelShort(lake)}
                         </Typography>
                       </ListItemContent>
+                      {/* Scoping to a draft returns nothing, so the row says why before it is picked. */}
+                      {isDraftLake(lake) && (
+                        <Tooltip size="sm" title="Draft - grounds no answers until it is published">
+                          <Chip
+                            size="sm"
+                            variant="soft"
+                            color="warning"
+                            data-testid={`datalake-lake-picker-draft-chip-${lake.id}`}
+                            sx={{ fontSize: '11px', flexShrink: 0 }}
+                          >
+                            Draft
+                          </Chip>
+                        </Tooltip>
+                      )}
                       {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
                           so an unmarked row would read as their own. */}
                       {lake.isOwn === false && (

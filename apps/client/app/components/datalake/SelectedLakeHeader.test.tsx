@@ -103,3 +103,14 @@ describe('SelectedLakeHeader', () => {
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 });
+
+describe('SelectedLakeHeader - draft marker', () => {
+  it('marks a draft lake and stays quiet for a published one', () => {
+    const { unmount } = renderHeader({ status: 'draft' });
+    expect(screen.getByTestId('datalake-selected-lake-draft-chip')).toHaveTextContent('Draft');
+    unmount();
+
+    renderHeader({ status: 'active' });
+    expect(screen.queryByTestId('datalake-selected-lake-draft-chip')).not.toBeInTheDocument();
+  });
+});

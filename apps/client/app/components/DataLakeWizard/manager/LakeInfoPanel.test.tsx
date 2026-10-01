@@ -21,6 +21,7 @@ vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
 
 const promoteMutate = vi.fn();
 const demoteMutate = vi.fn();
+const deleteMutate = vi.fn();
 const buildMutate = vi.fn();
 const purgeMutate = vi.fn((_?: undefined, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const buildPending = vi.fn(() => false);
@@ -64,7 +65,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
     useArchiveDataLake: mutation,
-    usePermanentDeleteDataLake: mutation,
+    usePermanentDeleteDataLake: () => ({ mutate: deleteMutate, isPending: false }),
     usePromoteDataLake: () => ({ mutate: promoteMutate, isPending: false }),
     useDemoteDataLake: () => ({ mutate: demoteMutate, isPending: false }),
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [])),
@@ -139,6 +140,7 @@ beforeEach(() => {
   rechunkMutate.mockClear();
   promoteMutate.mockClear();
   demoteMutate.mockClear();
+  deleteMutate.mockClear();
   buildMutate.mockClear();
   purgeMutate.mockClear();
   buildPending.mockReset();
@@ -460,14 +462,27 @@ describe('LakeInfoPanel - publish/draft', () => {
     expect(promoteMutate).toHaveBeenCalledWith('lake-1');
   });
 
-  it('offers Move to draft for an active lake, and calls the demote mutation on click', async () => {
+  it('offers Move to draft for an active lake, and demotes only from the confirm dialog', async () => {
     const user = userEvent.setup();
     renderPanel({ ...baseLake, status: 'active' } as ManagerLake);
 
     expect(screen.queryByTestId('datalake-promote-btn-lake-1')).not.toBeInTheDocument();
-    const btn = screen.getByTestId('datalake-demote-btn-lake-1');
-    await user.click(btn);
-    expect(demoteMutate).toHaveBeenCalledWith('lake-1');
+    await user.click(screen.getByTestId('datalake-demote-btn-lake-1'));
+    expect(screen.getByTestId('datalake-demote-confirm')).toBeInTheDocument();
+    expect(demoteMutate).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('datalake-demote-confirm-btn'));
+    expect(demoteMutate).toHaveBeenCalledWith('lake-1', expect.anything());
+  });
+
+  it('can dismiss the Move to draft dialog without demoting', async () => {
+    const user = userEvent.setup();
+    renderPanel({ ...baseLake, status: 'active' } as ManagerLake);
+
+    await user.click(screen.getByTestId('datalake-demote-btn-lake-1'));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('datalake-demote-confirm')).not.toBeInTheDocument();
+    expect(demoteMutate).not.toHaveBeenCalled();
   });
 
   // A lake written before `status` existed carries none, and retrieval's `status: 'active'`
@@ -502,5 +517,31 @@ describe('LakeInfoPanel - origin chip', () => {
     renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
 
     expect(screen.queryByTestId('datalake-origin-chip-lake-1')).not.toBeInTheDocument();
+  });
+});
+
+describe('LakeInfoPanel - delete confirmation', () => {
+  it('deletes only from the confirm dialog, and exits the panel on success', async () => {
+    deleteMutate.mockImplementationOnce((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-delete-active-btn-lake-1'));
+    expect(screen.getByTestId('datalake-delete-confirm')).toBeInTheDocument();
+    expect(deleteMutate).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('datalake-delete-confirm-btn'));
+    expect(deleteMutate).toHaveBeenCalledWith('lake-1', expect.anything());
+    expect(noopProps.onDeleted).toHaveBeenCalled();
+  });
+
+  it('can be cancelled without deleting', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-delete-active-btn-lake-1'));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('datalake-delete-confirm')).not.toBeInTheDocument();
+    expect(deleteMutate).not.toHaveBeenCalled();
   });
 });

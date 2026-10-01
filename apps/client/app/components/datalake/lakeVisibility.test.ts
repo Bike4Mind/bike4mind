@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DATA_LAKES } from '@bike4mind/common';
-import { isBuiltInLake, lakeVisibilityLabel, lakeVisibilityLabelShort } from './lakeVisibility';
+import { isBuiltInLake, isDraftLake, lakeVisibilityLabel, lakeVisibilityLabelShort } from './lakeVisibility';
 
 /** A real registry id, so the test cannot drift from the registry it is asserting about. */
 const builtInId = DATA_LAKES[0]?.id;
@@ -37,5 +37,24 @@ describe('lakeVisibilityLabel', () => {
   it('treats a missing id as not built-in rather than throwing', () => {
     expect(isBuiltInLake({})).toBe(false);
     expect(lakeVisibilityLabel({})).toBe('Private');
+  });
+});
+
+describe('isDraftLake', () => {
+  it('reads an explicit draft as draft for any caller', () => {
+    expect(isDraftLake({ status: 'draft' })).toBe(true);
+    expect(isDraftLake({ status: 'draft', canManage: false })).toBe(true);
+  });
+
+  it('does not mark a published or archived lake', () => {
+    expect(isDraftLake({ status: 'active', canManage: true })).toBe(false);
+    expect(isDraftLake({ status: 'archived', canManage: true })).toBe(false);
+  });
+
+  it('reads an absent status as draft only on a lake the caller manages', () => {
+    // A fallback lake has no status and canManage is never true for it - it always serves.
+    expect(isDraftLake({ canManage: true })).toBe(true);
+    expect(isDraftLake({ canManage: false })).toBe(false);
+    expect(isDraftLake({})).toBe(false);
   });
 });

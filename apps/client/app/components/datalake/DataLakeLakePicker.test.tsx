@@ -338,3 +338,21 @@ describe('DataLakeLakePicker', () => {
     expect(labelColor).not.toMatch(/text-tertiary/i);
   });
 });
+
+describe('DataLakeLakePicker - draft marker', () => {
+  it('marks a draft lake row, since scoping to it grounds nothing', () => {
+    renderPicker({
+      lakes: [
+        lake({ id: 'a', name: 'Draft Lake', status: 'draft' }),
+        lake({ id: 'b', name: 'Live Lake', status: 'active' }),
+        // A reader's view of a lake with no status is a fallback lake, which always serves.
+        lake({ id: 'c', name: 'Built-in', canManage: false }),
+      ],
+    });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-draft-chip-a')).toHaveTextContent('Draft');
+    expect(screen.queryByTestId('datalake-lake-picker-draft-chip-b')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-draft-chip-c')).not.toBeInTheDocument();
+  });
+});

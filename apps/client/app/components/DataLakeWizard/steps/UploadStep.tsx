@@ -2,9 +2,11 @@ import { Alert, Box, Button, Chip, CircularProgress, LinearProgress, Stack, Typo
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
+import { usePromoteDataLake } from '@client/app/hooks/data/dataLakes';
 import { deriveLakeServingState, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
 import type { DataLakeStatus } from '@bike4mind/common';
 
@@ -72,8 +74,13 @@ function describeFailures(failedFiles: number, processingFailedFiles: number): s
  * above otherwise never mentions it. Renders nothing when the lake serves or the status is unknown
  * (a fallback lake has none and always serves); reads `servesRetrieval` from the same shared helper
  * the health badge uses, so the two can never disagree.
+ *
+ * A draft gets a Publish button when the lake id is known. Whoever reached this screen created the
+ * lake or could add files to it, so they can publish it; the server checks that again regardless.
  */
-function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }) {
+function NonServingLakeNotice({ status, lakeId }: { status: DataLakeStatus | undefined; lakeId: string | undefined }) {
+  const promoteLake = usePromoteDataLake();
+  const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   if (!status || deriveLakeServingState(status).servesRetrieval) return null;
   // Whole sentences, not JSX text interleaved with {DATA_LAKE} expressions - JSX drops the space
   // between an expression and the text that follows it (see DriveOnlyCommitStatus above).
@@ -82,7 +89,9 @@ function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }
     ? `This ${DATA_LAKE} is a draft, so it does not ground answers yet.`
     : `This ${DATA_LAKE} is not serving retrieval yet (${status}), so it does not ground answers.`;
   const detail = isDraft
-    ? `Your files are stored and indexed. Publish the ${DATA_LAKE} from the ${DATA_LAKES} list to let the assistant search them.`
+    ? lakeId
+      ? `Your files are stored and indexed. Publish the ${DATA_LAKE} to let the assistant search them.`
+      : `Your files are stored and indexed. Publish the ${DATA_LAKE} from the ${DATA_LAKES} list to let the assistant search them.`
     : `The assistant will not search these files while the ${DATA_LAKE} stays in this state.`;
   return (
     <Alert
@@ -99,6 +108,24 @@ function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }
         <Typography level="body-xs" sx={{ mt: 0.25 }}>
           {detail}
         </Typography>
+        {isDraft && lakeId && (
+          <Button
+            size="sm"
+            variant="soft"
+            color="success"
+            startDecorator={<PublishOutlinedIcon sx={{ fontSize: 16 }} />}
+            loading={promoteLake.isPending}
+            data-testid="wizard-lake-publish-btn"
+            // Flipping the run's recorded status retires this notice and the upload indicator's
+            // draft copy together, the same as if the lake had been born active.
+            onClick={() =>
+              promoteLake.mutate(lakeId, { onSuccess: () => updateUploadProgress({ lakeStatus: 'active' }) })
+            }
+            sx={{ mt: 1 }}
+          >
+            Publish
+          </Button>
+        )}
       </Box>
     </Alert>
   );
@@ -112,6 +139,7 @@ function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }
 function DriveOnlyCommitStatus({
   status,
   lakeStatus,
+  lakeId,
   errorMessage,
   driveRollback,
   folderLabel,
@@ -120,6 +148,7 @@ function DriveOnlyCommitStatus({
 }: {
   status: UploadProgress['status'];
   lakeStatus: DataLakeStatus | undefined;
+  lakeId: string | undefined;
   errorMessage: string | undefined;
   driveRollback: UploadProgress['driveRollback'];
   folderLabel: string;
@@ -155,7 +184,7 @@ function DriveOnlyCommitStatus({
         <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
           {syncingSentence}
         </Typography>
-        <NonServingLakeNotice status={lakeStatus} />
+        <NonServingLakeNotice status={lakeStatus} lakeId={lakeId} />
         <Button variant="solid" color="primary" onClick={onDone}>
           Done
         </Button>
@@ -259,6 +288,7 @@ export default function UploadStep() {
         <DriveOnlyCommitStatus
           status={progress.status}
           lakeStatus={progress.lakeStatus}
+          lakeId={progress.lakeId}
           errorMessage={progress.errorMessage}
           driveRollback={progress.driveRollback}
           folderLabel={driveFolderLabel}
@@ -349,7 +379,7 @@ export default function UploadStep() {
           <Typography level="body-sm" color="neutral" textAlign="center">
             {completionSummary}
           </Typography>
-          <NonServingLakeNotice status={progress.lakeStatus} />
+          <NonServingLakeNotice status={progress.lakeStatus} lakeId={progress.lakeId} />
           {wantsTaxonomy && <TaxonomyStatusRow status={progress.taxonomyStatus} />}
           <Button variant="solid" color="primary" onClick={resetWizard}>
             Done
