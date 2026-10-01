@@ -91,9 +91,41 @@ describe('assessApprovalRisk', () => {
       ['retargeting a branch', 'git branch --set-upstream-to=origin/main'],
       ['dropping reflog entries', 'git reflog expire --all'],
       ['xxd writing its second path argument', 'xxd notes.txt out.bin'],
+      ['uniq writing its second path argument', 'uniq notes.txt out.txt'],
+      ['find writing its list to a file', 'find . -name x -fprint0 out.txt'],
+      ['tree writing its listing to a file', 'tree -o out.txt'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });
+  });
+
+  /**
+   * The worst case for an allow-list of read-only commands: an entry on it that will run
+   * something else for you. Each of these was verified to execute, not merely suspected.
+   */
+  describe('allowed commands that run another program when asked the right way', () => {
+    it.each([
+      // `-O<cmd>` glues its value to the letter, so there is no `=` and no separate token.
+      ['git grep opening its hits in a pager it was handed', "git grep -O'touch PWNED' pattern"],
+      ['the same, spelled long', "git grep --open-files-in-pager='touch PWNED' pattern"],
+      ['the bare form, which runs whatever the config says', 'git grep -O pattern'],
+      // Everything before the subcommand is git's own, and several of those name a program.
+      ['a config override naming an external diff', "git -c diff.external='touch PWNED' diff"],
+      ['a config override naming a pager', "git -p -c core.pager='touch PWNED' log"],
+      ['an exec-path override', 'git --exec-path=/tmp/evil status'],
+      ['sort compressing its temp files with a program', "sort --compress-program='touch PWNED' notes.txt"],
+      ['git help opening a browser', 'git help -w status'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command)).toBe('sensitive');
+    });
+
+    /** The globals that name no program stay allowed, so the usual spellings do not regress. */
+    it.each(['git --no-pager log --oneline', 'git --no-optional-locks status', 'git help status'])(
+      'still allows %s',
+      async command => {
+        expect(await shell(command)).toBe('contained');
+      }
+    );
   });
 
   /**
@@ -251,6 +283,8 @@ describe('assessApprovalRisk', () => {
 
     it.each([
       ['a git hook', '.git/hooks/pre-commit'],
+      // `git diff` is on the allow-list, and this file is where `diff.external` names what it runs.
+      ['the repository config', '.git/config'],
       ['a CI workflow', '.github/workflows/ci.yml'],
       ['a shell rc file', '.zshrc'],
       ['a direnv file', '.envrc'],

@@ -111,6 +111,8 @@ interface InertCommand {
   subcommands?: readonly string[];
   /** Arguments that turn this command into a write, an exec or a network call. */
   forbiddenArguments?: readonly string[];
+  /** The same, for flags that glue their value on with no `=` left to match against. */
+  forbiddenPrefixes?: readonly string[];
   /** Marks a package manager, and bounds the script names it may be asked to run. */
   scripts?: RegExp;
   /** For the few whose SHAPE decides whether they write, where no flag list can say it. */
@@ -118,14 +120,50 @@ interface InertCommand {
 }
 
 /**
- * Whether any token is one of `flags`, in either spelling.
+ * Whether `token` is one of `flags`, in either spelling.
  *
  * `--output FILE` and `--output=FILE` are the same flag and the same write, so a check that
  * only compares whole tokens lets the second form straight through.
  */
-function hasFlag(tokens: readonly string[], flags: readonly string[]): boolean {
-  return tokens.some(token => flags.some(flag => token === flag || token.startsWith(`${flag}=`)));
+function isFlag(token: string, flags: readonly string[]): boolean {
+  return flags.some(flag => token === flag || token.startsWith(`${flag}=`));
 }
+
+function hasFlag(tokens: readonly string[], flags: readonly string[]): boolean {
+  return tokens.some(token => isFlag(token, flags));
+}
+
+/**
+ * Whether any token STARTS with one of `prefixes`, for flags that take no `=` at all.
+ *
+ * `git grep -O'touch x'` glues its value to the letter, so there is no separate token and no
+ * `=` for `isFlag` to find, and that one RUNS the command it is given. Matching the prefix is
+ * the only thing that sees it, at the cost of an ask for the rare `git diff -O<orderfile>`.
+ */
+function hasPrefix(tokens: readonly string[], prefixes: readonly string[]): boolean {
+  return tokens.some(token => prefixes.some(prefix => token.startsWith(prefix)));
+}
+
+/**
+ * The only options allowed BEFORE the subcommand, which is where git's own options go.
+ *
+ * An allow-list rather than a list of the dangerous ones, because several of git's globals run
+ * a program of the caller's choosing and they do not look alike: `git -c diff.external=CMD diff`
+ * runs CMD, and so do `-c core.pager` under `--paginate`, `-c alias.*` and `--exec-path`.
+ * Finding the subcommand and ignoring everything in front of it is what let `git diff` look
+ * read-only while it ran whatever it was handed.
+ *
+ * `-C <dir>` is absent and costs nothing: its value lands where the subcommand is read from, so
+ * `git -C dir status` asked already.
+ */
+const GIT_SAFE_GLOBALS: readonly string[] = [
+  '--no-pager',
+  '--no-optional-locks',
+  '--no-replace-objects',
+  '--literal-pathspecs',
+  '--git-dir',
+  '--work-tree',
+];
 
 /** Everything after `git <subcommand>` that turns a listing into a create, a move or a delete. */
 const GIT_BRANCH_WRITES: readonly string[] = [
@@ -147,32 +185,41 @@ const GIT_BRANCH_WRITES: readonly string[] = [
 ];
 
 /**
- * The two subcommands on the list whose bare form reads and whose arguments do not.
+ * What the subcommand name alone cannot say: the globals in front of it, and the three entries
+ * that read in their bare form and not in any other.
  *
  * `git branch` lists, `git branch foo` creates and `git branch -D foo` deletes. `git reflog`
  * shows, while `git reflog expire` and `git reflog delete` drop the entries that are often the
- * only remaining way back to a commit nothing else points at. Neither can be bounded by the
- * subcommand name alone, and both are too useful read-only to leave off the list over it.
+ * only remaining way back to a commit nothing else points at. `git help` prints, and
+ * `git help -w` opens a browser. All three are too useful read-only to leave off the list.
  */
 function gitStaysReadOnly(rest: readonly string[]): boolean {
-  const positional = rest.filter(token => !token.startsWith('-'));
-  if (positional[0] === 'branch') {
-    return positional.length === 1 && !hasFlag(rest, GIT_BRANCH_WRITES);
+  const start = rest.findIndex(token => !token.startsWith('-'));
+  if (start === -1) return false;
+  if (!rest.slice(0, start).every(token => isFlag(token, GIT_SAFE_GLOBALS))) return false;
+
+  const positional = rest.slice(start).filter(token => !token.startsWith('-'));
+  switch (positional[0]) {
+    case 'branch':
+      return positional.length === 1 && !hasFlag(rest, GIT_BRANCH_WRITES);
+    case 'reflog':
+      return positional.length === 1 || positional[1] === 'show';
+    case 'help':
+      return !hasFlag(rest, ['-w', '--web']);
+    default:
+      return true;
   }
-  if (positional[0] === 'reflog') {
-    return positional.length === 1 || positional[1] === 'show';
-  }
-  return true;
 }
 
 /**
- * `xxd [options] [infile [outfile]]` - the SECOND path it is given is a file it writes.
+ * `xxd [options] [infile [outfile]]` and `uniq [options] [input [output]]` both WRITE the
+ * second path they are handed, and no flag names it.
  *
- * No flag names it, so the only bound is the count, and a value-taking flag's value looks
- * exactly like a path from here. Rather than track which flags those are, anything with a
- * second bare token asks: `xxd -c 8 notes.txt` is a false alarm, and a silent write is not.
+ * So the only bound is the count, and from here a value-taking flag's value looks exactly like
+ * a path. Rather than track which flags those are, anything with a second bare token asks:
+ * `uniq -f 1 notes.txt` is a false alarm, and a silent write is not.
  */
-function xxdWritesNothing(rest: readonly string[]): boolean {
+function writesNoSecondPath(rest: readonly string[]): boolean {
   return rest.filter(token => !token.startsWith('-')).length <= 1;
 }
 
@@ -221,7 +268,9 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   expand: {},
   fd: { forbiddenArguments: ['-x', '--exec', '-X', '--exec-batch'] },
   file: {},
-  find: { forbiddenArguments: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprintf', '-fls'] },
+  find: {
+    forbiddenArguments: ['-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0', '-fprintf', '-fls'],
+  },
   fold: {},
   // Read-only porcelain only, and read-only plumbing under it. `add`, `commit`, `checkout` and
   // `stash` all change the working tree or the index, and `push`, `pull`, `fetch`, `clone`,
@@ -261,8 +310,10 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
       'var',
       'help',
     ],
-    // `git diff --output=FILE` writes that file.
-    forbiddenArguments: ['--output'],
+    // `git diff --output=FILE` writes that file, and `git grep -O<cmd>` RUNS one. The long
+    // spelling of the second is here; the glued short one needs the prefix check.
+    forbiddenArguments: ['--output', '--open-files-in-pager'],
+    forbiddenPrefixes: ['-O'],
     guard: gitStaysReadOnly,
   },
   grep: {},
@@ -288,20 +339,21 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
   seq: {},
   sha256sum: {},
   shasum: {},
-  // `sort -o FILE` writes that file, which is the one way this reads anything but inert.
-  sort: { forbiddenArguments: ['-o', '--output'] },
+  // `sort -o FILE` writes that file, and GNU `sort --compress-program=PROG` runs PROG as soon
+  // as the input is big enough to spill to a temp file.
+  sort: { forbiddenArguments: ['-o', '--output', '--compress-program'] },
   stat: {},
   sw_vers: {},
   tail: {},
   tr: {},
-  tree: {},
+  tree: { forbiddenArguments: ['-o'] },
   uname: {},
-  uniq: {},
+  uniq: { guard: writesNoSecondPath },
   uptime: {},
   wc: {},
   which: {},
   whoami: {},
-  xxd: { guard: xxdWritesNothing },
+  xxd: { guard: writesNoSecondPath },
   yarn: { scripts: RUNNABLE_SCRIPT },
 };
 
@@ -315,6 +367,10 @@ const INERT_COMMANDS: Readonly<Record<string, InertCommand>> = {
  */
 const EXECUTED_LATER: readonly RegExp[] = [
   /(^|\/)\.git\/hooks\//,
+  // Not run itself, but `diff.external`, `core.pager` and `alias.*` each NAME a command git
+  // then runs, and a plain `git diff` is on the allow-list above - so writing this file and
+  // reading a diff is two contained calls that add up to arbitrary execution.
+  /(^|\/)\.git\/config$/,
   /(^|\/)\.github\/workflows\//,
   /(^|\/)\.gitlab-ci\.yml$/,
   /(^|\/)\.(bash|zsh)(rc|_profile|_login|env)$/,
@@ -451,6 +507,7 @@ async function assessSegment(tokens: readonly string[], cwd: string, context: To
 
   if (hasFlag(rest, FOLLOWS_SYMLINKS)) return false;
   if (inert.forbiddenArguments && hasFlag(rest, inert.forbiddenArguments)) return false;
+  if (inert.forbiddenPrefixes && hasPrefix(rest, inert.forbiddenPrefixes)) return false;
 
   if (inert.subcommands) {
     const subcommand = rest.find(token => !token.startsWith('-'));
