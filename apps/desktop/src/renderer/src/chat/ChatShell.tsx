@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import Button from '@mui/joy/Button';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
@@ -21,6 +22,7 @@ import { SessionList } from './SessionList';
 import { TodoPanel } from './TodoPanel';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
+import { seedOnArrival } from './firstRunSeed';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
@@ -217,6 +219,18 @@ export function ChatShell({ account }: { account?: ReactNode }) {
     presentReply(liveText, true).pending
   );
 
+  /**
+   * What the composer says while it will not take a keystroke. It has to name the step that is
+   * actually open: there is no conversation to "pick" on a fresh install, so the old copy sent
+   * the user looking for a list that says "No Code sessions yet." The button in the empty pane
+   * is the step, and this points at it.
+   */
+  const disabledPlaceholder = creatingCode
+    ? 'Starting a session...'
+    : mode === 'code'
+      ? 'Start a Code session to type here'
+      : 'Start a conversation to type here';
+
   const onSend = useCallback(
     async (text: string) => {
       const attached = draft.attachments;
@@ -253,23 +267,49 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   }, [loading, activeId, sessions, mode]);
 
   /**
-   * Start a session. New behaves the same in both modes: it makes one, and opens nothing.
+   * Make a session, without touching what the pane is showing. The two callers differ on that:
+   * the New button is a click on the sidebar and has to put the transcript back, the first-run
+   * seeding below must not pull a user out of the screen they opened.
    *
    * A Code session is created UNBOUND - no directory, no branch - and the chip row above the
    * composer is where a project gets chosen. Creating one used to open the OS folder picker
    * first, which meant dismissing that dialog produced nothing at all: no session, no message,
    * and no way back in. Nothing is asked up front now, so there is nothing left to cancel.
    */
+  const startSession = useCallback(async () => {
+    if (mode !== 'code') return await create();
+    clearCodeError();
+    return await createCode({});
+  }, [mode, create, createCode, clearCodeError]);
+
+  /** New, from the sidebar: it makes a session, opens it, and opens nothing else. */
   const onCreate = useCallback(async () => {
     setScreen('conversation');
-    if (mode !== 'code') {
-      setActiveId(await create());
-      return;
-    }
-    clearCodeError();
-    const created = await createCode({});
+    const created = await startSession();
     if (created) setActiveId(created);
-  }, [mode, create, createCode, clearCodeError]);
+  }, [startSession]);
+
+  /**
+   * On first arrival in a mode with nothing in it, make the session instead of sitting on a
+   * disabled composer over a sidebar with nothing to pick.
+   *
+   * This is the whole of a fresh install's first screen: signed in, no sessions, and every
+   * control that could get the user moving either disabled or unlabelled. Creating costs
+   * nothing here - a Chat session is empty until something is typed, and a Code session is
+   * created unbound - so neither one asks a question or touches a folder on the way in.
+   *
+   * See firstRunSeed.ts for what the ref holds, and why marking the arrival rather than the
+   * creation is what keeps this from looping, from seeding on every mode toggle, and from
+   * putting a session back the moment the user deletes their last one.
+   */
+  const arrived = useRef(new Set<ChatSessionMode>());
+  useEffect(() => {
+    const empty = !sessions.some(session => session.mode === mode);
+    if (!seedOnArrival(arrived.current, { loading, mode, hasSessionInMode: !empty })) return;
+    void startSession().then(created => {
+      if (created) setActiveId(created);
+    });
+  }, [loading, sessions, mode, startSession]);
 
   /**
    * Another session in the same project, from the group header's "+".
@@ -377,6 +417,28 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           <MessageThread
             messages={conversation.messages}
             sessionId={activeId}
+            // What stands in for the transcript when there is no session to have one. It is the
+            // only control on screen that starts one from here, so it is a button and not a
+            // sentence pointing at the sidebar: the header above says what the state is, this
+            // says what to do about it, and the composer's placeholder names the same step.
+            noSession={
+              <Stack spacing={1.5} alignItems="center">
+                <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                  {mode === 'code'
+                    ? 'Start a Code session to run a task here.'
+                    : 'Start a conversation to send your first message.'}
+                </Typography>
+                <Button
+                  size="sm"
+                  variant="soft"
+                  loading={creatingCode}
+                  onClick={() => void onCreate()}
+                  data-testid="chat-start-session-btn"
+                >
+                  {mode === 'code' ? 'New Code session' : 'New conversation'}
+                </Button>
+              </Stack>
+            }
             // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
             // one parked at the approval gate - is still running, and Continue must not be
             // offered on top of it.
@@ -451,6 +513,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           <Composer
             sessionId={activeId}
             disabled={!activeId || creatingCode}
+            disabledPlaceholder={disabledPlaceholder}
             streaming={turnOpen}
             attachments={draft}
             blockedReason={blockedReason}

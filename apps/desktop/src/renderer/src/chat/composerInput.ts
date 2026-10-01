@@ -158,19 +158,24 @@ export function composerEscapeAction(input: { pickerOpen: boolean; streaming: bo
 /**
  * What the empty input says, in precedence order.
  *
- * The disabled message outranks a suggestion outright: "Pick a conversation to start typing"
- * answers the question the user is about to ask, and a hint about a conversation they cannot
- * type in does not. The suggestion then outranks the ordinary prompt, and only while the draft
- * is EMPTY - keyed on the raw text, because a draft of nothing but spaces is still something
- * the user typed, and drawing a hint under it would read as the app having eaten it.
+ * The disabled message outranks a suggestion outright: it answers the question the user is
+ * about to ask, and a hint about a conversation they cannot type in does not. The suggestion
+ * then outranks the ordinary prompt, and only while the draft is EMPTY - keyed on the raw text,
+ * because a draft of nothing but spaces is still something the user typed, and drawing a hint
+ * under it would read as the app having eaten it.
+ *
+ * The disabled line comes from the caller, which is the only thing that knows WHY. The old
+ * fixed copy told the user to pick a conversation, and on a fresh install there is none to
+ * pick - so the one screen with no way forward was the one screen giving directions.
  */
 export function composerPlaceholder(input: {
   disabled: boolean;
   text: string;
   suggestion: string | null | undefined;
   placeholder: string;
+  disabledPlaceholder?: string;
 }): string {
-  if (input.disabled) return 'Pick a conversation to start typing';
+  if (input.disabled) return input.disabledPlaceholder ?? 'Start a conversation to type here';
   return shownSuggestion(input) ?? input.placeholder;
 }
 

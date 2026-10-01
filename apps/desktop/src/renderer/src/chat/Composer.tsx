@@ -38,6 +38,7 @@ export function Composer({
   notReady,
   usage,
   placeholder = 'Send a message...',
+  disabledPlaceholder,
   onSend,
   onStop,
   onRunCommand,
@@ -76,6 +77,11 @@ export function Composer({
    * need to act on, and those still win.
    */
   usage?: ComposerUsage | null;
+  /**
+   * What the placeholder says while `disabled` holds - the step that IS open, named by the
+   * owner, which is the only side that knows whether there is no session, or one being made.
+   */
+  disabledPlaceholder?: string;
   onSend: (text: string) => void;
   onStop: () => void;
   /**
@@ -392,7 +398,7 @@ export function Composer({
           value={text}
           onChange={event => onTextChange(event.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder })}
+          placeholder={composerPlaceholder({ disabled, text, suggestion, placeholder, disabledPlaceholder })}
           disabled={disabled}
           minRows={1}
           maxRows={8}

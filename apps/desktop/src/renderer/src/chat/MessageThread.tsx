@@ -400,6 +400,7 @@ const PIN_THRESHOLD_PX = 48;
 export function MessageThread({
   messages,
   sessionId,
+  noSession,
   streaming,
   onRespond,
   onMove,
@@ -410,6 +411,12 @@ export function MessageThread({
   messages: ChatMessage[];
   /** Needed to read attachment bytes back; they are stored per conversation. */
   sessionId: string | null;
+  /**
+   * What the pane shows when there is no session at all, as opposed to a session with nothing
+   * said in it yet. The two used to share one line, so a window with nothing open invited the
+   * user to "send a message" while the composer refused to take one.
+   */
+  noSession?: ReactNode;
   /**
    * A reply is in flight for this conversation, however this window came to know it - so there
    * is nothing to resume, and the live line belongs at the foot of the last turn.
@@ -493,9 +500,13 @@ export function MessageThread({
   if (empty) {
     return (
       <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}>
-        <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
-          Send a message to start this conversation.
-        </Typography>
+        {sessionId ? (
+          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
+            Send a message to start this conversation.
+          </Typography>
+        ) : (
+          noSession
+        )}
       </Box>
     );
   }

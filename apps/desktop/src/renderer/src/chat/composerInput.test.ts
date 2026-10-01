@@ -167,8 +167,16 @@ describe('composerPlaceholder', () => {
   // conversation they cannot type in does not.
   it('never lets a suggestion replace the disabled message', () => {
     expect(composerPlaceholder({ ...base, disabled: true, suggestion: 'Add a test' })).toBe(
-      'Pick a conversation to start typing'
+      'Start a conversation to type here'
     );
+  });
+
+  // Only the owner knows WHY the box is shut - no session yet, or one being made - and the old
+  // fixed copy told a user with no sessions at all to pick one.
+  it('lets the owner name the step the disabled composer is waiting on', () => {
+    expect(
+      composerPlaceholder({ ...base, disabled: true, suggestion: null, disabledPlaceholder: 'Starting a session...' })
+    ).toBe('Starting a session...');
   });
 
   it('goes back to the ordinary prompt once the draft has content', () => {
