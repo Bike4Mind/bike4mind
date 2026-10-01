@@ -32,10 +32,12 @@ vi.mock('@client/app/utils/githubLakeConnectHandoff', async importOriginal => {
 
 import GitHubLakeCallbackPage from './callback';
 import { readGitHubLakeConnectHandoff, saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
+import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
 
 const AUTHORIZE_URL = 'https://github.com/login/oauth/authorize?client_id=c&state=s1';
 const assign = vi.fn();
 let currentSearch = '';
+let currentPathname = '/';
 const setSearch = (params: Record<string, string>) => {
   currentSearch = `?${new URLSearchParams(params).toString()}`;
 };
@@ -54,12 +56,17 @@ beforeEach(() => {
   sessionStorage.clear();
   saveGitHubLakeConnectHandoff({ dataLakeId: 'lake1', authorizeUrl: AUTHORIZE_URL });
   currentSearch = '';
+  currentPathname = '/';
   vi.stubGlobal('location', {
     assign,
     get search() {
       return currentSearch;
     },
+    get pathname() {
+      return currentPathname;
+    },
   });
+  captureGitHubLakeCallbackSearch(); // reset: this page load did not land on the callback
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -93,6 +100,19 @@ describe('GitHubLakeCallbackPage', () => {
     renderPage();
     expect(h.completeMutate).toHaveBeenCalledWith(
       { state: 's1', code: '0e12345678901234567', installationId: 42 },
+      expect.any(Object)
+    );
+  });
+
+  it('reads the query GitHub sent, not the URL the router rewrote before the page mounted', () => {
+    currentPathname = GITHUB_LAKE_CALLBACK_PATH;
+    setSearch({ installation_id: '42', code: '12345678901234567890', state: 's1' });
+    captureGitHubLakeCallbackSearch();
+    // What the router leaves in the address bar: the id JSON-quoted, the all-digit code parsed and rounded.
+    currentSearch = '?installation_id=%2242%22&code=%2212345678901234567000%22&state=s1';
+    renderPage();
+    expect(h.completeMutate).toHaveBeenCalledWith(
+      { state: 's1', code: '12345678901234567890', installationId: 42 },
       expect.any(Object)
     );
   });

@@ -10,6 +10,7 @@ import {
   saveGitHubLakeConnectHandoff,
 } from '@client/app/utils/githubLakeConnectHandoff';
 import { getServerErrorField } from '@client/app/utils/error';
+import { getGitHubLakeCallbackBootSearch } from '@client/app/utils/githubLakeCallbackSearch';
 import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
 
 /**
@@ -28,8 +29,9 @@ const GitHubLakeCallbackPage = () => {
     if (handled.current) return;
     handled.current = true;
 
-    // Read the raw query: the router's default search parser JSON.parses values and would corrupt an all-digit code.
-    const raw = new URLSearchParams(window.location.search);
+    // By now the router has rewritten the URL (quoted the numeric installation_id, parsed an all-digit
+    // code), so read the query GitHub actually sent, snapshotted before the router started.
+    const raw = new URLSearchParams(getGitHubLakeCallbackBootSearch() ?? window.location.search);
     const search: GitHubLakeCallbackSearch = {
       installation_id: raw.get('installation_id') ?? undefined,
       code: raw.get('code') ?? undefined,
