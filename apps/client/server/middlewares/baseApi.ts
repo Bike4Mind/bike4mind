@@ -12,7 +12,7 @@ import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@server/utils/config';
-import { resolveAllowedMethods } from '@server/utils/allowedMethods';
+import { createMethodGuard } from '@server/utils/allowedMethods';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -86,12 +86,12 @@ interface BaseAPIOptions {
 
 /** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
 function methodGuard(allowedMethods: readonly string[]) {
-  const allowed = resolveAllowedMethods(allowedMethods);
-  const allowHeader = allowed.join(', ');
+  const checkMethod = createMethodGuard(allowedMethods);
   return (req: Request, res: Response, next: () => void) => {
-    if (allowed.includes(req.method ?? '')) return next();
-    res.setHeader('Allow', allowHeader);
-    throw new MethodNotAllowedError(`Method ${req.method} is not allowed. Allowed: ${allowHeader}`);
+    const result = checkMethod(req.method);
+    if (result.allowed) return next();
+    res.setHeader('Allow', result.allowHeader);
+    throw new MethodNotAllowedError(result.message);
   };
 }
 

@@ -320,7 +320,7 @@ describe('feature flag', () => {
 describe('method dispatch', () => {
   it('hands a method no contract serves to the path-level 405 handler, advertising every verb', async () => {
     await run('PATCH');
-    expect(mockMethodNotAllowed).toHaveBeenCalledWith(['get', 'post', 'delete'], expect.anything(), expect.anything());
+    expect(mockMethodNotAllowed).toHaveBeenCalledWith(['GET', 'POST', 'DELETE'], expect.anything(), expect.anything());
     expect(mockAssertLakeAccess).not.toHaveBeenCalled();
     expect(mockAssertLakeAccessWithGrants).not.toHaveBeenCalled();
   });

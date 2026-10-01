@@ -9251,7 +9251,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -9571,7 +9571,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -9882,7 +9882,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -10256,7 +10256,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -10682,7 +10682,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -11052,7 +11052,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },
@@ -11425,7 +11425,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
                 }
               }
             },

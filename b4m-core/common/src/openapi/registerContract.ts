@@ -118,7 +118,8 @@ export function registerContract(contract: EndpointContract): void {
         ? undefined
         : SECURITY_REQUIREMENT;
 
-  // Error bodies reuse the single shared ErrorResponse component ($ref) instead of
+  // Error bodies reuse the single shared ErrorResponse (or, for a declared scope 403,
+  // ScopeForbiddenResponse) component ($ref) instead of
   // minting an identical per-operation copy; other schemas get an operation-scoped
   // component so their examples/shape stay endpoint-specific. A body with no schema
   // is raw bytes, which have only a media type.
@@ -130,9 +131,11 @@ export function registerContract(contract: EndpointContract): void {
       ? BINARY_SCHEMA
       : body.schema === ApiErrorSchema
         ? ErrorResponse
-        : annotateInheritedName(body.schema).openapi(componentName, {
-            ...(body.example !== undefined && { example: body.example }),
-          });
+        : body.schema === ScopeForbiddenErrorSchema
+          ? SCOPE_FORBIDDEN_RESPONSE
+          : annotateInheritedName(body.schema).openapi(componentName, {
+              ...(body.example !== undefined && { example: body.example }),
+            });
 
   const responses: Record<string, ContractResponse> = {};
   for (const [status, spec] of Object.entries(contract.responses)) {
@@ -215,9 +218,10 @@ export function registerContract(contract: EndpointContract): void {
     }
   }
 
-  // Both transports 405 any method but the contract's own, ahead of auth and before a stream
-  // opens (baseApi's `allowedMethods` for Next, defineLambdaRoute's guard for Function URLs), so
-  // this holds for public and streaming contracts too.
+  // Every transport 405s any method but the contract's own, ahead of auth and before a stream
+  // opens (baseApi's `allowedMethods` for Next, defineLambdaRoute's guard for Function URLs, and
+  // the completions route's own guard on the ChatCompletion Express app), so this holds for public
+  // and streaming contracts too. A new transport must install the same guard or this is false.
   if (!responses['405']) {
     responses['405'] = {
       description: 'The path does not serve this HTTP method.',

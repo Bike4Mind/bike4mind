@@ -9,7 +9,7 @@ import {
 import { connectDB, mongoose } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { resolveAllowedMethods } from '@server/utils/allowedMethods';
+import { createMethodGuard } from '@server/utils/allowedMethods';
 import { resolveContractAuth, type ContractAuthResult } from './resolveContractAuth';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
@@ -61,8 +61,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
   handle: (ctx: LambdaRouteContext<C>) => Promise<LambdaRouteResult>,
   options: LambdaRouteOptions = {}
 ): (event: APIGatewayProxyEventV2, resolvedRequestId?: string) => Promise<APIGatewayProxyResultV2> {
-  const allowedMethods = resolveAllowedMethods([contract.method]);
-  const allowHeader = allowedMethods.join(', ');
+  const checkMethod = createMethodGuard([contract.method]);
 
   return async (event: APIGatewayProxyEventV2, resolvedRequestId?: string): Promise<APIGatewayProxyResultV2> => {
     // Reuse the wrapper's id when threaded (so both layers report the same value
@@ -87,13 +86,10 @@ export function defineLambdaRoute<C extends EndpointContract>(
     // A Function URL accepts every method, so the contract's verb is enforced here, ahead of the
     // DB connect and auth (the same 405 baseApi's `allowedMethods` gives the Next transport).
     // The runtime always sets requestContext; a hand-built event without it passes through.
-    const method = event.requestContext?.http?.method?.toUpperCase();
-    if (method && !allowedMethods.includes(method)) {
-      return json(
-        405,
-        { error: `Method ${method} is not allowed. Allowed: ${allowHeader}`, request_id: requestId },
-        { Allow: allowHeader }
-      );
+    const method = event.requestContext?.http?.method;
+    const methodCheck = method ? checkMethod(method) : undefined;
+    if (methodCheck && !methodCheck.allowed) {
+      return json(405, { error: methodCheck.message, request_id: requestId }, { Allow: methodCheck.allowHeader });
     }
 
     let body: unknown;

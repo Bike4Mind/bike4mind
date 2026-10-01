@@ -12,3 +12,20 @@ export function resolveAllowedMethods(methods: readonly string[]): string[] {
   if (getIndex === -1 || upperCased.includes('HEAD')) return upperCased;
   return [...upperCased.slice(0, getIndex + 1), 'HEAD', ...upperCased.slice(getIndex + 1)];
 }
+
+export type MethodGuardResult = { allowed: true } | { allowed: false; allowHeader: string; message: string };
+
+/**
+ * The 405 decision every transport makes ahead of auth (middlewares/baseApi.ts,
+ * cli/defineLambdaRoute.ts, chatCompletion/external/sseRoute.ts), so the `Allow` value and the
+ * error wording cannot drift between them. Each transport still shapes its own response.
+ */
+export function createMethodGuard(methods: readonly string[]): (method: string | undefined) => MethodGuardResult {
+  const allowed = resolveAllowedMethods(methods);
+  const allowHeader = allowed.join(', ');
+  return method => {
+    const upperCased = method?.toUpperCase() ?? '';
+    if (allowed.includes(upperCased)) return { allowed: true };
+    return { allowed: false, allowHeader, message: `Method ${upperCased} is not allowed. Allowed: ${allowHeader}` };
+  };
+}
