@@ -3849,6 +3849,39 @@ describe('search_knowledge_base chip source origin', () => {
     });
   });
 
+  it('semantic arm: a dynamic lake prefix attributes only the creator-owned file', async () => {
+    const dynamicLake = {
+      id: 'lake-dyn',
+      name: 'Dynamic Lake',
+      datalakeTag: 'datalake:dyn',
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:dyn',
+        creatorUserId: 'creator',
+        fileTagPrefix: 'acme:',
+      },
+    };
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:dyn'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [dynamicLake],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fcreator', ['acme:x'], 'creator', 0.9), hit('fother', ['acme:x'], 'someone-else', 0.85)],
+    });
+
+    const ctx = semanticCtx();
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fcreator: { kind: 'lake', lakes: [{ id: 'lake-dyn', name: 'Dynamic Lake' }] },
+      fother: { kind: 'library', owned: false },
+    });
+  });
+
   it('semantic agent-scoped (kbScope) arm: chips carry no sourceOrigin key at all', async () => {
     fileScopedSemanticSearchMock.mockResolvedValue({
       ...emptySemanticResult(),
