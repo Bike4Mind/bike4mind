@@ -21,14 +21,15 @@ export const remarkGfmNoSingleTilde: [typeof remarkGfm, { singleTilde: false }] 
 // variables ("$HOME=$PWD", "$PATH/$SUBDIR", "${A}${B}") are rejected the same way; the cost is
 // that "$n$th" stays literal. Content still has to pass `looksLikeMath` below to be promoted.
 const SINGLE_DOLLAR_SPAN = /(?<!\$)\$(?!\$)(?!\s)([^$\n]*[^$\n\s])(?<!\$)\$(?!\$)(?![\w{])/g;
-// Splits on fenced code blocks and inline code spans so `$` and `\(`/`\[` inside code are never
-// touched. A fence segment carries no trailing newline, so the text after it starts mid-line.
-const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|`[^`\n]*`)/g;
+// Splits on ``` and ~~~ fenced code blocks and inline code spans so `$` and `\(`/`\[` inside them
+// are never touched. Indented code blocks are not detected. A fence segment carries no trailing
+// newline, so the text after it starts mid-line.
+const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g;
 
 // LaTeX's own delimiters. CommonMark reads `\(` and `\[` as backslash escapes, so without this the
 // parser drops the backslash and prints "( a^2 )". The lookbehind requires an even run of
 // backslashes before the delimiter: `\\[2pt]` is a LaTeX line break, not an opening bracket.
-const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
+export const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
 const INLINE_PAREN_SPAN = new RegExp(String.raw`${UNESCAPED}\\\(([^\n]*?)${UNESCAPED}\\\)`, 'g');
 const INLINE_BRACKET_SPAN = new RegExp(String.raw`${UNESCAPED}\\\[([^\n]*?)${UNESCAPED}\\\]`, 'g');
 // `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line. The body
@@ -110,6 +111,10 @@ function toDisplayMath(match: string, prefix: string, inner: string): string {
   const [firstLine = '', ...lines] = inner.split('\n');
   // A lazy-continuation line (no `>`) would end the blockquote between the two fences.
   if (prefix.includes('>') && lines.some(line => !/^[ \t]*>/.test(line))) return match;
+  const width = (ws: string) => [...ws].reduce((col, ch) => (ch === '\t' ? col + 4 - (col % 4) : col + 1), 0);
+  const indent = width(prefix.match(/^[ \t]*/)![0]);
+  // A body line indented less than the opener is a lazy continuation; a `$$` fence cannot hold it.
+  if (indent && lines.some(line => line.trim() && width(line.match(/^[ \t]*/)![0]) < indent)) return match;
   const first = firstLine.trim();
   const last = lines.pop();
   const body = [...(first ? [prefix + first] : []), ...lines];

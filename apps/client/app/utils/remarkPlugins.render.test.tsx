@@ -113,4 +113,17 @@ describe.each(Object.entries(PLUGIN_SETS))('LaTeX delimiters render as KaTeX: %s
     expect(out.linkText).toEqual(['[a]']);
     expect(out.text).toContain('[Smith (2020)]');
   });
+
+  it('keeps the paragraph after an under-indented list math body out of the math', () => {
+    const markdown = '- item\n  \\[ a = b\nc^2 \\]\n\nNext paragraph.';
+    const html = renderToStaticMarkup(
+      <ReactMarkdown remarkPlugins={[...plugins]} rehypePlugins={[rehypeKatex]}>
+        {promoteInlineLatexDollars(markdown)}
+      </ReactMarkdown>
+    );
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const para = Array.from(doc.querySelectorAll('p')).find(el => el.textContent?.includes('Next paragraph.'));
+    expect(para).toBeDefined();
+    expect(para!.closest('.katex')).toBeNull();
+  });
 });

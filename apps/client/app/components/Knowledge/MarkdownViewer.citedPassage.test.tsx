@@ -238,3 +238,20 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
     expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
   });
 });
+
+describe('MarkdownViewer cited passage clipped inside a LaTeX span', () => {
+  const MATH_DOC = 'Area is \\( \\pi r^2 \\) for a circle of radius r.';
+  it.each([
+    ['opening delimiter without its closer', 'Area is \\( \\pi r^2'],
+    ['closing delimiter without its opener', '\\pi r^2 \\) for a circle'],
+    ['the whole span', 'Area is \\( \\pi r^2 \\) for a circle'],
+  ])('anchors a passage with %s', (_label, passage) => {
+    const { container } = render(
+      <TestWrapper>
+        <MarkdownViewer content={MATH_DOC} citedPassage={passage} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+    expect(container.querySelectorAll('[data-cited]').length).toBeGreaterThan(0);
+  });
+});

@@ -108,6 +108,7 @@ describe('promoteInlineLatexDollars', () => {
         'so \\[ \\begin{aligned} a &= b \\end{aligned} \\] holds',
         'so $$\\begin{aligned} a &= b \\end{aligned}$$ holds',
       ],
+      ['own-line block inside a list item', '- item\n  \\[ a = b\n  c^2 \\]', '- item\n  $$\n  a = b\n  c^2\n  $$'],
       ['own-line padded word equation', '\\[ area = pi r^2 \\]', '$$\narea = pi r^2\n$$'],
       ['own-line padded ratio with colons', '\\[ a:b = c:d \\]', '$$\na:b = c:d\n$$'],
       ['own-line block closing after an escaped backslash', '\\[ a = b \\\\ \\]', '$$\na = b \\\\\n$$'],
@@ -187,6 +188,9 @@ describe('promoteInlineLatexDollars', () => {
       // function names stay literal along with turndown's `key = value` prose.
       ['padded equation with a unit', 'so \\[ P = 101 kPa \\] holds'],
       ['padded bare log', 'so \\[ log(x) = 2 \\] holds'],
+      ['under-indented list body', '- item\n  \\[ a = b\nc^2 \\]\n\nNext paragraph.'],
+      ['blockquote inside a list with lazy body', '- item\n  > \\[ a = b\n> c^2 \\]\n\nNext.'],
+      ['tilde fence', '~~~latex\n\\[ x^2 \\]\nso \\(a^2\\) here\n~~~'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });
