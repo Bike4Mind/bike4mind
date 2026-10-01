@@ -37,6 +37,42 @@ describe('superlative conflicts', () => {
     expect(report.findings[0].evidence).toHaveLength(2);
   });
 
+  it.each([
+    ['identical sentence', 'X is the fastest Y on the market.', 'X is the fastest Y on the market.'],
+    ['case and punctuation', 'X is the fastest Y on the market.', 'x is THE fastest y on the market!'],
+    ['trailing punctuation', 'X is the fastest Y on the market!.', 'X is the fastest Y on the market!'],
+  ])('does not flag two documents stating the same claim: %s', (_label, a, b) => {
+    expect(kinds([doc('a', a), doc('b', b)])).toEqual([]);
+  });
+
+  it('flags a differing third document against two identical ones', () => {
+    const sentence = 'X is the fastest Y on the market.';
+    const report = run([doc('a', sentence), doc('b', sentence), doc('c', 'X is the fastest Y on the cloud.')]);
+
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0].documentCount).toBe(3);
+    const [first, second] = report.findings[0].evidence;
+    expect(first.excerpt).not.toBe(second.excerpt);
+    expect(report.findings[0].evidence.map(e => e.fabFileId)).toContain('c');
+  });
+
+  it('keeps symbols that are the whole difference between two claims', () => {
+    expect(kinds([doc('a', 'We are the only C++ vendor.'), doc('b', 'We are the only C# vendor.')])).toEqual([
+      'superlative-conflict',
+    ]);
+  });
+
+  it('flags a document holding two claims against one holding only one of them, with a differing witness pair', () => {
+    const report = run([
+      doc('a', 'X is the fastest Y on the market. X is the fastest Y on the cloud.'),
+      doc('b', 'X is the fastest Y on the market.'),
+    ]);
+
+    expect(report.findings).toHaveLength(1);
+    const [first, second] = report.findings[0].evidence;
+    expect(first.excerpt).not.toBe(second.excerpt);
+  });
+
   it('ignores comparatives, which two documents can both hold without contradiction', () => {
     expect(
       kinds([doc('a', 'Our pipeline is faster than the alternatives.'), doc('b', 'Their pipeline is faster too.')])
@@ -222,7 +258,7 @@ describe('the same figure written two ways is not a disagreement', () => {
 });
 
 /**
- * The charter of `crossDocumentGroups`, for the two kinds that compare a value: a finding must mean
+ * The charter of `crossDocumentGroups`, for the kinds that require disagreement: a finding must mean
  * the DOCUMENTS hold different values. A document stating both values supplies both on its own, so a
  * comparison over the flat hit list reported two documents that agree - byte-identical ones included -
  * as contradicting each other, and named a document whose only claim matched its sibling's.

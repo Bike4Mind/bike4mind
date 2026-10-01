@@ -2,6 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { FabFile, adminSettingsRepository } from '@bike4mind/database';
 import { decodeS3Key, findWithRetry } from '@server/s3/utils';
+import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { sendToQueue } from '@server/utils/sqs';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { dispatch as historyUploadComplete } from '@server/s3/historyUploadComplete';
@@ -70,17 +71,6 @@ const handler = baseApi({ auth: false }).post(
       return res.status(401).json({ error: 'Invalid webhook secret' });
     }
 
-    // Keep in sync with server/s3/objectCreated.ts and appFileUploadComplete.ts.
-    const isSkippable = (key: string) =>
-      key.includes('/backups/') ||
-      key.startsWith('temp/') ||
-      key.startsWith('tmp/') ||
-      key.startsWith('exports/') ||
-      key.startsWith('proxied-images/') ||
-      key.startsWith('tavern-sounds/') ||
-      key.startsWith('cc-bridge/') ||
-      key.startsWith('cc-bridge-downloads/');
-
     const records = ((req.body as { Records?: MinioS3Record[] } | undefined)?.Records ?? []) as MinioS3Record[];
 
     // Route each record to the handler its bucket owns before any fab-file work happens. A record
@@ -129,7 +119,7 @@ const handler = baseApi({ auth: false }).post(
       // MinIO URL-encodes the key like S3 does.
       const objectKey = decodeS3Key(rawKey);
 
-      if (isSkippable(objectKey)) {
+      if (isUntrackedFabFileKey(objectKey)) {
         req.logger.info(`Skipping S3 webhook for untracked file: ${objectKey}`);
         continue;
       }

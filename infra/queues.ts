@@ -101,9 +101,10 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
 // SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
 const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
 const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
-  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge is not
-  // sliced like driveDisconnectPurge, but a run cut off by the timeout resumes on the next receive:
-  // the connection stays disabled and the purge re-finds only the files still left.
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge runs in
+  // slices that re-enqueue (REVOKE_PURGE_SLICE_SIZE, githubLakeConnection.ts), and a run cut off by
+  // the timeout still resumes on the next receive: the connection stays disabled and the purge
+  // re-finds only the files still left.
   visibilityTimeout: '12 minutes',
   dlq: {
     queue: githubLakeRevokeQueueDLQ.arn,
@@ -758,7 +759,9 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket],
+    // githubLakeRevokeQueue: releasing a lake's GitHub connection hands a failed post-release uninstall
+    // to it (releaseGitHubLakeConnection, githubLakeConnection.ts).
+    link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
       retention: '3 days',
     },
@@ -938,9 +941,9 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    // fabFileBucket only: unlike githubLakeIngestQueue, this handler never re-enqueues itself, so it
-    // does not link its own queue.
-    link: [...allSecrets, fabFileBucket],
+    // Links its own queue: the handler re-enqueues for each remaining purge slice, and its release
+    // hands a failed post-release uninstall back to this queue (githubLakeConnection.ts).
+    link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
       retention: '3 days',
     },

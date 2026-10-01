@@ -1,7 +1,7 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import { CreateSessionRequestSchema, SessionResponseSchema } from '../../schemas/session';
-import { ApiErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 export const createSessionContract = defineEndpoint({
   method: 'post',
@@ -27,7 +27,7 @@ export const createSessionContract = defineEndpoint({
     400: { description: 'The request could not be processed (for example a bad project id).', schema: ApiErrorSchema },
     403: {
       description: 'The key lacks `notebooks:write`, or is not bound to a requested data lake.',
-      schema: ApiErrorSchema,
+      schema: ScopeForbiddenErrorSchema,
     },
     404: { description: 'A named data lake or project was not found.', schema: ApiErrorSchema },
   },

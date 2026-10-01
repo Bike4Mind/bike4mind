@@ -18,10 +18,11 @@ import { assertDataLakeTagWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
 const createFabFileSchema = fabFilesService.createFabFileSchema;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
     if (!req.ability?.can(Permission.create, FabFile)) {
       throw new BadRequestError('Unauthorized');

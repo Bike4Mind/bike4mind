@@ -30,7 +30,7 @@ import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
-import DriveConnectAction from './DriveConnectAction';
+import LakeSourceConnectActions from './LakeSourceConnectActions';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
 import DriveConnectUnavailableButton, { DRIVE_ORG_ONLY_REASON } from './DriveConnectUnavailableButton';
 
@@ -310,11 +310,13 @@ export default function SourceSelectionStep() {
         </Box>
 
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit. A personal lake gets the
+            does not, so the selection is parked and connected on commit; GitHub is not offered
+            there, since its install round-trip leaves the page and must sign a real lake id into
+            its state. A personal lake gets the
             control disabled with its reason, so Drive stays discoverable where it cannot connect. */}
         {targetLake ? (
           canConnectDrive ? (
-            <DriveConnectAction lake={targetLake} />
+            <LakeSourceConnectActions lake={targetLake} />
           ) : (
             !targetLake.organizationId && (
               <DriveConnectUnavailableButton testId="drive-connect-personal-lake-btn" reason={DRIVE_ORG_ONLY_REASON} />

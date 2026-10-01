@@ -7,11 +7,16 @@ const h = vi.hoisted(() => ({
   download: vi.fn(),
   getMetadata: vi.fn(),
   createFabFile: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 // The route only calls `.use(...).post(...)`; the ability check in `.use` is not the subject here.
+// Captures the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ use: () => ({ post: (handler: unknown) => handler }) }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { use: () => ({ post: (handler: unknown) => handler }) };
+  },
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
@@ -153,5 +158,9 @@ describe('POST /api/files/copy-generated-image object-level authz', () => {
       expect.objectContaining({ mimeType: 'image/webp' }),
       expect.anything()
     );
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

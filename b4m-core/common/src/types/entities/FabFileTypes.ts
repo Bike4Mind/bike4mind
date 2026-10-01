@@ -1575,6 +1575,20 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
   /**
+   * Every live, non-member FabFile still carrying this connection's provenance - the disconnect
+   * backstop for a file the connector UNPICKED but never deleted. A file removed from the connected
+   * folder (or left behind by the edit path before this existed) keeps its `driveConnectionId`, its
+   * chunks and its stored object while losing the lake meta-tag, so it is invisible to
+   * `findByDriveConnectionIdInDataLake` (whose conjunct is the tag the unpick pulled) and would
+   * otherwise survive every disconnect, staying searchable and billed forever. The meta-tag check
+   * is deliberately `$ne` on the tag name: no element of `tags` may match. The default soft-delete
+   * filter stays ON (a soft-deleted row was already
+   * reaped by `deleteFabFile`) and `status: 'pending'` is excluded (an unconfirmed in-flight upload
+   * was never durable content). `archivedAt: null` is safe because archiving stamps members only
+   * (`archiveByDataLakeTag`), and a non-member is by definition not one.
+   */
+  findLiveNonMembersByDriveConnectionId(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
    * Every live, uploaded file a GitHub connection has ingested into a lake (META-TAG ONLY, same filter as
    * findByDriveConnectionIdInDataLake). The set a re-sync diffs the repository tree against.
    *
@@ -1586,6 +1600,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     datalakeTag: string,
     options?: { includeDeleted?: boolean }
   ): Promise<IFabFileDocument[]>;
+  /** countByDriveConnectionIdInDataLake's GitHub twin: the number a GitHub disconnect will purge. */
+  countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
