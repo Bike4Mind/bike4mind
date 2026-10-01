@@ -401,11 +401,18 @@ export const bashExecute: ToolDefinition = {
       properties: {
         command: {
           type: 'string',
-          description: 'The bash command to run. Pipes, redirects and chained commands are allowed.',
+          description: [
+            'The bash command to run. Pipes, redirects and && chains are allowed.',
+            'Do not start it with `cd`: pass the directory as `cwd` instead.',
+          ].join(' '),
         },
         cwd: {
           type: 'string',
-          description: 'Absolute path to run in. Must be inside a shared folder. Defaults to the first one.',
+          description: [
+            'Absolute path to run in. Must be inside a shared folder. Defaults to the first one.',
+            'This is how you run somewhere else - always prefer it to a leading `cd`, which is',
+            'more likely to interrupt the user for approval.',
+          ].join(' '),
         },
         timeout: {
           type: 'number',

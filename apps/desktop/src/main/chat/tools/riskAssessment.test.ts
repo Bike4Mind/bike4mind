@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -14,6 +14,10 @@ describe('assessApprovalRisk', () => {
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-risk-')));
     await writeFile(join(root, 'notes.txt'), 'hello\n', 'utf8');
+    await mkdir(join(root, 'sub'));
+    // Inside the root by name, outside it once resolved - which is the only thing a `cd` check
+    // that stopped at the lexical path would miss.
+    await symlink(tmpdir(), join(root, 'escape'));
     context = { roots: [root], workingDirectory: root, signal: new AbortController().signal };
   });
 
@@ -72,6 +76,56 @@ describe('assessApprovalRisk', () => {
     /** Bare and listing forms read; the block below holds the forms that do not. */
     it.each(['git branch', 'git branch -a', 'git branch --list'])('allows %s', async command => {
       expect(await shell(command)).toBe('contained');
+    });
+
+    /**
+     * An `&&` chain of reads is a read. The steps are separate commands rather than separate
+     * segments of one pipeline, which matters only for where a `cd` lands; nothing else about
+     * the argument for a pipeline changes.
+     */
+    it.each([
+      'git status --short && git log --oneline',
+      'cat notes.txt && wc -l notes.txt && ls',
+      'git log --oneline | head -20 && git status --short',
+      'cd {ROOT} && git status',
+      'cd {ROOT}/sub && git status',
+      // The case this was opened for, which asked twice over: once for the `&&` and once for
+      // the `cd`.
+      'cd {ROOT} && git log --oneline origin/main..HEAD | head -50 && echo "---STATUS---" && git status --short',
+    ])('allows %s', async command => {
+      expect(await shell(command.replace('{ROOT}', root))).toBe('contained');
+    });
+
+    /**
+     * The point of threading the directory rather than merely allowing `cd`: `../notes.txt` is
+     * inside the root from `sub` and outside it from the root itself, so the pair below can
+     * only both hold if the second step was assessed where it will actually run.
+     */
+    it('resolves a later step against the directory an earlier cd moved to', async () => {
+      expect(await shell(`cd ${join(root, 'sub')} && cat ../notes.txt`)).toBe('contained');
+      expect(await shell('cat ../notes.txt')).toBe('sensitive');
+    });
+  });
+
+  /**
+   * `cd` is the one allow-listed word that changes what every command after it reads, so the
+   * bound on it is narrower than on anything else: one argument, absolute, and inside a root
+   * once its symlinks are resolved.
+   */
+  describe('the directory a chain runs in', () => {
+    it.each([
+      ['no argument at all, which is $HOME', 'cd && git status'],
+      ['the previous directory, which cannot be known from the text', 'cd - && git status'],
+      ['a second argument', 'cd {ROOT} {ROOT}/sub && git status'],
+      ['a flag that changes how the symlinks resolve', 'cd -P {ROOT} && git status'],
+      ['a relative name, which bash may look up through CDPATH', 'cd sub && git status'],
+      ['a directory outside every granted root', 'cd /etc && git status'],
+      ['a symlink out of the root', 'cd {ROOT}/escape && git status'],
+      // Every segment of a pipeline is a subshell, so this one moves nothing and `..` is still
+      // being resolved from the root.
+      ['a cd piped, which leaves the directory where it was', 'cd {ROOT}/sub | cat ../notes.txt'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command.split('{ROOT}').join(root))).toBe('sensitive');
     });
   });
 
@@ -204,7 +258,9 @@ describe('assessApprovalRisk', () => {
 
     /**
      * The regression that would hurt most: the script allow-list must not become a way to get
-     * a second command past the gate, so the shell-control check still runs first.
+     * a second command past the gate. `;`, `|`, `>` and `||` never reach the allow-list at all,
+     * because the shell-control check runs first; `&&` does reach it now, and the second step
+     * is held to exactly the same bar as the first.
      */
     it.each([
       'yarn test; rm -rf /',
@@ -295,7 +351,16 @@ describe('assessApprovalRisk', () => {
       ['a backtick substitution inside double quotes', 'echo "`whoami`"'],
       ['an escape inside double quotes', 'echo "a\\tb"'],
       ['an unterminated quote', "cat 'unterminated"],
-      ['a chained command', 'git status && rm -rf .'],
+      ['a chain whose second step is not on the list', 'git status && rm -rf .'],
+      ['a chain whose second step reaches the network', 'cat notes.txt && curl https://example.com'],
+      // One character from the separator, and none of them is it.
+      ['a backgrounded first command', 'git status & cat notes.txt'],
+      ['a redirect of both streams, which is not a separator', 'git status &> out.txt'],
+      ['a redirect of both streams onto a descriptor', 'git status &>& 1'],
+      ['three ampersands', 'git status &&& cat notes.txt'],
+      ['a leading chain separator', '&& git status'],
+      ['a trailing chain separator', 'git status &&'],
+      ['a doubled chain separator', 'git status && && ls'],
       ['a semicolon', 'cat notes.txt; rm -rf .'],
       ['an or-chain, which is not a pipe', 'cat a.txt || rm b.txt'],
       ['a leading pipe', '| cat notes.txt'],

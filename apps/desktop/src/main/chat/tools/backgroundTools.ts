@@ -76,11 +76,19 @@ export const bashBackground: ToolDefinition = {
       properties: {
         command: {
           type: 'string',
-          description: 'The bash command to start. Do not append "&" - backgrounding is what this tool does.',
+          description: [
+            'The bash command to start. Do not append "&" - backgrounding is what this tool does,',
+            'and a trailing "&" makes the command need approval. Do not start it with `cd` either:',
+            'pass the directory as `cwd`.',
+          ].join(' '),
         },
         cwd: {
           type: 'string',
-          description: 'Absolute path to run in. Must be inside a shared folder. Defaults to the first one.',
+          description: [
+            'Absolute path to run in. Must be inside a shared folder. Defaults to the first one.',
+            'This is how you run somewhere else - always prefer it to a leading `cd`, which is',
+            'more likely to interrupt the user for approval.',
+          ].join(' '),
         },
       },
       required: ['command'],
