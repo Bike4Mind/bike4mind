@@ -40,6 +40,8 @@ import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
 import { branchExists, listWorktrees, projectDisplayName } from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
+import { defaultUserInstructionsRoot } from './project/instructions';
+import { type MemoryStore, memoryStoreFor } from './project/memory';
 import { ProjectContextCache } from './project/projectContext';
 import { resolveWorkspace, type WorkspaceOutcome } from './project/workspace';
 import { MAX_ATTACHMENTS_PER_TURN, textAttachmentBlock } from './attachments';
@@ -1197,6 +1199,11 @@ export class ChatService {
       // Per turn, from the session's current model, so a model switch changes the edit tools
       // from the next turn on.
       const patchEdits = usesApplyPatch(session.model);
+      // Keyed on the project the user picked, not the worktree this session works in: branches
+      // come and go and the project's memories outlive them. See resolveMemoryStore.
+      const memory: MemoryStore | undefined = session.project
+        ? await memoryStoreFor(session.project.directory, defaultUserInstructionsRoot()).catch(() => undefined)
+        : undefined;
       const tools = toolsForRequest({
         modelId: session.model,
         roots,
@@ -1204,6 +1211,7 @@ export class ChatService {
         host: !!host,
         explore: !!explore,
         browser: !!browser,
+        memory: !!memory,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
       const project = session.mode === 'code' ? session.project : undefined;
@@ -1226,7 +1234,8 @@ export class ChatService {
           this.deps.dependencies?.promptLines(session.id) ?? [],
           projectContext,
           !!browser,
-          patchEdits
+          patchEdits,
+          !!memory
         )
       );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -1340,7 +1349,7 @@ export class ChatService {
         thinking = turnThinking;
         const settled = await this.runTools(
           requested,
-          { roots, workingDirectory, media, host, explore, browser, patchEdits, title: session.title },
+          { roots, workingDirectory, media, host, explore, browser, memory, patchEdits, title: session.title },
           sessionId,
           replyId,
           controller.signal
@@ -1656,6 +1665,7 @@ export class ChatService {
       host: HostContext | undefined;
       explore: ExploreContext | undefined;
       browser: BrowserContext | undefined;
+      memory: MemoryStore | undefined;
       /** Whether this turn's model edits with apply_patch rather than file_edit and file_write. */
       patchEdits: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
@@ -1665,7 +1675,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, patchEdits } = scope;
+    const { roots, workingDirectory, media, host, explore, browser, memory, patchEdits } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1758,6 +1768,7 @@ export class ChatService {
           ...(host ? { host } : {}),
           ...(explore ? { explore } : {}),
           ...(browser ? { browser } : {}),
+          ...(memory ? { memory } : {}),
           report,
         };
 
@@ -2638,7 +2649,8 @@ function buildSystemMessage(
   dependencyLines: readonly string[] = [],
   projectContext = '',
   browser = false,
-  patchEdits = false
+  patchEdits = false,
+  memory = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2653,6 +2665,7 @@ function buildSystemMessage(
         'above the message box, and the sidebar card shares one with every conversation.',
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
+        ...(memory ? MEMORY_GUIDANCE : []),
         ...mcpGuidance(mcpServers),
         '',
         DESKTOP_ARTIFACT_PROMPT,
@@ -2756,6 +2769,7 @@ function buildSystemMessage(
       'return it, you do not know it.',
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
+      ...(memory ? MEMORY_GUIDANCE : []),
       ...mcpGuidance(mcpServers),
       '',
       DESKTOP_ARTIFACT_PROMPT,
@@ -2831,6 +2845,31 @@ const MEDIA_GUIDANCE: readonly string[] = [
   'flourish alongside a text answer. If they decline, do not try a variation; ask what they want.',
   'The result is shown or played to the USER and is never returned to you: you cannot see the',
   'image or hear the audio. Never describe what a generated image depicts or how audio sounds.',
+];
+
+/**
+ * What the model has to know about memory, in the voice of the guidance around it.
+ *
+ * Two failures to head off, and they pull opposite ways. A model given a memory tool writes
+ * down the turn it just had, which fills the index with what the commit log already says and
+ * buries the few facts actually worth carrying. And a model given an index reads every line of
+ * it before answering anything, which spends the context the index exists to save.
+ */
+const MEMORY_GUIDANCE: readonly string[] = [
+  'You keep memories for this project, across sessions. The index is in the block below, one',
+  'line per memory; memory_read fetches one by name, memory_write saves or replaces one, and',
+  'memory_delete removes one that turned out to be wrong.',
+  'Read a memory when its line in the index bears on what you are doing, not to survey what is',
+  'there. What a memory says was true when it was written: check a file, function or flag it',
+  'names still exists before you act on it.',
+  'Save a durable fact about the user, how they want you to work, or this project, that you',
+  'could not have got from the code or the commit history. Never save what the repository',
+  'already records - its structure, a fix you just made, what is in CLAUDE.md - and never save',
+  'what only matters until this conversation ends. One fact per memory. Before saving, look for',
+  'a memory already covering the same ground and update that one instead of adding a second.',
+  'Keep the index to one line per memory, holding the pointer and never the memory itself.',
+  'Saving and deleting need the user to approve the exact change first, so propose one when it',
+  'is worth their attention, not after every turn.',
 ];
 
 /**
