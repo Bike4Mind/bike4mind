@@ -39,6 +39,7 @@ import {
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
   visibleReplyText,
+  tokenEstimateMultiplier,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -74,6 +75,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
   effectiveContextWindow,
   safeInputWindow,
+  withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
@@ -3501,6 +3503,10 @@ export class ChatCompletionProcess {
         imageGenerationAvailable,
         systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
+      // Every input count this turn (assembly budget, overflow guard, pre-reservation, [BILLING_DRIFT])
+      // goes through this one tokenizer, so they all agree on the model's units: cl100k_base scaled up to
+      // the model's own tokenizer (see tokenEstimateMultiplier).
+      const estimateTokenizer = withTokenEstimateMultiplier(this.tokenizer, tokenEstimateMultiplier(modelInfo.id));
       // messageTruncationInfo is captured ONLY from this first build - the overflow-recovery rebuild
       // further down does not refresh it, so downstream telemetry always reflects the first attempt.
       const firstBuild = await buildAndSortMessages(
@@ -3511,7 +3517,7 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer,
+        estimateTokenizer,
         buildOptions
       );
       let messages = firstBuild.messages;
@@ -3564,7 +3570,7 @@ export class ChatCompletionProcess {
 
       // Calculate input tokens and per-source breakdown in parallel
       const tokenCalculationStartTime = Date.now();
-      const tokenCalcOptions = { estimateOnly: false, tokenizer: this.tokenizer };
+      const tokenCalcOptions = { estimateOnly: false, tokenizer: estimateTokenizer };
       let tokensBySource:
         | {
             systemPrompts: number;
@@ -3622,7 +3628,7 @@ export class ChatCompletionProcess {
                 })
               )
               .join('');
-            toolSchemaTokens = await this.tokenizer.countTokens(serializedToolSchemas);
+            toolSchemaTokens = await estimateTokenizer.countTokens(serializedToolSchemas);
           } catch (toolTokenError) {
             logger.warn(
               '📊 Failed to count tool-schema tokens; leaving tools uncounted for this estimate',
@@ -3686,7 +3692,7 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer,
+              estimateTokenizer,
               buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
@@ -5269,7 +5275,10 @@ export class ChatCompletionProcess {
       try {
         // Calculate output tokens
         const outputTokenCalculationStartTime = Date.now();
-        const outputTokens = await this.tokenizer.countTokens(Object.values(replies), currentModel.id);
+        const outputTokens = await withTokenEstimateMultiplier(
+          this.tokenizer,
+          tokenEstimateMultiplier(currentModel.id)
+        ).countTokens(Object.values(replies), currentModel.id);
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Output token calculation completed (${outputTokens} tokens) in ${
             Date.now() - outputTokenCalculationStartTime
@@ -5371,11 +5380,13 @@ export class ChatCompletionProcess {
         // guards billing; it monitors the quality of the local estimate that still
         // drives pre-reservation (and fallback settlement). Causes worth
         // investigating: a new content-block shape we don't measure, or a provider
-        // accounting change. Tool schemas ARE now counted (see the breakdown site),
-        // so the expected residual gap on tool-carrying turns is wire-shape
-        // approximation (our {name,description,input_schema} proxy vs each backend's
-        // exact formatTools) plus provider-side overhead the provider injects when
-        // tools are present (e.g. a tool-use preamble). Threshold is symmetric +/-30%.
+        // accounting change, or a Claude release whose tokenizer tokenEstimateMultiplier
+        // does not cover. For calibrated Claude models the estimate is a deliberate lower
+        // bound, so expect ratios a little under 1, and lower on code-heavy turns (Claude
+        // spends ~2x cl100k on code against a 1.5x factor). Tool-carrying turns add
+        // wire-shape approximation (our {name,description,input_schema} proxy vs each
+        // backend's formatTools) and any preamble the provider injects for tools.
+        // Threshold is symmetric +/-30%.
         // Compare against the provider's FULL input accounting, not just the uncached tail.
         // Provider `input_tokens` reports only the tokens NOT served from / written to cache;
         // on a prompt-cache hit or write the rest lands in cache_read/cache_creation. Summing

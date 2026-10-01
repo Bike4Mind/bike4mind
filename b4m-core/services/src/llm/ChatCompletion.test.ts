@@ -5729,7 +5729,9 @@ describe('ChatCompletionProcess', () => {
       // countTokens serves BOTH the tool-schema count (string arg) and the output count (array
       // arg); the impl differentiates so a test can target one without disturbing the other.
       toolCountImpl: (text: any) => number;
+      model?: { id: ChatModels; backend: ModelBackend };
     }): Promise<any> => {
+      const model = opts.model ?? { id: ChatModels.GPT4, backend: ModelBackend.OpenAI };
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(opts.tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
@@ -5750,14 +5752,14 @@ describe('ChatCompletionProcess', () => {
           await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
+        currentModel: model.id,
       } as any);
       mockedGetAvailableModels.mockResolvedValue([
         {
-          id: ChatModels.GPT4,
+          id: model.id,
           type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
+          name: 'Model under test',
+          backend: model.backend,
           max_tokens: 100,
           contextWindow: 200_000,
           can_stream: false,
@@ -5772,7 +5774,13 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, model: model.id },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
       await service.process({ body, logger: mockLogger });
 
       // Second lookup for the runs where the breakdown itself fails: there is no tokensBySource to
@@ -5785,6 +5793,33 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
       return call?.[0]?.promptMeta;
     };
+
+    // calculateTotalTokenLength is mocked, so these route its count through the tokenizer the process
+    // hands it: that is the only way to see whether the turn counts in the model's own units.
+    const countThroughTokenizer = async (_messages: any, options: any) => options.tokenizer.countTokens('x');
+
+    it("scales every input count to a Claude model's tokenizer", async () => {
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        tokenLengthImpl: countThroughTokenizer,
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 100 : 7),
+        model: { id: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock },
+      });
+      // messages 150 + tool schemas 150, each a raw 100 scaled by Claude 5's 1.5.
+      expect(promptMeta.context.tokensBySource.toolSchemas).toBe(150);
+      expect(promptMeta.tokenUsage.inputTokens).toBe(300);
+      const builderTokenizer = mockedBuildAndSortMessages.mock.calls[0][7];
+      await expect(builderTokenizer.countTokens('x')).resolves.toBe(150);
+    });
+
+    it('leaves an OpenAI model on the raw count', async () => {
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        tokenLengthImpl: countThroughTokenizer,
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 100 : 7),
+      });
+      expect(promptMeta.tokenUsage.inputTokens).toBe(200);
+    });
 
     it('folds tool-schema tokens into inputTokens without inflating the systemPrompts remainder', async () => {
       // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5; tools -> 30.
