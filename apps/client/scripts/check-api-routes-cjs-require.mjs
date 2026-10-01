@@ -31,7 +31,9 @@
 //
 // Why here: the self-host image workflow already runs a real `next build` on every PR that
 // touches the app, and its builder stage already hosts the post-build guards (pruneTestRoutes.mjs,
-// check-standalone-tree.mjs). Running this there costs zero extra build minutes.
+// check-standalone-tree.mjs). The probe itself is not free: loading all ~812 routes took ~2
+// minutes wall / ~20 CPU-minutes on a 14-core host, plus a temporary copy of the standalone tree
+// (hundreds of MB, removed before the layer commits) - a few minutes on a CI runner, no new build.
 //
 // Turbopack reports an external module's load failure as a rejection whose message WRAPS the
 // underlying error code ("Failed to load external module <name>: Error [ERR_REQUIRE_ESM]: ..."),
@@ -78,10 +80,11 @@ export const SELF_HOST_CONFIG_MISSING = 'Self-host config missing';
 // extracts the last tagged line rather than parsing the whole stream.
 const REPORT_MARKER = '@@API_ROUTE_PROBE@@';
 
-// Loader run in a child per route. require() is synchronous; the unhandledRejection handler and
-// the short settle timer catch the case where Turbopack externalizes through an async import()
-// that rejects after the module returns. The explicit exits keep a route's DB/SDK handles from
-// holding the child open; the parent's timeout is the backstop for a route that never returns.
+// Loader run in a child per route. require() is synchronous; when Turbopack emits the route as an
+// async module the loader awaits the exports promise (below), so an externalized import that
+// rejects after the module returns is caught, with an unhandledRejection backstop. The explicit
+// exits keep a route's DB/SDK handles from holding the child open; the parent's timeout is the
+// backstop for a route that never settles (a FAIL, labelled with the elapsed limit).
 const CHILD_SCRIPT = `
 const file = process.argv[1];
 const write = (report) => {
@@ -233,15 +236,16 @@ export function describeLoadError(message) {
  * Pass/fail is on a resolution failure only. A route whose load dies on missing self-host config
  * fails too: it never reached its own requires, so a real external-ESM bug behind it would go
  * unseen. An unreported child (killed, OOM, an early process.exit) is also a failure: the route
- * was never probed. A clean load is `{}`; anything else (network, a side effect that throws) is a
- * warning - it is not the failure class this guards and must not fail every build that lacks a
- * credential.
+ * was never probed. A route that never settles is likewise a failure, labelled with the timeout.
+ * A clean load is `{}`; anything else (network, a side effect that throws) is a warning - it is
+ * not the failure class this guards and must not fail every build that lacks a credential.
  */
 export function classifyLoadResult({ code, message, timedOut, unreported } = {}) {
   // No report at all (killed, OOM, a route that exits the child) means the probe learned
   // nothing about the route. An unprobed route cannot be a silent pass.
   if (unreported) return FAIL;
-  if (timedOut) return WARN;
+  // A route that outran the timeout never finished loading; the per-route line says so.
+  if (timedOut) return FAIL;
   const text = String(message ?? '');
   if (text.includes(SELF_HOST_CONFIG_MISSING)) return FAIL;
   if (findLoadFailureCode({ code, message })) return FAIL;
@@ -327,7 +331,10 @@ async function mapWithConcurrency(items, limit, fn) {
 export function isolateStandaloneTree(standaloneRoot, nextDirRel) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'api-route-probe-'));
   const isolatedRoot = path.join(tempRoot, 'standalone');
-  fs.cpSync(standaloneRoot, isolatedRoot, { recursive: true });
+  // verbatimSymlinks keeps pnpm/Turbopack's relative links relative. Node's default copy
+  // absolutizes them, so an external's realpath stays in the source tree and its own requires
+  // walk the builder's ancestors again - the exact resolution this copy exists to prevent.
+  fs.cpSync(standaloneRoot, isolatedRoot, { recursive: true, verbatimSymlinks: true });
   return {
     nextDir: path.join(isolatedRoot, nextDirRel),
     cleanup: () => fs.rmSync(tempRoot, { recursive: true, force: true }),
@@ -359,10 +366,10 @@ async function main() {
     process.exit(1);
   }
 
+  const timeoutMs = Number(process.env.API_ROUTE_PROBE_TIMEOUT_MS) || 20_000;
   const { nextDir, cleanup } = isolateStandaloneTree(standaloneRoot, nextDirRel);
   let results;
   try {
-    const timeoutMs = Number(process.env.API_ROUTE_PROBE_TIMEOUT_MS) || 20_000;
     const concurrency = typeof os.availableParallelism === 'function' ? os.availableParallelism() : 4;
     results = await mapWithConcurrency(modules, concurrency, async (rel) => {
       const file = path.resolve(nextDir, rel);
@@ -389,8 +396,9 @@ async function main() {
       const masked = String(result.message ?? '').includes(SELF_HOST_CONFIG_MISSING);
       const { missingPackage, requiredFrom } = describeLoadError(result.message);
       const named = [missingPackage && `module ${missingPackage}`, requiredFrom && `required from ${requiredFrom}`].filter(Boolean).join(', ');
+      const timedOut = result.timedOut ? ` (timed out after ${timeoutMs}ms)` : '';
       const hint = masked ? ' [Self-host config missing - add the key to .env.selfhost.example]' : '';
-      console.error(`  ${routePathForModule(rel)}${named ? ` (${named})` : ''}${hint}`);
+      console.error(`  ${routePathForModule(rel)}${named ? ` (${named})` : ''}${timedOut}${hint}`);
     }
     console.error(
       'A module the bundler left external cannot be loaded from the built route, so production returns a framework HTML 500 before the handler runs. ' +

@@ -213,11 +213,14 @@ describe('classifyLoadResult', () => {
   });
 
   it.each([
-    ['a timeout that still reported', { timedOut: true, message: 'Error: slow route' }],
     ['a connection error', { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:27017' }],
     ['a generic load error', { message: 'Error: boom' }],
   ])('warns on %s instead of failing the build', (_label, result) => {
     expect(classifyLoadResult(result)).toBe('warn');
+  });
+
+  it('fails a route that outran the timeout, even if it reported first', () => {
+    expect(classifyLoadResult({ timedOut: true, message: 'Error: slow route' })).toBe('fail');
   });
 
   it('fails an unreported child, because the route was never probed', () => {
@@ -264,8 +267,11 @@ describe('CLI', () => {
   // route modules in <root>/apps/client/.next/server/pages/api. The probe copies <root> outside
   // the builder before loading anything.
   const NEXT = 'apps/client/.next';
-  const run = (standaloneRoot: string, nextDirRel: string = NEXT) =>
-    spawnSync(process.execPath, [SCRIPT, standaloneRoot, nextDirRel], { encoding: 'utf8' });
+  const run = (standaloneRoot: string, nextDirRel: string = NEXT, env: NodeJS.ProcessEnv = {}) =>
+    spawnSync(process.execPath, [SCRIPT, standaloneRoot, nextDirRel], {
+      encoding: 'utf8',
+      env: { ...process.env, ...env },
+    });
   const writeRoute = (root: string, routeRel: string, contents: string): void =>
     write(root, path.join(NEXT, routeRel), contents);
 
@@ -378,6 +384,57 @@ describe('CLI', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('/api/isolated');
     expect(result.stderr).toContain('ancestor-only');
+  });
+
+  it('does not resolve a dep of a relative-symlinked external through the builder install', () => {
+    const builderRoot = makeTempDir();
+    const standaloneRoot = path.join(builderRoot, 'apps/client/.next/standalone');
+    // pnpm/Turbopack trace an external package as a RELATIVE symlink into .pnpm; a copy that
+    // absolutizes it would keep resolving through the builder install above the standalone root.
+    write(
+      standaloneRoot,
+      'node_modules/.pnpm/a@1.0.0/node_modules/a/package.json',
+      JSON.stringify({ name: 'a', version: '1.0.0', main: 'index.js' })
+    );
+    write(standaloneRoot, 'node_modules/.pnpm/a@1.0.0/node_modules/a/index.js', "module.exports = require('b');\n");
+    fs.symlinkSync('.pnpm/a@1.0.0/node_modules/a', path.join(standaloneRoot, 'node_modules/a'), 'dir');
+    // `b` was never traced into standalone; only the builder install above it has one.
+    writeCjsPackage(builderRoot, 'b');
+    writeRoute(standaloneRoot, 'server/pages/api/symlinked.js', "module.exports = require('a');\n");
+
+    const result = run(standaloneRoot);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('/api/symlinked');
+    expect(result.stderr).toContain('b');
+  });
+
+  it('passes a route whose async exports resolve', () => {
+    const dir = makeTempDir();
+    writeRoute(
+      dir,
+      'server/pages/api/async-ok.js',
+      'module.exports = new Promise((resolve) => setTimeout(() => resolve({}), 100));\n'
+    );
+
+    const result = run(dir);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('1 routes probed, 0 failed to load');
+    expect(result.stderr).not.toContain('did not load cleanly');
+  });
+
+  it('fails and labels a route that never settles', () => {
+    const dir = makeTempDir();
+    // Keep the event loop alive so the parent's timeout, not a natural exit, ends the child.
+    writeRoute(
+      dir,
+      'server/pages/api/hang.js',
+      'setInterval(() => {}, 1000);\nmodule.exports = new Promise(() => {});\n'
+    );
+
+    const result = run(dir, NEXT, { API_ROUTE_PROBE_TIMEOUT_MS: '1000' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('/api/hang');
+    expect(result.stderr).toContain('timed out after 1000ms');
   });
 
   it('fails a tree with no routes, so a moved build root cannot read as all clear', () => {
