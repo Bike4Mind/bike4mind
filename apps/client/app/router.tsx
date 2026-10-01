@@ -1,6 +1,9 @@
 import { lazy, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
+import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
+import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
+import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
 import {
   createRouter,
   createRoute,
@@ -68,6 +71,7 @@ const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
+const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const QuestsPage = lazy(() => import('./routes/quests'));
@@ -843,6 +847,25 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
+const gitHubLakeCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: GITHUB_LAKE_CALLBACK_PATH,
+  beforeLoad: ({ location }) => requireGitHubLakeCallbackSession(location),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <GitHubLakeCallbackPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): GitHubLakeCallbackSearch => ({
+    installation_id: optionalStringParam(search, 'installation_id'),
+    code: optionalStringParam(search, 'code'),
+    state: optionalStringParam(search, 'state'),
+    error: optionalStringParam(search, 'error'),
+    setup_action: optionalStringParam(search, 'setup_action'),
+  }),
+});
+
 // Subscribe route (replaces /subscribe.tsx)
 const subscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -1143,6 +1166,7 @@ const routeTree = rootRoute.addChildren([
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
   adminRoute,
@@ -1176,6 +1200,9 @@ function createNextCompatibleHistory() {
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
 // captureUtmParams() for why this cannot live in a React effect.
 captureUtmParams();
+
+// Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
+captureGitHubLakeCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above.

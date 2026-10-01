@@ -18,6 +18,10 @@ import {
  * the exclusion for the session's own owner: the client cache merges a WS quest update as a
  * top-level spread (react-query.ts), so an unconditional exclusion replaced the owner's own
  * cached returnValue with nothing the moment any live update landed, not just a sharee's.
+ * `callback` (the API caller's completion-callback URL and signing key id) is `select: false` on
+ * QuestModel, which a change stream ignores, so it is dropped here for EVERY viewer, the owner
+ * included: it belongs to the API key that armed it, which may be a collaborator's, not the
+ * session owner's. No SPA code reads it, so the owner-cache concern above does not apply.
  *
  * organizations: the subscription streams raw org documents, so it has to reproduce what
  * `toSafeOrganization` applies on every REST path - it reads the same two field lists so the
@@ -27,6 +31,9 @@ import {
  * of every co-member org the same subscription happens to match. An owner's own billing contact
  * still reaches them through the access-gated REST GET.
  */
+/** Quest fields no session viewer should see, the owner included; see the quests note above. */
+const QUEST_SERVER_ONLY_FIELDS = ['callback'] as const;
+
 export type FieldLimitOptions = {
   /** Passed in rather than hardcoded so a collection rename can't silently drop the exclusion. */
   questCollectionName: string;
@@ -44,8 +51,9 @@ export function resolveFieldLimits(
   if (collectionName === 'users') {
     return { password: false, stripeCustomerId: false, resetPasswordToken: false };
   }
-  if (collectionName === questCollectionName && !isQuestOwner) {
-    return Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false]));
+  if (collectionName === questCollectionName) {
+    const excluded = [...(isQuestOwner ? [] : OWNER_ONLY_PROMPT_META_PROJECTION_PATHS), ...QUEST_SERVER_ONLY_FIELDS];
+    return Object.fromEntries(excluded.map(path => [path, false]));
   }
   if (collectionName === organizationCollectionName) {
     const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];

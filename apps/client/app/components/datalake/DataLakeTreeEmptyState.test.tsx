@@ -3,6 +3,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+
+// ConnectSourceMenu reads the GitHub flag from the admin settings cache; its items are its own suite's.
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => false, isFeatureEnabled: vi.fn(), isLoading: false }),
+}));
+
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 
 const appTheme = extendTheme({ ...getThemeConfig() });

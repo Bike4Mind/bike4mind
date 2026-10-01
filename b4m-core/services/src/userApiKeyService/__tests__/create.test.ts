@@ -111,6 +111,43 @@ describe('createUserApiKey — overwatch ingest scope', () => {
   });
 });
 
+describe('createUserApiKey - callback signing secret', () => {
+  let repo: ReturnType<typeof makeRepo>;
+
+  beforeEach(() => {
+    repo = makeRepo();
+  });
+
+  it('returns a plaintext callbackSigningSecret prefixed whsec_', async () => {
+    const result = await createUserApiKey('sys-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    });
+    expect(result.callbackSigningSecret).toMatch(/^whsec_/);
+  });
+
+  it('persists a callbackSigningSecretCreatedAt on the created document', async () => {
+    await createUserApiKey('sys-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' });
+    const [document] = repo.create.mock.calls[0];
+    expect(document.callbackSigningSecretCreatedAt).toBeInstanceOf(Date);
+  });
+
+  // encryptAtRest (b4m-core/utils/src/security/secretsAtRest.ts) degrades to a
+  // pass-through when no SECRET_ENCRYPTION_KEY is configured, which is the case in
+  // this test environment - so the persisted field is not guaranteed to differ from
+  // the plaintext here. We only pin that the document carries *some* string field
+  // for it, not its ciphertext shape (that belongs to secretsAtRest's own tests).
+  it('passes a callbackSigningSecret string through to the persisted document', async () => {
+    const result = await createUserApiKey('sys-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    });
+    const [document] = repo.create.mock.calls[0];
+    expect(typeof document.callbackSigningSecret).toBe('string');
+    expect(result.callbackSigningSecret).toMatch(/^whsec_/);
+  });
+});
+
 describe('createUserApiKey — embed keys (epic #41)', () => {
   let repo: ReturnType<typeof makeRepo>;
   const adapters = () => ({

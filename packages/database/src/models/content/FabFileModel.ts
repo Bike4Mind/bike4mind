@@ -1888,6 +1888,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
   }
 
+  async countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number> {
+    // Same includeDeleted set the disconnect purge reaches, as countByDriveConnectionIdInDataLake.
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ githubConnectionId }, datalakeTag));
+  }
+
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
     // Excludes 'pending' - a row this slice's own createFabFile minted but whose storage.upload
     // never confirmed (see the interface docs and markUploaded). `distinct` keeps this a projection

@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeConnectUrls,
@@ -54,7 +54,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     }
     await verifyOrgAccess(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
-    return res.json({ connection: conn ? toGitHubLakeConnectionResponse(conn) : null });
+    if (!conn) {
+      return res.json({ connection: null });
+    }
+    // Rides along for the disconnect confirmation, which must say how many files the purge deletes.
+    const fileCount = await fabFileRepository.countByGitHubConnectionIdInDataLake(conn.id, lake.datalakeTag);
+    return res.json({ connection: toGitHubLakeConnectionResponse(conn, fileCount) });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

@@ -22,6 +22,7 @@ import {
   fabFileModerationDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
+  generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -226,6 +227,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'ImageGeneration',
     sourceQueue: 'imageEditQueue',
     queue: imageEditDLQ,
+  },
+  {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+    queue: generationCallbackQueueDLQ,
   },
   {
     label: 'research-engine',
