@@ -20,7 +20,7 @@ import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
@@ -222,7 +222,7 @@ export default function DataLakeExplorer({
   const handleViewFile = useCallback(
     (file: IFabFileDocument) => {
       if (chatEmbedded) {
-        setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id });
+        openFileInChatViewer(file);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
         setSessionLayout({ previewFile: file, selectedArtifactId: file.id });

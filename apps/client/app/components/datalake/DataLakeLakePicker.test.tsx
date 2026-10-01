@@ -5,7 +5,7 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -340,19 +340,20 @@ describe('DataLakeLakePicker', () => {
 });
 
 describe('DataLakeLakePicker - draft marker', () => {
-  it('marks a draft lake row, since scoping to it grounds nothing', () => {
+  it('marks draft and status-less user lakes, not built-ins', () => {
     renderPicker({
       lakes: [
-        lake({ id: 'a', name: 'Draft Lake', status: 'draft' }),
-        lake({ id: 'b', name: 'Live Lake', status: 'active' }),
-        // A reader's view of a lake with no status is a fallback lake, which always serves.
-        lake({ id: 'c', name: 'Built-in', canManage: false }),
+        lake({ id: 'd', name: 'Drafty', status: 'draft' }),
+        lake({ id: 'a', name: 'Live', status: 'active' }),
+        lake({ id: 'n', name: 'Legacy', status: undefined }),
+        lake({ id: DATA_LAKES[0].id, name: 'Builtin', status: undefined }),
       ],
     });
     openMenu();
 
-    expect(screen.getByTestId('datalake-lake-picker-draft-chip-a')).toHaveTextContent('Draft');
-    expect(screen.queryByTestId('datalake-lake-picker-draft-chip-b')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-lake-picker-draft-chip-c')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-draft-chip-d')).toHaveTextContent('Draft');
+    expect(screen.queryByTestId('datalake-lake-picker-draft-chip-a')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-draft-chip-n')).toBeInTheDocument();
+    expect(screen.queryByTestId(`datalake-lake-picker-draft-chip-${DATA_LAKES[0].id}`)).not.toBeInTheDocument();
   });
 });

@@ -164,6 +164,8 @@ export interface IOrgGoogleDriveConnectionResponse {
   connectedAt: string;
   enabled: boolean;
   status: GoogleDriveConnectionStatus;
+  /** 'syncing' with a claim past its staleness window: the run died and only a Re-sync recovers the row. */
+  syncStale: boolean;
   lastError?: string;
   lastUsedAt?: string;
   lastPolledAt?: string;

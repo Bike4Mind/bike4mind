@@ -41,20 +41,14 @@ describe('lakeVisibilityLabel', () => {
 });
 
 describe('isDraftLake', () => {
-  it('reads an explicit draft as draft for any caller', () => {
-    expect(isDraftLake({ status: 'draft' })).toBe(true);
-    expect(isDraftLake({ status: 'draft', canManage: false })).toBe(true);
+  it('is true for an explicit draft and for a user lake with no status', () => {
+    expect(isDraftLake({ id: 'user-lake', status: 'draft' })).toBe(true);
+    expect(isDraftLake({ id: 'user-lake', status: undefined })).toBe(true);
+    expect(isDraftLake({ id: 'user-lake', status: null })).toBe(true);
   });
 
-  it('does not mark a published or archived lake', () => {
-    expect(isDraftLake({ status: 'active', canManage: true })).toBe(false);
-    expect(isDraftLake({ status: 'archived', canManage: true })).toBe(false);
-  });
-
-  it('reads an absent status as draft only on a lake the caller manages', () => {
-    // A fallback lake has no status and canManage is never true for it - it always serves.
-    expect(isDraftLake({ canManage: true })).toBe(true);
-    expect(isDraftLake({ canManage: false })).toBe(false);
-    expect(isDraftLake({})).toBe(false);
+  it('is false for an active lake and for a built-in lake with no status', () => {
+    expect(isDraftLake({ id: 'user-lake', status: 'active' })).toBe(false);
+    expect(isDraftLake({ id: builtInId, status: undefined })).toBe(false);
   });
 });

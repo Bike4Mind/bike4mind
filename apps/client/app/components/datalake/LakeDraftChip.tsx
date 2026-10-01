@@ -1,12 +1,10 @@
 import { Chip, Tooltip } from '@mui/joy';
-
-export const DRAFT_LAKE_TOOLTIP = 'Draft - grounds no answers until it is published';
+import { DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 
 /**
- * The one draft marker for every surface that lists a lake: the Explorer's tree rows, lake picker
- * and selected-lake header, and the manager's lake list. Callers gate it on isDraftLake
- * (lakeVisibility.ts) so they agree on WHICH lakes are drafts, and render this so they agree on
- * how one looks.
+ * Draft marker for a lake row: the Explorer's tree folders and lake picker, and the manager's lake
+ * list. Callers gate it on isDraftLake (lakeVisibility.ts) so they agree on WHICH lakes are drafts.
+ * The selected-lake header keeps its own longer-worded chip.
  */
 export default function LakeDraftChip({ testId, tooltip = DRAFT_LAKE_TOOLTIP }: { testId: string; tooltip?: string }) {
   return (

@@ -1807,6 +1807,67 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('Research Mode turns', () => {
+      // Research Mode stores its answers in researchModeResults and leaves replies empty.
+      const makeResearchItem = (n: number, researchModeResults: unknown[]) =>
+        makeItem(n, { reply: undefined, replies: [], researchModeResults });
+
+      it('carries the prior Research Mode answers so the follow-up is not read as unanswered', async () => {
+        const items = [
+          makeItem(2, { prompt: 'lighthouse story', replies: [] }),
+          makeResearchItem(1, [
+            { configurationId: 'a', success: true, response: 'cycling guide A' },
+            { configurationId: 'b', success: true, response: 'cycling guide B' },
+          ]),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(messages).toEqual([
+          { role: 'user', content: 'prompt 1' },
+          {
+            role: 'assistant',
+            content: '[Response 1 of 2]\ncycling guide A\n\n[Response 2 of 2]\ncycling guide B',
+          },
+        ]);
+      });
+
+      it('uses a single successful answer as-is and skips failed or empty results', async () => {
+        const items = [
+          makeItem(2),
+          makeResearchItem(1, [
+            { configurationId: 'a', success: false, error: 'Cancelled' },
+            { configurationId: 'b', success: true, response: '   ' },
+            { configurationId: 'c', success: true, response: 'only answer' },
+          ]),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(messages).toEqual([
+          { role: 'user', content: 'prompt 1' },
+          { role: 'assistant', content: 'only answer' },
+        ]);
+      });
+
+      it('counts Research Mode answers toward the verbatim token budget', async () => {
+        const big = 'x'.repeat(4000);
+        const items = [
+          makeItem(3),
+          makeResearchItem(2, [{ configurationId: 'a', success: true, response: big }]),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, count] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db, verbatimTokenBudget: 500 });
+
+        // Item 2 alone exceeds the budget, so the older item 1 is dropped.
+        expect(count).toBe(1);
+      });
+    });
+
     describe('priorToolNames', () => {
       const makeToolCallItem = (n: number, names: string[]) =>
         makeItem(n, { promptMeta: { functionCalls: names.map((name, i) => ({ id: `${n}-${i}`, name })) } });
@@ -1998,6 +2059,23 @@ describe('Context Management Tests', () => {
       expect(messages[messages.length - 1]).toEqual({ role: 'assistant', content: 'reply 3' });
       // The latest prior turn is present (would be dropped by a pop).
       expect(messages.some(m => m.role === 'user' && m.content === 'prompt 3')).toBe(true);
+    });
+
+    it('uses Research Mode answers when a turn has no replies', async () => {
+      const items = [
+        makeItem(1, {
+          replies: [],
+          researchModeResults: [{ configurationId: 'a', success: true, response: 'research answer' }],
+        }),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const messages = await fetchAgentConversationHistory(makeSession(), 20, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 1' },
+        { role: 'assistant', content: 'research answer' },
+      ]);
     });
 
     it('respects the context-summary boundary', async () => {

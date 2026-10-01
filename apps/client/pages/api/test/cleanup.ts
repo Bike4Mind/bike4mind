@@ -21,6 +21,15 @@ import {
   Agent,
   Project,
   Organization,
+  DataLakeModel,
+  DataLakeAccessGrantModel,
+  DataLakeProposalModel,
+  DataLakeResearchConfigModel,
+  DataLakeResearchRunModel,
+  DataLakeFindingModel,
+  LakeMembershipDecisionModel,
+  DataLakeCorpusActionModel,
+  DataLakeOwnershipOfferModel,
 } from '@bike4mind/database';
 import mongoose from 'mongoose';
 import {
@@ -96,8 +105,21 @@ const handler = baseApi({ auth: false }).delete(
       return res.json({ success: true, cleaned: { users: 0 }, message: 'No e2e test users found' });
     }
 
-    const sessions = await Session.find({ userId: { $in: userIds } }, { _id: 1 }).lean();
+    // includeDeleted: the session hard-delete below bypasses the soft-delete plugin, so it removes
+    // soft-deleted sessions too. Without this, a quest pointing at one of those String sessionIds
+    // is never collected and is orphaned - the lookup and the delete must scope the same set.
+    const sessions = await Session.find({ userId: { $in: userIds } }, { _id: 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
     const sessionIds = sessions.map(s => s._id);
+    const sessionIdStrings = sessions.map(s => s._id.toString());
+
+    // Lakes the swept users own. `createdByUserId` (and `dataLakeId` on the grants) is a String
+    // field, like nearly every other user reference; the grants are reclaimed alongside the lakes
+    const ownedLakes = await DataLakeModel.collection
+      .find({ createdByUserId: { $in: userIdStrings } }, { projection: { _id: 1 } })
+      .toArray();
+    const lakeIdStrings = ownedLakes.map(l => l._id.toString());
 
     // Helper to delete and track count per collection
     const counts: Record<string, number> = {};
@@ -106,31 +128,81 @@ const handler = baseApi({ auth: false }).delete(
       counts[label] = result.deletedCount;
     }
 
-    // Hard-delete across collections using native driver to bypass soft-delete plugin
+    // Data lakes MUST be torn down in order: sweep every lake-keyed child, THEN the lake record.
+    // `cleanupDeletedDataLake` is the canonical sweep but unusable here - it needs an actor, a
+    // 'purging'/'deleted' lake and its full adapter set - and it early-returns once the parent is
+    // gone, so a lake deleted before its children strands them with no path left to collect them.
+    // Children fan out among themselves; the parent is awaited after, so a failed child delete
+    // leaves the lake resolvable for a retry.
+    await Promise.all([
+      deleteFrom(
+        'dataLakeAccessGrants',
+        DataLakeAccessGrantModel.collection.deleteMany({
+          $or: [{ dataLakeId: { $in: lakeIdStrings } }, { principalType: 'user', principalId: { $in: userIdStrings } }],
+        })
+      ),
+      deleteFrom(
+        'dataLakeProposals',
+        DataLakeProposalModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeBatches',
+        mongoose.models.DataLakeBatch.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeResearchConfigs',
+        DataLakeResearchConfigModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeResearchRuns',
+        DataLakeResearchRunModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom('dataLakeFindings', DataLakeFindingModel.collection.deleteMany({ lakeId: { $in: lakeIdStrings } })),
+      deleteFrom(
+        'lakeMembershipDecisions',
+        LakeMembershipDecisionModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeCorpusActions',
+        DataLakeCorpusActionModel.collection.deleteMany({ lakeId: { $in: lakeIdStrings } })
+      ),
+      deleteFrom(
+        'dataLakeOwnershipOffers',
+        DataLakeOwnershipOfferModel.collection.deleteMany({ dataLakeId: { $in: lakeIdStrings } })
+      ),
+    ]);
+    await deleteFrom('dataLakes', DataLakeModel.collection.deleteMany({ createdByUserId: { $in: userIdStrings } }));
+
+    // Hard-delete across collections using the native driver to bypass the soft-delete plugin.
+    // The native driver does NOT cast, so each filter must carry the value type the field stores:
+    // every user reference below is a String EXCEPT Tool.userId (ObjectId) and User._id, which are
+    // the only two that take `userIds`. Passing an ObjectId to a String field matches nothing, which
+    // silently orphans the row while still deleting the user - the bug this list exists to avoid.
     await Promise.all([
       // Leaf collections (session-dependent)
-      deleteFrom('quests', Quest.collection.deleteMany({ sessionId: { $in: sessionIds } })),
+      deleteFrom('quests', Quest.collection.deleteMany({ sessionId: { $in: sessionIdStrings } })),
 
       // Leaf collections (user-dependent)
-      deleteFrom('favorites', Favorite.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('favorites', Favorite.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom(
         'inbox',
-        Inbox.collection.deleteMany({ $or: [{ userId: { $in: userIds } }, { receiverId: { $in: userIds } }] })
+        Inbox.collection.deleteMany({
+          $or: [{ userId: { $in: userIdStrings } }, { receiverId: { $in: userIdStrings } }],
+        })
       ),
-      deleteFrom('activityCounters', UserActivityCounter.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('activityCounters', UserActivityCounter.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom(
         'friendships',
         Friendship.collection.deleteMany({
-          $or: [{ requester: { $in: userIds } }, { recipient: { $in: userIds } }],
+          $or: [{ requester: { $in: userIdStrings } }, { recipient: { $in: userIdStrings } }],
         })
       ),
-      deleteFrom('emailPreferences', EmailPreferences.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('voices', Voice.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('userApiKeys', UserApiKey.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('apiKeys', ApiKey.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('artifacts', Artifact.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('emailPreferences', EmailPreferences.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('voices', Voice.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('userApiKeys', UserApiKey.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('apiKeys', ApiKey.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('artifacts', Artifact.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('tools', Tool.collection.deleteMany({ userId: { $in: userIds } })),
-      // RegistrationInvite stores userId/usedbyId as String, not ObjectId
       deleteFrom(
         'registrationInvites',
         RegistrationInvite.collection.deleteMany({
@@ -143,33 +215,56 @@ const handler = baseApi({ auth: false }).delete(
       ),
 
       // Optional collections (may not be registered if never used)
-      ...(['Tag', 'Activity', 'ResearchData', 'ResearchTask', 'ResearchAgent'] as const).flatMap(name => {
+      ...(['Tag', 'ResearchData', 'ResearchTask', 'ResearchAgent'] as const).flatMap(name => {
         const model = mongoose.models[name];
         return model
           ? [
               deleteFrom(
                 name.charAt(0).toLowerCase() + name.slice(1) + 's',
-                model.collection.deleteMany({ userId: { $in: userIds } })
+                model.collection.deleteMany({ userId: { $in: userIdStrings } })
               ),
             ]
           : [];
       }),
+      // Activity keys ownership as ownerType/ownerId, not userId, so it needs its own filter - the
+      // generic `userId` form above matched nothing and left user-owned feed rows behind.
+      ...(mongoose.models.Activity
+        ? [
+            deleteFrom(
+              'activities',
+              mongoose.models.Activity.collection.deleteMany({ ownerType: 'User', ownerId: { $in: userIdStrings } })
+            ),
+          ]
+        : []),
 
       // Parent collections
-      deleteFrom('files', FabFile.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('agents', Agent.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('projects', Project.collection.deleteMany({ userId: { $in: userIds } })),
-      deleteFrom('organizations', Organization.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('files', FabFile.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('agents', Agent.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('projects', Project.collection.deleteMany({ userId: { $in: userIdStrings } })),
+      deleteFrom('organizations', Organization.collection.deleteMany({ userId: { $in: userIdStrings } })),
 
       // Sessions, then users
-      deleteFrom('sessions', Session.collection.deleteMany({ userId: { $in: userIds } })),
+      deleteFrom('sessions', Session.collection.deleteMany({ userId: { $in: userIdStrings } })),
       deleteFrom('users', User.collection.deleteMany({ _id: { $in: userIds } })),
     ]);
 
     const totalDeleted = Object.values(counts).reduce((sum, n) => sum + n, 0);
 
+    // A swept user with zero child rows is either genuinely childless or the signature of a value
+    // type mismatch that deletes the user and orphans everything else. Warn so it cannot pass
+    // silently, but keep `success: true` - a brand-new account with no children is legitimate.
+    const childDeleted = Object.entries(counts)
+      .filter(([label]) => label !== 'users')
+      .reduce((sum, [, n]) => sum + n, 0);
+    const warning =
+      childDeleted === 0
+        ? 'Swept users but deleted no child rows - check cleanup filters against the schema field types'
+        : undefined;
+    if (warning) console.warn(`[e2e cleanup] ${warning}`);
+
     return res.json({
       success: true,
+      ...(warning ? { warning } : {}),
       cleaned: {
         users: userIds.length,
         staleSwept,
@@ -181,6 +276,7 @@ const handler = baseApi({ auth: false }).delete(
         quests: counts.quests || 0,
         artifacts: counts.artifacts || 0,
         registrationInvites: counts.registrationInvites || 0,
+        dataLakes: counts.dataLakes || 0,
         totalDeleted,
         byCollection: counts,
       },

@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
-import { OrgGoogleDriveConnection, orgGoogleDriveConnectionRepository } from './OrgGoogleDriveConnectionModel';
+import {
+  OrgGoogleDriveConnection,
+  orgGoogleDriveConnectionRepository,
+  isDriveSyncClaimLive,
+} from './OrgGoogleDriveConnectionModel';
 
 /**
  * Invariants for the org Google Drive connection (#1588). The load-bearing ones are the global
@@ -804,5 +808,21 @@ describe('OrgGoogleDriveConnectionModel - disconnect/claimForSync race (F2)', ()
     expect(await orgGoogleDriveConnectionRepository.claimForSync(created.id)).not.toBeNull();
     expect(await orgGoogleDriveConnectionRepository.markDisconnecting(created.id, base.organizationId)).toBeNull();
     expect((await OrgGoogleDriveConnection.findById(created.id))?.enabled).toBe(true);
+  });
+});
+
+describe('isDriveSyncClaimLive', () => {
+  const now = Date.parse('2026-09-28T12:00:00Z');
+  const minutesAgo = (m: number) => new Date(now - m * 60_000);
+
+  it.each([
+    [{ status: 'connected' as const }, false],
+    [{ status: 'syncing' as const }, false],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(5) }, true],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(21) }, false],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(21), activeIngestBatchId: 'b1' }, true],
+    [{ status: 'syncing' as const, syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' }, false],
+  ])('%o -> %s', (conn, live) => {
+    expect(isDriveSyncClaimLive(conn, now)).toBe(live);
   });
 });

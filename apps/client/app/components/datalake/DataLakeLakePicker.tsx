@@ -344,12 +344,13 @@ export default function DataLakeLakePicker({
                         <Typography noWrap level="body-sm">
                           {lake.name}
                         </Typography>
-                        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                          {lakeVisibilityLabelShort(lake)}
-                        </Typography>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                          <Typography noWrap level="body-xs" sx={{ color: 'text.tertiary', minWidth: 0 }}>
+                            {lakeVisibilityLabelShort(lake)}
+                          </Typography>
+                          {isDraftLake(lake) && <LakeDraftChip testId={`datalake-lake-picker-draft-chip-${lake.id}`} />}
+                        </Box>
                       </ListItemContent>
-                      {/* Scoping to a draft returns nothing, so the row says why before it is picked. */}
-                      {isDraftLake(lake) && <LakeDraftChip testId={`datalake-lake-picker-draft-chip-${lake.id}`} />}
                       {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
                           so an unmarked row would read as their own. */}
                       {lake.isOwn === false && (

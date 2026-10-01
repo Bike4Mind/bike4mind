@@ -4,7 +4,7 @@ import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { registerContracts } from './operations';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
-import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import { API_KEY_RATE_LIMIT_DEFAULTS, ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
@@ -179,6 +179,37 @@ describe('buildOpenApiDocument', () => {
     expect(doc.info.description).toContain(ApiKeyScope.READ_FILES);
     // The aspirational vocab from the issue must NOT leak in (Decision 2).
     expect(doc.info.description).not.toContain('ai.completions:write');
+  });
+
+  it('quotes the enforced rate-limit defaults and every published rate-limit header in info.description', () => {
+    const { requestsPerMinute, requestsPerDay } = API_KEY_RATE_LIMIT_DEFAULTS;
+    expect(doc.info.description).toContain(`${requestsPerMinute} requests/minute`);
+    expect(doc.info.description).toContain(`${requestsPerDay} requests/day`);
+    // Hardcoded rather than read back from the spec, so a header dropped from RATE_LIMIT_HEADER_SPEC
+    // can't vanish from both sides of the comparison at once.
+    const expectedHeaders = [
+      'X-RateLimit-Limit-Minute',
+      'X-RateLimit-Remaining-Minute',
+      'X-RateLimit-Reset-Minute',
+      'X-RateLimit-Limit-Day',
+      'X-RateLimit-Remaining-Day',
+      'X-RateLimit-Reset-Day',
+    ];
+    const publishedHeaders = Object.keys(chat.responses['200'].headers).filter(h => h.startsWith('X-RateLimit-'));
+    expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
+    const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
+    expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
+  });
+
+  it('gives every tag used by an operation a top-level description', () => {
+    const declared = new Set(doc.tags.map((tag: { name: string }) => tag.name));
+    const used = Object.values(doc.paths).flatMap(pathItem =>
+      Object.values(pathItem as Record<string, { tags?: string[] }>).flatMap(op => op.tags ?? [])
+    );
+    expect(used.filter(tag => !declared.has(tag))).toEqual([]);
+    for (const tag of doc.tags as { name: string; description?: string }[]) {
+      expect(tag.description, tag.name).toBeTruthy();
+    }
   });
 
   it('declares X-Request-ID on every response', () => {

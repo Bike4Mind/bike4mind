@@ -1,4 +1,4 @@
-import { IUserApiKeyRateLimit, IUserApiKeyRepository } from '@bike4mind/common';
+import { API_KEY_RATE_LIMIT_DEFAULTS, IUserApiKeyRateLimit, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -13,10 +13,7 @@ import { z } from 'zod';
  */
 export const API_KEY_RATE_LIMIT_MAX_PER_MINUTE = 10_000;
 export const API_KEY_RATE_LIMIT_MAX_PER_DAY = 1_000_000;
-export const API_KEY_RATE_LIMIT_DEFAULTS: IUserApiKeyRateLimit = {
-  requestsPerMinute: 60,
-  requestsPerDay: 1000,
-};
+export { API_KEY_RATE_LIMIT_DEFAULTS };
 
 const requestsPerMinuteSchema = z.number().int().min(1).max(API_KEY_RATE_LIMIT_MAX_PER_MINUTE);
 const requestsPerDaySchema = z.number().int().min(1).max(API_KEY_RATE_LIMIT_MAX_PER_DAY);

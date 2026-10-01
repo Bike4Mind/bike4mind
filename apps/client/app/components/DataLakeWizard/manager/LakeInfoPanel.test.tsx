@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { toast } from 'sonner';
 import { LakeInfoPanel } from './LakeInfoPanel';
+import { DATA_LAKES } from '@bike4mind/common';
 import type { ManagerLake } from './shared';
 
 // LakeInfoPanel's Drive chip reaches this hook directly - stub it so the chip renders nothing
@@ -15,11 +17,14 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 
 // "Start chat" pulls in SessionsContext/react-router/react-query transitively - irrelevant to this
 // suite (build/rebuild + state chips + purge), so stub it to a no-op, same as DataLakeManagerPanel's suite.
+const startChat = vi.fn();
 vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
-  default: () => vi.fn(),
+  default: () => startChat,
 }));
 
 const promoteMutate = vi.fn();
+const promoteMutateAsync = vi.fn();
+const promotePending = vi.fn(() => false);
 const demoteMutate = vi.fn();
 const deleteMutate = vi.fn();
 const buildMutate = vi.fn();
@@ -66,7 +71,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
   return {
     useArchiveDataLake: mutation,
     usePermanentDeleteDataLake: () => ({ mutate: deleteMutate, isPending: false }),
-    usePromoteDataLake: () => ({ mutate: promoteMutate, isPending: false }),
+    usePromoteDataLake: () => ({ mutate: promoteMutate, mutateAsync: promoteMutateAsync, isPending: promotePending() }),
     useDemoteDataLake: () => ({ mutate: demoteMutate, isPending: false }),
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [])),
     useRechunkDataLake: () => ({ mutate: rechunkMutate, isPending: false }),
@@ -132,6 +137,10 @@ const renderPanel = (lake: ManagerLake = baseLake) =>
     </Wrapper>
   );
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 beforeEach(() => {
   useGetLakeMemoryHealth.mockReset();
   useGetLakeMemoryHealth.mockReturnValue({ data: undefined });
@@ -139,6 +148,12 @@ beforeEach(() => {
   useUnderChunkedCount.mockReturnValue({ data: undefined });
   rechunkMutate.mockClear();
   promoteMutate.mockClear();
+  promoteMutateAsync.mockReset();
+  promotePending.mockReset();
+  promotePending.mockReturnValue(false);
+  promoteMutateAsync.mockResolvedValue(undefined);
+  startChat.mockReset();
+  startChat.mockResolvedValue(undefined);
   demoteMutate.mockClear();
   deleteMutate.mockClear();
   buildMutate.mockClear();
@@ -543,5 +558,118 @@ describe('LakeInfoPanel - delete confirmation', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByTestId('datalake-delete-confirm')).not.toBeInTheDocument();
     expect(deleteMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe('LakeInfoPanel - Start chat on a draft lake', () => {
+  const draft = { ...baseLake, status: 'draft' } as ManagerLake;
+  const clickStart = async (lake: ManagerLake) => {
+    renderPanel(lake);
+    await userEvent.click(screen.getByTestId(`datalake-startchat-btn-${lake.id}`));
+  };
+
+  it('opens a confirm modal instead of starting the chat', async () => {
+    await clickStart(draft);
+    expect(screen.getByTestId('datalake-startchat-draft-modal')).toBeInTheDocument();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it('treats a user lake with an absent status as a draft', async () => {
+    await clickStart({ ...baseLake, status: undefined } as ManagerLake);
+    expect(screen.getByTestId('datalake-startchat-draft-modal')).toBeInTheDocument();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it('starts directly on a built-in lake (registry id, no status, not manageable)', async () => {
+    const id = DATA_LAKES[0].id;
+    await clickStart({ ...baseLake, id, status: undefined, canManage: false } as ManagerLake);
+    await waitFor(() => expect(startChat).toHaveBeenCalledWith(id));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+  });
+
+  it('publishes then starts the chat, in that order', async () => {
+    const order: string[] = [];
+    promoteMutateAsync.mockImplementation(async () => void order.push('promote'));
+    startChat.mockImplementation(async () => void order.push('start'));
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-publish-btn'));
+    await waitFor(() => expect(startChat).toHaveBeenCalledWith('lake-1'));
+    expect(promoteMutateAsync).toHaveBeenCalledWith('lake-1');
+    expect(order).toEqual(['promote', 'start']);
+    await waitFor(() => expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument());
+  });
+
+  it('does not start the chat when publishing fails, and keeps the modal usable', async () => {
+    promoteMutateAsync.mockRejectedValue(new Error('nope'));
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-publish-btn'));
+    await waitFor(() => expect(promoteMutateAsync).toHaveBeenCalled());
+    expect(startChat).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-startchat-draft-modal')).toBeInTheDocument();
+  });
+
+  it('reports a start failure after a successful publish without publishing again', async () => {
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => 'id');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    startChat.mockRejectedValue(new Error('boom'));
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-publish-btn'));
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Published, but could not start a chat'));
+    expect(promoteMutateAsync).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+  });
+
+  it('blocks Start anyway and Cancel while publishing', async () => {
+    promotePending.mockReturnValue(true);
+    await clickStart(draft);
+    expect(screen.getByTestId('datalake-startchat-draft-anyway-btn')).toBeDisabled();
+    expect(screen.getByTestId('datalake-startchat-draft-cancel-btn')).toBeDisabled();
+  });
+
+  it('starts the chat without publishing on Start anyway', async () => {
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-anyway-btn'));
+    await waitFor(() => expect(startChat).toHaveBeenCalledWith('lake-1'));
+    expect(promoteMutateAsync).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument());
+  });
+
+  it('closes on Cancel without starting', async () => {
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-cancel-btn'));
+    await waitFor(() => expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument());
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it('toasts the default message when Start anyway fails on a draft lake', async () => {
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => 'id');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    startChat.mockRejectedValue(new Error('boom'));
+    await clickStart(draft);
+    await userEvent.click(screen.getByTestId('datalake-startchat-draft-anyway-btn'));
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Could not start a chat with this lake'));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('datalake-startchat-btn-lake-1')).not.toBeDisabled());
+  });
+
+  it('toasts the default message when Start chat fails on an active lake', async () => {
+    const errorSpy = vi.spyOn(toast, 'error').mockImplementation(() => 'id');
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    startChat.mockRejectedValue(new Error('boom'));
+    await clickStart({ ...baseLake, status: 'active' } as ManagerLake);
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith('Could not start a chat with this lake'));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+  });
+
+  it('starts directly on an active lake', async () => {
+    await clickStart({ ...baseLake, status: 'active' } as ManagerLake);
+    await waitFor(() => expect(startChat).toHaveBeenCalledWith('lake-1'));
+    expect(screen.queryByTestId('datalake-startchat-draft-modal')).not.toBeInTheDocument();
+  });
+
+  it('offers no Publish button to a non-manager', async () => {
+    await clickStart({ ...draft, canManage: false } as ManagerLake);
+    expect(screen.getByTestId('datalake-startchat-draft-anyway-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-startchat-draft-publish-btn')).not.toBeInTheDocument();
   });
 });

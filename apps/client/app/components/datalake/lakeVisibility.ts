@@ -1,5 +1,4 @@
-import { DATA_LAKES as BUILT_IN_LAKES } from '@bike4mind/common';
-import type { DataLakeStatus } from '@bike4mind/common';
+import { DATA_LAKES as BUILT_IN_LAKES, type DataLakeStatus } from '@bike4mind/common';
 
 /**
  * The single derivation of a lake's visibility label.
@@ -57,14 +56,12 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
 export const canConnectLakeDrive = (lake: { organizationId?: string | null; canManage?: boolean }): boolean =>
   !!lake.organizationId && !!lake.canManage;
 
+export const DRAFT_LAKE_TOOLTIP = 'Draft - not grounding answers until published';
+
 /**
- * Whether a lake is a draft that grounds no answers until someone publishes it. The manager's
- * Publish button and the Explorer's draft markers both derive from here so they cannot disagree.
- *
- * An ABSENT status counts as draft only when the caller can manage the lake. A lake written before
- * the field existed is as invisible to retrieval as a draft (promoteDataLake matches
- * `$in: ['draft', null]`), but a fallback (built-in) lake also has no status and always serves.
- * canManage is never true for a fallback lake, which is what separates the two cases.
+ * Only 'active' lakes ground answers. A missing status means a pre-status-field user lake (draft),
+ * except built-in registry lakes, which always serve.
  */
-export const isDraftLake = (lake: { status?: DataLakeStatus; canManage?: boolean }): boolean =>
-  lake.status === 'draft' || (!lake.status && !!lake.canManage);
+export function isDraftLake(lake: LakeVisibilityScope & { status?: DataLakeStatus | null }): boolean {
+  return lake.status === 'draft' || (!lake.status && !isBuiltInLake(lake));
+}
