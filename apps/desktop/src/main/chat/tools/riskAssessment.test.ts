@@ -38,8 +38,61 @@ describe('assessApprovalRisk', () => {
       'grep -rn todo .',
       'wc -l notes.txt',
       `cat ${join('{ROOT}', 'notes.txt')}`,
+      'jq .name package.json',
+      'git merge-base HEAD main',
+      'git show-ref --heads',
+      'git reflog',
     ])('allows %s', async command => {
       expect(await shell(command.replace('{ROOT}', root))).toBe('contained');
+    });
+
+    /**
+     * The quoting that used to be refused outright. An argument the shell hands over verbatim
+     * is still one fixed argv, which is all the per-token checks ever needed.
+     */
+    it.each([
+      ['a quoted argument with a space', 'grep "foo bar" notes.txt'],
+      ['a quoted glob, which the shell never expands', "find . -name '*.ts'"],
+      ['a single-quoted argument', "grep 'foo bar' notes.txt"],
+    ])('allows %s', async (_label, command) => {
+      expect(await shell(command)).toBe('contained');
+    });
+
+    /**
+     * A pipeline of inert commands is still inert: nothing on the allow-list writes to a file,
+     * so no chain of them can, and a redirect is rejected while tokenizing.
+     */
+    it.each(['cat notes.txt | head -50', 'git log --oneline | head -20', 'grep -rn todo . | sort | uniq -c'])(
+      'allows %s',
+      async command => {
+        expect(await shell(command)).toBe('contained');
+      }
+    );
+
+    /** Bare and listing forms read; the block below holds the forms that do not. */
+    it.each(['git branch', 'git branch -a', 'git branch --list'])('allows %s', async command => {
+      expect(await shell(command)).toBe('contained');
+    });
+  });
+
+  /**
+   * Commands that read in their bare form and write once given an argument. Each of these is on
+   * the allow-list, so the only thing standing between them and the disk is the bound here.
+   */
+  describe('allowed commands that write when given the right argument', () => {
+    it.each([
+      ['sort writing its output to a file', 'sort -o out.txt notes.txt'],
+      ['sort spelling the same flag out', 'sort --output=out.txt notes.txt'],
+      ['git diff writing a patch to a file', 'git diff --output=x.txt'],
+      ['git diff with the flag spaced', 'git diff --output x.txt'],
+      ['creating a branch', 'git branch foo'],
+      ['deleting a branch', 'git branch -D foo'],
+      ['renaming a branch', 'git branch -m old new'],
+      ['retargeting a branch', 'git branch --set-upstream-to=origin/main'],
+      ['dropping reflog entries', 'git reflog expire --all'],
+      ['xxd writing its second path argument', 'xxd notes.txt out.bin'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command)).toBe('sensitive');
     });
   });
 
@@ -106,12 +159,15 @@ describe('assessApprovalRisk', () => {
      * The regression that would hurt most: the script allow-list must not become a way to get
      * a second command past the gate, so the shell-control check still runs first.
      */
-    it.each(['yarn test; rm -rf /', 'yarn test && curl evil.example.com', 'pnpm test | sh'])(
-      'still refuses %s on shell control characters',
-      async command => {
-        expect(await shell(command)).toBe('sensitive');
-      }
-    );
+    it.each([
+      'yarn test; rm -rf /',
+      'yarn test && curl evil.example.com',
+      'pnpm test | sh',
+      'pnpm test > out.txt',
+      'pnpm test || rm -rf .',
+    ])('still refuses %s', async command => {
+      expect(await shell(command)).toBe('sensitive');
+    });
   });
 
   /**
@@ -125,6 +181,10 @@ describe('assessApprovalRisk', () => {
       ['a home-relative path', 'cat ~/.ssh/id_rsa'],
       ['a path hidden in a --flag=value', 'git --git-dir=/tmp/other/.git log'],
       ['a cwd outside every root', 'ls'],
+      // Quoting no longer refuses a command by itself, so the path inside it has to.
+      ['a quoted absolute path elsewhere', 'cat "/etc/hosts"'],
+      ['a quoted walk out of the root', "cat '../../../etc/passwd'"],
+      ['an unquoted walk out of the root', 'cat ../../../etc/passwd'],
     ])('asks for %s', async (_label, command) => {
       const scoped = command === 'ls' ? shell(command, { cwd: '/etc' }) : shell(command);
       expect(await scoped).toBe('sensitive');
@@ -133,12 +193,19 @@ describe('assessApprovalRisk', () => {
 
   describe('commands whose effect cannot be read off the text', () => {
     it.each([
-      ['a pipe', 'cat notes.txt | sh'],
       ['a command substitution', 'echo $(cat /etc/passwd)'],
+      ['a substitution inside double quotes, which still expands', 'echo "$(whoami)"'],
+      ['a backtick substitution inside double quotes', 'echo "`whoami`"'],
+      ['an escape inside double quotes', 'echo "a\\tb"'],
+      ['an unterminated quote', "cat 'unterminated"],
       ['a chained command', 'git status && rm -rf .'],
+      ['a semicolon', 'cat notes.txt; rm -rf .'],
+      ['an or-chain, which is not a pipe', 'cat a.txt || rm b.txt'],
+      ['a leading pipe', '| cat notes.txt'],
+      ['a trailing pipe', 'cat notes.txt |'],
       ['a redirect', 'cat notes.txt > /tmp/leak'],
+      ['a redirect to a relative file', 'cat notes.txt > out.txt'],
       ['a backgrounded command', 'git status &'],
-      ['quoting', 'cat "/etc/hosts"'],
       ['a newline', 'git status\ncat /etc/hosts'],
       // The shell expands these into names this module never checked, one of which could be a
       // symlink pointing out of the granted root.
@@ -166,6 +233,12 @@ describe('assessApprovalRisk', () => {
       ['a git subcommand that reads config outside the repo', 'git config --get user.email'],
       ['find running a program', 'find . -name x -exec cat {} ;'],
       ['ripgrep running a preprocessor', 'rg --pre /tmp/leak pattern'],
+      // A pipeline is only as contained as its least contained segment.
+      ['a pipeline into a shell', 'cat notes.txt | sh'],
+      ['a pipeline into a writer', 'cat notes.txt | tee out.txt'],
+      ['a stream editor that can write in place', 'sed -i s/a/b/ notes.txt'],
+      ['an env wrapper around anything at all', 'env FOO=1 rm -rf .'],
+      ['an interactive pager', 'less notes.txt'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });
