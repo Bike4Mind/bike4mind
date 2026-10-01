@@ -10,6 +10,8 @@ import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabF
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
 import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
+import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
+import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
@@ -58,6 +60,9 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Matches hosted's 12-minute visibility over the purge handler's 10-minute timeout (infra/queues.ts). */
 const DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC = 720;
+/** Both GitHub lake queues mirror hosted: 12-minute visibility over a 10-minute handler timeout (infra/queues.ts). */
+const GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC = 720;
+const GITHUB_LAKE_RUN_BUDGET_MS = 10 * 60_000;
 /** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
 const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
@@ -178,6 +183,23 @@ async function main() {
   } else {
     bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
   }
+
+  // One message per dispatch and a hosted-length deadline, like the Lambda: the ingest slices by
+  // getRemainingTimeInMillis and re-enqueues, so without a budget a large repo would outlive its
+  // visibility and be redelivered mid-run. maxReceiveCount matches each queue's hosted dlq.retry.
+  const githubLakeQueueOpts = {
+    visibilityTimeoutSec: GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC,
+    runBudgetMs: GITHUB_LAKE_RUN_BUDGET_MS,
+    batchSize: 1,
+  };
+  worker.registerQueueHandler('githubLakeIngestQueue', Resource.githubLakeIngestQueue.url, githubLakeIngestDispatch, {
+    ...githubLakeQueueOpts,
+    maxReceiveCount: 2,
+  });
+  worker.registerQueueHandler('githubLakeRevokeQueue', Resource.githubLakeRevokeQueue.url, githubLakeRevokeDispatch, {
+    ...githubLakeQueueOpts,
+    maxReceiveCount: 7,
+  });
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the
