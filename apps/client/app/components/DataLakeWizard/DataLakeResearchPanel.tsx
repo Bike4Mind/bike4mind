@@ -977,7 +977,7 @@ export function DataLakeResearchPanel({
                   <Typography level="body-xs" data-testid="datalake-research-run-config">
                     {runConfigLabel(run, configById)}
                   </Typography>
-                  <Typography level="body-xs" textColor="text.tertiary">
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-when">
                     {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
                     {run.judgeModel && (run.totals.proposed > 0 || run.totals.belowRelevance > 0)
                       ? ` \u00b7 judged by ${run.judgeModel}`

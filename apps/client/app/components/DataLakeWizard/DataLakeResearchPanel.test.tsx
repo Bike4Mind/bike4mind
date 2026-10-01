@@ -637,8 +637,9 @@ describe('DataLakeResearchPanel', () => {
         configs: [config({ lastRunAt: new Date('2026-03-01T11:00:00.000Z') })],
         runs: [run({ startedAt })],
       });
-      const text = screen.getByTestId('datalake-research-config-last-run').textContent ?? '';
-      expect(text.startsWith('Last run ')).toBe(true);
+      const shown = (screen.getByTestId('datalake-research-run-when').textContent ?? '').split(' \u00b7 ')[0];
+      expect(shown).not.toBe('');
+      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(`Last run ${shown}`);
     });
 
     // A retired or filtered model must still read as the selection, or the picker shows blank while
