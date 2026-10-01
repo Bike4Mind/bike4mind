@@ -26,4 +26,9 @@ describe('isUnsearchable', () => {
   ] as const)('still marks it when %s', (_label, l, session, viewer) => {
     expect(isUnsearchable(l, session, viewer)).toBe(true);
   });
+
+  it('still marks it when neither the session owner nor the viewer is known', () => {
+    const ownerless = { preauthorizedLakeIds: ['l1'] } as unknown as typeof ownSession;
+    expect(isUnsearchable(lake, ownerless, undefined)).toBe(true);
+  });
 });
