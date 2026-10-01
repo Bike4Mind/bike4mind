@@ -35,6 +35,7 @@ import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFil
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
+import { recordGeneratedImages } from '../../../recordGeneratedImages';
 
 /**
  * Validate that an image-generation provider's API key is present. Without
@@ -139,6 +140,7 @@ async function updateQuestAndReturnMarkdown(storedImageUrls: string[], context: 
 
   // Update the quest's images array AND return markdown for compatibility
   await context.statusUpdate({ images: storedImageUrls });
+  await recordGeneratedImages(context.db.sessions, context.sessionId, storedImageUrls.length, context.logger);
   const instructions = 'Successfully generated images';
   return instructions;
 }

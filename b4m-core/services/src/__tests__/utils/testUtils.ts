@@ -196,6 +196,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     upsertByClaudeConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByClaudeConversationId']>,
     search: vi.fn(),
     findByIdAndUserId: vi.fn(),
+    incrementImageCount: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
     pullKnowledgeIds: vi.fn(),
     searchByUserId: vi.fn(),

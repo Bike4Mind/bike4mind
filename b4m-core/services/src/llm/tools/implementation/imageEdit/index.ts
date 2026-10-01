@@ -34,6 +34,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
+import { recordGeneratedImages } from '../../../recordGeneratedImages';
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -259,6 +260,7 @@ async function updateQuestAndReturnMarkdown(storedImagePath: string, context: To
 
   // Update the quest's images array
   await context.statusUpdate({ images: [storedImagePath] });
+  await recordGeneratedImages(context.db.sessions, context.sessionId, 1, context.logger);
   return 'Successfully edited image';
 }
 
