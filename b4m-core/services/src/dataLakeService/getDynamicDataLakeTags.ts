@@ -87,8 +87,6 @@ export interface DataLakeAccessContext {
   user: {
     id?: string | { toString(): string } | null;
     tags?: string[] | null;
-    /** Read only by `measureIdentityNamedExclusion`; absent is treated as non-admin. */
-    isAdmin?: boolean | null;
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
@@ -782,7 +780,15 @@ export async function getDynamicDataLakeAccess(
  */
 export async function measureIdentityNamedExclusion(
   context: MeasurableDataLakeAccessContext,
-  identityTags: string[]
+  identityTags: string[],
+  opts?: {
+    /**
+     * True only for a caller who may already see every lake exist (an admin). Per-call rather than
+     * on the context because the retrieval context has no admin bypass and must not grow one;
+     * absent means the count is bounded to what the caller could already see.
+     */
+    callerMaySeeAllLakes?: boolean;
+  }
 ): Promise<number | undefined> {
   if (identityTags.length === 0) return 0;
   if (!context.db.dataLakes || typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
@@ -842,7 +848,7 @@ export async function measureIdentityNamedExclusion(
       ...reach,
       supersededOwnLakeIds: [...supersededOwnLakeIds],
       restrictToTags: identityTags,
-      callerMaySeeAllLakes: context.user.isAdmin === true,
+      callerMaySeeAllLakes: opts?.callerMaySeeAllLakes === true,
     });
   } catch (err) {
     context.logger?.warn('[dataLakes] scoped gate-excluded-lake count failed; reporting as unknown', err);
