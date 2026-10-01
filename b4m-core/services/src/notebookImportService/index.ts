@@ -711,8 +711,8 @@ export class NotebookImportService {
         }
 
         // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
-        // path, and the org branch would be wrong anyway - organization.currentStorageSize is never
-        // incremented on upload, so uploaded bytes are debited to the user.
+        // path, and the org branch would be wrong anyway - orgs track no storage usage, so uploaded
+        // bytes are debited to the user.
         if (!this.importingUser) {
           throw new Error('no importing user resolved, refusing to skip the storage quota check');
         }

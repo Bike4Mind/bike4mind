@@ -4,7 +4,8 @@
  *
  * Auth mode, the `ai:generate` scope and body validation all come from `generateImageContract`.
  * The scope lets a least-privilege image-only key drive the whole POST -> poll GET /api/v1/quests/{id}
- * flow (the poll endpoint already accepts ai:generate).
+ * flow (the poll endpoint already accepts ai:generate). `callbackUrl` replaces the poll with a push
+ * (server/generationCallback).
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
@@ -14,6 +15,7 @@ import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
+import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
   const body = req.validated;
@@ -37,7 +39,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     promptPreview: body.prompt.substring(0, 100) + '...',
   });
 
-  const { sessionId: reqSessionId, sessionName, ...invokeParams } = body;
+  const { sessionId: reqSessionId, sessionName, callbackUrl, ...invokeParams } = body;
+  const callback = await resolveGenerationCallback(req, callbackUrl);
 
   const { sessionId, asyncPromises, session } = await getOrCreateSession({
     sessionId: reqSessionId,
@@ -115,6 +118,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     });
 
     const endTime = performance.now();
+
+    await armGenerationCallback(quest.id, callback, req.logger);
 
     req.logger.updateMetadata({
       duration: `${endTime - startTime}ms`,

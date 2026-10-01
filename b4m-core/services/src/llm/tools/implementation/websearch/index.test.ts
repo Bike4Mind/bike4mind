@@ -391,6 +391,57 @@ describe('performWebSearch - place handling', () => {
     vi.unstubAllGlobals();
   });
 
+  it('sends the model query unchanged to the organic search, without US geo-targeting', async () => {
+    useSerpApi();
+    const fetchStub = stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
+    const query = 'best coffee shops near Shibuya Crossing Tokyo';
+
+    await performWebSearch(mockAdapters, {
+      query,
+      include_places: true,
+      anchor_location: 'Shibuya Crossing, Tokyo',
+    });
+
+    const organicUrl = fetchStub.mock.calls
+      .map(([input]) => new URL(input))
+      .find(url => url.searchParams.get('engine') === 'google');
+    expect(organicUrl?.searchParams.get('q')).toBe(query);
+    expect(organicUrl?.searchParams.has('location')).toBe(false);
+    expect(organicUrl?.searchParams.has('gl')).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('drops the US geo-targeting from the image search on a place query too', async () => {
+    useSerpApi();
+    const fetchStub = stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
+
+    await performWebSearch(
+      mockAdapters,
+      { query: 'coffee near Shibuya Crossing', include_places: true, include_images: true },
+      TEST_SECRET
+    );
+
+    const imagesUrl = fetchStub.mock.calls
+      .map(([input]) => new URL(input))
+      .find(url => url.searchParams.get('engine') === 'google_images');
+    expect(imagesUrl?.searchParams.get('q')).toBe('coffee near Shibuya Crossing');
+    expect(imagesUrl?.searchParams.has('location')).toBe(false);
+    expect(imagesUrl?.searchParams.has('gl')).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the US geo-targeting on an ordinary search', async () => {
+    useSerpApi();
+    const fetchStub = stubSerpApi([]);
+
+    await performWebSearch(mockAdapters, { query: 'dinner' });
+
+    const organicUrl = new URL(fetchStub.mock.calls[0][0]);
+    expect(organicUrl.searchParams.get('location')).toBe('United States');
+    expect(organicUrl.searchParams.get('gl')).toBe('us');
+    vi.unstubAllGlobals();
+  });
+
   it('lists places by id with the map prompt, and stores the coordinates only on the citables', async () => {
     useSerpApi();
     stubSerpApi([mapsPlace('ChIJa', 'Barr'), mapsPlace('ChIJb', 'Kadeau')]);

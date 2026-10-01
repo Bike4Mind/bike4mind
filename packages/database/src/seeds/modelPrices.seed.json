@@ -1,26 +1,6 @@
 {
-  "generatedAt": "2026-09-14T16:43:38.685Z",
+  "generatedAt": "2026-10-01T06:01:25.900Z",
   "entries": [
-    {
-      "modelId": "ai21.j2-mid-v1",
-      "unit": "per_token",
-      "pricing": {
-        "4000": {
-          "input": 0.0000125,
-          "output": 0.0000125
-        }
-      }
-    },
-    {
-      "modelId": "ai21.j2-ultra-v1",
-      "unit": "per_token",
-      "pricing": {
-        "4000": {
-          "input": 0.0000188,
-          "output": 0.0000188
-        }
-      }
-    },
     {
       "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
       "unit": "per_token",

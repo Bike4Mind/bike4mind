@@ -62,6 +62,14 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
+  /** The Drive folder feeding one lake (GET /api/data-lakes/:id/drive-connection). */
+  driveConnection: (dataLakeId?: string) => ['lake-drive-connection', dataLakeId] as const,
+  /** Prefix of every lake's Drive connection read. */
+  driveConnectionRoot: ['lake-drive-connection'] as const,
+  /** The repository feeding one lake (GET /api/data-lakes/:id/github-connection). */
+  gitHubConnection: (dataLakeId?: string) => ['lake-github-connection', dataLakeId] as const,
+  /** Prefix of every lake's GitHub connection read. */
+  gitHubConnectionRoot: ['lake-github-connection'] as const,
   /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
   health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
   /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
@@ -125,6 +133,15 @@ export const dataLakeKeys = {
     ['dataLakeFindings', dataLakeId, filters ?? {}] as const,
   /** Invalidation prefix covering every filter variant of one lake's findings. */
   findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
+  /**
+   * One file's current tag names under one lake's prefix
+   * (GET /api/data-lakes/:id/files/:fabFileId/tags). Seeds the retag editor: a tag write is
+   * replace-semantics, so the editor must start from the real current set or a submit silently
+   * strips every name it never knew about.
+   */
+  lakeFileTags: (dataLakeId: string, fabFileId: string) => ['dataLakeFileTags', dataLakeId, fabFileId] as const,
+  /** Invalidation prefix covering every file's tag seed in one lake - what a corpus action stales. */
+  lakeFileTagsOf: (dataLakeId: string) => ['dataLakeFileTags', dataLakeId] as const,
   /**
    * One lake's saved research configurations (GET /api/data-lakes/:id/research/configs), #1682.
    * Outside `list` for the same reason as `spend` and `proposals`.

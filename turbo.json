@@ -88,7 +88,7 @@
     },
     "@bike4mind/workers#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"],
-      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../client/vitest.setup.ts"]
+      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json"]
     },
     "test": {
       "dependsOn": ["^build"]

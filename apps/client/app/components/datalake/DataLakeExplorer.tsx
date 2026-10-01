@@ -6,12 +6,13 @@ import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { UNCATEGORIZED_KEY } from './DataLakeTreeView';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
-import { scopeTagCountsToLakes, seedEmptyLakeTags, type TagScopeLake } from './scopeTagCountsToLakes';
+import { scopeTagCountsToLakes, seedEmptyLakeTags } from './scopeTagCountsToLakes';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
 import { lakeIdsForTags, tagsForLakeIds } from './tagsForLakeIds';
 import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
+import { isDraftLake } from './lakeVisibility';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -19,7 +20,7 @@ import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
@@ -104,7 +105,7 @@ const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []
 
 /** Stable empty fallback for seedEmptyLakeTags below, so an in-flight lake list never churns
  *  the memo it feeds (see lakesInScope). */
-const EMPTY_LAKES: TagScopeLake[] = [];
+const EMPTY_LAKES: ManageableDataLakeConfig[] = [];
 
 export default function DataLakeExplorer({
   articleId,
@@ -221,7 +222,7 @@ export default function DataLakeExplorer({
   const handleViewFile = useCallback(
     (file: IFabFileDocument) => {
       if (chatEmbedded) {
-        setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id });
+        openFileInChatViewer(file);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
         setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
@@ -367,6 +368,18 @@ export default function DataLakeExplorer({
     [isScopeEmpty, scopedTagCounts, lakesInScope]
   );
   const tree = useMemo(() => buildTagTree(seededTagCounts), [seededTagCounts]);
+  // Same prefix guard and trailing-colon strip as seedEmptyLakeTags, so a lake's path matches its
+  // own root node.
+  const draftLakePaths = useMemo(
+    () =>
+      new Set(
+        lakesInScope
+          .filter(lake => isDraftLake(lake) && typeof lake.fileTagPrefix === 'string')
+          .map(lake => lake.fileTagPrefix.replace(/:+$/, ''))
+          .filter(Boolean)
+      ),
+    [lakesInScope]
+  );
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -612,6 +625,7 @@ export default function DataLakeExplorer({
           source={source}
           uncategorized={uncategorized}
           selectedFileIds={attachedFileIds}
+          draftLakePaths={draftLakePaths}
           onAttachFile={attachFileToChat}
           onViewFile={handleViewFile}
           canDeleteFile={canDeleteFile}
@@ -652,7 +666,12 @@ export default function DataLakeExplorer({
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
-                <ActiveLakeScopeStrip lakes={selectedLakes} onClear={() => handleSelectLakes([])} />
+                <ActiveLakeScopeStrip
+                  lakes={selectedLakes}
+                  onClear={() => handleSelectLakes([])}
+                  // From the resolved lakes, not the raw ids, so a stale id is dropped on the way.
+                  onRemove={lakeId => handleSelectLakes(selectedLakes.filter(l => l.id !== lakeId).map(l => l.id))}
+                />
               )}
             </>
           }

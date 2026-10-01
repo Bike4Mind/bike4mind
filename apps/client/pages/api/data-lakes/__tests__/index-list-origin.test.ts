@@ -35,6 +35,8 @@ vi.mock('@server/dataLakes/dataLakeScopes', () => ({
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
     find: vi.fn().mockResolvedValue([

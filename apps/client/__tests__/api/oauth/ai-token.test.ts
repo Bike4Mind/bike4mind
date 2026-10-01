@@ -186,6 +186,18 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
   });
 
+  it('identities subjectSource (grace mode): mints successfully and logs would-reject with client_id', async () => {
+    // FEDERATED_CLIENT has no subjectSource set (undefined !== 'sub'), so the call-site
+    // grace log fires. Verify it names client_id, not the issuer URL.
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('client-1'));
+    expect((req as any).logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('cognito-idp'));
+  });
+
   it('grant gate (enforce): a first-party client with no grant still mints - the gate never runs for it', async () => {
     // Regression: enforcing a grant on first-party/pre-existing federated clients (which never go
     // through code.ts consent and so have no grant row) would 403 every such integration the moment

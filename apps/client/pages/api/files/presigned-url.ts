@@ -1,6 +1,7 @@
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { baseApi } from '@server/middlewares/baseApi';
+import { FILES_READ_SCOPES } from '@server/files/fileScopes';
 import { BadRequestError } from '@server/utils/errors';
 import { z } from 'zod';
 import { Request } from 'express';
@@ -8,6 +9,7 @@ import { Resource } from 'sst';
 import { FabFile, fabFileRepository } from '@bike4mind/database';
 import { isImageServeable } from '@bike4mind/common';
 import { isFileInAccessibleLake, resolveAccessibleLakes } from '@server/dataLakes';
+import { holdsDataLakeReadScope } from '@server/dataLakes/dataLakeScopes';
 
 const s3Client = new S3Client();
 
@@ -70,7 +72,7 @@ export async function filterServeableFilePaths(
   );
 }
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: FILES_READ_SCOPES }).get(
   async (req: Request<unknown, unknown, unknown, { 'filePaths[]'?: string | string[]; expiresIn?: string }>, res) => {
     let filePathsQuery = req.query['filePaths[]'];
 
@@ -104,6 +106,9 @@ const handler = baseApi().get(
           const id = String(fabFile._id);
           if (await fabFileRepository.shareable.findAccessibleById(req.user, id)) return true;
           if (fabFile.deletedAt) return false; // soft-deleted lake article must not sign (mirrors files/[id])
+          // A key scoped to files alone must not reach lake files through this fallback -
+          // mirrors the identical gate in loadAccessibleFabFile's single-file fallback (files/[id]).
+          if (!holdsDataLakeReadScope(req)) return false;
           const lakes = await accessibleLakes();
           return isFileInAccessibleLake(lakes, fabFile);
         }

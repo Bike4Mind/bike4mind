@@ -48,7 +48,8 @@ import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
 import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
-import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStatusChip';
+import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
 import type { ManagerLake } from './shared';
@@ -97,6 +98,34 @@ export function LakeInfoPanel({
   const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
+  // Move to draft and Delete each pull the lake out of every reader's grounding, and both sit in a
+  // row of everyday buttons, so neither fires from a single click.
+  const [demoteConfirmOpen, setDemoteConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [draftChatOpen, setDraftChatOpen] = useState(false);
+  const startChat = async (failureMessage = 'Could not start a chat with this lake') => {
+    setDraftChatOpen(false);
+    setStartingChat(true);
+    try {
+      await startChatWithLake(lake.id);
+    } catch (error) {
+      console.error('Start chat failed for lake', lake.id, error);
+      toast.error(failureMessage);
+    } finally {
+      // Reset in finally, not only on error: a success that does not unmount this panel
+      // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
+      setStartingChat(false);
+    }
+  };
+  const publishAndStartChat = async () => {
+    try {
+      await promoteLake.mutateAsync(lake.id);
+    } catch {
+      // usePromoteDataLake already toasted the server reason.
+      return;
+    }
+    await startChat('Published, but could not start a chat');
+  };
   // Mounted only while open so the picker's file query does not fire (and page through the
   // caller's whole knowledge base) until it is actually needed.
   const [addExistingOpen, setAddExistingOpen] = useState(false);
@@ -189,12 +218,14 @@ export function LakeInfoPanel({
     >
       {/* pr clears the modal's absolutely-positioned ModalClose (top-right). */}
       <Box sx={{ px: 3, pr: 6, pt: 2.5, pb: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-          <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
+        {/* Wraps so a full manage row drops below the title instead of crushing it: every button
+            is flexShrink 0, so without wrap the title column shrank to one word per line. */}
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+          <Typography level="h4" sx={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'anywhere' }}>
             {lake.name}
           </Typography>
-          {/* Start chat is available to ANY user who can reach the lake (not manage-gated): it
-              opens a session scoped to this lake, applying the lake's preferred prompt server-side.
+          {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
+              lakes confirm first): it opens a session scoped to this lake, applying the lake's preferred prompt server-side.
               Minimal placement for now - see useStartChatWithLake's note; polish is a design follow-up. */}
           <Button
             size="sm"
@@ -204,22 +235,52 @@ export function LakeInfoPanel({
             aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
-            onClick={async () => {
-              setStartingChat(true);
-              try {
-                await startChatWithLake(lake.id);
-              } catch {
-                toast.error('Could not start a chat with this lake');
-              } finally {
-                // Reset in finally, not only on error: a success that does not unmount this panel
-                // (e.g. navigation interrupted) would otherwise leave the spinner stuck forever.
-                setStartingChat(false);
-              }
-            }}
+            onClick={() => (isDraftLake(lake) ? setDraftChatOpen(true) : void startChat())}
             sx={{ flexShrink: 0, fontSize: '13px' }}
           >
             Start chat
           </Button>
+          <Modal open={draftChatOpen} onClose={() => !promoteLake.isPending && setDraftChatOpen(false)}>
+            <ModalDialog data-testid="datalake-startchat-draft-modal" role="alertdialog">
+              <DialogTitle>This lake is a draft</DialogTitle>
+              <DialogContent>
+                <Typography level="body-sm">
+                  Drafts don{"'"}t ground answers, so the chat will find nothing in this lake until it is published.
+                </Typography>
+              </DialogContent>
+              <DialogActions>
+                {lake.canManage && (
+                  <Button
+                    variant="solid"
+                    color="primary"
+                    data-testid="datalake-startchat-draft-publish-btn"
+                    loading={promoteLake.isPending}
+                    onClick={publishAndStartChat}
+                  >
+                    Publish and start chat
+                  </Button>
+                )}
+                <Button
+                  variant="soft"
+                  color="neutral"
+                  data-testid="datalake-startchat-draft-anyway-btn"
+                  disabled={promoteLake.isPending}
+                  onClick={() => void startChat()}
+                >
+                  Start anyway
+                </Button>
+                <Button
+                  variant="plain"
+                  color="neutral"
+                  data-testid="datalake-startchat-draft-cancel-btn"
+                  disabled={promoteLake.isPending}
+                  onClick={() => setDraftChatOpen(false)}
+                >
+                  Cancel
+                </Button>
+              </DialogActions>
+            </ModalDialog>
+          </Modal>
           {/* Add files / Settings / Archive are owner-or-admin only (the backend enforces the
               same rule). The nav surfaces other users' read-only public lakes too. */}
           {lake.canManage && (
@@ -273,11 +334,9 @@ export function LakeInfoPanel({
                 </Button>
               </Tooltip>
               {/* Draft is excluded from grounding until an owner or admin explicitly publishes it
-                  - adding files no longer does this as a side effect. An ABSENT status counts as
-                  draft here, matching promoteDataLake and activateIfDraft's `$in: ['draft', null]`:
-                  a lake written before the field existed is just as invisible to retrieval, so it
-                  must still get the affordance. */}
-              {(!lake.status || lake.status === 'draft') && (
+                  - adding files no longer does this as a side effect. Matches promoteDataLake and
+                  activateIfDraft's `$in: ['draft', null]`. */}
+              {isDraftLake(lake) && (
                 <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
                   <Button
                     size="sm"
@@ -301,8 +360,7 @@ export function LakeInfoPanel({
                     color="neutral"
                     startDecorator={<UnpublishedOutlinedIcon sx={{ fontSize: 16 }} />}
                     data-testid={`datalake-demote-btn-${lake.id}`}
-                    loading={demoteLake.isPending}
-                    onClick={() => demoteLake.mutate(lake.id)}
+                    onClick={() => setDemoteConfirmOpen(true)}
                     sx={{ flexShrink: 0, fontSize: '13px' }}
                   >
                     Move to draft
@@ -588,9 +646,10 @@ export function LakeInfoPanel({
               Connector-fed
             </Chip>
           )}
-          {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
+          {/* Attached-source markers: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}
           <LakeHealthBadge lakeId={lake.id} failedFileCount={failedCount} />
@@ -773,8 +832,7 @@ export function LakeInfoPanel({
                 size="sm"
                 startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
                 data-testid={`datalake-delete-active-btn-${lake.id}`}
-                loading={deleteLake.isPending}
-                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+                onClick={() => setDeleteConfirmOpen(true)}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
                 Delete
@@ -800,6 +858,53 @@ export function LakeInfoPanel({
             )}
           </Box>
         )}
+        <Modal open={demoteConfirmOpen} onClose={() => setDemoteConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-demote-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Move this lake back to draft?</DialogTitle>
+            <DialogContent>
+              {lake.name} stops grounding answers for everyone who can read it, including chats already scoped to it.
+              Its files stay stored and indexed, and publishing it again restores grounding.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="warning"
+                loading={demoteLake.isPending}
+                data-testid="datalake-demote-confirm-btn"
+                onClick={() => demoteLake.mutate(lake.id, { onSuccess: () => setDemoteConfirmOpen(false) })}
+              >
+                Move to draft
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setDemoteConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+        <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-delete-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Delete this lake?</DialogTitle>
+            <DialogContent>
+              {lake.name} leaves the active list and stops grounding answers for everyone who can read it. You can
+              restore it from the Deleted section until it is permanently purged.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="danger"
+                loading={deleteLake.isPending}
+                data-testid="datalake-delete-confirm-btn"
+                // No close on success: onDeleted exits the panel, which unmounts this dialog with it.
+                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+              >
+                Delete
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setDeleteConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
         <Modal open={purgeMemoryConfirmOpen} onClose={() => setPurgeMemoryConfirmOpen(false)}>
           <ModalDialog role="alertdialog" data-testid="datalake-purge-memory-confirm" sx={{ maxWidth: '28rem' }}>
             <DialogTitle>Erase this lake&apos;s memory profile?</DialogTitle>

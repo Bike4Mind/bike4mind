@@ -50,19 +50,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // enforces the tiered budgets (scopeForLake is the one place that derivation lives), so a view
     // that omitted the owner type would fall to the restrictive unknown-owner tier and quote an
     // org-owned lake a ceiling it is not actually held to.
-    const [levers, ledger] = await Promise.all([
+    const [levers, ledger, researchLifetimeUsd] = await Promise.all([
       dataLakeService.resolveSpendLevers(
         { adminSettings: adminSettingsRepository },
         req.logger,
         scopedSettingsService.scopeForLake(lake).owner?.type
       ),
       usageEventRepository.lakeUsageSummary(lake.id, days),
+      usageEventRepository.lakeResearchLifetimeUsd(lake.id),
     ]);
 
     const response: IDataLakeSpendResponse = {
       dataLakeId: lake.id,
       days,
       embeddingSpendMicroUsd: lake.embeddingSpendMicroUsd ?? null,
+      researchLifetimeUsd,
       spendEnabled: levers.spendEnabled,
       perRunBudgetMicroUsd: levers.perRunBudgetMicroUsd,
       perLakeBudgetMicroUsd: levers.perLakeBudgetMicroUsd,

@@ -401,6 +401,23 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(params.options.tools).toHaveLength(1);
     expect(params.options.tools[0].toolSchema.name).toBe('lookup');
   });
+
+  it.each(['GET', 'PUT', 'HEAD'])('405s %s with Allow: POST, ahead of auth', async method => {
+    const res = await fetch(`${baseUrl}/api/ai/v1/completions`, {
+      method,
+      headers: { 'x-request-id': 'req-405' },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+    if (method !== 'HEAD') {
+      expect(await res.json()).toEqual({
+        error: `Method ${method} is not allowed. Allowed: POST`,
+        request_id: 'req-405',
+      });
+    }
+    expect(mockAuth.verifyApiKey).not.toHaveBeenCalled();
+    expect(mockAuth.verifyJwtToken).not.toHaveBeenCalled();
+  });
 });
 
 describe('ChatCompletion /api/ai/v1/ws-completions', () => {

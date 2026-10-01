@@ -12,14 +12,20 @@ describe('toGeneratedFiles', () => {
   it('builds fully-qualified CDN URLs under /generated', () => {
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
     expect(toGeneratedFiles(['a1b2c3.png'])).toEqual([
-      { name: 'a1b2c3.png', url: 'https://cdn.example.com/generated/a1b2c3.png', isImage: true, isAudio: false },
+      {
+        name: 'a1b2c3.png',
+        url: 'https://cdn.example.com/generated/a1b2c3.png',
+        isImage: true,
+        isAudio: false,
+        isVideo: false,
+      },
     ]);
   });
 
   it('flags non-image files (e.g. .xlsx) with isImage: false', () => {
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
     const [file] = toGeneratedFiles(['report.xlsx']);
-    expect(file).toMatchObject({ name: 'report.xlsx', isImage: false, isAudio: false });
+    expect(file).toMatchObject({ name: 'report.xlsx', isImage: false, isAudio: false, isVideo: false });
   });
 
   it('flags generated audio (music_generation .mp3) with isAudio: true, isImage: false', () => {
@@ -31,6 +37,25 @@ describe('toGeneratedFiles', () => {
       { isImage: true, isAudio: false },
       { isImage: false, isAudio: false },
     ]);
+  });
+
+  it('flags a rendered video (.mp4) with isVideo: true, neither isImage nor isAudio', () => {
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    expect(toGeneratedFiles(['clip.mp4'])).toEqual([
+      {
+        name: 'clip.mp4',
+        url: 'https://cdn.example.com/generated/clip.mp4',
+        isImage: false,
+        isAudio: false,
+        isVideo: true,
+      },
+    ]);
+  });
+
+  it('flags .webm and .mov as video, case-insensitively', () => {
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    const files = toGeneratedFiles(['a.webm', 'b.MOV', 'c.mp4.txt']);
+    expect(files.map(f => f.isVideo)).toEqual([true, true, false]);
   });
 
   it('normalizes a trailing slash on the CDN URL so paths never double-slash', () => {

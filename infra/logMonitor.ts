@@ -7,6 +7,7 @@ import {
   imageGenerationQueueSubscription,
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
+  generationCallbackQueueSubscription,
   liveOpsTriageQueueSubscription,
   secopsTriageQueueSubscription,
   notebookCurationQueueSubscription,
@@ -80,8 +81,9 @@ const DEFAULT_ERROR_PATTERN = '[,,w3=ERROR,w4]';
 const DEFAULT_ERROR_SUFFIX = 'errors';
 
 // Runtime kill signals carry no ERROR token, so the default pattern never matches
-// them. One optional-term pattern (OR semantics) on the AgentExecutor groups, which
-// are how a stalled or killed agent run surfaces. `Runtime exited with error` covers
+// them. One optional-term pattern (OR semantics) on the AgentExecutor groups and
+// both sweep crons, which are how a stalled or killed agent run surfaces.
+// `Runtime exited with error` covers
 // non-zero exits; `"signal: killed"` covers the SIGKILL/OOM path a Lambda logs.
 const KILLS_PATTERN = '?"Task timed out" ?"Runtime.OutOfMemory" ?"signal: killed" ?"Runtime exited with error"';
 
@@ -175,6 +177,7 @@ const individualLogGroups = $util.all([
   // Queue handlers not previously monitored — gaps exposed by prod incident 2026-05-09
   githubWebhookQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   webhookDeliveryQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  generationCallbackQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   liveOpsTriageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   secopsTriageQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   notebookCurationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),

@@ -15,6 +15,8 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { filterReadableQuests } from '@server/utils/sessionAccess';
+import { userCanAccessGeneratedImage } from '@server/utils/generatedImageAccess';
+import { resolveProxyTarget } from '@server/utils/appFileProxy';
 import { apiKeyService } from '@bike4mind/services';
 import {
   ChatModels,
@@ -91,28 +93,41 @@ function extractImageUrls(content: string, imageArrays: string[][]): string[] {
   let match: RegExpExecArray | null;
   while ((match = mdImageRegex.exec(content)) !== null) {
     const url = match[1];
-    if (isS3Url(url)) urls.add(url);
+    if (isStorageImageUrl(url)) urls.add(url);
   }
 
   // Match HTML img tags: <img src="url">
   const htmlImgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
   while ((match = htmlImgRegex.exec(content)) !== null) {
     const url = match[1];
-    if (isS3Url(url)) urls.add(url);
+    if (isStorageImageUrl(url)) urls.add(url);
   }
 
   // Add images from arrays
   for (const images of imageArrays) {
     for (const url of images) {
-      if (isS3Url(url)) urls.add(url);
+      if (isStorageImageUrl(url)) urls.add(url);
     }
   }
 
   return Array.from(urls);
 }
 
-function isS3Url(url: string): boolean {
-  return url.includes('.amazonaws.com') || url.includes('cloudfront.net');
+/**
+ * Raw bucket / CloudFront URLs, plus generated images served from the app's own CDN origin
+ * (`<cdnUrl>/generated/<key>`, see generatedFiles.ts) - the shape the chat UI renders and users
+ * copy into plans. Other CDN prefixes (org-files, admin-logos, ...) stay out of scope.
+ */
+function isStorageImageUrl(url: string): boolean {
+  if (url.includes('.amazonaws.com') || url.includes('cloudfront.net')) return true;
+  const cdnUrl = getCdnUrl();
+  return !!cdnUrl && url.startsWith(`${cdnUrl}/generated/`);
+}
+
+function getCdnUrl(): string {
+  const cdnUrl = (process.env.NEXT_PUBLIC_CDN_URL || '').replace(/\/+$/, '');
+  // A relative value (the local `sst dev` file proxy) can't prefix an absolute image URL.
+  return /^https?:\/\//.test(cdnUrl) ? cdnUrl : '';
 }
 
 /**
@@ -131,13 +146,33 @@ function extractS3Key(url: string): string {
 }
 
 /**
- * Determines which storage to use based on the URL.
+ * Determines which storage holds the image and its key there. A raw S3 URL names its bucket in
+ * the host; a CDN URL routes by path, where CloudFront strips `/generated/` before the generated
+ * bucket (infra/buckets.ts), so the key is the bare name `quest.images` and the access check use.
  */
-function getStorageForUrl(url: string): { storage: S3Storage; label: string } {
-  if (url.includes('generatedimages') || url.includes('generated-images')) {
-    return { storage: getGeneratedImageStorage(), label: 'generatedImages' };
+function resolveImageSource(url: string): {
+  storage: S3Storage;
+  label: 'generatedImages' | 'files';
+  key: string;
+} {
+  const key = extractS3Key(url);
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    // unparseable: fall through to the files bucket
   }
-  return { storage: getFilesStorage(), label: 'files' };
+  if (host.endsWith('.amazonaws.com')) {
+    if (host.includes('generatedimages') || host.includes('generated-images')) {
+      return { storage: getGeneratedImageStorage(), label: 'generatedImages', key };
+    }
+    return { storage: getFilesStorage(), label: 'files', key };
+  }
+  const target = resolveProxyTarget(key);
+  if (target?.bucket === 'generated') {
+    return { storage: getGeneratedImageStorage(), label: 'generatedImages', key: target.key };
+  }
+  return { storage: getFilesStorage(), label: 'files', key };
 }
 
 function getExtensionFromUrl(url: string): string {
@@ -495,14 +530,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         urlToFilename.set(url, filename);
 
         try {
-          const { storage } = getStorageForUrl(url);
-          const key = extractS3Key(url);
+          const { storage, label, key } = resolveImageSource(url);
 
           // A held/blocked uploaded image must not be included in the export zip. Look up
           // a matching FabFile by the extracted storage key; if it exists and isn't
           // serveable yet, skip it via the same breadcrumb path as a download failure below.
-          // Fail-closed on lookup error (skip) - no FabFile match (external/generated image
-          // URL) falls through unaffected.
+          // Fail-closed on lookup error (skip). Untracked keys are handled by the guard below.
           let fabFile;
           try {
             fabFile = await FabFile.findOne({ filePath: key });
@@ -515,16 +548,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
           // Object-level guard: a tracked fab-file key embedded in the plan markdown must be
           // accessible to the export subject (the plan owner, resolved above), or its bytes would
-          // leak (IDOR). Untracked keys (external/generated-image URLs) have no FabFile owner record
-          // and fall through unaffected - the same limitation the generated-image copy/serve paths
-          // carry. Lake-tag access isn't resolved here (a queue handler has no entitlement context),
-          // so a curated-lake image degrades to the breadcrumb below rather than leaking. Fails
-          // closed: a tracked file with no loadable export user is treated as inaccessible.
+          // leak (IDOR). An untracked key has no FabFile owner record, so it is allowed only when it is
+          // a generated-images key the owner can reach via quest.images (see generatedImageAccess.ts);
+          // every other untracked key fails closed. Lake-tag access isn't resolved here (a queue
+          // handler has no entitlement context), so a curated-lake image degrades to the breadcrumb
+          // below rather than leaking. Fails closed: no loadable export user means inaccessible.
           if (fabFile) {
             const accessible = exportUser
               ? await fabFileRepository.shareable.findAccessibleById(exportUser, fabFile.id)
               : null;
             if (!accessible) throw new Error('Image is not available');
+          } else {
+            const allowed =
+              label === 'generatedImages' && exportUser ? await userCanAccessGeneratedImage(key, exportUser.id) : false;
+            if (!allowed) throw new Error('Image is not available');
           }
 
           const buffer = await storage.download(key);
