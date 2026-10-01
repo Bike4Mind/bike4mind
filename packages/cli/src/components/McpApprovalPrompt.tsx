@@ -16,9 +16,17 @@ type McpApprovalItem = {
   value: McpApprovalChoice;
 };
 
+// Repo-controlled strings could carry terminal escapes; show them as literal text.
+const displaySafe = (s: string) =>
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point
+  s.replace(/[\u0000-\u001f\u007f-\u009f]/g, c => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+
+const displayArg = (a: string) => (/[\s"']/.test(a) ? JSON.stringify(displaySafe(a)) : displaySafe(a));
+
 /**
  * Startup prompt for repo-discovered MCP servers (trusted project) whose exact
- * definition hasn't been approved. Shows env/header KEY names only, never values.
+ * definition hasn't been approved. Shows env/header KEY names; values only for
+ * loader-style env keys (PATH, NODE_OPTIONS, LD_*, ...) that change what runs.
  * "Approve all" persists each definition's fingerprint (a changed definition asks
  * again); "Skip" persists nothing, so they stay off and re-prompt next launch.
  *
@@ -37,16 +45,30 @@ export function McpApprovalPrompt({ projectRoot, servers, onSelect }: McpApprova
         <Text bold color="yellow">
           This project defines MCP servers that will run code on your machine.
         </Text>
-        <Text dimColor>{projectRoot}</Text>
+        <Text dimColor>{displaySafe(projectRoot)}</Text>
       </Box>
 
       <Box marginBottom={1} flexDirection="column">
         {servers.map(s => (
           <Box key={s.name} flexDirection="column" marginBottom={1}>
-            <Text bold>{s.name}</Text>
-            <Text>{s.url ?? [s.command, ...(s.args ?? [])].join(' ')}</Text>
-            {s.envKeys.length > 0 && <Text dimColor>env: {s.envKeys.join(', ')}</Text>}
-            {s.headerKeys.length > 0 && <Text dimColor>headers: {s.headerKeys.join(', ')}</Text>}
+            <Text bold>{displaySafe(s.name)}</Text>
+            <Text>
+              {s.url !== undefined
+                ? displaySafe(s.url)
+                : [s.command, ...(s.args ?? [])]
+                    .filter((p): p is string => p !== undefined)
+                    .map(displayArg)
+                    .join(' ')}
+            </Text>
+            {s.envKeys.length > 0 && (
+              <Text dimColor>
+                env:{' '}
+                {s.envKeys
+                  .map(k => (k in s.envValues ? displaySafe(`${k}=${s.envValues[k]}`) : displaySafe(k)))
+                  .join(', ')}
+              </Text>
+            )}
+            {s.headerKeys.length > 0 && <Text dimColor>headers: {s.headerKeys.map(displaySafe).join(', ')}</Text>}
           </Box>
         ))}
       </Box>

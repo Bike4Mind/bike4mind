@@ -572,7 +572,7 @@ function CliApp() {
         }));
         return;
       }
-      state.configStore.warnPendingMcpApprovals();
+      if (!mcpApprovalResolvedRef.current) state.configStore.warnPendingMcpApprovals();
 
       // Load additional directories from config and --add-dir flag
       const configDirs = await state.configStore.getAdditionalDirectories();
@@ -3928,6 +3928,8 @@ function CliApp() {
               } else {
                 console.log('\nThese MCP servers stay off this session. You will be asked again next launch.\n');
               }
+            } catch (err) {
+              console.error('\nCould not save MCP approval:', err instanceof Error ? err.message : String(err), '\n');
             } finally {
               setState(prev => ({ ...prev, mcpApprovalPrompt: null }));
               init().catch(err => {

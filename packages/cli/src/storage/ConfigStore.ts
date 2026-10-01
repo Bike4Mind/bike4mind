@@ -738,7 +738,13 @@ export function fingerprintMcpServer(s: NormalizedMcpServer): string {
     .digest('hex');
 }
 
-/** A repo MCP server awaiting approval. Carries env/header KEYS only, never values. */
+/** Env keys whose values change what code a spawned process runs; shown to the user at approval. */
+const LOADER_ENV_KEY = /^(PATH|NODE_OPTIONS|NODE_PATH|BASH_ENV|ENV|RUBYOPT|PERL5OPT|PERL5LIB|LD_.*|DYLD_.*|PYTHON.*)$/i;
+
+/**
+ * A repo MCP server awaiting approval. Carries env/header KEYS, plus values only
+ * for loader-style env keys (envValues); secrets and header values never leave the store.
+ */
 export interface PendingMcpApproval {
   name: string;
   /** fingerprintMcpServer() of the definition shown; approval persists exactly this. */
@@ -748,6 +754,7 @@ export interface PendingMcpApproval {
   args?: string[];
   url?: string;
   envKeys: string[];
+  envValues: Record<string, string>;
   headerKeys: string[];
 }
 
@@ -1104,6 +1111,11 @@ export class ConfigStore {
     const approvedRepo: NormalizedMcpServer[] = [];
     this.pendingMcpApprovals = [];
     for (const s of repoServers) {
+      // Disabled servers never spawn, so there is nothing to approve.
+      if (!s.enabled) {
+        approvedRepo.push(s);
+        continue;
+      }
       (approved.has(fingerprintMcpServer(s)) ? approvedRepo : this.pendingMcpApprovals).push(s);
     }
     merged.mcpServers = mergeMcpServersGlobalWins(global.mcpServers, approvedRepo);
@@ -1138,6 +1150,7 @@ export class ConfigStore {
       args: s.args,
       url: s.url,
       envKeys: Object.keys(s.env ?? {}),
+      envValues: Object.fromEntries(Object.entries(s.env ?? {}).filter(([k]) => LOADER_ENV_KEY.test(k))),
       headerKeys: Object.keys(s.headers ?? {}),
     }));
   }

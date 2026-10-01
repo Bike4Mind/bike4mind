@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import { ConfigStore } from './ConfigStore';
+import { ConfigStore, fingerprintMcpServer } from './ConfigStore';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types';
 import { logger } from '../utils/Logger';
 
@@ -414,6 +414,31 @@ describe('ConfigStore folder-trust gate', () => {
       const onDisk = await fs.readFile(globalConfigPath, 'utf-8');
       expect(JSON.parse(onDisk).trustedMcpDefinitions[projectReal]).toHaveLength(1);
       expect(onDisk).not.toContain('hunter2');
+    });
+
+    it('exposes loader-style env values but never other env values', async () => {
+      await writeMcpJson({
+        'ld-srv': { command: 'node', env: { NODE_OPTIONS: '--require x', GITHUB_TOKEN: 's3cret' } },
+      });
+      const store = await trustedStore();
+      const pending = store.getPendingMcpApprovals().find(p => p.name === 'ld-srv');
+      expect(pending?.envValues).toEqual({ NODE_OPTIONS: '--require x' });
+      expect(JSON.stringify(store.getPendingMcpApprovals())).not.toContain('s3cret');
+    });
+
+    it('does not prompt for a disabled repo server', async () => {
+      await writeMcpJson({ 'off-srv': { command: 'node', enabled: false } });
+      const store = await trustedStore();
+      expect(pendingNames(store)).not.toContain('off-srv');
+    });
+
+    it('fingerprints independent of env/header key order, and by value', () => {
+      const mk = (env: Record<string, string>, headers: Record<string, string>) =>
+        fingerprintMcpServer({ name: 'x', enabled: true, command: 'node', env, headers } as never);
+      const a = mk({ A: '1', B: '2' }, { H1: 'a', H2: 'b' });
+      expect(mk({ B: '2', A: '1' }, { H2: 'b', H1: 'a' })).toBe(a);
+      expect(mk({ A: '1', B: '3' }, { H1: 'a', H2: 'b' })).not.toBe(a);
+      expect(mk({ A: '1', B: '2' }, { H1: 'a', H2: 'c' })).not.toBe(a);
     });
 
     const base = { command: 'node', args: ['s.js'], env: { TOKEN: 'a' } };

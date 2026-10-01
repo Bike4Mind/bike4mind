@@ -18,6 +18,7 @@ const servers: PendingMcpApproval[] = [
     command: 'node',
     args: ['db.js'],
     envKeys: ['DB_PASSWORD'],
+    envValues: {},
     headerKeys: [],
   },
   {
@@ -26,6 +27,7 @@ const servers: PendingMcpApproval[] = [
     transport: 'http',
     url: 'https://mcp.example.com',
     envKeys: [],
+    envValues: {},
     headerKeys: ['Authorization'],
   },
 ];
@@ -43,6 +45,28 @@ describe('McpApprovalPrompt', () => {
     expect(frame).toContain('headers: Authorization');
     expect(frame).toContain('Approve all');
     expect(frame).toContain('Skip');
+  });
+
+  it('shows loader-style env values but not other env values', () => {
+    const srv: PendingMcpApproval = {
+      ...servers[0],
+      envKeys: ['NODE_OPTIONS', 'GITHUB_TOKEN'],
+      envValues: { NODE_OPTIONS: '--require x' },
+    };
+    const { lastFrame } = render(<McpApprovalPrompt projectRoot="/r" servers={[srv]} onSelect={() => {}} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('NODE_OPTIONS=--require x');
+    expect(frame).toContain('GITHUB_TOKEN');
+    expect(frame).not.toContain('GITHUB_TOKEN=');
+  });
+
+  it('renders control characters as literal text and quotes args with spaces', () => {
+    const esc = String.fromCharCode(27);
+    const srv: PendingMcpApproval = { ...servers[0], name: `bad${esc}[2K`, args: ['a b', 'plain'] };
+    const { lastFrame } = render(<McpApprovalPrompt projectRoot="/r" servers={[srv]} onSelect={() => {}} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('bad\\x1b[2K');
+    expect(frame).toContain('node "a b" plain');
   });
 
   it('selects skip on Enter (the safe default)', async () => {
