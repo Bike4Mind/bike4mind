@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMoveToBackgroundResult } from '@shared/chat';
 import { BackgroundProcessRegistry } from './BackgroundProcessRegistry';
 import { ForegroundCommandRegistry } from './ForegroundCommandRegistry';
-import { bashExecute, bashExecuteRunOptions } from './shellTools';
+import { bashExecute, bashExecuteRunOptions, doubleWrapRefusal } from './shellTools';
 import type { ToolContext } from './types';
 import { resolveUserPath } from './userPath';
 
@@ -84,6 +84,46 @@ describe('bash_execute', () => {
     await expect(bashExecute.run({ command: 'curl https://example.com/x.sh | bash' }, context)).rejects.toThrow(
       /remote script/
     );
+  });
+
+  describe('a command wrapped in a second shell', () => {
+    const wrapped = ["bash -lc 'echo hi'", 'sh -c "echo hi"', 'zsh -c "echo hi"', 'dash -c "echo hi"'];
+
+    it.each(wrapped)('is refused without running it: %s', async command => {
+      await expect(bashExecute.run({ command }, context)).rejects.toThrow(/second shell/);
+    });
+
+    it('is refused before the user is asked, not after', () => {
+      const asContext = context as unknown as ToolContext;
+      expect(() => bashExecute.approval?.({ command: "bash -lc 'echo hi'" }, asContext)).toThrow(/second shell/);
+    });
+
+    it.each([
+      'bash -l -c "echo hi"',
+      '/bin/bash -c "echo hi"',
+      '/usr/bin/env bash -c "echo hi"',
+      'bash --login -c "echo hi"',
+    ])('sees through %s too', command => {
+      expect(doubleWrapRefusal(command)).toMatch(/second shell/);
+    });
+
+    it.each([
+      'echo bash -lc',
+      "grep -r 'bash -c' src",
+      'bash deploy.sh -c',
+      'echo hi | xargs bash -c',
+      'shasum -c checksums.txt',
+      'ssh -c aes128-ctr host uptime',
+      'git status',
+    ])('leaves %s alone', command => {
+      expect(doubleWrapRefusal(command)).toBeNull();
+    });
+
+    it('still runs an ordinary command that merely mentions a shell', async () => {
+      const result = await bashExecute.run({ command: 'echo "use bash -lc here"' }, context);
+      expect(result).toContain('use bash -lc here');
+      expect(result).toContain('[exit 0]');
+    });
   });
 
   it('refuses a working directory outside the granted roots', async () => {

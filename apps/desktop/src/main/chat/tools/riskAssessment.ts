@@ -1,4 +1,4 @@
-import { resolveWithinRoots } from './paths';
+import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 import { resolveCwd } from './shellTools';
 import type { ApprovalPrompt, ToolContext } from './types';
 
@@ -51,6 +51,14 @@ export function spendsCredits(toolName: string): boolean {
  * `|` is the one separator deliberately absent: a pipeline is split on it and every segment is
  * assessed in full, which is sound here only because nothing on the allow-list writes to a file
  * and redirection is still rejected right here.
+ *
+ * `&` stays IN the set even though `&&` is a separator too, because the tokenizer intercepts
+ * the two-character spelling before consulting this set at all. What reaches it is therefore a
+ * lone `&`, which backgrounds, or an `&>`, which redirects - and both must keep failing here
+ * however the loop above is rearranged later.
+ *
+ * `;` likewise stays. It separates commands without the one property that makes threading a
+ * directory across `&&` sound; see `assessCommand`.
  */
 const UNQUOTED_CONTROL = /[;&`$(){}<>\\~!#\n\r]/;
 
@@ -76,9 +84,9 @@ const DOUBLE_QUOTED_EXPANDS = /[$`\\]/;
 /**
  * Arguments that make any command follow a symlink out of the folder it was pointed at.
  *
- * The path check proves the NAMED path is inside a granted root, and `resolveWithinRoots`
- * resolves a symlink given by name. It cannot speak for a link the command discovers while
- * walking, which is exactly what these turn on.
+ * The path check proves the NAMED path is inside a granted root, and
+ * `resolveWithinRootsPhysically` resolves the symlinks along it. It cannot speak for a link the
+ * command discovers while walking, which is exactly what these turn on.
  */
 const FOLLOWS_SYMLINKS: readonly string[] = ['-L', '-R', '--dereference', '--dereference-recursive', '--follow'];
 
@@ -502,7 +510,17 @@ function runnableScript(rest: readonly string[], allowed: RegExp): string | null
 }
 
 /**
- * The command as argv, one array per pipeline segment, or null when it cannot be read safely.
+ * One step of an `&&` chain: the segments of a single pipeline, as argv.
+ *
+ * The two separators are kept apart because they differ in the one way this module cares
+ * about. Every segment of a pipeline is its own subshell, so all of them start in the
+ * directory the shell is in and none of them can move it. A step of an `&&` chain runs in the
+ * shell itself, so a `cd` there moves every step that follows.
+ */
+type Pipeline = string[][];
+
+/**
+ * The command as argv, one `Pipeline` per `&&` step, or null when it cannot be read safely.
  *
  * Returning null is the fail-closed half of this module: anything the tokenizer is not certain
  * it has read the way the shell will read it ends up in front of the user, and the per-token
@@ -511,15 +529,28 @@ function runnableScript(rest: readonly string[], allowed: RegExp): string | null
  * Quoting is handled rather than refused because refusing it is what made `grep "foo bar" x`
  * and `find . -name '*.ts'` ask. Single quotes are literal to the shell, so their contents are
  * taken as written; double quotes are only taken when nothing inside them still expands.
+ *
+ * `&&` is read as a separator and every other use of `&` is still refused, which is the whole
+ * sharp edge of this function: a lone `&` backgrounds the command so its output and exit code
+ * are never seen, `&>` redirects both streams into a file, and `&&&` is not a spelling worth
+ * guessing at. Each of those is one character away from the separator and none of them is it,
+ * so the match is made on the exact pair and anything else returns null.
  */
-function tokenizeCommand(command: string): string[][] | null {
-  const segments: string[][] = [];
+function tokenizeCommand(command: string): Pipeline[] | null {
+  const pipelines: Pipeline[] = [];
+  let pipeline: Pipeline = [];
   let current: string[] = [];
   let token: string | null = null;
 
   const endToken = () => {
     if (token !== null) current.push(token);
     token = null;
+  };
+
+  const endSegment = () => {
+    endToken();
+    pipeline.push(current);
+    current = [];
   };
 
   for (let index = 0; index < command.length; index += 1) {
@@ -536,9 +567,19 @@ function tokenizeCommand(command: string): string[][] | null {
     }
 
     if (char === '|') {
-      endToken();
-      segments.push(current);
-      current = [];
+      endSegment();
+      continue;
+    }
+
+    if (char === '&') {
+      // Exactly two. One is a background, three is nothing bash will run, and a `&>` that gets
+      // this far is a redirect - the UNQUOTED_CONTROL check would refuse the `>` a character
+      // later anyway, and refusing it here says why.
+      if (command[index + 1] !== '&' || command[index + 2] === '&') return null;
+      endSegment();
+      pipelines.push(pipeline);
+      pipeline = [];
+      index += 1;
       continue;
     }
 
@@ -552,48 +593,95 @@ function tokenizeCommand(command: string): string[][] | null {
     token = (token ?? '') + char;
   }
 
-  endToken();
-  segments.push(current);
+  endSegment();
+  pipelines.push(pipeline);
   // An empty segment is a leading, trailing or doubled separator, and `||` is not a pipe at all.
-  return segments.some(segment => segment.length === 0) ? null : segments;
+  return pipelines.some(steps => steps.some(segment => segment.length === 0)) ? null : pipelines;
 }
 
 /**
- * Whether one segment of a pipeline is confined enough to run unasked.
+ * Where a `cd` leaves the shell, or null when this one is not contained.
+ *
+ * `cd` is not on INERT_COMMANDS and could not be: it is a builtin, it names no executable, and
+ * the generic path check would not even look at its argument - `looksLikePath('subdir')` is
+ * false, so a bare name that happens to be a symlink out of the root would sail past. So it is
+ * bounded here instead, by three things.
+ *
+ * Exactly one argument. A bare `cd` goes to `$HOME`, which is outside every granted root on any
+ * machine where the roots are worth having, and a second argument is bash's substitution form.
+ *
+ * That argument absolute, which is the bound worth saying out loud because it looks like
+ * fussiness and is not: bash searches `CDPATH` for an operand that does not begin with a slash,
+ * and `CDPATH` is the user's own exported variable, inherited by the shell this command runs
+ * in. `cd packages` is therefore not a statement about the directory named `packages` under the
+ * cwd - it is a lookup this module cannot see the table for. A leading slash is the one
+ * spelling bash promises to resolve against nothing else.
+ *
+ * It also does the work of a flag check, which is why there is no separate one: `cd -` goes to
+ * `$OLDPWD`, and `-L` and `-P` change which directory the shell believes it ended up in. Not
+ * one of them begins with a slash, so not one of them gets past the line above.
+ *
+ * And then the destination goes through `resolveWithinRootsPhysically` like any other path,
+ * which resolves the symlinks on the way and throws when the answer is outside every granted
+ * root. That throw is what keeps this from reopening the hole `git --git-dir` left: a `cd`
+ * reaches only directories the user shared, which is exactly the reach `bash_execute`'s own
+ * `cwd` parameter already has.
+ *
+ * What is threaded on is the RESOLVED directory, not the one that was typed, because that is
+ * the one the following steps read from: bash keeps the typed spelling in `$PWD` for its own
+ * `cd` and `pwd`, but it chdir'd to the real directory, and a `../x` in a later step is
+ * resolved from there by the kernel. The two differ whenever the target is a symlink, which is
+ * also the only reason `cd ..` would have needed the typed form - and a relative `cd` is
+ * already refused above.
+ */
+async function changedDirectory(rest: readonly string[], cwd: string, context: ToolContext): Promise<string | null> {
+  if (rest.length !== 1) return null;
+  const target = rest[0];
+  if (!target.startsWith('/')) return null;
+  return await resolveWithinRootsPhysically(target, context.roots, cwd);
+}
+
+/**
+ * The directory a segment leaves the shell in, or null when the segment is not confined enough
+ * to run unasked. Everything but a `cd` leaves it where it found it, so a non-null return is
+ * the 'contained' verdict and the cwd to carry forward is almost always the one passed in.
  *
  * Every clause is necessary: a listed executable, so what it does with its argv is bounded - by
  * inertness for most of the list, and by the script name for the three package managers; and
  * every path argument proven inside a granted root by the same resolver the tools use, so it
- * reaches only what the user shared. `resolveWithinRoots` throws rather than returning, and the
- * caller treats that as a reason to ask.
+ * reaches only what the user shared, resolved the way the kernel will resolve it rather than
+ * the way `path.resolve` would. `resolveWithinRootsPhysically` throws rather than returning,
+ * and the caller treats that as a reason to ask.
  */
-async function assessSegment(tokens: readonly string[], cwd: string, context: ToolContext): Promise<boolean> {
+async function assessSegment(tokens: readonly string[], cwd: string, context: ToolContext): Promise<string | null> {
   const [executable, ...rest] = tokens;
   // A slash in the executable means a path, not a name: `./configure` and `/usr/bin/env` are
   // both ways of running something this list was never asked about.
-  if (!executable || executable.includes('/')) return false;
+  if (!executable || executable.includes('/')) return null;
+
+  if (executable === 'cd') return await changedDirectory(rest, cwd, context);
 
   const inert = Object.prototype.hasOwnProperty.call(INERT_COMMANDS, executable)
     ? INERT_COMMANDS[executable]
     : undefined;
-  if (!inert) return false;
+  if (!inert) return null;
 
-  if (hasFlag(rest, FOLLOWS_SYMLINKS)) return false;
-  if (inert.forbiddenArguments && hasFlag(rest, inert.forbiddenArguments)) return false;
-  if (inert.forbiddenPrefixes && hasPrefix(rest, inert.forbiddenPrefixes)) return false;
+  if (hasFlag(rest, FOLLOWS_SYMLINKS)) return null;
+  if (inert.forbiddenArguments && hasFlag(rest, inert.forbiddenArguments)) return null;
+  if (inert.forbiddenPrefixes && hasPrefix(rest, inert.forbiddenPrefixes)) return null;
 
-  if (inert.subcommands && !namesAllowedSubcommand(rest, inert.subcommands)) return false;
+  if (inert.subcommands && !namesAllowedSubcommand(rest, inert.subcommands)) return null;
 
-  if (inert.guard && !inert.guard(rest)) return false;
-  if (inert.scripts && !runnableScript(rest, inert.scripts)) return false;
+  if (inert.guard && !inert.guard(rest)) return null;
+  if (inert.scripts && !runnableScript(rest, inert.scripts)) return null;
 
   for (const token of rest) {
     const candidate = pathArgument(token);
     if (candidate === null) continue;
-    await resolveWithinRoots(candidate, context.roots, cwd);
+    await resolveWithinRootsPhysically(candidate, context.roots, cwd);
   }
 
-  return true;
+  return cwd;
 }
 
 /**
@@ -603,19 +691,45 @@ async function assessSegment(tokens: readonly string[], cwd: string, context: To
  * worth stating: nothing on the allow-list writes to a file, so no chain of them can either,
  * and the one way to turn a chain into a write - a redirect - is rejected while tokenizing.
  * Reading `git log | head` is the same act as reading `git log`, only shorter on screen.
+ *
+ * An `&&` chain of pipelines is contained under the same argument, which survives the extra
+ * separator unchanged: the steps still only read, and running one after another adds no way to
+ * write. What it does NOT survive on its own is `cd`, because a command with no path argument
+ * at all - `git log`, `git status` - says nothing about which directory it reads, and before
+ * `cd` that directory was always the one `resolveCwd` had already proven. So the directory is
+ * threaded here, and every step is assessed against where it will actually run.
+ *
+ * The threading is sound because of the separator and not in spite of it. `&&` short-circuits:
+ * a `cd` that fails - the directory is missing, or is a file - stops the chain, so the shell
+ * never runs a later step somewhere other than where this loop assessed it. `;` has no such
+ * property. It would run the rest of the chain in the PREVIOUS directory while this loop had
+ * already moved on, and two directories can both be inside granted roots while a `..` out of
+ * one lands inside a root and the same `..` out of the other does not. That divergence is the
+ * whole reason `;` is still refused while tokenizing rather than treated as a third separator.
+ *
+ * A `cd` inside a pipeline moves nothing, because the segment running it is a subshell that
+ * exits a moment later - so `cd x | cat` is assessed, and leaves the directory alone.
  */
 async function assessCommand(input: Record<string, unknown>, context: ToolContext): Promise<ApprovalRisk> {
   const command = typeof input.command === 'string' ? input.command.trim() : '';
   if (!command) return 'sensitive';
 
-  const segments = tokenizeCommand(command);
-  if (!segments) return 'sensitive';
+  const pipelines = tokenizeCommand(command);
+  if (!pipelines) return 'sensitive';
 
-  // Throws when `cwd` is outside every granted root, which is itself a reason to ask.
-  const cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+  // Throws when `cwd` is outside every granted root, which is itself a reason to ask. Taken
+  // through `realpathNearest` because the child is chdir'd to this path and the kernel resolves
+  // every relative argument below from the REAL directory that lands it in, not from the name.
+  let cwd = await realpathNearest(await resolveCwd(input, context.roots, context.workingDirectory));
 
-  for (const segment of segments) {
-    if (!(await assessSegment(segment, cwd, context))) return 'sensitive';
+  for (const pipeline of pipelines) {
+    let next = cwd;
+    for (const segment of pipeline) {
+      const after = await assessSegment(segment, cwd, context);
+      if (after === null) return 'sensitive';
+      if (pipeline.length === 1) next = after;
+    }
+    cwd = next;
   }
 
   return 'contained';

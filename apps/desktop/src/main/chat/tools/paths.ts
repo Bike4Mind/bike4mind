@@ -1,5 +1,5 @@
 import { realpath } from 'node:fs/promises';
-import { isAbsolute, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path';
 
 /**
  * Thrown when a tool is pointed outside every granted root. Carries no filesystem detail
@@ -60,6 +60,54 @@ export async function resolveWithinRoots(
   // and returning that would silently redirect a write the user believes is going elsewhere.
   // It is safe only because the target was just proven to be inside a granted root too.
   return lexical;
+}
+
+/**
+ * Resolve `requested` the way the KERNEL will, and prove THAT is inside a granted root.
+ *
+ * For `resolveWithinRoots` above, the lexical collapse is sound, because every caller of it
+ * opens the collapsed path it hands back - the kernel is never shown the original spelling, so
+ * the path that was checked and the path that is opened are the same string.
+ *
+ * A shell command is the one case where that does not hold. Its arguments reach bash as
+ * written, and the kernel applies `..` to wherever the symlinks BEFORE it actually landed,
+ * while `path.resolve` applies it to the name on the left. Those differ exactly when a granted
+ * root holds a link back to itself or to an ancestor: with `r/l -> r`, `cat l/../secret` reads
+ * `r/../secret` while `resolve` reports `r/secret` and calls it contained. Verified, not
+ * assumed.
+ *
+ * So the components are walked in order here instead, each prefix resolved before the next is
+ * applied, which is what lets a `..` land where the kernel will put it. A component that does
+ * not exist cannot hide a symlink under it, so from there the rest is appended as written.
+ */
+export async function resolveWithinRootsPhysically(
+  requested: string,
+  roots: readonly string[],
+  baseDirectory: string
+): Promise<string> {
+  if (!requested) throw new PathAccessDenied(requested);
+  if (roots.length === 0) throw new PathAccessDenied(requested);
+
+  const prefix = parse(requested).root;
+  // A Windows drive-relative path - `C:notes.txt` - has a root and is still not absolute, and
+  // the directory it is relative to is per-drive state no part of this app can see. Only ever
+  // true on Windows, since `parse` is the posix one everywhere else and reads that as a name.
+  if (prefix !== '' && !isAbsolute(requested)) throw new PathAccessDenied(requested);
+
+  let current = prefix === '' ? await realpathOrSelf(resolve(baseDirectory)) : prefix;
+  for (const part of requested.slice(prefix.length).split(/[\\/]+/)) {
+    if (part === '' || part === '.') continue;
+    // `current` is already resolved, so its parent is the one the kernel would step back to.
+    current = part === '..' ? dirname(current) : await realpathOrSelf(join(current, part));
+  }
+
+  const realRoots = await Promise.all(roots.map(root => realpath(root).catch(() => resolve(root))));
+  if (!realRoots.some(root => isWithin(root, current))) throw new PathAccessDenied(requested);
+  return current;
+}
+
+async function realpathOrSelf(target: string): Promise<string> {
+  return realpath(target).catch(() => target);
 }
 
 /**

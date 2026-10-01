@@ -93,6 +93,41 @@ export function refusalReason(command: string): string | null {
   return REFUSED.find(entry => entry.pattern.test(command))?.reason ?? null;
 }
 
+/**
+ * A leading `bash -lc`, `sh -c`, `zsh -lc` and so on - a second shell wrapped around the script.
+ *
+ * Anchored at the start, and only for the `-c` form, because that is the one that is a mistake:
+ * the command already reaches bash as a single argv entry (see commandLaunch), so a wrapper here
+ * is a layer of quoting that bash strips before the inner shell ever sees it. A model writing one
+ * has to escape every inner quote as '"'"' to survive it, and on a script dense with jq filters
+ * and sed expressions it gets that wrong and the command arrives mangled or empty. Elsewhere in
+ * the line - `echo bash -lc`, `grep 'bash -c' src`, a pipe into `xargs bash -c` - it is data or a
+ * deliberate nested shell, and neither is ours to second-guess. `env` and a long flag are allowed
+ * in front because `/usr/bin/env bash -c` and `bash --login -c` are the same mistake spelled out.
+ */
+const SHELL_WRAPPER =
+  /^\s*(?:(?:\S*\/)?env[ \t]+)?(?:\S*\/)?(bash|zsh|dash|sh)((?:[ \t]+--?[A-Za-z][\w-]*)*[ \t]+-[A-Za-z]*c[A-Za-z]*)(?=[ \t]|$)/;
+
+/**
+ * The error a double-wrapped command is refused with, or null when there is no wrapper.
+ *
+ * A refusal rather than an unwrap: unquoting it here means doing exactly what the shell would,
+ * and getting that subtly wrong would run something other than what the approval card showed.
+ * The model can resend the inner script in the same turn.
+ */
+export function doubleWrapRefusal(command: string): string | null {
+  const match = SHELL_WRAPPER.exec(command);
+  if (!match) return null;
+
+  const wrapper = `${match[1]}${match[2]}`.replace(/[ \t]+/g, ' ');
+  return [
+    `Refused: this command starts with \`${wrapper}\`, which wraps the script in a second shell.`,
+    'The command string is handed straight to bash; nothing re-parses it afterwards, so the outer',
+    'shell only strips a layer of quoting off the script before it runs. Resend the inner script on',
+    'its own, written the way you would type it at a prompt. It was not run.',
+  ].join(' ');
+}
+
 interface CommandOutcome {
   stdout: string;
   stderr: string;
@@ -379,6 +414,15 @@ export const bashExecute: ToolDefinition = {
     description: [
       'Run a bash command on the user machine and return its output.',
       '',
+      'The string you pass is handed to bash as it stands and nothing re-parses it afterwards, so',
+      'write it the way you would type it at a prompt. Do not put `bash -lc`, `bash -c`, `sh -c`,',
+      '`zsh -c` or any other shell in front of it, and do not add an outer layer of quoting to go',
+      'with one: that layer is stripped before your script runs, every inner quote then has to be',
+      'escaped to survive it, and a command that starts with such a wrapper is refused rather than',
+      'run. Pipes, redirects, `&&`, heredocs and multi-line scripts all work as written.',
+      '',
+      'Pass `cwd` to run somewhere other than the default folder rather than opening with a `cd`.',
+      '',
       'The user is shown the exact command and must approve it before it runs, so state plainly',
       'what you are about to do and why. A denial is an answer, not an error to work around: do',
       'not rephrase the same command to get past it.',
@@ -392,6 +436,9 @@ export const bashExecute: ToolDefinition = {
       `${MAX_TIMEOUT_MS / 1000}s), so it is the wrong tool for a dev server, a watcher or anything`,
       'else meant to keep running: start those with bash_background instead.',
       '',
+      'Raise `timeout` up front for anything that loops over network calls - a script making one',
+      '`gh api` or `curl` call per item will outrun the default long before it is finished.',
+      '',
       'Commands must exit on their own. Never use watch flags (-w, --watch) here: use `vitest run` /',
       '`jest --watchAll=false`. pnpm passes flags after the script name to the script, so',
       '`pnpm test -w` runs the tests in watch mode, which is stopped after its first pass.',
@@ -401,11 +448,18 @@ export const bashExecute: ToolDefinition = {
       properties: {
         command: {
           type: 'string',
-          description: 'The bash command to run. Pipes, redirects and chained commands are allowed.',
+          description:
+            'The bash command to run, exactly as you would type it at a prompt. Pipes, redirects ' +
+            'and chained commands are allowed. Never prefix it with `bash -lc` or another shell, ' +
+            'and do not open it with a `cd`: pass the directory as `cwd`.',
         },
         cwd: {
           type: 'string',
-          description: 'Absolute path to run in. Must be inside a shared folder. Defaults to the first one.',
+          description: [
+            'Absolute path to run in. Must be inside a shared folder. Defaults to the first one.',
+            'This is how you run somewhere else - always prefer it to a leading `cd`, which is',
+            'more likely to interrupt the user for approval.',
+          ].join(' '),
         },
         timeout: {
           type: 'number',
@@ -420,6 +474,12 @@ export const bashExecute: ToolDefinition = {
   approval(input: Record<string, unknown>): ApprovalPrompt {
     const command = typeof input.command === 'string' ? input.command : '';
     const cwd = typeof input.cwd === 'string' ? input.cwd : '';
+
+    // Here as well as in run() so the user is never asked to approve a command that is going to
+    // be refused anyway - a throw from approval() settles the call without a card.
+    const wrapped = doubleWrapRefusal(command);
+    if (wrapped) throw new Error(wrapped);
+
     return {
       detail: cwd ? `$ ${command}\n\nin ${cwd}` : `$ ${command}`,
       // Keyed on both, and on the exact text: "always allow" must not carry from `git status`
@@ -431,6 +491,9 @@ export const bashExecute: ToolDefinition = {
 
   async run(input, context) {
     const command = requireString(input, 'command');
+
+    const wrapped = doubleWrapRefusal(command);
+    if (wrapped) throw new Error(wrapped);
 
     const refused = refusalReason(command);
     if (refused) throw new Error(`Refused: this command ${refused}. It was not run.`);
