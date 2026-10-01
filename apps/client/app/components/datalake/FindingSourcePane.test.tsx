@@ -65,7 +65,10 @@ describe('FindingSourcePane', () => {
     renderPane();
 
     expect(screen.getByTestId('finding-source-title')).toHaveTextContent('investor-update.md');
-    expect(screen.getByTestId('finding-source-citation')).toHaveAttribute('href', '/data-lakes?article=file-a');
+    expect(screen.getByTestId('finding-source-citation')).toHaveAttribute(
+      'href',
+      '/data-lakes?article=file-a&passage=' + encodeURIComponent(source.excerpt)
+    );
   });
 
   // The finding's own name is what the detector saw, so it survives a file read that came back

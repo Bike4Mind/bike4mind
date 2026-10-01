@@ -2180,7 +2180,7 @@ describe('useScanDataLakeFindings', () => {
     // The bare prefix, so the dialog's filtered list and the chip's open-only count both refresh.
     expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
-    expect(toast.success).toHaveBeenCalledWith('Scan complete: 3 finding(s) across 4 document(s).');
+    expect(toast.success).toHaveBeenCalledWith('Scanned 4 document(s), found 3 finding(s).');
   });
 
   it('says nothing was read rather than calling an empty lake clean', async () => {
@@ -2190,7 +2190,9 @@ describe('useScanDataLakeFindings', () => {
       await result.current.mutateAsync();
     });
 
-    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/no document in this lake has text/i));
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringMatching(/^Scanned 0 documents\..*no document in this lake has text/i)
+    );
   });
 
   it("surfaces the rate limit's own retry hint, not axios' status line", async () => {

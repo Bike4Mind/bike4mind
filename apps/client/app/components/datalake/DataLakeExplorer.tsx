@@ -55,6 +55,8 @@ import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/comm
 interface DataLakeExplorerProps {
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
+  /** Optional cited passage text to highlight when opening a deep-linked article. */
+  articlePassage?: string | null;
   /** Which browse backend to read. Only the react-query cache key differs; a branded
    *  surface passes its own value to keep its cache separate from the main app's. */
   source?: DataLakeBrowseSource;
@@ -108,6 +110,7 @@ const EMPTY_LAKES: TagScopeLake[] = [];
 
 export default function DataLakeExplorer({
   articleId,
+  articlePassage,
   source = 'datalakes',
   rootLabel,
   onManage,
@@ -484,9 +487,17 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      handleViewFile(deepLinkTarget);
+      if (articlePassage && articlePassage.trim().length > 0) {
+        openFileInChatViewer(deepLinkTarget, {
+          fileId: deepLinkTarget.id,
+          chunkId: 'unknown',
+          passage: articlePassage,
+        });
+      } else {
+        handleViewFile(deepLinkTarget);
+      }
     }
-  }, [deepLinkTarget, handleViewFile]);
+  }, [deepLinkTarget, handleViewFile, articlePassage]);
 
   // Browsing deliberately leaves the open file alone: the tree and the viewer are separate panels,
   // so browsing categories - including back out of one - must not dismiss what you are reading. The

@@ -119,6 +119,10 @@ describe('LakeFindingsDialog', () => {
 
     expect(screen.getByTestId('lake-finding-row-finding-1')).toBeInTheDocument();
     expect(screen.getByTestId('lake-finding-subject')).toHaveTextContent('annual recurring revenue');
+    // Accessible names: close button and both filter selects carry an aria-label.
+    expect(screen.getByTestId('lake-findings-close-btn')).toHaveAttribute('aria-label', 'Close findings dialog');
+    expect(screen.getByTestId('lake-findings-status-filter')).toHaveAttribute('aria-label', 'Filter by status');
+    expect(screen.getByTestId('lake-findings-kind-filter')).toHaveAttribute('aria-label', 'Filter by finding kind');
     expect(h.findings).toHaveBeenCalledWith(
       'lake-1',
       { status: 'open', kind: undefined, limit: 50 },
@@ -542,10 +546,19 @@ describe('LakeFindingsDialog', () => {
 
   it('says an empty list means no run found anything, not that the lake is clean', () => {
     h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: { computedAt: '2026-03-08T12:00:00Z' } } });
     renderDialog();
 
     expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/after a scan/i);
     expect(screen.getByTestId('lake-findings-empty')).not.toHaveTextContent(/clean/i);
+  });
+
+  it('says a never-scanned lake has not been scanned yet in the empty state', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: null } });
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/not been scanned yet/i);
   });
 
   it('runs detection on this lake when Scan now is pressed', () => {

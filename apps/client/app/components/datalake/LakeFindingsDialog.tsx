@@ -409,6 +409,8 @@ export function LakeFindingsDialog({
     isLoadingMore,
   } = useDataLakeFindings(dataLakeId, { status, kind, limit: FINDINGS_PAGE_LIMIT }, { enabled: open });
   const scan = useScanDataLakeFindings(dataLakeId);
+  // Read the last run's state to distinguish a never-scanned lake from a scanned one with no matches.
+  const { data: health } = useGetDataLakeHealth(dataLakeId, open);
 
   // Derived from the live list rather than held as a snapshot, so a refetch that drops or updates
   // the open finding takes the curator back to the list instead of leaving stale passages on screen.
@@ -425,7 +427,7 @@ export function LakeFindingsDialog({
   return (
     <Modal open={open} onClose={onClose}>
       <ModalDialog layout="fullscreen" data-testid="lake-findings-dialog">
-        <ModalClose />
+        <ModalClose aria-label="Close findings dialog" data-testid="lake-findings-close-btn" />
         <DialogTitle>{`Findings in "${lakeName}"`}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {selected ? (
@@ -444,7 +446,9 @@ export function LakeFindingsDialog({
                   onChange={(_, value) =>
                     narrow(() => setStatus(value === ANY ? undefined : (value as LakeFindingStatus)))
                   }
-                  slotProps={{ button: { 'data-testid': 'lake-findings-status-filter' } }}
+                  slotProps={{
+                    button: { 'data-testid': 'lake-findings-status-filter', 'aria-label': 'Filter by status' },
+                  }}
                   sx={{ minWidth: '9rem' }}
                 >
                   <Option value={ANY}>Any status</Option>
@@ -460,7 +464,9 @@ export function LakeFindingsDialog({
                   onChange={(_, value) =>
                     narrow(() => setKind(value === ANY ? undefined : (value as InconsistencyKind)))
                   }
-                  slotProps={{ button: { 'data-testid': 'lake-findings-kind-filter' } }}
+                  slotProps={{
+                    button: { 'data-testid': 'lake-findings-kind-filter', 'aria-label': 'Filter by finding kind' },
+                  }}
                   sx={{ minWidth: '12rem' }}
                 >
                   <Option value={ANY}>Any kind</Option>
@@ -504,10 +510,9 @@ export function LakeFindingsDialog({
                 </Alert>
               ) : !findings?.length ? (
                 <Typography level="body-sm" textColor="text.secondary" data-testid="lake-findings-empty">
-                  {/* Never "this lake is clean": detection is a pattern pass over a bounded sample, so
-                      an empty list means the runs that happened found nothing, not that none exist. */}
-                  Nothing matches these filters. Findings appear after a scan, which runs nightly or when you choose
-                  Scan now.
+                  {health?.inconsistency === null
+                    ? 'This lake has not been scanned yet. Findings appear after you run Scan now.'
+                    : 'Nothing matches these filters. Findings appear after a scan, which runs nightly or when you choose Scan now.'}
                 </Typography>
               ) : (
                 <Box
