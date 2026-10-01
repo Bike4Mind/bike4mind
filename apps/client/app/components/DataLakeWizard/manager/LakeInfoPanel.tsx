@@ -98,6 +98,10 @@ export function LakeInfoPanel({
   const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
+  // Move to draft and Delete each pull the lake out of every reader's grounding, and both sit in a
+  // row of everyday buttons, so neither fires from a single click.
+  const [demoteConfirmOpen, setDemoteConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [draftChatOpen, setDraftChatOpen] = useState(false);
   const startChat = async (failureMessage = 'Could not start a chat with this lake') => {
     setDraftChatOpen(false);
@@ -356,8 +360,7 @@ export function LakeInfoPanel({
                     color="neutral"
                     startDecorator={<UnpublishedOutlinedIcon sx={{ fontSize: 16 }} />}
                     data-testid={`datalake-demote-btn-${lake.id}`}
-                    loading={demoteLake.isPending}
-                    onClick={() => demoteLake.mutate(lake.id)}
+                    onClick={() => setDemoteConfirmOpen(true)}
                     sx={{ flexShrink: 0, fontSize: '13px' }}
                   >
                     Move to draft
@@ -829,8 +832,7 @@ export function LakeInfoPanel({
                 size="sm"
                 startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
                 data-testid={`datalake-delete-active-btn-${lake.id}`}
-                loading={deleteLake.isPending}
-                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+                onClick={() => setDeleteConfirmOpen(true)}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
                 Delete
@@ -856,6 +858,53 @@ export function LakeInfoPanel({
             )}
           </Box>
         )}
+        <Modal open={demoteConfirmOpen} onClose={() => setDemoteConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-demote-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Move this lake back to draft?</DialogTitle>
+            <DialogContent>
+              {lake.name} stops grounding answers for everyone who can read it, including chats already scoped to it.
+              Its files stay stored and indexed, and publishing it again restores grounding.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="warning"
+                loading={demoteLake.isPending}
+                data-testid="datalake-demote-confirm-btn"
+                onClick={() => demoteLake.mutate(lake.id, { onSuccess: () => setDemoteConfirmOpen(false) })}
+              >
+                Move to draft
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setDemoteConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
+        <Modal open={deleteConfirmOpen} onClose={() => setDeleteConfirmOpen(false)}>
+          <ModalDialog role="alertdialog" data-testid="datalake-delete-confirm" sx={{ maxWidth: '28rem' }}>
+            <DialogTitle>Delete this lake?</DialogTitle>
+            <DialogContent>
+              {lake.name} leaves the active list and stops grounding answers for everyone who can read it. You can
+              restore it from the Deleted section until it is permanently purged.
+            </DialogContent>
+            <DialogActions>
+              <Button
+                variant="solid"
+                color="danger"
+                loading={deleteLake.isPending}
+                data-testid="datalake-delete-confirm-btn"
+                // No close on success: onDeleted exits the panel, which unmounts this dialog with it.
+                onClick={() => deleteLake.mutate(lake.id, { onSuccess: onDeleted })}
+              >
+                Delete
+              </Button>
+              <Button variant="plain" color="neutral" onClick={() => setDeleteConfirmOpen(false)}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </ModalDialog>
+        </Modal>
         <Modal open={purgeMemoryConfirmOpen} onClose={() => setPurgeMemoryConfirmOpen(false)}>
           <ModalDialog role="alertdialog" data-testid="datalake-purge-memory-confirm" sx={{ maxWidth: '28rem' }}>
             <DialogTitle>Erase this lake&apos;s memory profile?</DialogTitle>

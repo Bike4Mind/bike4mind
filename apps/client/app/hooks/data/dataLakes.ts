@@ -777,13 +777,18 @@ function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
 }
 
-function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
+function useLifecycleMutation(
+  action: LifecycleAction,
+  successMessage: string,
+  errorMessage: string,
+  successToast?: Parameters<typeof toast.success>[1]
+) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postLifecycle(id, action),
     onSuccess: (_data, id) => {
       invalidateAfterLifecycle(queryClient, id);
-      toast.success(successMessage);
+      toast.success(successMessage, successToast);
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || errorMessage);
@@ -811,7 +816,12 @@ export function useRestoreDeletedDataLake() {
  * draft -> active flip. A draft lake is excluded from grounding until this runs.
  */
 export function usePromoteDataLake() {
-  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake');
+  // Longer and more descriptive than the other lifecycle toasts: publishing changes what every reader's
+  // answers draw on, and the default toast was gone before most people saw it.
+  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake', {
+    description: 'It now grounds answers for everyone who can read it.',
+    duration: 8000,
+  });
 }
 
 /** Moves an active lake back to draft, pulling it out of grounding. Reverses promote. */
