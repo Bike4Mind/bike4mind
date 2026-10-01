@@ -625,7 +625,7 @@ export function LakeInfoPanel({
                 variant="outlined"
                 color="neutral"
                 sx={{ fontSize: '11px' }}
-                data-testid={`datalake-manager-file-count-chip-${lake.id}`}
+                data-testid={`datalake-manager-filecount-chip-${lake.id}`}
               >
                 {fileCount} {fileCount === 1 ? 'file' : 'files'}
                 {lake.isCreator === false && " (creator's view)"}

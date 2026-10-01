@@ -178,12 +178,12 @@ describe('LakeInfoPanel - file count scope qualifier', () => {
 
   it("shows no qualifier to the lake's creator", () => {
     renderWithCount(true);
-    expect(screen.getByTestId('datalake-manager-file-count-chip-lake-1')).toHaveTextContent(/^3 files$/);
+    expect(screen.getByTestId('datalake-manager-filecount-chip-lake-1')).toHaveTextContent(/^3 files$/);
   });
 
   it("tells a non-creator the count is in the creator's view", () => {
     renderWithCount(false);
-    expect(screen.getByTestId('datalake-manager-file-count-chip-lake-1')).toHaveTextContent("3 files (creator's view)");
+    expect(screen.getByTestId('datalake-manager-filecount-chip-lake-1')).toHaveTextContent("3 files (creator's view)");
   });
 });
 
