@@ -18,6 +18,11 @@ describe('withTokenEstimateMultiplier', () => {
     expect(tokenizer.countTokens).toHaveBeenCalledWith('text', 'claude-sonnet-5');
   });
 
+  it('does not round an exact product up past itself', async () => {
+    // 100 * 1.09 is 109.00000000000001 in floating point.
+    await expect(withTokenEstimateMultiplier(createTokenizer(100), 1.09).countTokens('text')).resolves.toBe(109);
+  });
+
   it('passes encode and decode through to the real encoder', async () => {
     const tokenizer = createTokenizer(10);
     const calibrated = withTokenEstimateMultiplier(tokenizer, 1.5);

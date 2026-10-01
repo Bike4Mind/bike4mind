@@ -5273,12 +5273,13 @@ export class ChatCompletionProcess {
       // Post-streaming processing: token counting, credits, performance metrics, features.
       // Wrapped in protective try/catch so failures here never overwrite quest.reply or leave quest stuck.
       try {
-        // Calculate output tokens
+        // Calculate output tokens, in the units of the model that actually answered
+        const answeringMultiplier = tokenEstimateMultiplier(currentModel.id);
         const outputTokenCalculationStartTime = Date.now();
-        const outputTokens = await withTokenEstimateMultiplier(
-          this.tokenizer,
-          tokenEstimateMultiplier(currentModel.id)
-        ).countTokens(Object.values(replies), currentModel.id);
+        const outputTokens = await withTokenEstimateMultiplier(this.tokenizer, answeringMultiplier).countTokens(
+          Object.values(replies),
+          currentModel.id
+        );
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Output token calculation completed (${outputTokens} tokens) in ${
             Date.now() - outputTokenCalculationStartTime
@@ -5334,11 +5335,18 @@ export class ChatCompletionProcess {
           (actualTokenUsage?.cacheCreationInputTokens ?? 0);
         const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
+        // inputTokens was counted in the requested model's units (estimateTokenizer). When a fallback that
+        // tokenizes differently answered, restate it in that model's units before it prices or drift-checks.
+        const requestedMultiplier = tokenEstimateMultiplier(modelInfo.id);
+        const localInputTokens =
+          requestedMultiplier === answeringMultiplier
+            ? inputTokens
+            : Math.ceil((inputTokens * answeringMultiplier) / requestedMultiplier);
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : localInputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
-          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, localInputTokens);
         // Provider-basis only: the local fallback deliberately never bills cache creation,
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
@@ -5352,7 +5360,7 @@ export class ChatCompletionProcess {
             )
           : getTextModelCost(
               currentModel,
-              inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
               outputTokens
             );
         // Single stochastic settlement draw, shared by the quest meta, the
@@ -5400,7 +5408,7 @@ export class ChatCompletionProcess {
               (actualTokenUsage.cacheCreationInputTokens ?? 0)
             : undefined;
         if (apiInputForDrift != null && apiInputForDrift > 0) {
-          const ratio = inputTokens / apiInputForDrift;
+          const ratio = localInputTokens / apiInputForDrift;
           if (ratio < 0.7 || ratio > 1.3) {
             logger.warn('[BILLING_DRIFT] Local vs provider input-token count diverges', {
               questId: quest.id,
@@ -5408,7 +5416,7 @@ export class ChatCompletionProcess {
               sessionId: quest.sessionId,
               model: currentModel.id,
               backend: currentModel.backend,
-              localInputTokens: inputTokens,
+              localInputTokens,
               providerInputTokens: apiInputForDrift,
               ratio: Number(ratio.toFixed(2)),
               tokensBySource: quest.promptMeta?.context?.tokensBySource,

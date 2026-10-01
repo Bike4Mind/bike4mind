@@ -28,8 +28,10 @@ export function tokenEstimateMultiplier(modelId: string | undefined): number {
   const match = modelId?.match(CLAUDE_FAMILY_VERSION);
   if (!match) return 1;
 
-  const version = Number(match[1]) + Number(match[2] ?? 0) / 10;
-  if (version >= 4.7) return CLAUDE_4_7_PLUS_MULTIPLIER;
-  if (version >= 4.5) return CLAUDE_4_5_MULTIPLIER;
+  // Compared as (major, minor), not as a decimal: 4-10 is newer than 4-7, but 4.10 < 4.7.
+  const major = Number(match[1]);
+  const minor = Number(match[2] ?? 0);
+  if (major > 4 || (major === 4 && minor >= 7)) return CLAUDE_4_7_PLUS_MULTIPLIER;
+  if (major === 4 && minor >= 5) return CLAUDE_4_5_MULTIPLIER;
   return 1;
 }

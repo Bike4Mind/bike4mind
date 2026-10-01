@@ -3666,9 +3666,114 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // GPT-4 is uncalibrated: the output count is the raw tokenizer count.
+      expect(tokenUsage.outputTokens).toBe(40);
       // The local basis never bills cache creation, so recording a count here would
       // imply a charge that was not made.
       expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
+    });
+
+    const claudeSonnet5 = {
+      id: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      type: 'text' as const,
+      name: 'Claude Sonnet 5',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+    const gpt4 = {
+      id: ChatModels.GPT4,
+      type: 'text' as const,
+      name: 'GPT-4',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+    const claudeBody = {
+      ...startQuestParams,
+      params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
+      tools: [],
+      projectId: undefined,
+      organizationId: undefined,
+    };
+    const findSettledTokenUsage = () =>
+      mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      )?.[0]?.promptMeta.tokenUsage;
+
+    it("settles a Claude model's local output count in its own tokenizer's units", async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      mockedGetAvailableModels.mockResolvedValue([claudeSonnet5]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({ body: claudeBody, logger: mockLogger });
+
+      const tokenUsage = findSettledTokenUsage();
+      // Raw 40 output scaled by Claude 5's 1.5. Local basis: 80 * $10/1M + 60 * $30/1M = $0.0026 -> 5.2,
+      // ceil'd by the pinned draw to 6 credits.
+      expect(tokenUsage.outputTokens).toBe(60);
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.0026, 6);
+      expect(tokenUsage.creditsUsed).toBe(6);
+      expect(tokenUsage.settledBasis).toBe('local');
+    });
+
+    it('restates the local input in the fallback model units when a fallback answers', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: Bedrock is unable to process')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      const fallbackBackend = {
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hello from fallback'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: gpt4, backend: fallbackBackend, attempt: 1 } as any);
+      mockedGetAvailableModels.mockResolvedValue([claudeSonnet5, gpt4]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({ body: claudeBody, logger: mockLogger });
+
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+      const tokenUsage = findSettledTokenUsage();
+      // 80 Claude-5 units restated for GPT-4: ceil(80 / 1.5) = 54. Output is GPT-4's raw 40.
+      // 54 * $10/1M + 40 * $30/1M = $0.00174; pricing the unconverted 80 would give $0.002.
+      expect(tokenUsage.outputTokens).toBe(40);
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.00174, 6);
+      expect(tokenUsage.settledBasis).toBe('local');
     });
 
     // Partial provider usage (cache read reported without input/output counts) also

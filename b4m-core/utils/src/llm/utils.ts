@@ -2442,14 +2442,14 @@ export async function buildAndSortMessages(
   tokenBudget = tokenBudget - bufferTokenBudget;
 
   let userPromptContent: string = '';
-  let userPromptTokens: number[] = [];
 
   if (userPrompt.length > 0) {
     userPromptContent = Array.isArray(userPrompt[0].content)
       ? JSON.stringify(userPrompt[0].content)
       : userPrompt[0].content || '';
-    userPromptTokens = await tokenizer.encodeTokens(userPromptContent);
-    tokenBudget = tokenBudget - userPromptTokens.length;
+    // countTokens, not encodeTokens().length: a calibrated tokenizer (withTokenEstimateMultiplier) scales
+    // only countTokens, and every other source in this budget is charged through it.
+    tokenBudget = tokenBudget - (await tokenizer.countTokens(userPromptContent));
   }
   // Everything below divides this figure. Captured before system instructions are charged against it,
   // so the attached-content floor is a share of the whole input budget rather than of whatever the
