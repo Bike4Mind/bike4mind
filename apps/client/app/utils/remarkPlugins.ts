@@ -31,10 +31,12 @@ const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|`[^`\n]*`)/g;
 const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
 const INLINE_PAREN_SPAN = new RegExp(String.raw`${UNESCAPED}\\\(([^\n]*?)${UNESCAPED}\\\)`, 'g');
 const INLINE_BRACKET_SPAN = new RegExp(String.raw`${UNESCAPED}\\\[([^\n]*?)${UNESCAPED}\\\]`, 'g');
-// `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line, with no
-// blank line between them so an unclosed `\[` cannot swallow the paragraphs that follow.
+// `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line. The body
+// may not cross a blank line, so an unclosed `\[` cannot swallow the paragraphs that follow, nor
+// hold another unescaped `\[`/`\]`, so `\[ a \] and \[ b \]` is left to the inline pass instead of
+// becoming one broken block.
 const OWN_LINE_BRACKET_BLOCK = new RegExp(
-  String.raw`^([ \t]*(?:>[ \t]*)*)\\\[((?:(?!\n[ \t>]*\n)[\s\S])*?)${UNESCAPED}\\\][ \t]*$`,
+  String.raw`^([ \t]*(?:>[ \t]*)*)\\\[((?:(?!\n[ \t>]*\n)(?!${UNESCAPED}\\[\[\]])[\s\S])*?)${UNESCAPED}\\\][ \t]*$`,
   'gm'
 );
 
@@ -56,11 +58,23 @@ function looksLikeMath(content: string): boolean {
   );
 }
 
+// `\[x\]` is also how markdown escapes literal brackets, and turndown writes exactly that into
+// stored Knowledge files (`\[Smith (2020)\]`, `[\[a\]](#cite)`, `arr\[i\]`). So a bracket body needs
+// real LaTeX - a control sequence, or `^`, `_` or `=` between operands - and one holding another
+// markdown escape is prose. Parens keep the looser `looksLikeMath`: turndown never escapes them.
+function looksLikeBracketMath(content: string): boolean {
+  const odd = String.raw`(?:^|[^\\])(?:\\\\)*\\`;
+  if (new RegExp(odd + String.raw`[_*[\]]`).test(content)) return false;
+  return new RegExp(odd + '[a-zA-Z]').test(content) || /\S\s*[\^_=]\s*\S/.test(content);
+}
+
 // Inline `$$...$$` for a one-line span, or the original text when it is not math (`\(sic\)`, the
 // markdown-escaped citation `\[1\]`) or holds a `$` that would break the produced delimiters.
-function toInlineMath(match: string, inner: string): string {
-  const body = inner.trim();
-  return body && !body.includes('$') && looksLikeMath(body) ? `$$${body}$$` : match;
+function toInlineMath(isMath: (content: string) => boolean) {
+  return (match: string, inner: string): string => {
+    const body = inner.trim();
+    return body && !body.includes('$') && isMath(body) ? `$$${body}$$` : match;
+  };
 }
 
 // remark-math renders `$$` as display math only as a fence: `$$` alone on a line, then content,
@@ -68,12 +82,14 @@ function toInlineMath(match: string, inner: string): string {
 // line takes the opening line's prefix so the block stays inside its list item or blockquote.
 function toDisplayMath(match: string, prefix: string, inner: string): string {
   if (inner.includes('$')) return match;
-  const lines = inner.split('\n');
-  const first = lines.shift()!.trim();
+  const [firstLine = '', ...lines] = inner.split('\n');
+  // A lazy-continuation line (no `>`) would end the blockquote between the two fences.
+  if (prefix.includes('>') && lines.some(line => !/^[ \t]*>/.test(line))) return match;
+  const first = firstLine.trim();
   const last = lines.pop();
   const body = [...(first ? [prefix + first] : []), ...lines];
   if (last !== undefined && last.replace(/[\s>]/g, '')) body.push(last.trimEnd());
-  if (!looksLikeMath(body.join('\n'))) return match;
+  if (!looksLikeBracketMath(body.join('\n'))) return match;
   return [`${prefix}$$`, ...body, `${prefix}$$`].join('\n');
 }
 
@@ -84,8 +100,8 @@ function normalizeLatexBrackets(segment: string, startsLine: boolean, endsLine: 
       const atEdge = (offset === 0 && !startsLine) || (offset + match.length === segment.length && !endsLine);
       return atEdge ? match : toDisplayMath(match, prefix, inner);
     })
-    .replace(INLINE_BRACKET_SPAN, toInlineMath)
-    .replace(INLINE_PAREN_SPAN, toInlineMath);
+    .replace(INLINE_BRACKET_SPAN, toInlineMath(looksLikeBracketMath))
+    .replace(INLINE_PAREN_SPAN, toInlineMath(looksLikeMath));
 }
 
 /**
@@ -101,8 +117,9 @@ function normalizeLatexBrackets(segment: string, startsLine: boolean, endsLine: 
  * A dollar span is promoted when it matches `SINGLE_DOLLAR_SPAN`'s currency-safe delimiter shape
  * AND its content passes `looksLikeMath`. Together these catch math with no backslash command
  * (`$x^2$`, `$n > 0$`, `$f(x)$`, `$a_1, a_2$`) while still leaving currency prose ("$124 and
- * $150 per seat", "$5 to $10", "$20/month") as literal text. Bracket spans pass `looksLikeMath`
- * too, so markdown escapes like `\[1\]` stay literal.
+ * $150 per seat", "$5 to $10", "$20/month") as literal text. `\( \)` spans pass `looksLikeMath`
+ * too; `\[ \]` spans pass the stricter `looksLikeBracketMath`, so markdown-escaped brackets like
+ * `\[1\]` or `\[Smith (2020)\]` stay literal.
  *
  * Use this in every renderer that displays LLM / AI-generated markdown so the behavior stays
  * consistent and the fix does not drift across surfaces.

@@ -80,6 +80,13 @@ describe('promoteInlineLatexDollars', () => {
       ],
       ['own-line bracket in a blockquote', '> \\[ e^{i\\pi} = -1 \\]', '> $$\n> e^{i\\pi} = -1\n> $$'],
       ['bracket content sharing the delimiter lines', '\\[ a = 1,\n   b = 2 \\]', '$$\na = 1,\n   b = 2\n$$'],
+      ['two bracket spans on one line stay two inline spans', '\\[ x^2 \\] and \\[ y^2 \\]', '$$x^2$$ and $$y^2$$'],
+      [
+        'two bracket spans on their own line produce no fence',
+        'Then\n\\[ x = 1 \\] and \\[ y = 2 \\]\ndone',
+        'Then\n$$x = 1$$ and $$y = 2$$\ndone',
+      ],
+      ['bracket with a subscript', 'where \\[a_1\\] is', 'where $$a_1$$ is'],
     ])('%s', (_label, input, expected) => {
       expect(promoteInlineLatexDollars(input)).toBe(expected);
     });
@@ -94,6 +101,15 @@ describe('promoteInlineLatexDollars', () => {
       ['escaped parens around prose', 'he said \\(sic\\) twice'],
       ['bracket content holding a dollar', 'cost \\[ x = $5^2 \\]'],
       ['unclosed bracket does not cross a blank line', '\\[ x^2\n\nlater \\]'],
+      // turndown output: Knowledge files store scraped and emailed HTML with brackets escaped.
+      ['escaped author-year citation', 'As shown in \\[Smith (2020)\\], x'],
+      ['escaped letter footnote link', '1850.[\\[a\\]](#cite-a)'],
+      ['escaped task-list checkbox', '-   \\[x\\] Ship'],
+      ['escaped array indexes', 'arr\\[i\\] and m\\[j\\]\\[k\\]'],
+      ['escaped bracket around an escaped underscore', 'Use \\[foo\\_bar\\]'],
+      ['escaped single letter on its own line', '\\[a\\]'],
+      ['own-line escaped brackets with prose between', '\\[a\\] see note (1)\n\\[b\\]'],
+      ['blockquote block with a lazy-continuation line', '> \\[\nx^2\n> \\]\nafter'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });

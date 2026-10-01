@@ -215,8 +215,8 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
   });
 
   it('marks the right block after LaTeX bracket delimiters are rewritten', () => {
-    // The \[ \] block above the cited paragraph grows by the inserted fence lines, so this only
-    // passes if the passage is located in the rewritten string.
+    // The cited passage holds `\( \)`, which the viewer rewrites in the document, so this only
+    // passes if the passage gets the same rewrite before it is located.
     const doc = [
       'Holidays accrue monthly.',
       '',
