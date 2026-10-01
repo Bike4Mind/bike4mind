@@ -65,14 +65,8 @@ RUN set -eu; \
 # emits means file tracing swept the app source tree in behind us.
 RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
 # Then require each built API route, so a module the bundler left external fails here (naming
-# package and route) instead of 500ing in production at module load. NODE_ENV=production matches
-# the runner's entry selection; the --no-experimental-require-module flag the probe passes to its
-# child is stricter than the deployed runtime. The probe copies the standalone root to a temp dir
-# first, so it cannot resolve through this builder's node_modules above it - the runner copies
-# only standalone. The self-host template supplies placeholder runtime env: without it the resource
-# shim throws at load for most routes and the probe would be blind behind that throw. Runs after
-# the prune so test routes are not probed; see the script header for the failure class and its
-# self-host-only scope.
+# package and route) instead of 500ing at module load. Runs after the prune; the template env and
+# the standalone copy that keeps the builder's node_modules out of resolution are in the header.
 COPY .env.selfhost.example ./
 RUN NODE_ENV=production node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs apps/client/.next/standalone apps/client/.next
 
