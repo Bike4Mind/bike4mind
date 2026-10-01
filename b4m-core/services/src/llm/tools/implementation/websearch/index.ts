@@ -187,7 +187,8 @@ export async function performWebSearch(
   }
 
   try {
-    const results = await provider.search(params.query, params.num_results);
+    const searchOptions = params.include_places ? { locationInQuery: true } : undefined;
+    const results = await provider.search(params.query, params.num_results, searchOptions);
     Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
 
     // An unconfigured/placeholder signing secret can never produce a verifiable image URL - every
@@ -202,7 +203,7 @@ export async function performWebSearch(
     const anchorQuery = params.include_places ? params.anchor_location?.trim() : undefined;
     // Only on a location query: each is another paid provider call, behind the model's own flag.
     const [imageResults, placeResults, anchorResults] = await Promise.all([
-      wantsImages ? provider.searchImages?.(params.query) : undefined,
+      wantsImages ? provider.searchImages?.(params.query, undefined, searchOptions) : undefined,
       params.include_places ? provider.searchPlaces?.(params.query) : undefined,
       anchorQuery ? provider.searchPlaces?.(anchorQuery, 1) : undefined,
     ]).then(all => all.map(result => result ?? []) as [WebSearchImageResult[], WebSearchPlace[], WebSearchPlace[]]);
