@@ -147,6 +147,19 @@ describe('LoginFlow', () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it('does not open when the server omits verification_uri_complete', async () => {
+    const { verification_uri_complete: _omitted, ...partial } = deviceFlowFor('https://app.example.com');
+    oauth.initiateDeviceFlow.mockResolvedValue(partial);
+    oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={vi.fn()} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('Not opening browser'));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it('opens a localhost dev URL on the matching origin', async () => {
     oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('http://localhost:3000'));
     oauth.waitForAuthorization.mockReturnValue(new Promise(() => {}));

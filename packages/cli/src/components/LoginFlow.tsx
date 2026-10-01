@@ -164,12 +164,11 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   }, [apiUrl, configStore, onSuccess, onError]);
 
   // Both URIs are checked: the CLI opens _complete, but the screen tells the user to visit verification_uri.
-  const untrustedUri = deviceFlow
-    ? [deviceFlow.verification_uri, deviceFlow.verification_uri_complete].find(
-        u => !isBrowserOpenableUrl(u) || !isOnApiOrigin(u, apiUrl)
-      )
-    : undefined;
-  const trusted = !!deviceFlow && untrustedUri === undefined;
+  // `every`, not `find() === undefined`: a server that omits a URI would otherwise read as trusted.
+  const uris = deviceFlow ? [deviceFlow.verification_uri, deviceFlow.verification_uri_complete] : [];
+  const isTrustedUri = (u: string) => isBrowserOpenableUrl(u) && isOnApiOrigin(u, apiUrl);
+  const untrustedUri = uris.find(u => !isTrustedUri(u));
+  const trusted = uris.length > 0 && uris.every(isTrustedUri);
 
   // Auto-open browser when device flow is initiated
   useEffect(() => {
