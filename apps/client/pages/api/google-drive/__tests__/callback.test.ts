@@ -46,7 +46,9 @@ vi.mock('@server/integrations/google/drive/common', async importOriginal => {
 });
 
 // Import after mocks are registered.
-import handler from '@pages/api/google-drive/callback';
+import callbackHandler from '@pages/api/google-drive/callback';
+import errorHandler from '@server/middlewares/errorHandler';
+import { getTokens } from '@server/integrations/google/drive/common';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
@@ -66,6 +68,16 @@ beforeEach(() => {
   mockFindByIdAndUpdate.mockReset();
 });
 
+/** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
+async function handler(req: any, res: any) {
+  req.logger = { warn: vi.fn(), error: vi.fn() };
+  try {
+    await callbackHandler(req, res);
+  } catch (error) {
+    errorHandler(error, req, res);
+  }
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -78,6 +90,12 @@ function expectRejectedConnect(res: ReturnType<typeof createMocks>['res'], code:
   expect(res._getStatusCode()).toBe(400);
   expect(res._getJSONData()).toMatchObject({ code });
   expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+  expectNonceCleared(res);
+}
+
+function expectNonceCleared(res: ReturnType<typeof createMocks>['res']) {
+  const setCookie = [res.getHeader('Set-Cookie') ?? []].flat().map(String);
+  expect(setCookie).toContainEqual(expect.stringMatching(/^b4m_oauth_nonce_google-drive=;.*Max-Age=0/));
 }
 
 describe('google-drive callback browser-binding', () => {
@@ -143,5 +161,20 @@ describe('google-drive callback browser-binding', () => {
     await handler(req as any, res as any);
     expect(mockFindByIdAndUpdate).toHaveBeenCalledTimes(1);
     expect(res._getStatusCode()).toBe(204);
+    expectNonceCleared(res);
+  });
+
+  it('answers a coded 400, not the upstream 401, when Google rejects the token exchange', async () => {
+    vi.mocked(getTokens).mockRejectedValueOnce(Object.assign(new Error('invalid_client'), { status: 401 }));
+    const { state, nonceCookie } = mintStateWithCookie();
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'user-1' };
+
+    await handler(req as any, res as any);
+    expectRejectedConnect(res, 'GOOGLE_DRIVE_CONNECT_FAILED');
   });
 });

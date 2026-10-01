@@ -5,4 +5,5 @@
 export const GOOGLE_DRIVE_CONNECT_ERROR = {
   expired: 'GOOGLE_DRIVE_CONNECT_EXPIRED',
   invalid: 'GOOGLE_DRIVE_CONNECT_INVALID',
+  failed: 'GOOGLE_DRIVE_CONNECT_FAILED',
 } as const;

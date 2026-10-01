@@ -67,6 +67,28 @@ describe('GoogleDriveCallbackPage', () => {
     );
   });
 
+  it('offers to connect again when Google rejects the token exchange', async () => {
+    rejectWithCode('GOOGLE_DRIVE_CONNECT_FAILED');
+
+    render(<GoogleDriveCallbackPage />);
+
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+    expect(h.toastError).toHaveBeenCalledWith(
+      'Google Drive could not complete the connection. Please connect again.',
+      expect.objectContaining({ action: expect.objectContaining({ label: 'Connect again' }) })
+    );
+  });
+
+  it('completes the connection and goes home without a toast', async () => {
+    h.apiGet.mockResolvedValue({ data: undefined });
+
+    render(<GoogleDriveCallbackPage />);
+
+    await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+    expect(h.apiGet).toHaveBeenCalledWith('/api/google-drive/callback?code=auth-code&state=signed-state');
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
   it('falls back to the generic error for an uncoded failure', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     h.apiGet.mockRejectedValue(new Error('network down'));

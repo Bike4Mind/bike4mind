@@ -1,3 +1,4 @@
+import { BadRequestError } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
@@ -6,6 +7,23 @@ import { encryptToken } from '@server/security/tokenEncryption';
 import { verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { GOOGLE_DRIVE_CONNECT_ERROR } from '@client/shared/googleDriveConnectErrors';
+import type { Request } from 'express';
+
+/**
+ * Google's token endpoint fails with a GaxiosError carrying its own `.status`, which errorHandler
+ * forwards verbatim - so an upstream 401 (e.g. `invalid_client`) would reach the SPA as the
+ * code-less 401 that logs the user out. Rethrow every exchange failure as a coded 400.
+ */
+async function exchangeCode(req: Request, code: string) {
+  try {
+    return await getTokens(code);
+  } catch (error) {
+    req.logger.warn('Google Drive token exchange failed', error);
+    throw new BadRequestError('Google Drive could not complete the connection.', {
+      code: GOOGLE_DRIVE_CONNECT_ERROR.failed,
+    });
+  }
+}
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { code?: string; state?: string }>(async (req, res) => {
@@ -24,21 +42,21 @@ const handler = baseApi().get(
       );
       // A failed connect answers 400 + a code, never a 401: ApiContext treats a code-less 401
       // as a dead login session, and the post-login redirectTo would replay this callback forever.
+      // Throw rather than write the response here, so the finally clears the nonce cookie before
+      // errorHandler ends the response.
       if (!stateResult.valid) {
         const code =
           stateResult.reason === 'expired' ? GOOGLE_DRIVE_CONNECT_ERROR.expired : GOOGLE_DRIVE_CONNECT_ERROR.invalid;
-        return res.status(400).json({ error: stateResult.message, code });
+        throw new BadRequestError(stateResult.message, { code });
       }
       // Defense-in-depth beyond the browser binding: the tokens must land on the
       // account that started the flow, not whoever the completion request is authed
       // as, in case the session changed between flow start and completion.
       if (stateResult.payload.userId !== user.id) {
-        return res
-          .status(400)
-          .json({ error: 'Invalid authorization state.', code: GOOGLE_DRIVE_CONNECT_ERROR.invalid });
+        throw new BadRequestError('Invalid authorization state.', { code: GOOGLE_DRIVE_CONNECT_ERROR.invalid });
       }
 
-      const tokens = await getTokens(code as string);
+      const tokens = await exchangeCode(req, code as string);
       await User.findByIdAndUpdate(user.id, {
         $set: {
           googleDrive: {

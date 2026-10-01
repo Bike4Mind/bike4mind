@@ -37,6 +37,12 @@ const reportConnectFailure = (error: unknown) => {
     });
     return;
   }
+  if (code === GOOGLE_DRIVE_CONNECT_ERROR.failed) {
+    toast.error('Google Drive could not complete the connection. Please connect again.', {
+      action: connectAgainAction,
+    });
+    return;
+  }
   console.error('Error connecting to Google Drive:', error);
   toast.error('Error connecting to Google Drive');
 };
