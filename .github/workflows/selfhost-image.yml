@@ -30,6 +30,9 @@ on:
       # lockfile is unchanged.
       - 'package.json'
       - 'pnpm-lock.yaml'
+      # The builder loads this template as the built-API-route probe's placeholder env, so a key
+      # change can flip the image build's verdict.
+      - '.env.selfhost.example'
       - '.github/workflows/selfhost-image.yml'
   pull_request:
     paths:
@@ -48,6 +51,9 @@ on:
       # lockfile is unchanged.
       - 'package.json'
       - 'pnpm-lock.yaml'
+      # The builder loads this template as the built-API-route probe's placeholder env, so a key
+      # change can flip the image build's verdict.
+      - '.env.selfhost.example'
       - '.github/workflows/selfhost-image.yml'
   workflow_dispatch:
 

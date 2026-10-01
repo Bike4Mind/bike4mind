@@ -64,11 +64,14 @@ RUN set -eu; \
 # Then assert what actually ships: anything beyond the five entries a healthy standalone build
 # emits means file tracing swept the app source tree in behind us.
 RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
-# Then require each built API route under the deployed Node flag, so an ESM-only package the
-# bundler left external fails here (naming package and route) instead of 500ing in production
-# at module load. Runs after the prune so test routes are not probed; see the script header for
-# the failure class and why this standalone tree is the closest PR-time artifact to the Lambda.
-RUN node apps/client/scripts/check-api-routes-cjs-require.mjs apps/client/.next/standalone/apps/client/.next
+# Then require each built API route under the deployed Node flag, so a module the bundler left
+# external fails here (naming package and route) instead of 500ing in production at module load.
+# The self-host template supplies placeholder runtime env: without it the resource shim throws at
+# load for most routes and the probe would be blind behind that throw. Runs after the prune so
+# test routes are not probed; see the script header for the failure class and its self-host-only
+# scope.
+COPY .env.selfhost.example ./
+RUN node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs apps/client/.next/standalone/apps/client/.next
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
