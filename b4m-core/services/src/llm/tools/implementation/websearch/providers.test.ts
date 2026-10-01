@@ -742,29 +742,30 @@ describe('web_search time budget', () => {
   });
 });
 
-describe('resolveWebSearchProviders fallback', () => {
-  it('pairs SearXNG with a SerpAPI fallback under auto when both are configured', async () => {
-    mockGetProvider.mockResolvedValue('auto');
+describe('resolveWebSearchProviders lead and backup', () => {
+  it.each([
+    ['auto' as const, ['searxng', 'serpapi']],
+    ['serpapi' as const, ['serpapi', 'searxng']],
+    ['searxng' as const, ['searxng', 'serpapi']],
+  ])('under %s with both configured, leads with the choice and backs it up with the other', async (choice, order) => {
+    mockGetProvider.mockResolvedValue(choice);
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
     mockGetSerperKey.mockResolvedValue('serp-key');
 
-    const [primary, fallback] = await resolveWebSearchProviders(adapters);
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
 
-    expect([primary?.name, fallback?.name]).toEqual(['searxng', 'serpapi']);
+    expect([lead?.name, backup?.name]).toEqual(order);
   });
 
-  it.each(['serpapi' as const, 'searxng' as const])(
-    'gives an explicit %s choice no fallback, even with both configured',
-    async choice => {
-      mockGetProvider.mockResolvedValue(choice);
-      mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
-      mockGetSerperKey.mockResolvedValue('serp-key');
+  it('has no backup when only the lead is configured', async () => {
+    mockGetProvider.mockResolvedValue('serpapi');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
 
-      const [primary, fallback] = await resolveWebSearchProviders(adapters);
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
 
-      expect([primary?.name, fallback]).toEqual([choice, null]);
-    }
-  );
+    expect([lead?.name, backup]).toEqual(['serpapi', null]);
+  });
 
   it('does not substitute the other provider when the explicit choice is unconfigured', async () => {
     mockGetProvider.mockResolvedValue('searxng');
