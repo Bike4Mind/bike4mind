@@ -56,6 +56,7 @@ import {
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
 import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
+import { appendIdentityReminder, buildIdentityReminder } from './identityReminder';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -861,9 +862,7 @@ export class AnthropicBackend implements ICompletionBackend {
     // bust the cache key on every model identifier change).
     // Omitted for callers whose contract is a bare completion (API promptMode raw) -
     // with no system messages left either, the request then carries no system at all.
-    const identityReminder = options.omitIdentityReminder
-      ? null
-      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
     let system: string | Array<{ type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }> | undefined;
     if (anySystemCacheControlled) {
       const systemMessages = messages.filter(m => m.role === 'system');
@@ -886,8 +885,8 @@ export class AnthropicBackend implements ICompletionBackend {
       system = blocks.length > 0 ? blocks : undefined;
     } else {
       const joined = this.consolidateSystemMessages(messages);
-      const parts = [joined, identityReminder].filter(Boolean);
-      system = parts.length > 0 ? parts.join('\n') : undefined;
+      const text = identityReminder ? appendIdentityReminder(joined ?? '', identityReminder) : joined;
+      system = text || undefined;
     }
 
     // Ensure tool_use/tool_result pairing integrity after filterRelevantMessages.
