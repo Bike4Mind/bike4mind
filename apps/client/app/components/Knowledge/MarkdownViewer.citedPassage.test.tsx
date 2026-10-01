@@ -213,4 +213,28 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
     expect(marked[0].textContent).toContain('The accrual rate is');
     expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
   });
+
+  it('marks the right block after LaTeX bracket delimiters are rewritten', () => {
+    // The \[ \] block above the cited paragraph grows by the inserted fence lines, so this only
+    // passes if the passage is located in the rewritten string.
+    const doc = [
+      'Holidays accrue monthly.',
+      '',
+      '\\[ r = \\frac{18}{12} \\]',
+      '',
+      'The accrual rate is \\( r \\) days.',
+      '',
+      'Sabbaticals are separate.',
+    ].join('\n');
+    const { container } = render(
+      <TestWrapper>
+        <MarkdownViewer content={doc} citedPassage={'The accrual rate is \\( r \\) days.'} />
+      </TestWrapper>
+    );
+
+    const marked = Array.from(container.querySelectorAll('[data-cited]'));
+    expect(marked).toHaveLength(1);
+    expect(marked[0].textContent).toContain('The accrual rate is');
+    expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+  });
 });
