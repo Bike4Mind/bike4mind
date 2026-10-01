@@ -61,4 +61,51 @@ describe('promoteInlineLatexDollars', () => {
     const text = 'block math:\n$$\nL = \\frac{1}{2}\n$$\n';
     expect(promoteInlineLatexDollars(text)).toBe(text);
   });
+
+  describe('LaTeX bracket delimiters', () => {
+    it.each([
+      ['inline paren', 'A \\( a^2 + b^2 \\) end', 'A $$a^2 + b^2$$ end'],
+      ['inline paren, single-letter variable', 'Solve for \\(x\\):', 'Solve for $$x$$:'],
+      ['mid-line bracket stays inline', 'so \\[ x^2 \\] holds', 'so $$x^2$$ holds'],
+      ['own-line one-line bracket', 'D:\n\\[ g^2 + h^2 \\]\nend', 'D:\n$$\ng^2 + h^2\n$$\nend'],
+      [
+        'multi-line bracket block',
+        'The roots are\n\\[\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n\\]\nso done',
+        'The roots are\n$$\nx = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}\n$$\nso done',
+      ],
+      [
+        'bracket block indented in a list item',
+        '1. Divide:\n   \\[\n   x^2 + \\frac{b}{a}x = 0\n   \\]\n2. Next',
+        '1. Divide:\n   $$\n   x^2 + \\frac{b}{a}x = 0\n   $$\n2. Next',
+      ],
+      ['own-line bracket in a blockquote', '> \\[ e^{i\\pi} = -1 \\]', '> $$\n> e^{i\\pi} = -1\n> $$'],
+      ['bracket content sharing the delimiter lines', '\\[ a = 1,\n   b = 2 \\]', '$$\na = 1,\n   b = 2\n$$'],
+    ])('%s', (_label, input, expected) => {
+      expect(promoteInlineLatexDollars(input)).toBe(expected);
+    });
+
+    it.each([
+      ['paren inside inline code', 'use `\\(x^2\\)` literally'],
+      ['bracket inside a fence', '```\n\\[x^2\\]\n```'],
+      ['LaTeX line break with spacing', 'a \\\\[2pt] b \\\\]'],
+      ['escaped backslash before paren', 'path \\\\(x^2\\\\) here'],
+      ['markdown-escaped citation', 'see \\[1\\] and \\[2\\]'],
+      ['markdown-escaped citation on its own line', '\\[1\\]'],
+      ['escaped parens around prose', 'he said \\(sic\\) twice'],
+      ['bracket content holding a dollar', 'cost \\[ x = $5^2 \\]'],
+      ['unclosed bracket does not cross a blank line', '\\[ x^2\n\nlater \\]'],
+    ])('leaves %s alone', (_label, text) => {
+      expect(promoteInlineLatexDollars(text)).toBe(text);
+    });
+
+    it('treats a bracket right after inline code as mid-line', () => {
+      expect(promoteInlineLatexDollars('`f` \\[x^2\\] `g`')).toBe('`f` $$x^2$$ `g`');
+    });
+
+    it('does not re-promote its own $$ output as a single-dollar span', () => {
+      const out = promoteInlineLatexDollars('\\(a\\) and \\(b^2\\) cost $5');
+      expect(out).toBe('$$a$$ and $$b^2$$ cost $5');
+      expect(out).not.toContain('$$$');
+    });
+  });
 });
