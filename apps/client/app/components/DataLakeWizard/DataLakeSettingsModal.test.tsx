@@ -482,12 +482,12 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     const help = screen.getByTestId('datalake-systemprompt-help');
     // The two halves of the real contract: fires on retrieval turns, never otherwise.
     expect(help).toHaveTextContent(/pull content from this lake/i);
-    expect(help).toHaveTextContent(/never fire on turns that don't use the lake/i);
-    // The pre-#1108 always-on wording must not come back.
+    expect(help).toHaveTextContent(/never on turns that don't use it/i);
+    // The old always-on wording must not come back.
     expect(help).not.toHaveTextContent(/not only when the lake is used/i);
   });
 
-  // The QA carry-forward from PR 1: a user who can only READ a shared/public lake must never
+  // A user who can only READ a shared/public lake must never
   // see the wording of its prompt, only its effect on answers.
   it('NEVER shows the prompt to a non-editor on a shared/public lake', () => {
     render(
@@ -1851,5 +1851,31 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - dialog width', () => {
+  const renderLake = (lake: typeof openLake) =>
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+  const maxWidthOf = () => window.getComputedStyle(screen.getByTestId('datalake-settings-modal')).maxWidth;
+
+  it('stays at 28rem when no tabs are shown', () => {
+    const lake = { ...openLake, id: 'lake-width-1', canManage: false, embeddingSpendMicroUsd: undefined };
+    renderLake(lake);
+    expect(screen.queryByTestId('datalake-settings-tab-settings')).not.toBeInTheDocument();
+    expect(maxWidthOf()).toBe('28rem');
+  });
+
+  it('is 44rem when tabs are shown, and stays 44rem on another tab', async () => {
+    const user = userEvent.setup();
+    const lake = { ...openLake, id: 'lake-width-2', embeddingSpendMicroUsd: 0 };
+    renderLake(lake);
+    expect(maxWidthOf()).toBe('44rem');
+    await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+    expect(maxWidthOf()).toBe('44rem');
   });
 });

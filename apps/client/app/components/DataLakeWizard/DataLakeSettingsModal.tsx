@@ -258,11 +258,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       ? 'settings'
       : tab;
   const showTabs = showSpendTab || showHistoryTab || showProposalsTab || showResearchTab;
-  // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
-  // them means a future narrow read-only tab silently gets a Save button it must not have.
-  // Every non-settings panel is tabular and needs the room; the settings form does not.
-  const isWideTab =
-    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
+  const dialogWidth = showTabs ? '44rem' : '28rem';
   // Research saves through its own per-configuration buttons, so the modal's Save must stay away
   // from it - it would submit the lake settings form the user is not looking at.
   const isReadOnlyTab =
@@ -514,7 +510,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session. Users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "Apply to readers" below. They never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "Apply to readers". Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
@@ -758,8 +754,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         <ModalDialog
           data-testid="datalake-settings-modal"
           sx={{
-            width: { xs: '95%', sm: isWideTab ? '44rem' : '28rem' },
-            maxWidth: isWideTab ? '44rem' : '28rem',
+            width: { xs: '95%', sm: dialogWidth },
+            maxWidth: dialogWidth,
           }}
         >
           <ModalClose aria-label="Close data lake settings" data-testid="datalake-settings-close-btn" />
