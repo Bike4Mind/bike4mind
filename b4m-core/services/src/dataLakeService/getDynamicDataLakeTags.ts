@@ -87,6 +87,8 @@ export interface DataLakeAccessContext {
   user: {
     id?: string | { toString(): string } | null;
     tags?: string[] | null;
+    /** Read only by `measureIdentityNamedExclusion`; absent is treated as non-admin. */
+    isAdmin?: boolean | null;
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
@@ -747,7 +749,7 @@ export async function getDynamicDataLakeAccess(
 /**
  * #3055 (scope-accounting follow-up): how many of the SPECIFIC lakes a session names by
  * IDENTITY tag (`datalake:x`, e.g. from `datalakeTagsFrom(session.retrievalTags)`) are
- * unreachable for this caller (a gate they lack, or a private/other-org lake) - the
+ * unreachable for this caller (a gate they lack, or a private/other-org lake an admin can see) - the
  * per-turn-scoped sibling of `excludedByAccessCount` above, for exactly the case that function's
  * own account-wide count cannot answer.
  *
@@ -840,6 +842,7 @@ export async function measureIdentityNamedExclusion(
       ...reach,
       supersededOwnLakeIds: [...supersededOwnLakeIds],
       restrictToTags: identityTags,
+      callerMaySeeAllLakes: context.user.isAdmin === true,
     });
   } catch (err) {
     context.logger?.warn('[dataLakes] scoped gate-excluded-lake count failed; reporting as unknown', err);
