@@ -1,3 +1,4 @@
+import { Fragment, type ReactNode } from 'react';
 import { Box, Chip, Stack, Tooltip, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
@@ -61,89 +62,95 @@ export default function ActiveLakeScopeStrip({
     </Tooltip>
   );
 
+  const groups: { key: string; heading: ReactNode; testId: string; chips: ReactNode }[] = [];
+  if (showGrounded) {
+    groups.push({
+      key: 'grounded',
+      heading: (
+        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+          Grounded on
+        </Typography>
+      ),
+      testId: 'datalake-active-scope-grounded',
+      chips: (
+        <>
+          {/* Warning, not neutral: a chat that retrieves from nothing looks identical to one that
+              simply found no match, and the colour is the only thing separating them at a glance. */}
+          {lakes.length === 0 && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              sx={{ fontSize: '11px' }}
+              data-testid="datalake-active-scope-none"
+            >
+              {copy.noLakesLabel}
+            </Chip>
+          )}
+          {groundedLakes.map(lake => {
+            const isDraft = isDraftLake(lake);
+            return (
+              <Tooltip key={lake.id} size="sm" title={isDraft ? DRAFT_LAKE_TOOLTIP : ''}>
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={isDraft ? 'warning' : 'neutral'}
+                  sx={{ fontSize: '11px', maxWidth: '100%' }}
+                  data-testid={`datalake-active-scope-chip-${lake.id}`}
+                >
+                  {lake.name}
+                </Chip>
+              </Tooltip>
+            );
+          })}
+        </>
+      ),
+    });
+  }
+  if (unsearchableLakes.length > 0) {
+    groups.push({
+      key: 'unsearchable',
+      heading: (
+        <Typography
+          level="body-xs"
+          sx={{ color: 'warning.400' }}
+          data-testid={allUnsearchable ? 'datalake-active-scope-all-unsearchable' : undefined}
+        >
+          {allUnsearchable ? 'Chat cannot search any selected lake' : 'Not searched'}
+        </Typography>
+      ),
+      testId: 'datalake-active-scope-unsearchable-group',
+      chips: unsearchableLakes.map(lake => (
+        <Chip
+          key={lake.id}
+          size="sm"
+          variant="soft"
+          color="warning"
+          startDecorator={<UnsearchableLakeIcon testId={`datalake-active-scope-unsearchable-${lake.id}`} />}
+          sx={{ fontSize: '11px', maxWidth: '100%' }}
+          data-testid={`datalake-active-scope-chip-${lake.id}`}
+        >
+          {lake.name}
+        </Chip>
+      )),
+    });
+  }
+
   return (
     <Box
       data-testid="datalake-active-scope-strip"
       sx={{ px: '12px', pt: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}
     >
-      {showGrounded && (
-        <>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            Grounded on
-          </Typography>
-          <Stack
-            direction="row"
-            alignItems="center"
-            gap={0.5}
-            flexWrap="wrap"
-            data-testid="datalake-active-scope-grounded"
-          >
-            {/* Warning, not neutral: a chat that retrieves from nothing looks identical to one that
-                simply found no match, and the colour is the only thing separating them at a glance. */}
-            {lakes.length === 0 && (
-              <Chip
-                size="sm"
-                variant="soft"
-                color="warning"
-                sx={{ fontSize: '11px' }}
-                data-testid="datalake-active-scope-none"
-              >
-                {copy.noLakesLabel}
-              </Chip>
-            )}
-            {groundedLakes.map(lake => {
-              const isDraft = isDraftLake(lake);
-              return (
-                <Tooltip key={lake.id} size="sm" title={isDraft ? DRAFT_LAKE_TOOLTIP : ''}>
-                  <Chip
-                    size="sm"
-                    variant="soft"
-                    color={isDraft ? 'warning' : 'neutral'}
-                    sx={{ fontSize: '11px', maxWidth: '100%' }}
-                    data-testid={`datalake-active-scope-chip-${lake.id}`}
-                  >
-                    {lake.name}
-                  </Chip>
-                </Tooltip>
-              );
-            })}
-            {unsearchableLakes.length === 0 && clearChip}
+      {/* The clear chip trails whichever group renders last. */}
+      {groups.map((group, i) => (
+        <Fragment key={group.key}>
+          {group.heading}
+          <Stack direction="row" alignItems="center" gap={0.5} flexWrap="wrap" data-testid={group.testId}>
+            {group.chips}
+            {i === groups.length - 1 && clearChip}
           </Stack>
-        </>
-      )}
-      {unsearchableLakes.length > 0 && (
-        <>
-          <Typography
-            level="body-xs"
-            sx={{ color: 'warning.400' }}
-            data-testid={allUnsearchable ? 'datalake-active-scope-all-unsearchable' : undefined}
-          >
-            {allUnsearchable ? 'Chat can not search any selected lake' : 'Not searched'}
-          </Typography>
-          <Stack
-            direction="row"
-            alignItems="center"
-            gap={0.5}
-            flexWrap="wrap"
-            data-testid="datalake-active-scope-unsearchable-group"
-          >
-            {unsearchableLakes.map(lake => (
-              <Chip
-                key={lake.id}
-                size="sm"
-                variant="soft"
-                color="warning"
-                startDecorator={<UnsearchableLakeIcon testId={`datalake-active-scope-unsearchable-${lake.id}`} />}
-                sx={{ fontSize: '11px', maxWidth: '100%' }}
-                data-testid={`datalake-active-scope-chip-${lake.id}`}
-              >
-                {lake.name}
-              </Chip>
-            ))}
-            {clearChip}
-          </Stack>
-        </>
-      )}
+        </Fragment>
+      ))}
     </Box>
   );
 }

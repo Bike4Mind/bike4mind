@@ -95,7 +95,9 @@ import {
   useScanDataLakeFindings,
   useRuleOnDataLakeFinding,
   useUnderChunkedCount,
+  useGetDataLakesWithRetrievability,
 } from './dataLakes';
+import { dataLakeKeys } from './dataLakeKeys';
 
 const PAGE_SIZE = 24;
 
@@ -131,6 +133,42 @@ const mountBrowse = (initialSearch = '') => {
 
 const requestedUrls = (): string[] => apiGet.mock.calls.map(call => call[0] as string);
 const paramsOf = (url: string) => new URL(url, 'http://test.local').searchParams;
+
+// The only client path that opts into the retrievability label: drop the param and every row
+// renders unlabeled (treated as searchable) while the consumer tests, which mock this hook, stay green.
+describe('useGetDataLakesWithRetrievability', () => {
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: { data: [] } });
+  });
+
+  const mount = (sessionId: string | null) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const view = renderHook(() => useGetDataLakesWithRetrievability(sessionId), { wrapper });
+    return { ...view, queryClient };
+  };
+
+  it('requests the labelled list scoped to the session, under the session-keyed query key', async () => {
+    const { result, queryClient } = mount('sess-1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', {
+      params: { includeRetrievability: 'true', sessionId: 'sess-1' },
+    });
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability('sess-1'))?.status).toBe('success');
+  });
+
+  it('omits sessionId but keeps includeRetrievability with no session', async () => {
+    const { result, queryClient } = mount(null);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', { params: { includeRetrievability: 'true' } });
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability(null))?.status).toBe('success');
+  });
+});
 
 describe('useBrowsePublicDataLakes', () => {
   beforeEach(() => {

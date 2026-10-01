@@ -125,12 +125,13 @@ describe('ActiveLakeScopeStrip', () => {
     await userEvent.unhover(screen.getByTestId('datalake-active-scope-chip-c'));
     await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
 
+    // Tooltip names its child via aria-label from `title`, synchronously, so absence needs no timer.
+    expect(screen.getByTestId('datalake-active-scope-chip-a')).toHaveAttribute('aria-label', DRAFT_LAKE_TOOLTIP);
     for (const id of ['b', DATA_LAKES[0].id]) {
-      await userEvent.hover(screen.getByTestId(`datalake-active-scope-chip-${id}`));
-      // Joy's enterDelay is 100ms; wait past it so absence is not just "not yet".
-      await new Promise(r => setTimeout(r, 300));
-      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
-      await userEvent.unhover(screen.getByTestId(`datalake-active-scope-chip-${id}`));
+      expect(screen.getByTestId(`datalake-active-scope-chip-${id}`)).not.toHaveAttribute(
+        'aria-label',
+        DRAFT_LAKE_TOOLTIP
+      );
     }
   });
 });

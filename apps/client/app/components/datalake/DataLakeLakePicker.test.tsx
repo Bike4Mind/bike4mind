@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
+import { UNSEARCHABLE_LAKE_REASON } from './lakeRetrievability';
 import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -353,6 +354,21 @@ describe('DataLakeLakePicker - unsearchable lakes', () => {
     expect(screen.getByTestId('datalake-lake-picker-unsearchable-c')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-lake-picker-unsearchable-a')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-lake-picker-unsearchable-b')).not.toBeInTheDocument();
+  });
+
+  it('explains the marker on hover', async () => {
+    renderPicker({ lakes });
+    openMenu();
+
+    fireEvent.mouseOver(screen.getByTestId('datalake-lake-picker-unsearchable-c'));
+    await waitFor(() =>
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'Chat cannot search this lake with your current access. You can still browse it.'
+      )
+    );
+    expect(UNSEARCHABLE_LAKE_REASON).toBe(
+      'Chat cannot search this lake with your current access. You can still browse it.'
+    );
   });
 
   it('keeps an unsearchable row selectable, since selection also scopes the browse tree', () => {

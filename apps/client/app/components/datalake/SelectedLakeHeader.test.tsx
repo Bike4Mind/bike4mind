@@ -105,7 +105,7 @@ describe('SelectedLakeHeader', () => {
 
   it('marks a lake chat cannot search, and only on an explicit false', () => {
     const { unmount } = renderHeader({ retrievable: false });
-    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toHaveTextContent('Not searched by chat');
     unmount();
 
     renderHeader({ retrievable: undefined });

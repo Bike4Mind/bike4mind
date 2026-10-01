@@ -19,6 +19,7 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { useGetDataLakesWithRetrievability } from '@client/app/hooks/data/dataLakes';
 import {
   isUnsearchableInNewTestSession,
+  willPreauthorizeInNewTestSession,
   UnsearchableLakeIcon,
 } from '@client/app/components/datalake/lakeRetrievability';
 
@@ -83,7 +84,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
   // degraded-but-working button into a hard failure. Ids the caller cannot admit are simply omitted;
   // the route re-authorizes every id it does receive, so this filter is an affordance, not the gate.
   const preauthorizedLakeIds = useMemo(
-    () => (lakes ?? []).filter(l => selected.has(l.id) && l.canPreauthorize).map(l => l.id),
+    () => (lakes ?? []).filter(l => selected.has(l.id) && willPreauthorizeInNewTestSession(l)).map(l => l.id),
     [lakes, selected]
   );
 
