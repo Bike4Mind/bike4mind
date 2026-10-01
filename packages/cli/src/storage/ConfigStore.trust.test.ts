@@ -13,12 +13,13 @@
  * global config file OUTSIDE that dir.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import { ConfigStore } from './ConfigStore';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types';
+import { logger } from '../utils/Logger';
 
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
@@ -143,8 +144,10 @@ describe('ConfigStore folder-trust gate', () => {
     await store.trustProject();
 
     expect(store.isProjectTrusted()).toBe(true);
-    const config = await store.get();
-    const names = config.mcpServers.map(s => s.name).sort();
+    // Trust alone doesn't spawn repo MCP servers: each definition needs approval.
+    expect((await store.get()).mcpServers.map(s => s.name)).toEqual(['glob-srv']);
+    await store.approveMcpServers(store.getPendingMcpApprovals());
+    const names = (await store.get()).mcpServers.map(s => s.name).sort();
     expect(names).toContain('repo-srv');
     expect(names).toContain('mcpjson-srv');
   });
@@ -346,6 +349,7 @@ describe('ConfigStore folder-trust gate', () => {
     const first = new ConfigStore(globalConfigPath);
     await first.load();
     await first.trustProject();
+    await first.approveMcpServers(first.getPendingMcpApprovals());
 
     // A fresh store (same cwd, same global file) sees the persisted trust.
     const second = new ConfigStore(globalConfigPath);
@@ -360,5 +364,136 @@ describe('ConfigStore folder-trust gate', () => {
     const untrustedConfig = await third.load();
     expect(third.isProjectTrusted()).toBe(false);
     expect(untrustedConfig.mcpServers.map(s => s.name)).toEqual(['glob-srv']);
+  });
+
+  describe('repo MCP definition approval', () => {
+    const mcpJsonPath = () => path.join(projectDir, '.mcp.json');
+    const pendingNames = (store: ConfigStore) =>
+      store
+        .getPendingMcpApprovals()
+        .map(p => p.name)
+        .sort();
+    const spawnable = async (store: ConfigStore) => (await store.get()).mcpServers.map(s => s.name);
+
+    async function writeMcpJson(servers: Record<string, unknown>) {
+      await fs.writeFile(mcpJsonPath(), JSON.stringify({ mcpServers: servers }));
+    }
+
+    const approve = (store: ConfigStore, ...names: string[]) =>
+      store.approveMcpServers(store.getPendingMcpApprovals().filter(p => names.includes(p.name)));
+
+    async function trustedStore() {
+      const store = new ConfigStore(globalConfigPath);
+      await store.load();
+      await store.trustProject();
+      return store;
+    }
+
+    it('holds an unapproved repo server out of mcpServers and lists it as pending', async () => {
+      await writeMcpJson({ 'secret-srv': { command: 'node', args: ['s.js'], env: { API_TOKEN: 'hunter2' } } });
+      const store = await trustedStore();
+
+      expect(await spawnable(store)).not.toContain('secret-srv');
+      const pending = store.getPendingMcpApprovals().find(p => p.name === 'secret-srv');
+      expect(pending).toMatchObject({ transport: 'stdio', command: 'node', args: ['s.js'], envKeys: ['API_TOKEN'] });
+      // Keys only - the value never leaves the store.
+      expect(JSON.stringify(store.getPendingMcpApprovals())).not.toContain('hunter2');
+    });
+
+    it('spawns an approved server, including on a fresh load, and persists only the hash', async () => {
+      await writeMcpJson({ 'secret-srv': { command: 'node', args: ['s.js'], env: { API_TOKEN: 'hunter2' } } });
+      const store = await trustedStore();
+      await approve(store, 'secret-srv');
+
+      expect(await spawnable(store)).toContain('secret-srv');
+      expect(pendingNames(store)).not.toContain('secret-srv');
+
+      const fresh = new ConfigStore(globalConfigPath);
+      expect((await fresh.load()).mcpServers.map(s => s.name)).toContain('secret-srv');
+
+      const onDisk = await fs.readFile(globalConfigPath, 'utf-8');
+      expect(JSON.parse(onDisk).trustedMcpDefinitions[projectReal]).toHaveLength(1);
+      expect(onDisk).not.toContain('hunter2');
+    });
+
+    const base = { command: 'node', args: ['s.js'], env: { TOKEN: 'a' } };
+    const httpBase = { type: 'http', url: 'https://mcp.example.com/a', headers: { Authorization: 'Bearer a' } };
+    it.each([
+      ['command', base, { ...base, command: 'evil' }],
+      ['args', base, { ...base, args: ['s.js', '--pwn'] }],
+      ['an env value', base, { ...base, env: { TOKEN: 'b' } }],
+      ['url', httpBase, { ...httpBase, url: 'https://evil.example.com/a' }],
+      ['a header value', httpBase, { ...httpBase, headers: { Authorization: 'Bearer b' } }],
+    ])('re-asks when %s changes', async (_label, before, after) => {
+      await writeMcpJson({ 'chg-srv': before });
+      const store = await trustedStore();
+      await approve(store, 'chg-srv');
+      expect(await spawnable(store)).toContain('chg-srv');
+
+      await writeMcpJson({ 'chg-srv': after });
+      const reloaded = new ConfigStore(globalConfigPath);
+      await reloaded.load();
+      expect(await spawnable(reloaded)).not.toContain('chg-srv');
+      expect(pendingNames(reloaded)).toContain('chg-srv');
+    });
+
+    it('approves only the definition that was shown, not one changed mid-prompt', async () => {
+      await writeMcpJson({ 'race-srv': { command: 'node', args: ['ok.js'] } });
+      const store = await trustedStore();
+      const shown = store.getPendingMcpApprovals();
+      await writeMcpJson({ 'race-srv': { command: 'node', args: ['evil.js'] } });
+      await store.approveMcpServers(shown);
+      // This session keeps the snapshot it showed; the next load sees the edit.
+      expect((await store.get()).mcpServers.find(s => s.name === 'race-srv')?.args).toEqual(['ok.js']);
+      const next = new ConfigStore(globalConfigPath);
+      await next.load();
+      expect(await spawnable(next)).not.toContain('race-srv');
+      expect(pendingNames(next)).toContain('race-srv');
+    });
+
+    it('never prompts for a repo name global already defines (global wins)', async () => {
+      const store = await trustedStore();
+      expect(pendingNames(store)).not.toContain('glob-srv');
+      expect((await store.get()).mcpServers.find(s => s.name === 'glob-srv')?.command).toBe('node');
+    });
+
+    it('untrust clears the root approvals; re-trusting asks again', async () => {
+      const store = await trustedStore();
+      await approve(store, 'repo-srv', 'mcpjson-srv');
+      await store.untrustProject();
+      expect(
+        JSON.parse(await fs.readFile(globalConfigPath, 'utf-8')).trustedMcpDefinitions[projectReal]
+      ).toBeUndefined();
+
+      await store.trustProject();
+      expect(pendingNames(store)).toEqual(['mcpjson-srv', 'repo-srv']);
+      expect(await spawnable(store)).toEqual(['glob-srv']);
+    });
+
+    it('warns once about pending servers (the headless / ACP path)', async () => {
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+      try {
+        const store = new ConfigStore(globalConfigPath);
+        await store.load();
+        await store.trustProject();
+        store.warnPendingMcpApprovals();
+        store.warnPendingMcpApprovals();
+        const ours = warn.mock.calls.map(c => String(c[0])).filter(m => m.includes('unapproved repo MCP'));
+        expect(ours).toHaveLength(1);
+        expect(ours[0]).toContain('mcpjson-srv');
+        expect(ours[0]).toContain('repo-srv');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('ignores a repo config that tries to pre-approve its own servers', async () => {
+      await writeMcpJson({ 'sneaky-srv': { command: 'sh', args: ['x.sh'] } });
+      const local = path.join(projectDir, '.bike4mind', 'local.json');
+      await fs.writeFile(local, JSON.stringify({ trustedMcpDefinitions: { [projectReal]: ['x'] } }));
+      const store = await trustedStore();
+      expect(pendingNames(store)).toContain('sneaky-srv');
+      expect(await spawnable(store)).not.toContain('sneaky-srv');
+    });
   });
 });
