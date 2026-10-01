@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Dropdown from '@mui/joy/Dropdown';
@@ -18,8 +26,14 @@ import { groupSessions, orderedSessions, type ProjectGroup } from './grouping';
 import { ArtifactIcon, ChevronIcon, MoreIcon, PanelLeftIcon, PlusIcon, SearchIcon } from './icons';
 import { ModeSwitcher } from './ModeSwitcher';
 import { SessionBadge } from './SessionBadge';
-
-export const SIDEBAR_WIDTH = 280;
+import {
+  clampSidebarWidth,
+  readSidebarWidth,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  writeSidebarWidth,
+} from './sidebarWidth';
 
 /**
  * Shared by every session list in the sidebar so the four of them cannot drift apart.
@@ -252,6 +266,114 @@ function ProjectHeader({
   );
 }
 
+/** Arrow-key step. A sixth of the range, so the whole of it is a handful of presses away. */
+const RESIZE_STEP = 16;
+
+/**
+ * The strip on the sidebar's right edge that sets its width.
+ *
+ * Pointer capture rather than listeners on the window: a drag routinely runs ahead of the edge
+ * it is moving and out over the transcript, which has handlers of its own, and capture keeps
+ * the moves arriving here either way. The width it reports is held in a ref as well as pushed
+ * up, because a pointermove is not a discrete event - React is free to defer the state it sets,
+ * and the prop read on pointerup would then be a frame or two behind the pointer.
+ *
+ * Wider than the line it draws: 5px is the thinnest strip a pointer finds without aiming, and
+ * it straddles the border so the two pixels either side of the edge both work.
+ */
+function SidebarResizeHandle({
+  width,
+  dragging,
+  onWidth,
+  onCommit,
+  onDraggingChange,
+}: {
+  width: number;
+  /** Held by the sidebar, which has to stop selecting its own text for the length of the drag. */
+  dragging: boolean;
+  onWidth: (width: number) => void;
+  onCommit: (width: number) => void;
+  onDraggingChange: (dragging: boolean) => void;
+}) {
+  const drag = useRef<{ x: number; from: number; to: number } | null>(null);
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    // Without this the press that starts the drag also starts a selection in the titles it
+    // began next to, and the drag then paints its way down the list.
+    event.preventDefault();
+    drag.current = { x: event.clientX, from: width, to: width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    onDraggingChange(true);
+  };
+
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const current = drag.current;
+    if (!current) return;
+    current.to = clampSidebarWidth(current.from + event.clientX - current.x);
+    onWidth(current.to);
+  };
+
+  const onPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const current = drag.current;
+    if (!current) return;
+    drag.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    onDraggingChange(false);
+    onCommit(current.to);
+  };
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const step = event.key === 'ArrowLeft' ? -RESIZE_STEP : event.key === 'ArrowRight' ? RESIZE_STEP : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    const next = clampSidebarWidth(width + step);
+    onWidth(next);
+    onCommit(next);
+  };
+
+  const reset = () => {
+    onWidth(SIDEBAR_DEFAULT_WIDTH);
+    onCommit(SIDEBAR_DEFAULT_WIDTH);
+  };
+
+  return (
+    <Box
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuenow={width}
+      aria-valuemin={SIDEBAR_MIN_WIDTH}
+      aria-valuemax={SIDEBAR_MAX_WIDTH}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+      onKeyDown={onKeyDown}
+      onDoubleClick={reset}
+      sx={{
+        position: 'absolute',
+        top: 0,
+        bottom: 0,
+        right: -2,
+        width: 5,
+        zIndex: 2,
+        cursor: 'col-resize',
+        // The pointer stream is the whole mechanism; without this a trackpad drag scrolls the
+        // list under it instead.
+        touchAction: 'none',
+        bgcolor: 'transparent',
+        transition: 'background-color 120ms',
+        '&:hover, &:focus-visible, &[data-dragging="true"]': { bgcolor: 'primary.outlinedBorder' },
+        '&:focus-visible': { outline: 'none' },
+      }}
+      data-dragging={dragging ? 'true' : undefined}
+      data-testid="sidebar-resize-handle"
+    />
+  );
+}
+
 /**
  * The sidebar: primary nav, a pinned section, then the sessions for the current mode - Code
  * sessions under a header per project, Chat sessions in one flat list - and the account strip.
@@ -301,6 +423,10 @@ export function SessionList({
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
+  // Declared above the collapsed rail's early return, so collapsing and re-expanding comes back
+  // to the width the user set rather than to the default.
+  const [width, setWidth] = useState(readSidebarWidth);
+  const [dragging, setDragging] = useState(false);
 
   const matching = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -390,15 +516,27 @@ export function SessionList({
   return (
     <Stack
       sx={{
-        width: SIDEBAR_WIDTH,
+        width,
         flexShrink: 0,
+        position: 'relative',
         borderRight: '1px solid',
         borderColor: 'divider',
         bgcolor: 'background.level1',
         height: '100%',
+        // Belt and braces with the preventDefault on the handle's pointerdown: the pointer
+        // leaves this box almost immediately on a widening drag, and a selection started
+        // anywhere in here would keep growing under it.
+        ...(dragging && { userSelect: 'none' }),
       }}
       data-testid="sidebar"
     >
+      <SidebarResizeHandle
+        width={width}
+        dragging={dragging}
+        onWidth={setWidth}
+        onCommit={writeSidebarWidth}
+        onDraggingChange={setDragging}
+      />
       <Stack direction="row" sx={{ alignItems: 'center', gap: 0.5, px: 1.5, pt: 1.5, pb: 1 }}>
         <ModeSwitcher mode={mode} onChange={onModeChange} />
         <Box sx={{ flex: 1 }} />
@@ -434,7 +572,23 @@ export function SessionList({
         </Box>
       </Stack>
 
-      <Box sx={{ overflowY: 'auto', flex: 1, px: 1, pb: 1 }}>
+      <Box
+        sx={{
+          overflowY: 'auto',
+          flex: 1,
+          px: 1,
+          pb: 1,
+          // Scoped to this one box and never to the document: layout.ts measures the classic
+          // scrollbar once and the transcript's reading column is centred on the number, so a
+          // global rule here would quietly move that column off the line its own rows sit on.
+          // `scrollbar-width` rather than the ::-webkit-scrollbar pseudo-elements because
+          // Chromium ignores those once it is set, and this one declaration is the whole of it.
+          // Nothing to see on a machine where scrollbars overlay the content, which is macOS
+          // unless the user asked for them permanently.
+          scrollbarWidth: 'thin',
+          scrollbarColor: 'var(--joy-palette-neutral-outlinedBorder) transparent',
+        }}
+      >
         {loading ? (
           <Typography level="body-xs" textColor="text.tertiary" sx={{ px: 1 }}>
             Loading conversations...

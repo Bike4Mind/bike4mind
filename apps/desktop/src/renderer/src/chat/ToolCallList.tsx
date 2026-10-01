@@ -87,13 +87,13 @@ function MoveToBackgroundButton({ call, onMove }: { call: ChatToolCall; onMove: 
         color="neutral"
         disabled={busy}
         onClick={move}
-        sx={{ flex: '0 0 auto', minHeight: 0, px: 0.75, py: 0, fontSize: 'xs', fontWeight: 'md' }}
+        sx={{ flex: '0 0 auto', minHeight: 0, px: 0.75, py: 0, fontSize: 'sm', fontWeight: 'md' }}
         data-testid="component-action-element"
       >
         Move to background
       </Button>
       {refusal && (
-        <Typography level="body-xs" textColor="warning.plainColor" noWrap sx={{ flex: '0 1 auto' }}>
+        <Typography level="body-sm" textColor="warning.plainColor" noWrap sx={{ flex: '0 1 auto' }}>
           {refusal}
         </Typography>
       )}
@@ -167,7 +167,7 @@ function ApprovalPrompt({
       data-testid="chat-tool-approval"
       data-irreversible={irreversible ? 'true' : undefined}
     >
-      <Typography level="body-xs" fontWeight="lg">
+      <Typography level="body-sm" fontWeight="lg">
         {diff
           ? diffs.length > 1
             ? `Apply this patch to ${diffs.length} files?`
@@ -198,7 +198,7 @@ function ApprovalPrompt({
           }}
         >
           <Typography
-            level="body-xs"
+            level="body-sm"
             fontFamily="monospace"
             sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
             data-testid="chat-tool-approval-detail"
@@ -295,9 +295,9 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
     <Box data-testid="chat-tool-detail">
       {argument && (
         <Typography
-          level="body-xs"
+          level="body-sm"
           fontFamily="monospace"
-          textColor="text.secondary"
+          textColor="text.tertiary"
           sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
           data-testid="chat-tool-detail-input"
         >
@@ -348,10 +348,10 @@ const ROW_TONE: Record<ChatToolStatus, string> = {
 function DiffStat({ totals }: { totals: DiffTotals }) {
   return (
     <Stack direction="row" spacing={0.5} sx={{ flex: '0 0 auto' }} data-testid="chat-tool-row-diffstat">
-      <Typography level="body-xs" textColor="success.plainColor">
+      <Typography level="body-sm" textColor="success.plainColor">
         +{totals.added}
       </Typography>
-      <Typography level="body-xs" textColor="danger.plainColor">
+      <Typography level="body-sm" textColor="danger.plainColor">
         -{totals.removed}
       </Typography>
     </Stack>
@@ -395,7 +395,7 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
         data-testid="chat-tool-entry-summary"
         title={toolDuration(call)}
       >
-        <Typography level="body-xs" textColor="inherit" noWrap sx={{ minWidth: 0, flex: 1 }}>
+        <Typography level="body-sm" textColor="inherit" noWrap sx={{ minWidth: 0, flex: 1 }}>
           {toolRowLabel(call)}
         </Typography>
         {totals && <DiffStat totals={totals} />}
@@ -419,9 +419,15 @@ function ToolCallEntry({ call, first, onMove }: { call: ChatToolCall; first: boo
  * tool call turns a turn that touched six files into a wall the reply is buried in.
  *
  * The rule down the left is what makes "this is not the reply" land at a glance. Colour alone
- * did not: a page of body-xs in text.tertiary still reads as more paragraphs when there are
- * twenty of them, and the reader is scanning for where the answer resumes. An indented aside
- * with a rule is the shape of a transcript, and the eye skips it without having to read it.
+ * did not: a page of muted rows still reads as more paragraphs when there are twenty of them,
+ * and the reader is scanning for where the answer resumes. An indented aside with a rule is the
+ * shape of a transcript, and the eye skips it without having to read it.
+ *
+ * Which is why the rows are set at the reply's own body-sm rather than under it: the rule and
+ * the colour are carrying the separation, so a size too small to read comfortably was buying
+ * nothing. The result block behind the disclosure is the one thing held back at body-xs - it is
+ * the only part of a row that runs to hundreds of lines, and so the only part that can actually
+ * build the wall the paragraph above is about.
  */
 function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCallToBackground }) {
   const [open, setOpen] = useState(false);
@@ -466,7 +472,7 @@ function ToolGroupRow({ group, onMove }: { group: ToolCallGroup; onMove?: MoveCa
             />
           )}
           <Typography
-            level="body-xs"
+            level="body-sm"
             textColor="inherit"
             noWrap
             sx={{ minWidth: 0, flex: '0 1 auto' }}
