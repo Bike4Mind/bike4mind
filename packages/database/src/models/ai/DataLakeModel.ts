@@ -548,6 +548,13 @@ export const buildAccessibleQuery = (
   };
 };
 
+/** Reach inputs shared by retrieval (`findActiveByUserTagsAndEntitlements`) and the identity-scoped count, so a new arm input cannot be wired into only one. */
+type ReachArmsOpts = {
+  grantedLakeIds?: string[];
+  orgGrantedLakes?: Record<string, string[]>;
+  supersededOwnLakeIds?: string[];
+};
+
 class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements IDataLakeRepository {
   constructor(private dataLakeModel: mongoose.Model<IDataLakeDocument>) {
     super(dataLakeModel);
@@ -669,11 +676,8 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds: string[] | null | undefined,
     userId: string | null | undefined,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      supersededOwnLakeIds?: string[];
-    }
+    caller: string,
+    opts?: ReachArmsOpts
   ): Record<string, unknown>[] {
     const normalizedTags = userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(userTags.concat(normalizedTags)));
@@ -721,7 +725,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // Ids are pre-resolved by the caller from listByPrincipal (grantedLakeReachFor); an empty list
     // adds no arm, and so does one whose every id is unusable. This is what keeps RETRIEVAL in step
     // with browse - without it a transferred owner can open a lake but not ground on it.
-    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.findActiveByUserTagsAndEntitlements');
+    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, caller);
     if (grantedLakeIds.length > 0) accessArms.push({ _id: { $in: grantedLakeIds } });
 
     // The ORG-principal half. Each arm carries its own `organizationId: <granting org>` conjunct, so
@@ -737,10 +741,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // holds a reader grant, or who holds the lake's tag, keeps reaching it through the arm that
     // actually authorizes them. Only when a userId is supplied.
     if (userId) {
-      const supersededOwnLakeIds = usableObjectIds(
-        opts?.supersededOwnLakeIds,
-        'DataLakeModel.findActiveByUserTagsAndEntitlements'
-      );
+      const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, caller);
       accessArms.unshift(
         supersededOwnLakeIds.length > 0
           ? { createdByUserId: userId, _id: { $nin: supersededOwnLakeIds } }
@@ -763,14 +764,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      supersededOwnLakeIds?: string[];
-      includeDraftLakes?: boolean;
-    }
+    opts?: ReachArmsOpts & { includeDraftLakes?: boolean }
   ): Promise<IDataLakeDocument[]> {
-    const accessArms = this.buildReachArms(userTags, entitlementKeys, organizationIds, userId, opts);
+    const accessArms = this.buildReachArms(
+      userTags,
+      entitlementKeys,
+      organizationIds,
+      userId,
+      'DataLakeModel.findActiveByUserTagsAndEntitlements',
+      opts
+    );
 
     // `active` alone for retrieval; draft + active for the ATTACHMENT doors, which must track the
     // browse door that admitted the file to the workbench in the first place (see the
@@ -800,9 +803,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * `restrictToTags`, when given, switches to the per-turn-scoped question "of exactly these
    * lakes, how many can the caller not reach", for a caller that named specific lakes by identity
    * rather than asking about the whole account. A named lake is excluded when it matches none of
-   * `buildReachArms`, whatever its visibility: a private or other-org lake carries no gate the
-   * caller lacks, so the gate-complement above would never count it, yet retrieval drops it all
-   * the same (the admin picker lists such lakes).
+   * `buildReachArms`: a private or other-org lake carries no gate the caller lacks, so the
+   * gate-complement above would never count it, yet retrieval drops it all the same (the admin
+   * picker lists such lakes). Because the count is shown to the caller, it only includes lakes the
+   * caller could already see exist (public, in their org, or created by them) unless
+   * `callerMaySeeAllLakes` is set, so a guessed tag cannot be used to probe for a hidden lake.
    *
    * The owner-bypass exemption (#3055): a lake is withheld from the count for its CREATOR
    * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
@@ -816,18 +821,29 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds: string[] | undefined,
     userId: string | undefined,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      supersededOwnLakeIds?: string[];
-      restrictToTags?: string[];
-    }
+    opts?: ReachArmsOpts & { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
   ): Promise<number> {
     if (opts?.restrictToTags && opts.restrictToTags.length > 0) {
-      const reachArms = this.buildReachArms(userTags, entitlementKeys, organizationIds, userId, opts);
+      const reachArms = this.buildReachArms(
+        userTags,
+        entitlementKeys,
+        organizationIds,
+        userId,
+        'DataLakeModel.countGateExcludedLakes',
+        opts
+      );
+      // The count is shown to the caller, so a lake they could not already know exists must not
+      // move it: restrictToTags is client-influenced, and a nonzero count for a guessed tag would
+      // confirm that lake exists. Only a caller who may see every lake skips the prerequisite.
+      const visibleToCaller: Record<string, unknown>[] = [{ isPublic: true }];
+      if (organizationIds && organizationIds.length > 0) {
+        visibleToCaller.push({ organizationId: { $in: organizationIds } });
+      }
+      if (userId) visibleToCaller.push({ createdByUserId: userId });
       return this.dataLakeModel.countDocuments({
         status: 'active',
         datalakeTag: { $in: opts.restrictToTags },
+        ...(opts.callerMaySeeAllLakes ? {} : { $or: visibleToCaller }),
         $nor: reachArms,
       });
     }
