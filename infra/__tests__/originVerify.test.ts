@@ -19,14 +19,11 @@ describe('origin verification wiring', () => {
     expect(headerName(proxy)).toBe(headerName(router));
   });
 
-  it('deletes any inbound value and then stamps the secret in the viewer-request injection', () => {
+  it('overwrites any inbound value with the secret in the viewer-request injection', () => {
     const injection = router.match(/const originVerifyInjection = \$interpolate`([\s\S]*?)`;/)?.[1] ?? '';
-    const del = injection.indexOf('delete event.request.headers["${ORIGIN_VERIFY_HEADER}"]');
-    const set = injection.indexOf(
+    expect(injection).toContain(
       'event.request.headers["${ORIGIN_VERIFY_HEADER}"] = { value: "${originVerifySecret.result}" }'
     );
-    expect(del).toBeGreaterThanOrEqual(0);
-    expect(set).toBeGreaterThan(del);
     expect(router).toMatch(/viewerRequest: \{\s*injection: \$interpolate`\$\{originVerifyInjection\}/);
   });
 
