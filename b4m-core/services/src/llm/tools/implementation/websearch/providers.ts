@@ -20,7 +20,7 @@ export interface WebSearchProviderResult {
 
 /**
  * Per-call search constraints beyond the query itself. Optional and additive: the chat `web_search`
- * tool passes none, so its behaviour is unchanged.
+ * tool passes only `locationInQuery`, and only on a place search.
  */
 export interface WebSearchOptions {
   /**
@@ -34,6 +34,12 @@ export interface WebSearchOptions {
    * where an under-wide one silently hides pages the caller wanted.
    */
   recencyDays?: number;
+  /**
+   * The query names the place it is about ("coffee near Shibuya Crossing"), so the search must not
+   * be geo-targeted anywhere else. SerpAPI's default US `location`/`gl` otherwise pulls a local-
+   * intent query toward US pages - a Tokyo query came back as US mall and airport "shops" sites.
+   */
+  locationInQuery?: boolean;
 }
 
 /**
@@ -62,7 +68,7 @@ export interface WebSearchProvider {
    * pages that are mostly absent from the same response - so relying on it alone leaves a visual
    * question answered in prose.
    */
-  searchImages?(query: string, limit?: number): Promise<WebSearchImageResult[]>;
+  searchImages?(query: string, limit?: number, options?: WebSearchOptions): Promise<WebSearchImageResult[]>;
   /**
    * Place search with provider coordinates, for a query the model flagged as location-based. The
    * inline map pins come ONLY from here, never from coordinates the model writes. Optional, and
@@ -284,6 +290,12 @@ function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
 }
 
+function setSerpApiGeoTargeting(searchParams: URLSearchParams, options?: WebSearchOptions): void {
+  if (options?.locationInQuery) return;
+  searchParams.set('location', 'United States');
+  searchParams.set('gl', 'us');
+}
+
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
@@ -398,12 +410,11 @@ export async function serpApiSearch(
     engine: 'google',
     api_key: apiKey,
     q: query,
-    location: 'United States',
     google_domain: 'google.com',
-    gl: 'us',
     hl: 'en',
     num: (num_results || DEFAULT_NUM_RESULTS).toString(),
   });
+  setSerpApiGeoTargeting(searchParams, options);
 
   const bucket = recencyBucket(options?.recencyDays);
   if (bucket) searchParams.set('tbs', SERPAPI_QDR[bucket]);
@@ -435,22 +446,23 @@ export async function serpApiSearch(
 async function serpApiImageSearch(
   adapters: GetEffectiveApiKeyAdapters,
   query: string,
-  limit: number
+  limit: number,
+  options?: WebSearchOptions
 ): Promise<WebSearchImageResult[]> {
   const apiKey = await getSerperKey(adapters);
   if (!apiKey) return [];
 
   const url = new URL('https://serpapi.com/search');
-  url.search = new URLSearchParams({
+  const searchParams = new URLSearchParams({
     engine: 'google_images',
     api_key: apiKey,
     q: query,
-    location: 'United States',
     google_domain: 'google.com',
-    gl: 'us',
     hl: 'en',
     safe: 'active',
-  }).toString();
+  });
+  setSerpApiGeoTargeting(searchParams, options);
+  url.search = searchParams.toString();
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
@@ -574,7 +586,8 @@ function safeHost(url: string): string {
 export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): WebSearchProvider {
   return {
     name: 'serpapi',
-    searchImages: (query, limit) => serpApiImageSearch(adapters, query, limit ?? DEFAULT_IMAGE_RESULTS),
+    searchImages: (query, limit, options) =>
+      serpApiImageSearch(adapters, query, limit ?? DEFAULT_IMAGE_RESULTS, options),
     searchPlaces: (query, limit) => serpApiPlaceSearch(adapters, query, limit ?? DEFAULT_PLACE_RESULTS),
     async search(query, numResults, options) {
       const data = await serpApiSearch(adapters, query, numResults, options);
