@@ -96,11 +96,18 @@ describe('promoteInlineLatexDollars', () => {
       ['escaped backslash before a star is kept', 'so \\( a \\\\*b \\) holds', 'so $$a \\\\*b$$ holds'],
       ['span touching a dollar span', '$x$\\(y^2\\)', '$$x$$ $$y^2$$'],
       ['two adjacent paren spans', '\\(a^2\\)\\(b^2\\)', '$$a^2$$ $$b^2$$'],
-      // Padded bodies skip the tight-only colon/word rule: turndown never pads, models do.
+      // A padded body holding a word still renders once it has `_` or `^`.
       ['padded subscripted name', 'so \\[ x_{max} = 5 \\] holds', 'so $$x_{max} = 5$$ holds'],
       ['padded word-named variables', 'so \\[ v_{avg} = d / t \\] holds', 'so $$v_{avg} = d / t$$ holds'],
       ['padded bare sum', 'so \\[ sum_{i=1}^n i \\] holds', 'so $$sum_{i=1}^n i$$ holds'],
-      ['padded bare function names', 'so \\[ f(x) = max(0, x) \\] holds', 'so $$f(x) = max(0, x)$$ holds'],
+      ['inline padded ratio with colons', 'so \\[ a:b = c:d \\] holds', 'so $$a:b = c:d$$ holds'],
+      ['padded sample size with no word', 'so \\[ n = 30 \\] holds', 'so $$n = 30$$ holds'],
+      ['padded escaped percent', 'so \\[ 5\\% = x \\] holds', 'so $$5\\% = x$$ holds'],
+      [
+        'padded aligned block',
+        'so \\[ \\begin{aligned} a &= b \\end{aligned} \\] holds',
+        'so $$\\begin{aligned} a &= b \\end{aligned}$$ holds',
+      ],
       ['own-line padded word equation', '\\[ area = pi r^2 \\]', '$$\narea = pi r^2\n$$'],
       ['own-line padded ratio with colons', '\\[ a:b = c:d \\]', '$$\na:b = c:d\n$$'],
       ['own-line block closing after an escaped backslash', '\\[ a = b \\\\ \\]', '$$\na = b \\\\\n$$'],
@@ -136,6 +143,23 @@ describe('promoteInlineLatexDollars', () => {
       ['padded prose with no math evidence', 'See \\[ see note \\] here'],
       ['own-line padded prose with no math evidence', '\\[ see note \\]'],
       ['own-line bracket whose closer is an escaped backslash', '\\[ a = b \\\\]'],
+      // turndown keeps source padding, so `<p>[ key = value ]</p>` arrives padded.
+      ['padded key-value prose', 'Set \\[ key = value \\] here'],
+      ['own-line padded key-value prose', '\\[ key = value \\]'],
+      ['padded note with a colon', 'See \\[ Note: n = 30 \\] here'],
+      ['own-line padded note with a colon', '\\[ Note: n = 30 \\]'],
+      ['padded step label', 'Run \\[ Step 1 = Init \\] first'],
+      ['own-line padded step label', '\\[ Step 1 = Init \\]'],
+      ['padded filter', 'Filter: \\[ status = active \\]'],
+      ['own-line padded filter', 'Filter:\n\\[ status = active \\]'],
+      ['padded bare function names', 'so \\[ f(x) = max(0, x) \\] holds'],
+      // `&`, `#`, `%` and `__` are KaTeX errors without a control sequence around them.
+      ['padded ampersand', 'See \\[ Q&A = done \\] here'],
+      ['padded ampersand between operands', 'See \\[ a & b = c \\] here'],
+      ['padded hash', 'See \\[ item #3 = x \\] here'],
+      ['padded percent', 'See \\[ rate = 5% \\] here'],
+      ['own-line padded percent', '\\[ rate = 5% \\]'],
+      ['padded dunder name', 'See \\[ __init__ \\] here'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });

@@ -62,17 +62,21 @@ function looksLikeMath(content: string): boolean {
 
 // `\[x\]` is also how markdown escapes literal brackets, and turndown writes exactly that into
 // stored Knowledge files (`\[Smith (2020)\]`, `arr\[i\]`, `\[n = 30\]`). An escaped `_`, `[` or `]`
-// inside marks prose; a control sequence marks math. Otherwise, since turndown never pads, a tight
-// body needs a raw `_` (turndown escapes it) and no `:` or 3+ letter word, while a padded body needs
-// `^`, `_` or `=` between operands. Parens keep `looksLikeMath`: turndown never escapes them.
+// inside marks prose; a control sequence marks math. Without one, an unescaped `&`, `#`, `%` or `__`
+// would be a KaTeX error, so the span stays text. Turndown adds no padding but keeps the source's, so
+// padding alone is no tell: a tight body needs a raw `_` (turndown escapes it) and no `:` or 3+ letter
+// word; a padded body needs `^`, `_` or `=` between operands, and `^`/`_` once it holds a word
+// (`\[ key = value \]` is prose). Parens keep `looksLikeMath`: turndown never escapes them.
 function looksLikeBracketMath(raw: string): boolean {
   const content = raw.trim();
   const odd = String.raw`(?:^|[^\\])(?:\\\\)*\\`;
   if (new RegExp(odd + String.raw`[_[\]]`).test(content)) return false;
   if (new RegExp(odd + '[a-zA-Z]').test(content)) return true;
+  if (/(?:^|[^\\])(?:\\\\)*[&#%]/.test(content) || content.includes('__')) return false;
+  const hasWord = /[a-zA-Z]{3}/.test(content);
   const padded = /^\s/.test(raw) && /\s$/.test(raw);
-  if (!padded) return !/:|[a-zA-Z]{3}/.test(content) && /\S\s*_\s*\S/.test(content);
-  return /\S\s*[_^=]\s*\S/.test(content);
+  if (!padded) return !hasWord && !content.includes(':') && /\S\s*_\s*\S/.test(content);
+  return (hasWord ? /\S\s*[_^]\s*\S/ : /\S\s*[_^=]\s*\S/).test(content);
 }
 
 // Models write `\*` so markdown will not italicise a product, but KaTeX has no `\*` command. Scans
