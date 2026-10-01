@@ -3,6 +3,7 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   resolveEnabledTools,
+  resolveDeniedTools,
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
@@ -30,6 +31,7 @@ import {
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -40,6 +42,8 @@ import {
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  DATA_LAKE_TOOL_NAMES,
+  DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
@@ -171,6 +175,7 @@ const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
 const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
+const mockedGetEffectiveLLMApiKeys = vi.mocked(getEffectiveLLMApiKeys);
 
 const mockDb = {};
 const mockStorage = {};
@@ -2233,6 +2238,268 @@ describe('ChatCompletionProcess', () => {
         }
       });
 
+      describe('data-lake intent gate and the request deniedTools', () => {
+        const offeredNames = () =>
+          (vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools ?? []).map(
+            (t: { toolSchema: { name: string } }) => t.toolSchema.name
+          );
+        const lakeBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          message: 'save this summary to my data lake',
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+
+        beforeEach(() => {
+          (service.db.adminSettings as Record<string, unknown>).getSettingsValue = vi.fn().mockResolvedValue(true);
+        });
+        afterEach(() => {
+          delete (service.db.adminSettings as Record<string, unknown>).getSettingsValue;
+        });
+
+        it('offers the data-lake trio on save-to-lake intent', async () => {
+          mockTextModel();
+          await service.process({ body: lakeBody(), logger: mockLogger });
+          expect(offeredNames()).toEqual(
+            expect.arrayContaining(['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'])
+          );
+        });
+
+        // Load-bearing: the intent gate pushes these AFTER resolveEnabledTools, so only the final
+        // denylist pass on the built list can strip them - this is the API-key scope case.
+        it('strips gate-added tools named in the request deniedTools, keeping the rest', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['create_data_lake', 'save_content_to_data_lake'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          expect(names).not.toContain('create_data_lake');
+          expect(names).not.toContain('save_content_to_data_lake');
+        });
+
+        it('strips a caller-named tool in the request deniedTools too', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({
+              message: 'hello',
+              tools: ['save_content_to_data_lake'],
+              deniedTools: ['save_content_to_data_lake', 'create_data_lake'],
+            }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('save_content_to_data_lake');
+          expect(names).not.toContain('create_data_lake');
+        });
+
+        // The gate-added trio is a UNIT for the Smart Tools toggle - denying only the read tool
+        // must not also drop the write tools it is paired with.
+        it('strips only the request-denied read tool, keeping the write tools', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['list_my_data_lakes'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('list_my_data_lakes');
+          expect(names).toContain('create_data_lake');
+          expect(names).toContain('save_content_to_data_lake');
+        });
+
+        // The route half of this chain: dataLakeToolsDeniedFor (apps/client dataLakeScopes.ts) returns
+        // DATA_LAKE_TOOL_NAMES for a datalake:read-less key and DATA_LAKE_WRITE_TOOL_NAMES for a
+        // datalake:read key, and /api/chat + /api/ai/llm pass it through as body.deniedTools
+        // (dataLakeScopes.test.ts, chat.integration.test.ts, llm.integration.test.ts).
+        it('withholds list_my_data_lakes on list intent for a datalake:read-less key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          for (const toolName of DATA_LAKE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        it('still offers list_my_data_lakes on list intent to a datalake:read key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_WRITE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          for (const toolName of DATA_LAKE_WRITE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        // The local-model (Ollama) trim (ChatCompletionProcess.ts's `modelInfo.backend ===
+        // ModelBackend.Ollama` block, ~line 3073) strips every AUTO_ADDED_TOOL_NAMES entry the user
+        // didn't select. The data-lake trio is in that list, so it must survive the trim when the
+        // caller explicitly selected save_content_to_data_lake - resolveEnabledTools' companion
+        // pairing (list_my_data_lakes, create_data_lake) counts as "selected" too - while an
+        // unrelated auto-added tool (blog_draft) the user never asked for still gets dropped, even
+        // though its own intent is in the message.
+        describe('local-model (Ollama) auto-added-tool trim', () => {
+          const mockOllamaModel = () => {
+            mockTextModel();
+            mockedGetAvailableModels.mockResolvedValue([
+              {
+                id: ChatModels.GPT4,
+                type: 'text',
+                name: 'Local Model',
+                backend: ModelBackend.Ollama,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+              },
+            ]);
+          };
+
+          // Blog intent in the message (to prove blog_draft would otherwise be offered) plus an
+          // explicit save-to-lake tool selection (to prove its companions survive the trim).
+          const trimBody = () =>
+            lakeBody({
+              message: 'Turn this conversation into a blog post',
+              tools: ['save_content_to_data_lake'],
+            });
+
+          // Control: same body, non-Ollama backend. Both the data-lake trio and the unrelated
+          // blog_draft are offered - proves the trim (not the gate or the selection) is what removes
+          // blog_draft on the Ollama path below.
+          it('offers the data-lake trio and the unrelated blog_draft on a non-Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockTextModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining([
+                  'save_content_to_data_lake',
+                  'list_my_data_lakes',
+                  'create_data_lake',
+                  'blog_draft',
+                ])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('keeps the selected save tool and its list/create companions on an Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake'])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('drops the unrelated blog_draft on an Ollama model despite its intent in the message', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              expect(offeredNames()).not.toContain('blog_draft');
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+        });
+      });
+
+      // Reviewer finding: both resolveCorpusInlinePlan's `knowledgeSearchDisabled` input (site
+      // around ChatCompletionProcess.ts:2826) and the invisible-failure warning's
+      // `knowledgeToolWithheldByConfig` gate (site around :3221) must read the RESOLVED request
+      // `deniedTools` union (resolveDeniedTools(session.disabledTools, parsedBody.deniedTools)),
+      // not session.disabledTools alone. A caller can deny search_knowledge_base only at the
+      // REQUEST level (e.g. an API-key scope - see dataLakeScopes.ts), and no existing test sent
+      // that tool through the request deniedTools field, so either site quietly reverting to
+      // session.disabledTools stayed green.
+      describe('corpus inline-defer plan and the withheld-tool warning read the resolved deniedTools', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) => {
+            if (key === 'CorpusRetrievalMinInlineTokensPerDoc') return 500;
+            if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
+            return undefined;
+          }) as typeof getSettingsValue);
+        });
+        afterEach(() => {
+          mockedGetSettingsValue.mockReset();
+        });
+
+        it('inlines a retrievable lake corpus when only the request deniedTools names the tool', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = Array.from({ length: 40 }, (_, i) => `k${i}`);
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+          const files = mockSession.knowledgeIds.map((id: string) => ({
+            id,
+            tags: [{ name: 'datalake:corpus' }],
+            chunkCount: 2,
+            vectorizedChunkCount: 2,
+            embeddingModel: 'text-embedding-3-small',
+            fileName: `${id}.md`,
+            vectorized: true,
+          }));
+          mockDb.fabfiles = { getAccessibleFiles: vi.fn().mockResolvedValue(files) };
+          mockedGetEffectiveLLMApiKeys.mockResolvedValueOnce({ openai: 'sk-test-key-1234567890' });
+
+          const body = { ...wireMinimalTurn(), deniedTools: ['search_knowledge_base'] };
+          const resolveCorpusInlinePlanSpy = vi.spyOn(service as any, 'resolveCorpusInlinePlan');
+
+          await service.process({ body, logger: mockLogger });
+
+          const args = resolveCorpusInlinePlanSpy.mock.calls[0][0] as { knowledgeSearchDisabled: boolean };
+          expect(args.knowledgeSearchDisabled).toBe(true);
+          const plan = await resolveCorpusInlinePlanSpy.mock.results[0].value;
+          expect(plan.deferredToRetrieval).toBe(false);
+        });
+
+        it('suppresses the invisible-failure warning for a lake-only caller whose deniedTools is request-only', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = []; // lake-only: no attached knowledge, so hasAttachedKnowledge stays false
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          // This warning is logged through `this.logger`, set once at construction from
+          // baseOptions - not through the per-call `logger` argument service.process() takes.
+          // Point it at this test's mock so the assertion below is not vacuously true.
+          (service as any).logger = mockLogger;
+
+          const body = {
+            ...wireMinimalTurn(),
+            // Keeps offeredToolNames non-empty so the OTHER knowledgeToolWithheldByConfig disjunct
+            // (offeredToolNames.length === 0) cannot mask a broken deniedTools check.
+            tools: ['current_datetime'],
+            deniedTools: ['search_knowledge_base'],
+          };
+
+          await service.process({ body, logger: mockLogger });
+
+          expect(mockLogger.warn).not.toHaveBeenCalledWith(
+            expect.stringMatching(/has an accessible data lake but search_knowledge_base is not offered/)
+          );
+        });
+      });
+
       it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
         (service as any).user.isAdmin = true;
         try {
@@ -3399,9 +3666,114 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // GPT-4 is uncalibrated: the output count is the raw tokenizer count.
+      expect(tokenUsage.outputTokens).toBe(40);
       // The local basis never bills cache creation, so recording a count here would
       // imply a charge that was not made.
       expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
+    });
+
+    const claudeSonnet5 = {
+      id: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      type: 'text' as const,
+      name: 'Claude Sonnet 5',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+    const gpt4 = {
+      id: ChatModels.GPT4,
+      type: 'text' as const,
+      name: 'GPT-4',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+    const claudeBody = {
+      ...startQuestParams,
+      params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
+      tools: [],
+      projectId: undefined,
+      organizationId: undefined,
+    };
+    const findSettledTokenUsage = () =>
+      mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      )?.[0]?.promptMeta.tokenUsage;
+
+    it("settles a Claude model's local output count in its own tokenizer's units", async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      mockedGetAvailableModels.mockResolvedValue([claudeSonnet5]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({ body: claudeBody, logger: mockLogger });
+
+      const tokenUsage = findSettledTokenUsage();
+      // Raw 40 output scaled by Claude 5's 1.5. Local basis: 80 * $10/1M + 60 * $30/1M = $0.0026 -> 5.2,
+      // ceil'd by the pinned draw to 6 credits.
+      expect(tokenUsage.outputTokens).toBe(60);
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.0026, 6);
+      expect(tokenUsage.creditsUsed).toBe(6);
+      expect(tokenUsage.settledBasis).toBe('local');
+    });
+
+    it('restates the local input in the fallback model units when a fallback answers', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: Bedrock is unable to process')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      const fallbackBackend = {
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hello from fallback'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: gpt4, backend: fallbackBackend, attempt: 1 } as any);
+      mockedGetAvailableModels.mockResolvedValue([claudeSonnet5, gpt4]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({ body: claudeBody, logger: mockLogger });
+
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+      const tokenUsage = findSettledTokenUsage();
+      // 80 Claude-5 units restated for GPT-4: ceil(80 / 1.5) = 54. Output is GPT-4's raw 40.
+      // 54 * $10/1M + 40 * $30/1M = $0.00174; pricing the unconverted 80 would give $0.002.
+      expect(tokenUsage.outputTokens).toBe(40);
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.00174, 6);
+      expect(tokenUsage.settledBasis).toBe('local');
     });
 
     // Partial provider usage (cache read reported without input/output counts) also
@@ -3699,7 +4071,7 @@ describe('ChatCompletionProcess', () => {
         entitlementKeys: string[],
         organizationIds: string[] | undefined,
         userId: string | undefined,
-        opts?: { restrictToTags?: string[] }
+        opts?: { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
       ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
@@ -3710,6 +4082,8 @@ describe('ChatCompletionProcess', () => {
       // widening), so a test can pin that the targeted exclusion measurement excludes exactly
       // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
       admittedPreauthorizedTags?: string[];
+      // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
+      userIsAdmin?: boolean;
       // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
       // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
       attachmentLakes?: unknown[];
@@ -3720,6 +4094,7 @@ describe('ChatCompletionProcess', () => {
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
+      (service as any).user.isAdmin = opts.userIsAdmin;
       if (opts.countGateExcludedLakesImpl) {
         mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
       }
@@ -4209,6 +4584,30 @@ describe('ChatCompletionProcess', () => {
           });
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
+
+        it.each([
+          [true, true],
+          [false, false],
+          [undefined, false],
+        ])(
+          'forwards the turn user admin flag (%s) to the identity count as callerMaySeeAllLakes=%s',
+          async (userIsAdmin, expected) => {
+            const countGateExcludedLakesImpl = vi.fn().mockReturnValue(0);
+            await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              retrievalTags: ['datalake:a'],
+              countGateExcludedLakesImpl,
+              userIsAdmin,
+            });
+            expect(countGateExcludedLakesImpl).toHaveBeenCalledWith(
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.objectContaining({ restrictToTags: ['datalake:a'], callerMaySeeAllLakes: expected })
+            );
+          }
+        );
 
         // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
         // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and
@@ -5462,7 +5861,9 @@ describe('ChatCompletionProcess', () => {
       // countTokens serves BOTH the tool-schema count (string arg) and the output count (array
       // arg); the impl differentiates so a test can target one without disturbing the other.
       toolCountImpl: (text: any) => number;
+      model?: { id: ChatModels; backend: ModelBackend };
     }): Promise<any> => {
+      const model = opts.model ?? { id: ChatModels.GPT4, backend: ModelBackend.OpenAI };
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(opts.tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
@@ -5483,14 +5884,14 @@ describe('ChatCompletionProcess', () => {
           await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
+        currentModel: model.id,
       } as any);
       mockedGetAvailableModels.mockResolvedValue([
         {
-          id: ChatModels.GPT4,
+          id: model.id,
           type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
+          name: 'Model under test',
+          backend: model.backend,
           max_tokens: 100,
           contextWindow: 200_000,
           can_stream: false,
@@ -5505,7 +5906,13 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, model: model.id },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
       await service.process({ body, logger: mockLogger });
 
       // Second lookup for the runs where the breakdown itself fails: there is no tokensBySource to
@@ -5518,6 +5925,33 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
       return call?.[0]?.promptMeta;
     };
+
+    // calculateTotalTokenLength is mocked, so these route its count through the tokenizer the process
+    // hands it: that is the only way to see whether the turn counts in the model's own units.
+    const countThroughTokenizer = async (_messages: any, options: any) => options.tokenizer.countTokens('x');
+
+    it("scales every input count to a Claude model's tokenizer", async () => {
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        tokenLengthImpl: countThroughTokenizer,
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 100 : 7),
+        model: { id: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock },
+      });
+      // messages 150 + tool schemas 150, each a raw 100 scaled by Claude 5's 1.5.
+      expect(promptMeta.context.tokensBySource.toolSchemas).toBe(150);
+      expect(promptMeta.tokenUsage.inputTokens).toBe(300);
+      const builderTokenizer = mockedBuildAndSortMessages.mock.calls[0][7];
+      await expect(builderTokenizer.countTokens('x')).resolves.toBe(150);
+    });
+
+    it('leaves an OpenAI model on the raw count', async () => {
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        tokenLengthImpl: countThroughTokenizer,
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 100 : 7),
+      });
+      expect(promptMeta.tokenUsage.inputTokens).toBe(200);
+    });
 
     it('folds tool-schema tokens into inputTokens without inflating the systemPrompts remainder', async () => {
       // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5; tools -> 30.
@@ -6358,6 +6792,25 @@ describe('resolveEnabledTools', () => {
     const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
     expect(twice).toEqual(once);
   });
+
+  it('pairs the save-to-data-lake toggle with its list and create companions', () => {
+    const result = resolveEnabledTools({ requestTools: ['save_content_to_data_lake'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake']);
+  });
+
+  it('does not drag the data-lake companions in without the save tool', () => {
+    const result = resolveEnabledTools({ requestTools: ['list_my_data_lakes'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['list_my_data_lakes']);
+  });
+
+  it('lets the session denylist strip a data-lake companion the save tool would pair in', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['save_content_to_data_lake'],
+      hasAttachedKnowledge: false,
+      sessionDisabledTools: ['create_data_lake'],
+    });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes']);
+  });
 });
 
 describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => {
@@ -6609,5 +7062,23 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
     history = dropOldestHistoryTurn(history!);
     expect(history).toEqual([user('q3'), assistant('a3')]);
     expect(dropOldestHistoryTurn(history!)).toBeNull();
+  });
+});
+
+describe('resolveDeniedTools', () => {
+  it('unions the session denylist with the request deniedTools', () => {
+    expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
+      'create_data_lake',
+      'web_search',
+    ]);
+  });
+
+  it('ignores a non-array session value', () => {
+    expect(resolveDeniedTools(undefined, ['create_data_lake'])).toEqual(['create_data_lake']);
+    expect(resolveDeniedTools('web_search', undefined)).toBeUndefined();
+  });
+
+  it('is undefined when neither source denies anything', () => {
+    expect(resolveDeniedTools([], [])).toBeUndefined();
   });
 });

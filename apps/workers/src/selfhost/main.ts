@@ -1,12 +1,9 @@
 import type { SQSEvent } from 'aws-lambda';
-import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, adminSettingsRepository, connectDB } from '@bike4mind/database';
+import { adminSettingsRepository, connectDB } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@server/utils/config';
-import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
@@ -20,8 +17,11 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
+import { registerTaskScheduler } from './taskScheduler';
+import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
+import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -57,8 +57,6 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Matches hosted's 12-minute visibility over the purge handler's 10-minute timeout (infra/queues.ts). */
 const DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC = 720;
-/** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
-const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
 const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
@@ -80,6 +78,7 @@ async function main() {
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
+  registerLakeHealthSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -146,6 +145,8 @@ async function main() {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
   }
 
+  registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
   // one rather than queueing work nothing will pick up.
@@ -197,19 +198,7 @@ async function main() {
     bootLogger.warn('SELF_HOST_EVENT_QUEUE not set; enrichment events will not be consumed');
   }
 
-  // Mirrors cron/scheduler.ts (hosted). Keep the handler map in sync with it.
-  worker.registerScheduledTask('scheduler', SCHEDULER_INTERVAL_MS, async () => {
-    await taskSchedulerService.process({
-      db: { taskSchedules: taskScheduleRepository },
-      logger: bootLogger,
-      handlers: {
-        [TaskScheduleHandler.RESEARCH_TASK_PROCESS]: async payload => {
-          await sendToQueue(Resource.researchEngineQueue.url, payload);
-        },
-        [TaskScheduleHandler.CUSTOM_TASK_PROCESS]: async () => {},
-      },
-    });
-  });
+  registerTaskScheduler(worker, bootLogger);
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
   // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose

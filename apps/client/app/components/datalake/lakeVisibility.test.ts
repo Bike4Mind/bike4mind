@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { DATA_LAKES } from '@bike4mind/common';
-import { isBuiltInLake, lakeVisibilityLabel, lakeVisibilityLabelShort } from './lakeVisibility';
+import { isBuiltInLake, isDraftLake, lakeVisibilityLabel, lakeVisibilityLabelShort } from './lakeVisibility';
 
 /** A real registry id, so the test cannot drift from the registry it is asserting about. */
 const builtInId = DATA_LAKES[0]?.id;
@@ -37,5 +37,18 @@ describe('lakeVisibilityLabel', () => {
   it('treats a missing id as not built-in rather than throwing', () => {
     expect(isBuiltInLake({})).toBe(false);
     expect(lakeVisibilityLabel({})).toBe('Private');
+  });
+});
+
+describe('isDraftLake', () => {
+  it('is true for an explicit draft and for a user lake with no status', () => {
+    expect(isDraftLake({ id: 'user-lake', status: 'draft' })).toBe(true);
+    expect(isDraftLake({ id: 'user-lake', status: undefined })).toBe(true);
+    expect(isDraftLake({ id: 'user-lake', status: null })).toBe(true);
+  });
+
+  it('is false for an active lake and for a built-in lake with no status', () => {
+    expect(isDraftLake({ id: 'user-lake', status: 'active' })).toBe(false);
+    expect(isDraftLake({ id: builtInId, status: undefined })).toBe(false);
   });
 });

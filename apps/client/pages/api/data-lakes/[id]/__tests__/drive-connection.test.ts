@@ -135,6 +135,21 @@ describe('/api/data-lakes/[id]/drive-connection (D2)', () => {
     expect(json.mock.calls[0][0].connection).toMatchObject({ disconnecting: true, disconnectStalled: true });
   });
 
+  // STALE (16 min) is for the disconnect window; the unchained sync-claim window is 20 min.
+  const CLAIM_PAST_WINDOW = new Date(Date.now() - 21 * 60 * 1000);
+
+  it.each([
+    ['a syncing row whose claim is past the window', { status: 'syncing', syncClaimedAt: CLAIM_PAST_WINDOW }, true],
+    ['a syncing row with a fresh claim', { status: 'syncing', syncClaimedAt: new Date() }, false],
+    ['a syncing row with no claim stamp', { status: 'syncing' }, true],
+    ['a connected row', { status: 'connected', syncClaimedAt: CLAIM_PAST_WINDOW }, false],
+  ])('GET reports syncStale for %s', async (_name, overrides, syncStale) => {
+    h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: true, ...overrides });
+    const { res, json } = makeRes();
+    await run(makeReq('GET'), res);
+    expect(json.mock.calls[0][0].connection.syncStale).toBe(syncStale);
+  });
+
   it('GET returns null when no connection feeds the lake', async () => {
     h.connFindByDataLakeIdAny.mockResolvedValue(null);
     const { res, json } = makeRes();

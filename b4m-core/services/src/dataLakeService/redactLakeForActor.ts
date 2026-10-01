@@ -112,6 +112,7 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   filesDeletedAt: 'withheld',
   // Same rationale, archive axis.
   filesArchivedAt: 'withheld',
+  purgeClaimId: 'withheld',
   // Lake-memory producer bookkeeping (#1440): internal lease + continuation cursor. Of no use to a
   // reader, and the lease timestamp would leak when/whether extraction is running. NOTE: the
   // lake-memory `state` on the health payload deliberately reverses the spirit of this withholding -

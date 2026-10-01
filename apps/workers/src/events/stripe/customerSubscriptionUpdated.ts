@@ -93,8 +93,7 @@ export const handler = withEventContext(async (event, logger) => {
           logger.warn(
             `setSeats validation failed for org ${organization.id} on Stripe webhook (quantity=${newQuantity}). Force-syncing to avoid drift. Reason: ${message}`
           );
-          organization.seats = newQuantity;
-          await organizationRepository.update(organization);
+          await organizationRepository.update({ id: organization.id, seats: newQuantity });
         }
         return true;
       }

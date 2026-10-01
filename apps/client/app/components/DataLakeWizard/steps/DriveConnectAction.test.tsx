@@ -33,6 +33,7 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   driveFolderId: 'FOLDER',
   folderName: 'Docs',
   status: 'connected',
+  syncStale: false,
   enabled: true,
   lastError: null,
   lastUsedAt: null,

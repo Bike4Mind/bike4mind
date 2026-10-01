@@ -151,7 +151,7 @@ const handler = baseApi()
         }
 
         const updatedSubscription = await jiraWebhookSubscriptionRepository.update({
-          ...subscription,
+          id: subscription.id,
           ...updates,
         });
 
@@ -159,7 +159,7 @@ const handler = baseApi()
           throw new Error('Failed to update subscription');
         }
 
-          const config = await jiraWebhookConfigRepository.findById(updatedSubscription.webhookConfigId);
+        const config = await jiraWebhookConfigRepository.findById(updatedSubscription.webhookConfigId);
 
         const response: IJiraWebhookSubscriptionResponse = {
           id: updatedSubscription.id,

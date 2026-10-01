@@ -93,7 +93,7 @@ export const deleteSession = async (
 
   session.deletedAt = new Date();
 
-  await db.sessions.update(session);
+  await db.sessions.update({ id: session.id, deletedAt: session.deletedAt });
   await db.projects.removeSession(session.id);
 
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));

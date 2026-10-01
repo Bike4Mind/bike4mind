@@ -12,7 +12,7 @@ interface RefuseInviteAdapters {
   db: {
     invites: {
       findByIdAndPendingEmail: (id: string, email: string) => Promise<IInvite>;
-      update(data: IInvite): Promise<unknown>;
+      update(data: Partial<IInvite>): Promise<unknown>;
     };
     users: {
       findById: (id: string) => Promise<IUserDocument>;
@@ -42,9 +42,8 @@ export const refuseInvite = async (
     invite.recipients.pending = invite.recipients.pending?.filter(p => p !== user.email);
     invite.recipients.refused.push(user.email);
     invite.remaining -= 1;
+    await db.invites.update({ id: invite.id, recipients: invite.recipients, remaining: invite.remaining });
   }
-
-  await db.invites.update(invite);
 
   return invite;
 };

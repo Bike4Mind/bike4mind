@@ -59,7 +59,7 @@ export const refreshAgentAvatarUrls = async (agents: IAgent[], viewerId: string)
               if (fabFile.userId === viewerId) {
                 const newExpireAt = new Date(now.getTime() + 3600 * 1000);
                 await fabFileRepository.update({
-                  ...fabFile,
+                  id: fabFile.id,
                   fileUrl: newSignedUrl,
                   fileUrlExpireAt: newExpireAt,
                 });

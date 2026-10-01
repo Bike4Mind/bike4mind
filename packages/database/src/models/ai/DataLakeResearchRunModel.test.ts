@@ -153,6 +153,34 @@ describe('DataLakeResearchRunRepository', () => {
     });
   });
 
+  it('settles a judge-unavailable stop with its not-judged count', async () => {
+    const created = await repo.createRun(input());
+
+    await repo.settleRun(created.id, {
+      status: 'failed',
+      completedAt: new Date(),
+      stopReason: 'judge_unavailable',
+      spentMicroUsd: 0,
+      totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+      error: 'The relevance judge failed',
+    });
+
+    expect(await repo.findByIdInLake(created.id, LAKE)).toMatchObject({
+      status: 'failed',
+      stopReason: 'judge_unavailable',
+      totals: expect.objectContaining({ judgeFailed: 3, notJudged: 7 }),
+    });
+  });
+
+  it('reads a run stored before the not-judged count existed as zero', async () => {
+    const created = await repo.createRun(input());
+    await mongoose
+      .model('DataLakeResearchRun')
+      .collection.updateOne({ _id: new mongoose.Types.ObjectId(created.id) }, { $unset: { 'totals.notJudged': '' } });
+
+    expect((await repo.findByIdInLake(created.id, LAKE))?.totals.notJudged).toBe(0);
+  });
+
   // The guard against a stale double-settle of the SAME caller (the executor) racing itself - e.g.
   // an SQS redelivery reaching the terminal settle a second time: a second settle is a no-op, not
   // an overwrite of the real outcome, and the caller can tell from the return value.

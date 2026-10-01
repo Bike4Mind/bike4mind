@@ -184,7 +184,12 @@ export class VideoGenerationService {
       quest.status = undefined;
       quest.promptMeta = promptMeta;
 
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        videos: quest.videos,
+        replies: quest.replies,
+        promptMeta: quest.promptMeta,
+      });
     } else {
       // Create the associated quest record
       quest = await this.db.quests.create({
@@ -512,7 +517,15 @@ export class VideoGenerationService {
         totalResponseTime,
       });
 
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        reply: quest.reply,
+        replies: quest.replies,
+        videos: quest.videos,
+        status: quest.status,
+        promptMeta: quest.promptMeta,
+        creditsUsed: quest.creditsUsed,
+      });
 
       if (this.invokeSessionAutoNaming) {
         await this.invokeSessionAutoNaming(sessionId, userId);

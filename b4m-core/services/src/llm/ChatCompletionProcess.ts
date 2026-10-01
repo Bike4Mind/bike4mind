@@ -39,6 +39,7 @@ import {
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
   visibleReplyText,
+  tokenEstimateMultiplier,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -74,6 +75,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
   effectiveContextWindow,
   safeInputWindow,
+  withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
@@ -216,7 +218,12 @@ import {
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
-import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
+import {
+  shouldOfferBlogTools,
+  shouldOfferDataLakeTools,
+  shouldOfferDelegation,
+  shouldOfferSkillTool,
+} from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -227,6 +234,7 @@ import {
   ABSTENTION_PROMPT,
   ELISION_WARNING,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DATA_LAKE_TOOL_NAMES,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -683,7 +691,25 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
   paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
+  // The Smart Tools toggle exposes only the save tool; it cannot name a target lake without the
+  // list, or make one without the create.
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'list_my_data_lakes');
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'create_data_lake');
   return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
+ * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
+ * so neither source can re-enable what the other denies. Undefined when both are empty, matching
+ * how `sessionDisabledTools` was passed before.
+ */
+export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+  const merged = new Set([
+    ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
+    ...(requestDeniedTools ?? []),
+  ]);
+  return merged.size > 0 ? [...merged] : undefined;
 }
 
 /**
@@ -753,9 +779,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
- * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
+ * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
+ * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -766,7 +793,14 @@ export function attachmentHasIndexedContent(
  * which is the whole point of the feature for local models. Listing them here would silently
  * defeat it.
  */
-export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
+export const AUTO_ADDED_TOOL_NAMES = [
+  'blog_draft',
+  'blog_publish',
+  'blog_edit',
+  'navigate_view',
+  'skill',
+  ...DATA_LAKE_TOOL_NAMES,
+];
 
 /**
  * Reconciliation delta with the zero-balance floor. Pre-reservation (the only
@@ -1757,6 +1791,8 @@ export class ChatCompletionProcess {
             `💾 [saveQuest] Saving quest ${quest.id} with ${quest.researchModeResults.length} Research Mode results`
           );
         }
+        // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
+        // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
         const result = await this.db.quests.update(quest);
         return result;
       });
@@ -1959,6 +1995,9 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      // Read at every denylist site below instead of `session.disabledTools`: the final pass after
+      // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
+      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -2053,7 +2092,7 @@ export class ChatCompletionProcess {
       const resolvedTools = resolveEnabledTools({
         requestTools: enabledTools,
         sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
-        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        sessionDisabledTools: deniedTools,
         hasAttachedKnowledge,
         hasAccessibleDataLake,
         skipAutoOffers,
@@ -2661,6 +2700,18 @@ export class ChatCompletionProcess {
         ) {
           enabledTools.push('skill');
         }
+
+        if (
+          await shouldOfferDataLakeTools({
+            message,
+            priorToolNames,
+            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
+          })
+        ) {
+          for (const tool of DATA_LAKE_TOOL_NAMES) {
+            if (!enabledTools.includes(tool)) enabledTools.push(tool);
+          }
+        }
       }
 
       // Local (Ollama) models run on modest hardware with small context budgets and
@@ -2776,8 +2827,7 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
         skipAutoOffers,
-        knowledgeSearchDisabled:
-          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
+        knowledgeSearchDisabled: deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) ?? false,
         defaultAdminSettings,
         // The same mapping the tool build uses below, so the session -> filter translation cannot
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
@@ -2979,7 +3029,7 @@ export class ChatCompletionProcess {
         // Also enforced over the returned list below; passed here as well because two things the
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
-        sessionDisabledTools: session.disabledTools,
+        sessionDisabledTools: deniedTools,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3015,8 +3065,8 @@ export class ChatCompletionProcess {
       // delegate_to_agent), so strip any session-forbidden tools here too - this
       // closes loopholes like a research subagent web-searching on a "curated
       // sources only" surface.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0 && allTools) {
-        const denied = new Set(session.disabledTools);
+      if (deniedTools && allTools) {
+        const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
@@ -3025,7 +3075,15 @@ export class ChatCompletionProcess {
       // the user explicitly enabled, dropping the auto/admin-added extras
       // (blog_draft, skill, navigate_view, blog_publish/edit) unless selected.
       if (modelInfo.backend === ModelBackend.Ollama && allTools) {
-        const userSelected = new Set<string>(parsedBody.tools ?? []);
+        // Companions of a selected tool count as selected (resolveEnabledTools' pairing), so the
+        // Smart Tools save-to-data-lake toggle keeps its list/create partners on this backend too.
+        const userSelected = new Set<string>(
+          resolveEnabledTools({
+            requestTools: [...(parsedBody.tools ?? [])],
+            hasAttachedKnowledge: false,
+            skipAutoOffers: true,
+          })
+        );
         const before = allTools.length;
         allTools = allTools.filter(
           t => !AUTO_ADDED_TOOL_NAMES.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)
@@ -3125,7 +3183,9 @@ export class ChatCompletionProcess {
         );
         const excludedByAccessCount =
           accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
+            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure, {
+                callerMaySeeAllLakes: this.user?.isAdmin === true,
+              })
             : narrowedAccess?.excludedByAccessCount;
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
@@ -3164,8 +3224,7 @@ export class ChatCompletionProcess {
       // denies it, or a model offered no tools at all. Without this, every turn of every
       // lake-holding caller on a non-tool model logs a warning and drowns the real case.
       const knowledgeToolWithheldByConfig =
-        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
-        offeredToolNames.length === 0;
+        deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) || offeredToolNames.length === 0;
       if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !skipAutoOffers) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`
@@ -3446,6 +3505,10 @@ export class ChatCompletionProcess {
         imageGenerationAvailable,
         systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
+      // Every input count this turn (assembly budget, overflow guard, pre-reservation, [BILLING_DRIFT])
+      // goes through this one tokenizer, so they all agree on the model's units: cl100k_base scaled up to
+      // the model's own tokenizer (see tokenEstimateMultiplier).
+      const estimateTokenizer = withTokenEstimateMultiplier(this.tokenizer, tokenEstimateMultiplier(modelInfo.id));
       // messageTruncationInfo is captured ONLY from this first build - the overflow-recovery rebuild
       // further down does not refresh it, so downstream telemetry always reflects the first attempt.
       const firstBuild = await buildAndSortMessages(
@@ -3456,7 +3519,7 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer,
+        estimateTokenizer,
         buildOptions
       );
       let messages = firstBuild.messages;
@@ -3509,7 +3572,7 @@ export class ChatCompletionProcess {
 
       // Calculate input tokens and per-source breakdown in parallel
       const tokenCalculationStartTime = Date.now();
-      const tokenCalcOptions = { estimateOnly: false, tokenizer: this.tokenizer };
+      const tokenCalcOptions = { estimateOnly: false, tokenizer: estimateTokenizer };
       let tokensBySource:
         | {
             systemPrompts: number;
@@ -3567,7 +3630,7 @@ export class ChatCompletionProcess {
                 })
               )
               .join('');
-            toolSchemaTokens = await this.tokenizer.countTokens(serializedToolSchemas);
+            toolSchemaTokens = await estimateTokenizer.countTokens(serializedToolSchemas);
           } catch (toolTokenError) {
             logger.warn(
               '📊 Failed to count tool-schema tokens; leaving tools uncounted for this estimate',
@@ -3631,7 +3694,7 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer,
+              estimateTokenizer,
               buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
@@ -5212,9 +5275,13 @@ export class ChatCompletionProcess {
       // Post-streaming processing: token counting, credits, performance metrics, features.
       // Wrapped in protective try/catch so failures here never overwrite quest.reply or leave quest stuck.
       try {
-        // Calculate output tokens
+        // Calculate output tokens, in the units of the model that actually answered
+        const answeringMultiplier = tokenEstimateMultiplier(currentModel.id);
         const outputTokenCalculationStartTime = Date.now();
-        const outputTokens = await this.tokenizer.countTokens(Object.values(replies), currentModel.id);
+        const outputTokens = await withTokenEstimateMultiplier(this.tokenizer, answeringMultiplier).countTokens(
+          Object.values(replies),
+          currentModel.id
+        );
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Output token calculation completed (${outputTokens} tokens) in ${
             Date.now() - outputTokenCalculationStartTime
@@ -5270,11 +5337,18 @@ export class ChatCompletionProcess {
           (actualTokenUsage?.cacheCreationInputTokens ?? 0);
         const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
+        // inputTokens was counted in the requested model's units (estimateTokenizer). When a fallback that
+        // tokenizes differently answered, restate it in that model's units before it prices or drift-checks.
+        const requestedMultiplier = tokenEstimateMultiplier(modelInfo.id);
+        const localInputTokens =
+          requestedMultiplier === answeringMultiplier
+            ? inputTokens
+            : Math.ceil((inputTokens * answeringMultiplier) / requestedMultiplier);
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : localInputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
-          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, localInputTokens);
         // Provider-basis only: the local fallback deliberately never bills cache creation,
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
@@ -5288,7 +5362,7 @@ export class ChatCompletionProcess {
             )
           : getTextModelCost(
               currentModel,
-              inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
               outputTokens
             );
         // Single stochastic settlement draw, shared by the quest meta, the
@@ -5316,11 +5390,13 @@ export class ChatCompletionProcess {
         // guards billing; it monitors the quality of the local estimate that still
         // drives pre-reservation (and fallback settlement). Causes worth
         // investigating: a new content-block shape we don't measure, or a provider
-        // accounting change. Tool schemas ARE now counted (see the breakdown site),
-        // so the expected residual gap on tool-carrying turns is wire-shape
-        // approximation (our {name,description,input_schema} proxy vs each backend's
-        // exact formatTools) plus provider-side overhead the provider injects when
-        // tools are present (e.g. a tool-use preamble). Threshold is symmetric +/-30%.
+        // accounting change, or a Claude release whose tokenizer tokenEstimateMultiplier
+        // does not cover. For calibrated Claude models the estimate is a deliberate lower
+        // bound, so expect ratios a little under 1, and lower on code-heavy turns (Claude
+        // spends ~2x cl100k on code against a 1.5x factor). Tool-carrying turns add
+        // wire-shape approximation (our {name,description,input_schema} proxy vs each
+        // backend's formatTools) and any preamble the provider injects for tools.
+        // Threshold is symmetric +/-30%.
         // Compare against the provider's FULL input accounting, not just the uncached tail.
         // Provider `input_tokens` reports only the tokens NOT served from / written to cache;
         // on a prompt-cache hit or write the rest lands in cache_read/cache_creation. Summing
@@ -5334,7 +5410,7 @@ export class ChatCompletionProcess {
               (actualTokenUsage.cacheCreationInputTokens ?? 0)
             : undefined;
         if (apiInputForDrift != null && apiInputForDrift > 0) {
-          const ratio = inputTokens / apiInputForDrift;
+          const ratio = localInputTokens / apiInputForDrift;
           if (ratio < 0.7 || ratio > 1.3) {
             logger.warn('[BILLING_DRIFT] Local vs provider input-token count diverges', {
               questId: quest.id,
@@ -5342,7 +5418,7 @@ export class ChatCompletionProcess {
               sessionId: quest.sessionId,
               model: currentModel.id,
               backend: currentModel.backend,
-              localInputTokens: inputTokens,
+              localInputTokens,
               providerInputTokens: apiInputForDrift,
               ratio: Number(ratio.toFixed(2)),
               tokensBySource: quest.promptMeta?.context?.tokensBySource,

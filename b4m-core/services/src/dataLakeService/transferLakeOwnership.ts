@@ -186,8 +186,8 @@ export async function authorizeLakeTransfer(
  *
  * TAKES NO SESSION ITSELF, but its callers supply one. The recipient's grant, each demotion, the actor
  * stamp and the audit row are separate writes; this service stays adapter-injected and connection-free
- * by design, so the wrapping belongs at the route seam - and both
- * `pages/api/data-lakes/[id]/transfer-ownership.ts` and the offer accept do it, with the access gate
+ * by design, so the wrapping belongs at the route seam - and the offer-accept route
+ * (`pages/api/data-lakes/ownership-offers/[offerId]/accept.ts`) does it, with the access gate
  * INSIDE the callback so a retry re-reads the grants rather than reusing a stale snapshot. Two
  * failures that buys: a failure mid-loop no longer leaves the lake with two effective owners and no
  * transfer row to explain it, and a concurrent DEPARTURE can no longer interleave.

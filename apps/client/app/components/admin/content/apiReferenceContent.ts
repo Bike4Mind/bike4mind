@@ -1,6 +1,14 @@
 // brand externalized
 import { getBrandName } from '@client/config/general';
 import { MIN_PASSAGE_TOKEN_TARGET, OVERSIZED_PASSAGE_TOKEN_THRESHOLD } from '@bike4mind/common';
+import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+
+// Generated from the same catalog the New-Key modals offer, so the table can't drift from
+// what a user can actually select. A literal `|` would split a GFM table cell.
+export const renderScopeTableRows = (): string =>
+  GENERIC_MODAL_API_KEY_SCOPES.map(
+    scope => `| \`${scope.value}\` | ${scope.description.replaceAll('|', '\\|')} |`
+  ).join('\n');
 
 export const API_REFERENCE_CONTENT = `
 # ${getBrandName()} API Reference
@@ -69,15 +77,8 @@ API keys can be scoped to limit access. Available scopes:
 
 | Scope | Description |
 |-------|-------------|
-| \`notebooks:read\` | Read sessions/notebooks |
-| \`notebooks:write\` | Create, update, delete sessions |
-| \`files:read\` | Read and download files |
-| \`files:write\` | Upload, chunk, delete files |
-| \`projects:read\` | Read projects and members |
-| \`projects:write\` | Create, update, delete projects |
-| \`ai:generate\` | Use image/video/audio generation endpoints |
-| \`ai:chat\` | Send chat messages and use LLM endpoints |
-| \`admin:*\` | Full admin access (superuser only) |
+${renderScopeTableRows()}
+| \`admin:*\` | Full admin access (superuser only; provisioned out of band, not selectable when creating a key) |
 
 An API-key caller can't escalate through key management: creating a key via
 \`POST /api/user-api-keys\` or rotating one is refused unless the calling key already holds

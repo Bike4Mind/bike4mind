@@ -149,6 +149,19 @@ describe('POST /api/agents/[id]/generate-avatar - storage quota', () => {
     expect(h.fabFileCreate).toHaveBeenCalledTimes(1);
   });
 
+  it('persists only the new visual leaves, pointing at the stored signed URL', async () => {
+    const { res } = makeRes();
+    const withinQuotaUser = { id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 };
+
+    await run(withinQuotaUser, res);
+
+    expect(h.agentUpdate).toHaveBeenCalledWith({
+      id: 'agent-1',
+      'visual.portraitUrl': 'https://s3.test/avatar.png',
+      'visual.generationPrompt': 'A vivid portrait prompt.',
+    });
+  });
+
   it('surfaces a BadRequestError from image-model selection as a 400, without ever reaching the storage step', async () => {
     const { res } = makeRes();
     const anyUser = { id: 'u1', isAdmin: false, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 };

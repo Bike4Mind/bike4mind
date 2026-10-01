@@ -43,14 +43,14 @@ export const deleteArtifact = async (
   }
 
   // Perform soft delete
-  const updateData = {
+  const updateData: Parameters<IArtifactRepository['update']>[0] = {
     id: artifact.id,
     deletedAt: new Date(),
     status: 'deleted',
     updatedAt: new Date(),
   };
 
-  await db.artifacts.update(updateData as any);
+  await db.artifacts.update(updateData);
 
   return {
     success: true,

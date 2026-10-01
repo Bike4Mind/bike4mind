@@ -26,6 +26,7 @@ interface QueueHandlerRegistration {
   url: string;
   dispatch: QueueDispatch;
   visibilityTimeoutSec: number;
+  batchSize: number;
   maxReceiveCount: number;
 }
 
@@ -77,9 +78,14 @@ export class SelfHostWorker {
     name: string,
     url: string,
     dispatch: QueueDispatch,
-    opts?: { visibilityTimeoutSec?: number; maxReceiveCount?: number }
+    opts?: { visibilityTimeoutSec?: number; maxReceiveCount?: number; batchSize?: number }
   ): void {
+    const batchSize = opts?.batchSize ?? MAX_MESSAGES_PER_RECEIVE;
+    if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MAX_MESSAGES_PER_RECEIVE) {
+      throw new Error('batchSize must be an integer from 1 to 10');
+    }
     this.queues.push({
+      batchSize,
       name,
       url,
       dispatch,
@@ -208,7 +214,7 @@ export class SelfHostWorker {
   }
 
   private async pollOnce(q: QueueHandlerRegistration): Promise<void> {
-    const messages = await receiveFromQueue(q.url, MAX_MESSAGES_PER_RECEIVE, q.visibilityTimeoutSec, LONG_POLL_SECONDS);
+    const messages = await receiveFromQueue(q.url, q.batchSize, q.visibilityTimeoutSec, LONG_POLL_SECONDS);
     for (const message of messages) {
       // Sequential: one bad message must not abort processing of the rest of the batch,
       // and handleMessage never rethrows.

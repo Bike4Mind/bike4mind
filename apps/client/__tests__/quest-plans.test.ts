@@ -582,41 +582,6 @@ describe('Quest Plans API', () => {
   });
 
   describe('POST /api/quest-plans/[id]/continue', () => {
-    it('should auto-resume paused quest when continuing', async () => {
-      const { questMasterPlanRepository } = await import('@bike4mind/database');
-      const pausedPlan = {
-        id: 'plan1',
-        goal: 'Paused Quest',
-        userId: 'user123',
-        state: 'paused',
-        notebookId: 'session123',
-      };
-
-      (questMasterPlanRepository.findById as any).mockResolvedValue(pausedPlan);
-      (questMasterPlanRepository.update as any).mockResolvedValue({ ...pausedPlan, state: 'active' });
-      (questMasterPlanRepository.continueInSession as any).mockResolvedValue({
-        ...pausedPlan,
-        state: 'active',
-      });
-
-      const { req } = createMocks({
-        method: 'POST',
-        query: { id: 'plan1' },
-        body: { sessionId: 'session123' },
-      });
-      req.user = { id: 'user123' } as any;
-
-      const plan = await questMasterPlanRepository.findById('plan1');
-
-      // Auto-resume if paused
-      if (plan?.state === 'paused') {
-        plan.state = 'active';
-        await questMasterPlanRepository.update(plan);
-      }
-
-      expect(questMasterPlanRepository.update).toHaveBeenCalledWith(expect.objectContaining({ state: 'active' }));
-    });
-
     it('should create notebook for cloned plans with placeholder notebookId', async () => {
       const { questMasterPlanRepository } = await import('@bike4mind/database');
       const { sessionService } = await import('@bike4mind/services');

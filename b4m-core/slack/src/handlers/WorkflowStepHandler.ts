@@ -4,6 +4,7 @@ import { SlackClient } from '../SlackClient';
 import { ChatModels, IChatHistoryItem, IUserDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { ChatCompletionInvoke } from '@bike4mind/services/llm';
 import { getSlackDeps, getSlackDb } from '../di/registry';
+import { resolveAccessibleNotebookId } from './notebook-manager';
 
 /**
  * Workflow step callback IDs - must match the app manifest
@@ -205,6 +206,18 @@ export class WorkflowStepHandler {
   }
 
   /**
+   * The user's saved Slack default notebook, else their last web notebook, if they can still
+   * write to it (same check as getOrCreateNotebookForSlackUser in notebook-manager.ts).
+   */
+  private async resolveSavedNotebookId(user: IUserDocument): Promise<string | null> {
+    const { Session } = getSlackDb();
+    return (
+      (await resolveAccessibleNotebookId(Session, user.slackSettings?.defaultNotebookId, user)) ??
+      (await resolveAccessibleNotebookId(Session, user.lastNotebookId, user))
+    );
+  }
+
+  /**
    * Trigger AI processing for a quest (fire-and-forget)
    * The AI will process in the background and update the quest with a response
    */
@@ -394,13 +407,12 @@ export class WorkflowStepHandler {
     try {
       // Determine which notebook to use
       let resolvedNotebookId: string;
+      const savedNotebookId = notebookId ? null : await this.resolveSavedNotebookId(user);
 
       if (notebookId) {
         resolvedNotebookId = notebookId;
-      } else if (user.slackSettings?.defaultNotebookId) {
-        resolvedNotebookId = user.slackSettings.defaultNotebookId;
-      } else if (user.lastNotebookId) {
-        resolvedNotebookId = user.lastNotebookId.toString();
+      } else if (savedNotebookId) {
+        resolvedNotebookId = savedNotebookId;
       } else {
         // No existing notebook, create one
         const { defineAbilitiesFor: defineAbilities } = getSlackDb();
@@ -532,13 +544,12 @@ export class WorkflowStepHandler {
     try {
       // Determine which notebook to use
       let resolvedNotebookId: string;
+      const savedNotebookId = notebookId ? null : await this.resolveSavedNotebookId(user);
 
       if (notebookId) {
         resolvedNotebookId = notebookId;
-      } else if (user.slackSettings?.defaultNotebookId) {
-        resolvedNotebookId = user.slackSettings.defaultNotebookId;
-      } else if (user.lastNotebookId) {
-        resolvedNotebookId = user.lastNotebookId.toString();
+      } else if (savedNotebookId) {
+        resolvedNotebookId = savedNotebookId;
       } else {
         // No existing notebook, create one for this query
         const { defineAbilitiesFor: defineAbilitiesQ } = getSlackDb();

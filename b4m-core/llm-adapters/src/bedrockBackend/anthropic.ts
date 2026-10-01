@@ -27,6 +27,7 @@ import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
+import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -758,13 +759,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Append model identity so the model correctly identifies itself when asked.
     // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
     // with the same flag in anthropicBackend.
-    const identityReminder = options.omitIdentityReminder
-      ? null
-      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');
     if (identityReminder) {
-      systemMessage = systemMessage ? `${systemMessage}\n${identityReminder}` : identityReminder;
+      systemMessage = appendIdentityReminder(systemMessage, identityReminder);
     }
 
     // Check if model ID needs to be transformed

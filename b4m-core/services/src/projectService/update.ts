@@ -35,7 +35,7 @@ export const update = async (userId: string, parameters: UpdateProjectParameters
   };
   Logger.globalInstance.log('updatedProject1', updatedProject, '123');
 
-  await db.projects.update(updatedProject);
+  await db.projects.update({ id: project.id, ...updatedFields, updatedAt: updatedProject.updatedAt });
 
   return updatedProject;
 };

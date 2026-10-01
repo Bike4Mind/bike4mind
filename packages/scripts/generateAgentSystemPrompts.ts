@@ -208,7 +208,7 @@ async function main() {
         const systemPrompt = await generateSystemPrompt(agent, metaPrompt, logger);
 
         const updateData = {
-          ...agent,
+          id: agent.id,
           systemPrompt,
           lastSystemPromptGeneratedAt: new Date(),
         };

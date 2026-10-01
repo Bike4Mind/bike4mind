@@ -8,6 +8,11 @@ import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
 import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
+import {
+  normalizeBedrockModels,
+  type BedrockAvailability,
+  type BedrockFoundationModelSummary,
+} from './sources/bedrock';
 import type { DiscoveredModel } from './types';
 
 const RUN_AT = new Date('2026-07-26T10:00:00Z');
@@ -148,6 +153,149 @@ describe('planCatalogWrites', () => {
     expect(second.rows[0].patch).toMatchObject({
       autoDisabled: true,
       autoDisabledReason: 'not invocable on demand',
+    });
+  });
+
+  // End to end through the real normalizer: what lifts a disable is the listing and the availability
+  // answer Bedrock gives, not a patch shape a test hand-writes.
+  describe('a disable the Bedrock source put on a row', () => {
+    const MODEL = 'anthropic.claude-opus-9-v1:0';
+    const available: BedrockAvailability = {
+      modelId: MODEL,
+      authorizationStatus: 'AUTHORIZED',
+      entitlementAvailability: 'AVAILABLE',
+      regionAvailability: 'AVAILABLE',
+    };
+    const summary = (inferenceTypesSupported: string[]): BedrockFoundationModelSummary => ({
+      modelId: MODEL,
+      modelName: 'Claude Opus 9',
+      providerName: 'Anthropic',
+      inputModalities: ['TEXT'],
+      outputModalities: ['TEXT'],
+      responseStreamingSupported: true,
+      inferenceTypesSupported,
+      modelLifecycle: { status: 'ACTIVE' },
+    });
+    const bedrockDispatch: CatalogWriteInput['resolveDispatch'] = record =>
+      record.backend === ModelBackend.Bedrock
+        ? {
+            adapterFamily: 'bedrock-anthropic',
+            dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+          }
+        : null;
+
+    const bedrockRun = (
+      inferenceTypes: string[],
+      entitlement?: BedrockAvailability,
+      previous?: IModelCatalogRowInput
+    ): Partial<CatalogWriteInput> => ({
+      contributions: [
+        {
+          name: 'bedrock',
+          kind: 'provider',
+          records: normalizeBedrockModels({
+            summaries: [summary(inferenceTypes)],
+            availability: entitlement ? new Map([[MODEL, entitlement]]) : undefined,
+          }).map(record => ({ ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } })),
+        },
+      ],
+      coveredBackends: new Set<string>([ModelBackend.Bedrock]),
+      resolveDispatch: bedrockDispatch,
+      // What runModelDiscovery hands the next run: the discovery row in force, its groups and credits.
+      ...(previous && {
+        base: asBase([previous]),
+        priorDiscoveryGroups: new Map([[MODEL, previous.ownedGroups]]),
+        priorContributors: new Map([[MODEL, previous.contributors ?? []]]),
+      }),
+    });
+
+    /** Promoted on a healthy run, then disabled by a later listing that dropped ON_DEMAND. */
+    const disabledWhileActive = () => {
+      const first = plan(bedrockRun(['ON_DEMAND']));
+      expect(first.diff[0]).toMatchObject({ promoted: true, lifecycleStatus: 'active' });
+      const second = plan(bedrockRun(['INFERENCE_PROFILE'], undefined, first.rows[0]));
+      expect(second.rows[0].patch).toMatchObject({ autoDisabled: true, autoDisabledReason: /inference profile/ });
+      return second.rows[0];
+    };
+
+    it('promotes a discovered row once a later run lists it on demand', () => {
+      const first = plan(bedrockRun(['INFERENCE_PROFILE']));
+      expect(first.diff[0]).toMatchObject({ lifecycleStatus: 'discovered', blockedBy: ['disabled-by-source'] });
+
+      const second = plan(bedrockRun(['ON_DEMAND'], available, first.rows[0]));
+
+      expect(second.diff[0]).toMatchObject({ promoted: true, lifecycleStatus: 'active', blockedBy: [] });
+      expect(second.rows[0].patch).toMatchObject({ lifecycle: { status: 'active' }, autoDisabled: false });
+      expect(second.rows[0].patch).not.toHaveProperty('autoDisabledReason');
+    });
+
+    // Promotion never re-decides an active row, so without the clearance this disable was sticky.
+    it('re-enables an active row once its source confirms the model can be called', () => {
+      const disabled = disabledWhileActive();
+
+      const next = plan(bedrockRun(['ON_DEMAND'], available, disabled));
+
+      expect(next.diff[0]).toMatchObject({
+        lifecycleStatus: 'active',
+        changedKeys: ['autoDisabled', 'autoDisabledReason'],
+      });
+      expect(next.rows[0].patch).toMatchObject({ autoDisabled: false });
+      expect(next.rows[0].patch).not.toHaveProperty('autoDisabledReason');
+      expect(asBase(next.rows).get(MODEL)?.record).toMatchObject({ autoDisabled: false });
+    });
+
+    it('keeps the disable when the run had no availability answer to confirm it by', () => {
+      const disabled = disabledWhileActive();
+
+      expect(plan(bedrockRun(['ON_DEMAND'], undefined, disabled)).rows).toHaveLength(0);
+    });
+
+    it('keeps the entitlement disable while the account is still not entitled', () => {
+      const first = plan(bedrockRun(['ON_DEMAND']));
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const disabled = plan(bedrockRun(['ON_DEMAND'], unentitled, first.rows[0])).rows[0];
+      expect(disabled.patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
+
+      expect(plan(bedrockRun(['ON_DEMAND'], unentitled, disabled)).rows).toHaveLength(0);
+    });
+
+    it('leaves a manual disable in force when it lifts its own', () => {
+      const disabled = disabledWhileActive();
+      const next = plan(bedrockRun(['ON_DEMAND'], available, disabled));
+
+      const merged = asBase(next.rows, [
+        operatorRow({ id: MODEL, disabled: true, disabledReason: 'paused by an operator' }, ['availability']),
+      ]);
+
+      expect(next.rows[0].patch).not.toHaveProperty('disabled');
+      expect(merged.get(MODEL)?.record).toMatchObject({ disabled: true, disabledReason: 'paused by an operator' });
+    });
+
+    it('does not lift a disable some other writer put on the row', () => {
+      const seeded = asBase(
+        [],
+        [
+          seedRow(
+            {
+              id: MODEL,
+              vendor: 'anthropic',
+              backend: 'bedrock',
+              type: 'text',
+              name: 'Claude Opus 9',
+              contextWindow: 200_000,
+              lifecycle: { status: 'active' },
+              autoDisabled: true,
+              autoDisabledReason: 'shipped disabled',
+            },
+            ['identity', 'limits', 'lifecycle', 'availability']
+          ),
+        ]
+      );
+
+      const result = plan({ ...bedrockRun(['ON_DEMAND'], available), base: seeded });
+
+      for (const row of result.rows) expect(row.ownedGroups).not.toContain('availability');
+      for (const entry of result.diff) expect(entry.changedKeys).not.toContain('autoDisabled');
     });
   });
 

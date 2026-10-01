@@ -16,8 +16,7 @@ import type {
   UploadProgress,
   WizardStep,
 } from '@client/app/stores/useDataLakeWizardStore';
-import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
-import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+import { MIN_DATA_LAKE_SLUG_LENGTH, slugifyDataLakeName } from '@bike4mind/common';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { api } from '@client/app/contexts/ApiContext';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';

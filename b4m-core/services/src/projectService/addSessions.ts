@@ -142,7 +142,7 @@ const updateShareableSessions = async (
 
     for (const member of project.users) push(member.userId, member.permissions);
 
-    await db.sessions.update(session);
+    await db.sessions.update({ id: session.id, users: session.users });
 
     if (files.length > 0) await updateShareableFiles(user, { project, files }, adapters);
   }

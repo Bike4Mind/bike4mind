@@ -24,6 +24,7 @@ import {
   TableChart as TableChartIcon,
   ShowChart as FinanceIcon,
   Groups as BobPanelIcon,
+  SaveAlt as SaveToDataLakeIcon,
 } from '@mui/icons-material';
 import { B4MLLMTools } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services/llm';
@@ -45,6 +46,8 @@ export type PublicTools = Exclude<
   // `count_knowledge_base` and `describe_knowledge_base` are paired server-side with
   // `search_knowledge_base` (a corpus you can search but not count/describe is the bug they exist
   // to fix), so neither needs a toggle of its own.
+  // `list_my_data_lakes` and `create_data_lake` ride along with `save_content_to_data_lake` the same
+  // way (resolveEnabledTools pairs them), so the one "Save to Data Lake" toggle brings all three.
   | 'edit_image'
   | 'blog_publish'
   | 'blog_edit'
@@ -52,6 +55,8 @@ export type PublicTools = Exclude<
   | 'skill'
   | 'count_knowledge_base'
   | 'describe_knowledge_base'
+  | 'list_my_data_lakes'
+  | 'create_data_lake'
   | SlackLlmTools
 >;
 
@@ -288,6 +293,13 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     icon: TableChartIcon,
     color: '#217346',
   },
+  save_content_to_data_lake: {
+    name: 'save_content_to_data_lake',
+    displayName: 'Save to Data Lake',
+    description: 'Save content the assistant writes as a file in one of your data lakes',
+    icon: SaveToDataLakeIcon,
+    color: '#00796b',
+  },
 };
 
 /**
@@ -388,4 +400,5 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   generate_jupyter_notebook: 'Data Science',
   // Excel generation
   excel_generation: 'Documents',
+  save_content_to_data_lake: 'Documents',
 };

@@ -766,6 +766,8 @@ When you put the app behind a reverse proxy, forward the original `Host` header 
 
 Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
 
+Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
+
 ## Share your instance with friends (secure internet exposure)
 
 The self-host stack is built for local, single-host use: it comes up on `localhost` with no authentication on its backing services. To let a few trusted people reach it, you have two supported paths (and a no-third-party variant of the first):
@@ -982,3 +984,9 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
+
+### Daily lake health trends
+
+The worker records health snapshots for active data lakes at 06:00 UTC, using the same bounded sweep as hosted deployments and without CloudWatch metrics. It does not run this sweep at startup. Starting after the daily boundary waits until the next day; a delayed timer runs only the latest due slot, with at most one scheduled attempt per UTC day. An overlapping run consumes the slot without starting another sweep. Shutdown waits up to the worker's existing 20-second grace period; a sweep still running then is abandoned. Completed lakes keep their snapshots, while unvisited lakes retain their older check timestamps and sort first at the next 06:00 UTC run. A restart after today's boundary does not retry that day's missed snapshots.
+
+Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.

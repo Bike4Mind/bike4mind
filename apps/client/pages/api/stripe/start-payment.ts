@@ -34,7 +34,7 @@ const handler = baseApi()
         type: CustomerType.User,
       });
       req.user.stripeCustomerId = customer.id;
-      await userRepository.update(req.user);
+      await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
     }
 
     let paymentDetails: PaymentDetails;

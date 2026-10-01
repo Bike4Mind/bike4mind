@@ -82,8 +82,9 @@ describe('projectService - delete', () => {
     expect(result.deletedAt).toBeInstanceOf(Date);
     expect(mockProjectRepo.findByIdAndUserId).toHaveBeenCalledWith(projectId, userId);
     expect(mockProjectRepo.update).toHaveBeenCalledWith({
-      ...existingProject,
+      id: projectId,
       deletedAt: expect.any(Date),
+      name: `[Deleted] ${projectId}`,
     });
   });
 

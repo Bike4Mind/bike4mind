@@ -209,7 +209,7 @@ Return only the edited content without any markdown code blocks or explanations.
     });
 
     const updatedFile: Partial<IFabFileDocument> = {
-      ...fabFile,
+      id: fabFile.id,
       fileUrl: await storage.generateSignedUrl(filePath, 3600),
       fileUrlExpireAt: new Date(Date.now() + 3600 * 1000),
       filePath,

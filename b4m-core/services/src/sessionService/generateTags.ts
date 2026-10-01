@@ -13,7 +13,7 @@ interface GenerateTagsSessionAdapters {
   db: {
     sessions: {
       findByIdAndUserId: (id: string, userId: string) => Promise<ISessionDocument | null | undefined>;
-      update: (session: ISessionDocument) => Promise<unknown>;
+      update: (session: Partial<ISessionDocument>) => Promise<unknown>;
     };
     chatHistories: {
       findBySessionId: (sessionId: string) => Promise<IChatHistoryItemDocument | null>;
@@ -58,6 +58,6 @@ export const generateTags = async (
 
   session.tags = JSON.parse(tags);
 
-  await db.sessions.update(session);
+  await db.sessions.update({ id: session.id, tags: session.tags });
   return session;
 };

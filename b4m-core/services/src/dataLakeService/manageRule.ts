@@ -155,6 +155,25 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  *
  * `grants` is the lake's active grant set, pre-fetched by the caller; omitted -> `[]`, so a caller
  * that has not threaded grants yet still gets rungs 1, 2 (via creator) and 4.
+ *
+ * WRITE-TIME RESIDUAL. Every manage write decides from a grant read and then writes, so a revoke can
+ * commit in between. The rule, rather than a list that drifts: a manage write is serialized against
+ * a revoke ONLY when it writes the lake DOCUMENT inside `withTransaction` with its gate inside the
+ * callback (see the SERIALIZATION note on `grantLakeAccess`). Today that is the grants door, the lake
+ * PUT, visibility, promote, demote and the cleanup claim (its sweep runs later and re-gates); the
+ * ownership apply (`acceptLakeOwnershipOffer` -> `applyLakeOwnershipTransfer`) is a transactional
+ * lake-doc writer too, gated by transfer authority rather than this rule. Every
+ * other manage-gated write - the archive/unarchive/delete/restore cascades, file membership and tags,
+ * proposals, findings, research, batches and taxonomy, rebuild queues - is gated once per request,
+ * and a revoke committing after that gate does not abort it. For the cascades that is deliberate:
+ * each runs its claim and sweep in one call, so a transaction would span the whole sweep, and
+ * re-checking after the claim would strand the lake mid-status.
+ *
+ * Two kinds of access loss collide with nothing, even against the serialized writes: a departure lapse
+ * (`lapseDepartedMemberLakeAccess` phase 1 expires the member's grant rows without writing the lake
+ * doc), and loss of an org role, since `administeredOrgIds`/`isAdmin` are request snapshots -
+ * current-membership enforcement for the org rungs is a separate, known gap (the snapshot is built
+ * in `toAccessContext.ts`).
  */
 export function canManageLake(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
