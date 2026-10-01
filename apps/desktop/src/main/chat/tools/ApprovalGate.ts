@@ -10,10 +10,15 @@ import type { ApprovalAlways } from './types';
  */
 const APPROVAL_TIMEOUT_MS = 10 * 60_000;
 
+/** The `optionId` of a question answer that was closed rather than skipped. */
+export const QUESTION_CANCELLED = 'cancelled';
+
 interface PendingApproval {
   sessionId: string;
   /** False for a tool whose effect cannot be undone: 'always' is downgraded to 'once'. */
   remember: boolean;
+  /** An untimed question card; see ApprovalRequestOptions.untimed. */
+  question: boolean;
   settle(answer: ChatApprovalAnswer): void;
 }
 
@@ -70,6 +75,12 @@ export interface ApprovalRequestOptions {
    * redirect, which is an instruction about one call, from ever becoming a policy.
    */
   rememberable?: readonly string[];
+  /**
+   * Wait until answered or aborted, with no expiry. For a question card: a person deciding
+   * something the model is blocked on is not an approval nobody can give, and auto-denying it
+   * after ten minutes would throw away the answer they were composing.
+   */
+  untimed?: boolean;
 }
 
 /**
@@ -163,7 +174,7 @@ export class ApprovalGate {
       const settle = (answer: ChatApprovalAnswer) => {
         if (done) return;
         done = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         signal.removeEventListener('abort', onAbort);
         this.pending.delete(approvalId);
         // An 'always' on an irreversible tool allows THIS call and nothing after it: the
@@ -182,11 +193,11 @@ export class ApprovalGate {
       };
 
       const onAbort = () => settle({ decision: 'deny' });
-      const timer = setTimeout(() => settle({ decision: 'deny' }), APPROVAL_TIMEOUT_MS);
+      const timer = options.untimed ? undefined : setTimeout(() => settle({ decision: 'deny' }), APPROVAL_TIMEOUT_MS);
       // Unref so a pending approval never keeps the process alive on quit.
-      timer.unref?.();
+      timer?.unref?.();
 
-      this.pending.set(approvalId, { sessionId, remember, settle });
+      this.pending.set(approvalId, { sessionId, remember, question: !!options.untimed, settle });
       signal.addEventListener('abort', onAbort, { once: true });
       if (signal.aborted) {
         settle({ decision: 'deny' });
@@ -202,6 +213,18 @@ export class ApprovalGate {
   /** Unknown ids are ignored: a stale click must never answer whatever request came next. */
   resolve(approvalId: string, answer: ChatApprovalAnswer): void {
     this.pending.get(approvalId)?.settle(answer);
+  }
+
+  /**
+   * The user moved on without answering: close this conversation's open question cards. Told
+   * apart from Skip by the option id, which a question card never otherwise carries.
+   */
+  cancelQuestions(sessionId: string): void {
+    for (const entry of this.pending.values()) {
+      if (entry.sessionId === sessionId && entry.question) {
+        entry.settle({ decision: 'deny', optionId: QUESTION_CANCELLED });
+      }
+    }
   }
 
   /** Deleting a conversation drops both its in-flight asks and anything it had standing. */

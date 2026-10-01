@@ -80,7 +80,13 @@ describe('ChatService generation tools', () => {
     await service.send(id, 'draw me a bicycle');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
-    expect(declaredTools()).toEqual(['generate_image', 'generate_speech', 'generate_sound_effect', 'generate_music']);
+    expect(declaredTools()).toEqual([
+      'generate_image',
+      'generate_speech',
+      'generate_sound_effect',
+      'generate_music',
+      'ask_user',
+    ]);
   });
 
   it('declares no generation tools when the app has nowhere to put the result', async () => {
@@ -89,7 +95,7 @@ describe('ChatService generation tools', () => {
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
 
-    expect(declaredTools()).toEqual([]);
+    expect(declaredTools()).toEqual(['ask_user']);
   });
 
   it('tells the model the output goes to the user and that it costs them', async () => {

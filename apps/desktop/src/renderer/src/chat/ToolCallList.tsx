@@ -13,10 +13,12 @@ import type {
   ChatToolNotice,
   ChatToolStatus,
 } from '@shared/chat';
+import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 import { ApprovalChoiceButtons } from './ApprovalChoice';
 import { DiffView } from './DiffView';
 import { ChevronIcon } from './icons';
 import { MediaAttachments } from './MediaAttachment';
+import { QuestionCard, QuestionSummary } from './QuestionCard';
 import {
   diffTotals,
   groupToolCalls,
@@ -269,6 +271,26 @@ function ToolCallDetail({ call }: { call: ChatToolCall }) {
   const diffs = call.diffs ?? (call.diff ? [call.diff] : []);
   const argument = diffs.length > 0 ? '' : summarizeInput(call);
 
+  const asked = call.name === ASK_USER_TOOL_NAME ? parseQuestions(call.input.questions) : null;
+  if (asked && 'questions' in asked && call.status === 'done') {
+    const outcome = parseOutcome(call.input.outcome);
+    return (
+      <Box data-testid="chat-tool-detail">
+        <QuestionSummary
+          questions={asked.questions}
+          answers={outcome?.status === 'answered' ? outcome.answers : undefined}
+          note={
+            outcome?.status === 'skipped'
+              ? 'Skipped'
+              : outcome?.status === 'cancelled'
+                ? 'Cancelled before it was answered'
+                : undefined
+          }
+        />
+      </Box>
+    );
+  }
+
   return (
     <Box data-testid="chat-tool-detail">
       {argument && (
@@ -515,6 +537,18 @@ export function ToolCallList({
     <Stack sx={{ my: 1 }}>
       {groupToolCalls(calls).map(group => {
         const waiting = group.calls[0];
+        const questions = waiting.name === ASK_USER_TOOL_NAME ? parseQuestions(waiting.input.questions) : null;
+        if (questions && 'questions' in questions && waiting.approvalId) {
+          const approvalId = waiting.approvalId;
+          return (
+            <QuestionCard
+              key={group.id}
+              questions={questions.questions}
+              onSubmit={answers => onRespond(approvalId, { decision: 'once', answers })}
+              onSkip={() => onRespond(approvalId, { decision: 'deny' })}
+            />
+          );
+        }
         return group.status === 'awaiting-approval' && waiting.approvalId ? (
           <ApprovalPrompt key={group.id} call={waiting} approvalId={waiting.approvalId} onRespond={onRespond} />
         ) : (

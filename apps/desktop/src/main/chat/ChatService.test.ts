@@ -176,7 +176,10 @@ describe('ChatService', () => {
     expect(preamble.role).toBe('system');
     expect(preamble.content).toMatch(/NO access/);
     expect(preamble.content).toMatch(/never invent a file name/i);
-    expect(post.mock.calls[0][1].options.tools).toEqual([]);
+    // Only the question tool: it reads no files, so it survives the missing grant.
+    expect(post.mock.calls[0][1].options.tools).toEqual([
+      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'ask_user' }) }),
+    ]);
   });
 
   it('keeps the partial reply when stopped, reported as done rather than an error', async () => {

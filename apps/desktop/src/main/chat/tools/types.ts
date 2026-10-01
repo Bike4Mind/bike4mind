@@ -404,6 +404,12 @@ export interface ToolSchema {
 export interface ToolDefinition {
   schema: ToolSchema;
   /**
+   * Waits on the user for an answer rather than for permission. ChatService validates the call,
+   * shows the card, and hands `run` the outcome as `input.outcome`. Never approval-gated and
+   * never offered to a conversation with no user in it.
+   */
+  interactive?: true;
+  /**
    * Declared by tools that run code or change something. The gate is enforced by ChatService,
    * not here, so a tool cannot run itself past it by forgetting to ask.
    *

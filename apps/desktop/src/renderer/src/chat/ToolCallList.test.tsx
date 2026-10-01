@@ -87,3 +87,60 @@ describe('ToolCallList', () => {
     expect(markup([settled])).not.toContain('data-testid="chat-tool-approval"');
   });
 });
+
+describe('ToolCallList ask_user', () => {
+  const questions = [
+    {
+      question: 'Which auth method?',
+      header: 'Auth',
+      options: [
+        { label: 'OAuth (Recommended)', description: 'Delegated.' },
+        { label: 'API keys', description: 'Static.' },
+      ],
+    },
+  ];
+  const asked = (overrides: Partial<ChatToolCall> = {}): ChatToolCall => ({
+    id: 'q1',
+    name: 'ask_user',
+    input: { questions },
+    status: 'awaiting-approval',
+    approvalId: 'approval-1',
+    ...overrides,
+  });
+
+  it('draws the question card, not an approval, while waiting', () => {
+    const html = markup([asked()]);
+    expect(html).toContain('data-testid="chat-question-card"');
+    expect(html).not.toContain('chat-tool-approval');
+  });
+
+  it('labels the settled row with the question and the answer', () => {
+    const html = markup([
+      asked({
+        status: 'done',
+        approvalId: undefined,
+        input: { questions, outcome: { status: 'answered', answers: [{ selected: ['OAuth (Recommended)'] }] } },
+      }),
+    ]);
+    expect(html).toContain('Asked: Which auth method? - OAuth (Recommended)');
+  });
+
+  it('shows the settled answers from the stored call after a reload', () => {
+    const html = markup([
+      asked({
+        status: 'done',
+        approvalId: undefined,
+        input: { questions, outcome: { status: 'answered', answers: [{ selected: [], other: 'mTLS' }] } },
+      }),
+    ]);
+    expect(html).toContain('data-testid="chat-question-answer-0"');
+    expect(html).toContain('mTLS');
+  });
+
+  it('says so on a skipped row', () => {
+    const html = markup([
+      asked({ status: 'done', approvalId: undefined, input: { questions, outcome: { status: 'skipped' } } }),
+    ]);
+    expect(html).toContain('Asked: Which auth method? - skipped');
+  });
+});

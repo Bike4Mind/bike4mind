@@ -1,4 +1,5 @@
 import type { ChatToolCall, ChatToolStatus } from '@shared/chat';
+import { ASK_USER_TOOL_NAME, parseOutcome, parseQuestions } from '@shared/questions';
 
 /**
  * How each tool is spoken about in the transcript.
@@ -56,6 +57,14 @@ const PHRASES: Record<string, ToolPhrases> = {
     toAlone: 'update the plan',
     many: n => `Updated the plan ${n} times`,
     active: 'Updating the plan...',
+  },
+  ask_user: {
+    did: 'Asked:',
+    didAlone: 'Asked a question',
+    to: 'ask',
+    toAlone: 'ask a question',
+    many: n => `Asked ${n} questions`,
+    active: 'Asking a question...',
   },
   explore: {
     did: 'Explored',
@@ -267,6 +276,10 @@ export function toolDuration(call: ChatToolCall): string | undefined {
 
 export function summarizeInput(call: ChatToolCall): string {
   const input = call.input ?? {};
+  if (call.name === ASK_USER_TOOL_NAME) {
+    const parsed = parseQuestions(input.questions);
+    return 'questions' in parsed ? parsed.questions.map(entry => entry.question).join(' ') : '';
+  }
   const keys = [...(ARGUMENT_PRIORITY[call.name] ?? []), ...DEFAULT_ARGUMENT_PRIORITY];
   for (const key of keys) {
     const value = input[key];
@@ -317,6 +330,23 @@ export function toolRowLabel(call: ChatToolCall): string {
   // panel, so "Ran x" would report an outcome this row never saw.
   if (call.status === 'moved') {
     return argument ? `Moved ${argument} to the background` : 'Moved a command to the background';
+  }
+
+  // The first question and, for a single one, what the user said: the row is the record.
+  if (call.name === ASK_USER_TOOL_NAME && call.status === 'done') {
+    const parsed = parseQuestions(call.input.questions);
+    const outcome = parseOutcome(call.input.outcome);
+    if ('questions' in parsed) {
+      const head = `Asked: ${shortenArgument(parsed.questions[0].question)}`;
+      if (outcome?.status === 'answered' && parsed.questions.length === 1) {
+        const answer = outcome.answers[0];
+        const said = [...(answer?.selected ?? []), ...(answer?.other ? [answer.other] : [])].join(', ');
+        return `${head} - ${shortenArgument(said || 'no answer')}`;
+      }
+      if (outcome?.status === 'skipped') return `${head} - skipped`;
+      if (outcome?.status === 'cancelled') return `${head} - cancelled`;
+      return head;
+    }
   }
 
   // Only on a call that succeeded: the tool writes it in the past tense as the thing it did, so

@@ -9,6 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
 export type ChatRole = 'user' | 'assistant';
@@ -256,6 +257,12 @@ export interface ChatApprovalAnswer {
   optionId?: string;
   /** What the user left in the chosen option's field, when it had one. */
   value?: string;
+  /**
+   * An `ask_user` card's replies, one per question, sent with decision 'once'. A 'deny' on that
+   * card is Skip. Question cards ride the approval channel because they wait on the user the
+   * same way: same id, same gate, same needs-action status.
+   */
+  answers?: ChatQuestionAnswer[];
 }
 
 /**

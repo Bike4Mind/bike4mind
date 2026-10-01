@@ -1,3 +1,4 @@
+import { askUser } from './askUserTool';
 import { applyPatch, usesApplyPatch } from './applyPatchTool';
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
 import { BROWSER_TOOLS } from './browserTools';
@@ -117,6 +118,7 @@ const BY_NAME = new Map(
     ...BROWSER_TOOLS,
     ...MEMORY_TOOLS,
     ...SKILL_TOOLS,
+    askUser,
   ].map(tool => [tool.schema.name, tool])
 );
 
@@ -155,6 +157,8 @@ export function toolsForRequest(options: {
   memory?: boolean;
   /** A skill catalog for this session. No folder grant needed; a global skill is the user's own file. */
   skills?: boolean;
+  /** A user is present to answer: main conversations, not spawned sessions. */
+  ask?: boolean;
   /**
    * Schemas contributed by the user's connected MCP servers, already namespaced and framed
    * (see chat/mcp/names.ts). They are appended rather than merged into a family above because
@@ -170,6 +174,7 @@ export function toolsForRequest(options: {
     ...(options.browser ? BROWSER_TOOLS : []),
     ...(options.memory ? MEMORY_TOOLS : []),
     ...(options.skills ? SKILL_TOOLS : []),
+    ...(options.ask ? [askUser] : []),
   ];
   return [
     ...available.map(tool => ({ toolSchema: tool.schema })),

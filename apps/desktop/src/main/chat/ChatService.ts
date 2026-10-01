@@ -34,6 +34,7 @@ import type {
 import { isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
+import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
 import { activeTodos, TODO_TOOL_NAME } from '@shared/todos';
 import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
@@ -81,7 +82,7 @@ import { SkillsPromptCache } from './skills/prompt';
 import type { SkillCatalog } from './skills/SkillCatalog';
 import type { McpManager } from './mcp/McpManager';
 import type { AccessStore } from './tools/AccessStore';
-import type { ApprovalGate } from './tools/ApprovalGate';
+import { QUESTION_CANCELLED, type ApprovalGate } from './tools/ApprovalGate';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import type { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { findTool, isOfferedEditTool, toolsForRequest, usesApplyPatch } from './tools/registry';
@@ -900,6 +901,9 @@ export class ChatService {
      */
     if (this.active.has(sessionId)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
+      // A card the model is parked on would hold this message behind the turn forever; the new
+      // message is the user moving on, so it closes the question rather than waiting on it.
+      this.deps.approvals?.cancelQuestions(sessionId);
       // Against the MERGED total: this send joins whatever is already waiting, so the cap has
       // to be read against the turn that will actually go out.
       const pending = this.deps.queue.list(sessionId)[0]?.attachments?.length ?? 0;
@@ -1363,6 +1367,8 @@ export class ChatService {
         browser: !!browser,
         memory: !!memory,
         skills: !!skills,
+        // A spawned session has no one watching it to answer; see ToolDefinition.interactive.
+        ask: !session.origin,
         mcp: mcpTools.map(binding => binding.definition.schema),
       });
       const project = session.mode === 'code' ? session.project : undefined;
@@ -1389,7 +1395,8 @@ export class ChatService {
           !!browser,
           patchEdits,
           !!memory,
-          skillsSection
+          skillsSection,
+          !session.origin
         )
       );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -1514,6 +1521,7 @@ export class ChatService {
             memory,
             skills,
             patchEdits,
+            ask: !session.origin,
             title: session.title,
           },
           sessionId,
@@ -1835,6 +1843,8 @@ export class ChatService {
       skills: SkillContext | undefined;
       /** Whether this turn's model edits with apply_patch rather than file_edit and file_write. */
       patchEdits: boolean;
+      /** Whether a user is present to answer an ask_user card. */
+      ask: boolean;
       /** The conversation's title, so a cross-session approval names it rather than its id. */
       title: string;
     },
@@ -1842,7 +1852,7 @@ export class ChatService {
     messageId: string,
     signal: AbortSignal
   ): Promise<ChatToolCall[]> {
-    const { roots, workingDirectory, media, host, explore, browser, memory, skills, patchEdits } = scope;
+    const { roots, workingDirectory, media, host, explore, browser, memory, skills, patchEdits, ask } = scope;
     return Promise.all(
       requested.map(async request => {
         const call: ChatToolCall = {
@@ -1851,13 +1861,25 @@ export class ChatService {
           input: parseArguments(request.arguments),
           status: 'running',
         };
-        const looping = this.doomLoop.record(sessionId, call.name, call.input);
+        // A question changes nothing, so asking it again is not a risky repeat.
+        const interactive = findTool(request.name)?.interactive === true;
+        const looping = interactive ? false : this.doomLoop.record(sessionId, call.name, call.input);
 
         // Built-ins are resolved FIRST and MCP tools only after, so no server can shadow one
         // even if the `mcp__` namespacing in mcp/names.ts were ever to let a name through.
         const tool = isOfferedEditTool(request.name, patchEdits)
           ? (findTool(request.name) ?? this.deps.mcp?.findTool(request.name))
           : undefined;
+        if (tool?.interactive && !ask) {
+          const unavailable: ChatToolCall = {
+            ...call,
+            status: 'error',
+            error: `${request.name} is not available in this conversation; no user is present to answer.`,
+          };
+          this.emit({ type: 'tool-start', sessionId, messageId, call });
+          this.emit({ type: 'tool-end', sessionId, messageId, call: unavailable });
+          return unavailable;
+        }
         if (!tool) {
           const instead = patchEdits ? 'apply_patch' : 'file_edit or file_write';
           const unknown: ChatToolCall = {
@@ -2453,6 +2475,8 @@ export class ChatService {
     signal: AbortSignal,
     looping: boolean
   ): Promise<ApprovalOutcome> {
+    if (tool.interactive) return this.awaitAnswer(call, sessionId, messageId, signal);
+
     const gate = this.deps.approvals;
     if (!gate || !tool.approval) return { input: call.input };
 
@@ -2581,6 +2605,50 @@ export class ChatService {
     }
 
     return { input: applyOption(call.input, picked ?? runnable[0], answer.value) };
+  }
+
+  /**
+   * Hold an interactive tool on its question card until the user answers, skips, or moves on.
+   *
+   * Rides the approval gate - same id, same IPC answer, same needs-action status - but is never
+   * subject to an approval mode and never times out. A malformed call falls through to `run`,
+   * which refuses it with the reason, so the model corrects the call instead of the user seeing
+   * a card that cannot be answered.
+   */
+  private async awaitAnswer(
+    call: ChatToolCall,
+    sessionId: string,
+    messageId: string,
+    signal: AbortSignal
+  ): Promise<ApprovalOutcome> {
+    const gate = this.deps.approvals;
+    const parsed = parseQuestions(call.input.questions);
+    if (!gate || 'error' in parsed) return { input: call.input };
+
+    // `outcome` is main's to set; a model that sends one must not be able to answer for the user.
+    const { outcome: _ignored, ...rest } = call.input;
+    const input = { ...rest, questions: parsed.questions };
+    const answer = await gate.request(
+      sessionId,
+      `${ASK_USER_TOOL_NAME}:${call.id}`,
+      signal,
+      approvalId => {
+        this.emit({
+          type: 'tool-start',
+          sessionId,
+          messageId,
+          call: { ...call, input, status: 'awaiting-approval', approvalId },
+        });
+      },
+      { remember: false, untimed: true }
+    );
+
+    let outcome: ChatQuestionOutcome;
+    if (signal.aborted || answer.optionId === QUESTION_CANCELLED) outcome = { status: 'cancelled' };
+    else if (answer.decision === 'once') {
+      outcome = { status: 'answered', answers: sanitizeAnswers(parsed.questions, answer.answers) };
+    } else outcome = { status: 'skipped' };
+    return { input: { ...input, outcome } };
   }
 
   /**
@@ -2851,7 +2919,8 @@ function buildSystemMessage(
    * the other guidance rather than beside the instruction files below it, because it is a list
    * of tools this model has and not an instruction the user wrote.
    */
-  skillsSection = ''
+  skillsSection = '',
+  ask = false
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -2867,6 +2936,7 @@ function buildSystemMessage(
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
         ...(memory ? MEMORY_GUIDANCE : []),
+        ...(ask ? ASK_GUIDANCE : []),
         ...mcpGuidance(mcpServers),
         ...(skillsSection ? [skillsSection] : []),
         '',
@@ -2972,6 +3042,7 @@ function buildSystemMessage(
       ...(media ? MEDIA_GUIDANCE : []),
       ...(host ? HOST_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
+      ...(ask ? ASK_GUIDANCE : []),
       ...mcpGuidance(mcpServers),
       ...(skillsSection ? [skillsSection] : []),
       '',
@@ -3058,6 +3129,15 @@ const MEDIA_GUIDANCE: readonly string[] = [
  * buries the few facts actually worth carrying. And a model given an index reads every line of
  * it before answering anything, which spends the context the index exists to save.
  */
+/** Kept short: the tool's own description carries the detail. */
+const ASK_GUIDANCE: readonly string[] = [
+  `Use ${ASK_USER_TOOL_NAME} only when blocked on a decision that is genuinely the user's; decide the`,
+  "rest yourself from the code, the project's conventions and sensible defaults. Never end a turn",
+  'with a list of "want me to do X, Y or Z?" options - ask them with the tool instead, with your',
+  'recommendation first and " (Recommended)" appended to its label. Never add an "Other" option,',
+  'and never use it to ask "should I proceed?".',
+];
+
 const MEMORY_GUIDANCE: readonly string[] = [
   'You keep memories for this project, across sessions. The index is in the block below, one',
   'line per memory; memory_read fetches one by name, memory_write saves or replaces one, and',
