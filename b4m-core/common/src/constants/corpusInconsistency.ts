@@ -472,17 +472,39 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
       const value = groups.val;
       if (!value) return null;
       const unitRaw = groups.unit || groups.curpre;
-      const mag = groups.mag;
+      const mag = groups.mag as string | undefined;
       const canonical = canonicalUnit(unitRaw);
       if (unitRequired && !canonical) return null;
-      const scaled = canonicalValue(value, mag);
       // Currency is decided from the matched group, not the canonical string: an unmapped `\p{Sc}`
       // symbol canonicalizes to itself and would otherwise read as a non-currency unit.
       const isCurrency = !!groups.curpre || (groups.unit ? groups.unit.toLowerCase() in CURRENCY_UNIT : false);
+
+      // Lowercase single-letter m/b should NOT scale unless a currency is present (e.g., `$5m`).
+      // Uppercase M/B or word magnitudes (thousand/million/billion/bn) continue to scale.
+      const effectiveMag = (() => {
+        if (!mag) return undefined;
+        const trimmed = mag.trim();
+        if (trimmed.length === 1) {
+          const lower = trimmed.toLowerCase();
+          if ((lower === 'm' || lower === 'b') && trimmed === lower && !isCurrency) return undefined;
+          // 'k' scales in either case; 'M'/'B' (captured under /i) scale too.
+          return lower;
+        }
+        // Word magnitudes (e.g., ' million') - keep.
+        return trimmed.toLowerCase();
+      })();
+
+      const scaled = canonicalValue(value, effectiveMag);
       // A prefix unit survives a clip that lands inside the value (`$1,200,000` cut to `$1,2`), unlike a
       // suffix unit, which the cut takes with it. A prefix-only value ending the passage is that fragment.
-      if (unitRequired && groups.curpre && !groups.unit && !mag && match.index + match[0].length >= sentence.length) {
-        return null;
+      if (unitRequired && groups.curpre && !groups.unit) {
+        const end = match.index + match[0].length;
+        const tail = sentence.slice(end).trim();
+        const hasTerminator = /[.!?]/.test(tail);
+        const clippedTail =
+          !hasTerminator &&
+          (tail === '' || /^(?:[\s,]+)$/u.test(tail) || /^(?:b|m|bil|mil|billion|million)\b/i.test(tail));
+        if (clippedTail) return null;
       }
       const includeUnit = unitRequired || (!isCurrency && !!canonical);
       return {
