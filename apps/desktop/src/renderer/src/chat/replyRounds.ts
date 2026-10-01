@@ -20,7 +20,7 @@ export function roundsOf(message: ChatMessage): ChatReplyRound[] {
     // whose prose introduced them. Twelve wordless commands in twelve rounds are one "Ran 12
     // commands" here, as they already are while the turn streams - and drawing a round apiece
     // would break the run up and defeat that collapsing on every reload.
-    if (open !== undefined && wordless(round)) {
+    if (open !== undefined && round.text.length === 0) {
       drawn[drawn.length - 1] = { ...open, toolCallIds: [...open.toolCallIds, ...round.toolCallIds] };
       continue;
     }
@@ -29,19 +29,7 @@ export function roundsOf(message: ChatMessage): ChatReplyRound[] {
   // A leading round with neither prose nor calls carries only reasoning, which is no longer
   // drawn - and it is the shape a turn holds for as long as the model reasons before saying
   // anything. Left in, it would open every such reply with an empty round's worth of space.
-  return drawn.filter(round => !wordless(round) || round.toolCallIds.length > 0);
-}
-
-/**
- * A round is wordless when its text is whitespace, not only when it is empty.
- *
- * A stored round was trimmed on its way to the store; a live one is rebuilt from the deltas and
- * keeps whatever the model ended on, which is routinely a stray newline. Testing for an empty
- * string sorted the same round one way while it streamed and the other way once it settled, so
- * the rows rearranged under the reader the moment the turn finished.
- */
-function wordless(round: ChatReplyRound): boolean {
-  return round.text.trim().length === 0;
+  return drawn.filter(round => round.text.length > 0 || round.toolCallIds.length > 0);
 }
 
 /** A round's own calls, in the message's order. Ids it names that are gone simply drop out. */

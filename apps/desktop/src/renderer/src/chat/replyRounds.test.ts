@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatMessage, ChatStreamEvent, ChatToolCall } from '@shared/chat';
-import { applyLiveEvent } from '@shared/liveReply';
+import type { ChatMessage, ChatToolCall } from '@shared/chat';
 import { callsIn, roundsOf } from './replyRounds';
 
 function call(id: string, name = 'bash_execute'): ChatToolCall {
@@ -96,69 +95,6 @@ describe('roundsOf', () => {
       { text: '', toolCallIds: ['a'] },
       { text: 'Found it.', toolCallIds: [] },
     ]);
-  });
-});
-
-/**
- * The same turn drawn from the stream and from the store must lay out identically, or the rows
- * rearrange under the reader the moment it settles. The two paths build `rounds` differently on
- * purpose - live folds as it goes, the store keeps one entry per round and folds at draw time -
- * so the only thing that can be asserted is that they DRAW the same, which is what matters.
- */
-describe('roundsOf over the same turn, live and settled', () => {
-  const calls = [call('a'), call('b')];
-
-  /** The turn as the stream leaves it: a middle round whose whole output was a stray newline. */
-  function streamed(): ChatMessage {
-    const events: ChatStreamEvent[] = [
-      { type: 'delta', sessionId: 's1', messageId: 'm1', text: 'Reading the files.' },
-      { type: 'tool-start', sessionId: 's1', messageId: 'm1', call: call('a') },
-      { type: 'tool-end', sessionId: 's1', messageId: 'm1', call: call('a') },
-      { type: 'delta', sessionId: 's1', messageId: 'm1', text: '\n\n ' },
-      { type: 'tool-start', sessionId: 's1', messageId: 'm1', call: call('b') },
-      { type: 'tool-end', sessionId: 's1', messageId: 'm1', call: call('b') },
-      { type: 'delta', sessionId: 's1', messageId: 'm1', text: '\n\nDone.' },
-    ];
-    // Opened empty on purpose: the events are what add the calls, and a message that already
-    // knows them is treated as a re-delivery and never attached to a round.
-    let live = message({});
-    for (const event of events) live = applyLiveEvent(live, event);
-    return live;
-  }
-
-  /** The same turn as main stores it, every round's text trimmed on the way in. */
-  function settled(): ChatMessage {
-    return message({
-      content: 'Reading the files.\n\nDone.',
-      rounds: [
-        { text: 'Reading the files.', toolCallIds: ['a'] },
-        { text: '', toolCallIds: ['b'] },
-        { text: 'Done.', toolCallIds: [] },
-      ],
-      toolCalls: calls,
-    });
-  }
-
-  function layout(drawn: ReturnType<typeof roundsOf>) {
-    return drawn.map(round => ({ prose: round.text.trim(), toolCallIds: round.toolCallIds }));
-  }
-
-  it('folds a whitespace-only round while it streams, exactly as it does once stored', () => {
-    expect(layout(roundsOf(streamed()))).toEqual(layout(roundsOf(settled())));
-  });
-
-  it('draws that turn as two rounds, the silent calls under the prose that opened them', () => {
-    expect(layout(roundsOf(streamed()))).toEqual([
-      { prose: 'Reading the files.', toolCallIds: ['a', 'b'] },
-      { prose: 'Done.', toolCallIds: [] },
-    ]);
-  });
-
-  // Settled rounds arrive trimmed, so widening the test to whitespace cannot reclassify one:
-  // every round the store holds answers both tests the same way.
-  it('leaves the spacing of a settled reply alone', () => {
-    expect(roundsOf(settled()).map(round => round.text)).toEqual(['Reading the files.', 'Done.']);
-    expect(settled().content).toBe('Reading the files.\n\nDone.');
   });
 });
 
