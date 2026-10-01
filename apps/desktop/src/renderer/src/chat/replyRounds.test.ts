@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatMessage, ChatToolCall } from '@shared/chat';
+import type { ChatMessage, ChatStreamEvent, ChatToolCall } from '@shared/chat';
+import { applyLiveEvent } from '@shared/liveReply';
 import { callsIn, roundsOf } from './replyRounds';
 
 function call(id: string, name = 'bash_execute'): ChatToolCall {
@@ -103,5 +104,33 @@ describe('callsIn', () => {
     const calls = callsIn({ text: '', toolCallIds: ['c', 'a', 'gone'] }, [call('a'), call('b'), call('c')]);
 
     expect(calls.map(entry => entry.id)).toEqual(['a', 'c']);
+  });
+});
+
+describe('roundsOf while a reply streams', () => {
+  const ev = (event: Omit<ChatStreamEvent, 'sessionId' | 'messageId'>) =>
+    ({ sessionId: 's1', messageId: 'm1', ...event }) as ChatStreamEvent;
+
+  it('never moves a call out of the round it was first drawn in', () => {
+    const events = [
+      ev({ type: 'delta', text: 'Reading.' }),
+      ev({ type: 'tool-start', call: call('a') }),
+      ev({ type: 'delta', text: '\n' }),
+      ev({ type: 'tool-start', call: call('b') }),
+      ev({ type: 'delta', text: '\n\nNow editing.' }),
+      ev({ type: 'tool-start', call: call('c') }),
+      ev({ type: 'delta', text: 'Done.' }),
+    ];
+    let live = message({});
+    const seen = new Map<string, number>();
+    for (const event of events) {
+      live = applyLiveEvent(live, event);
+      roundsOf(live).forEach((round, index) =>
+        round.toolCallIds.forEach(id => {
+          expect(seen.get(id) ?? index).toBe(index);
+          seen.set(id, index);
+        })
+      );
+    }
   });
 });

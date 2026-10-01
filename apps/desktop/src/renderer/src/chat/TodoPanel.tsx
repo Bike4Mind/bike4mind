@@ -40,7 +40,11 @@ export function TodoPanel({ todos, turnOpen }: { todos: readonly TodoItem[] | nu
           </Typography>
         </Box>
         {open && (
-          <Stack component="ul" spacing={0.25} sx={{ m: 0, mt: 0.5, p: 0, listStyle: 'none' }}>
+          <Stack
+            component="ul"
+            spacing={0.25}
+            sx={{ m: 0, mt: 0.5, p: 0, listStyle: 'none', maxHeight: '25vh', overflowY: 'auto' }}
+          >
             {todos.map((todo, index) => (
               <Stack
                 component="li"

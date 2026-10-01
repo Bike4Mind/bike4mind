@@ -303,6 +303,8 @@ function RelayTurn({ message }: { message: ChatMessage }) {
   );
 }
 
+const PIN_THRESHOLD_PX = 48;
+
 export function MessageThread({
   messages,
   sessionId,
@@ -335,15 +337,40 @@ export function MessageThread({
   footer?: ReactNode;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
+  const host = useRef<HTMLDivElement>(null);
+  const column = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true);
   const last = messages[messages.length - 1];
   const lastContent = (last?.content.length ?? 0) + (last?.toolCalls?.length ?? 0);
+  const empty = messages.length === 0;
+
+  // A reader who scrolled up to look at something stays there; one at the bottom follows.
+  const onScroll = () => {
+    const el = host.current;
+    if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < PIN_THRESHOLD_PX;
+  };
 
   // Keyed on the growing last message too, so the view follows tokens as they stream in.
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' });
+    if (last?.role === 'user') pinned.current = true;
+    if (pinned.current) bottom.current?.scrollIntoView({ block: 'end' });
   }, [messages.length, lastContent]);
 
-  if (messages.length === 0) {
+  // Content that grows or a viewport that shrinks with no new text (a plan panel, a queued
+  // banner, a taller composer) would otherwise leave the foot of the reply behind the composer.
+  useEffect(() => {
+    const el = host.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const follow = () => {
+      if (pinned.current) bottom.current?.scrollIntoView({ block: 'end' });
+    };
+    const observer = new ResizeObserver(follow);
+    observer.observe(el);
+    if (column.current) observer.observe(column.current);
+    return () => observer.disconnect();
+  }, [empty]);
+
+  if (empty) {
     return (
       <Box sx={{ flex: 1, display: 'grid', placeItems: 'center', p: 3 }}>
         <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-empty">
@@ -356,8 +383,8 @@ export function MessageThread({
   return (
     // Scrolling on the outer box, the column on the inner one: reversing the two would put the
     // scrollbar in the middle of the window rather than at the edge of the pane.
-    <Box sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
-      <Stack spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
+    <Box ref={host} onScroll={onScroll} sx={{ flex: 1, ...scrollingColumnHostSx }} data-testid="chat-thread">
+      <Stack ref={column} spacing={3} sx={{ ...contentColumnSx, py: 3 }}>
         {messages.map((message, index) =>
           message.relay ? (
             <RelayTurn key={message.id} message={message} />
@@ -376,6 +403,11 @@ export function MessageThread({
               {...(index === messages.length - 1 && streaming ? { status, live: true } : {})}
             />
           )
+        )}
+        {/* The turn line normally rides the reply, but the last message is not always that reply:
+            a queued prompt or a relayed message can land after it while the turn still runs. */}
+        {streaming && status && last && !(last.role === 'assistant' && !last.relay && !last.system) && (
+          <Box>{status}</Box>
         )}
         {footer}
         {/* Stays the LAST child: the auto-scroll targets it, so anything below it would be
