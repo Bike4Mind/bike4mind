@@ -3,10 +3,13 @@ import { ConflictError } from '@server/utils/errors';
 
 export type LakeConnectorKind = 'github' | 'googleDrive';
 
-const CONNECTORS: Record<
-  LakeConnectorKind,
-  { findByDataLakeIdAny: (lakeId: string) => Promise<unknown>; conflictMessage: string }
-> = {
+type LakeConnector = {
+  findByDataLakeIdAny: (lakeId: string) => Promise<{ id: string } | null>;
+  conflictMessage: string;
+};
+
+// Key order is check order: when a lake is bound to several kinds, the first one names the conflict.
+const CONNECTORS: Record<LakeConnectorKind, LakeConnector> = {
   github: {
     findByDataLakeIdAny: lakeId => orgGitHubLakeConnectionRepository.findByDataLakeIdAny(lakeId),
     conflictMessage: 'This data lake is already connected to a GitHub repository',
@@ -26,18 +29,25 @@ const CONNECTOR_KINDS = Object.keys(CONNECTORS) as LakeConnectorKind[];
  * Bound means a row exists, enabled or not: a disabled row still holds that model's per-lake unique
  * index, so the lake is not free.
  *
- * Fail-closed: every kind in CONNECTORS is checked, so a new connector is refused everywhere the
- * moment it is registered. `except` exempts the caller's own kind when that route already resolves
- * same-kind reconnects itself (Drive: same-folder reuse plus the folder/lake unique indexes).
+ * Every kind in CONNECTORS is checked unless exempted, so a route cannot forget one - but a new
+ * connector model is only covered once it is added to CONNECTORS (and LakeConnectorKind) here.
+ *
+ * `except` skips the caller's own kind when its create already refuses a same-kind second claim with
+ * a more specific message (Drive: the targetDataLakeId unique index -> "connected to a different
+ * Drive folder"). It plays no part in same-folder reuse, which never reaches this guard.
  */
 export async function assertLakeConnectorFree(
   lakeId: string,
   options: { except?: LakeConnectorKind } = {}
 ): Promise<void> {
-  const kinds = CONNECTOR_KINDS.filter(kind => kind !== options.except);
-  const bound = await Promise.all(kinds.map(kind => CONNECTORS[kind].findByDataLakeIdAny(lakeId)));
-  const conflict = kinds.find((_, index) => bound[index]);
+  const checked = await Promise.all(
+    CONNECTOR_KINDS.filter(kind => kind !== options.except).map(async kind => ({
+      kind,
+      bound: Boolean(await CONNECTORS[kind].findByDataLakeIdAny(lakeId)),
+    }))
+  );
+  const conflict = checked.find(({ bound }) => bound);
   if (conflict) {
-    throw new ConflictError(CONNECTORS[conflict].conflictMessage);
+    throw new ConflictError(CONNECTORS[conflict.kind].conflictMessage);
   }
 }

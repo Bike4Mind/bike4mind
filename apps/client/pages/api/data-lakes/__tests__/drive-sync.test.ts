@@ -265,6 +265,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh', 'u1');
     expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1', forceFullWalk: true });
     expect(status).toHaveBeenCalledWith(202);
+    expect(h.ghConnFindByDataLakeIdAny).not.toHaveBeenCalled();
   });
 
   it('enforces one connector per lake whatever EnableDataLakeGitHub is set to', () => {

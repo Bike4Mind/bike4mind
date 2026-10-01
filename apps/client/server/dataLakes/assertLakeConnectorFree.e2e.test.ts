@@ -56,6 +56,23 @@ describe('assertLakeConnectorFree (real mongod, cross-collection)', () => {
     );
   });
 
+  it('refuses on a real Drive row unless the caller exempts its own Drive kind', async () => {
+    await OrgGoogleDriveConnection.create({
+      organizationId: ORG,
+      authMode: 'oauth',
+      driveFolderId: 'folder-one',
+      folderName: 'One',
+      targetDataLakeId: LAKE_ID,
+      connectedBy: USER,
+      enabled: true,
+      status: 'connected',
+      connectedAt: new Date(),
+    });
+
+    await expect(assertLakeConnectorFree(LAKE_ID)).rejects.toThrow(/already connected to a Google Drive folder/i);
+    await expect(assertLakeConnectorFree(LAKE_ID, { except: 'googleDrive' })).resolves.toBeUndefined();
+  });
+
   it('resolves when no connector row exists for the lake', async () => {
     await expect(assertLakeConnectorFree(LAKE_ID, { except: 'googleDrive' })).resolves.toBeUndefined();
   });

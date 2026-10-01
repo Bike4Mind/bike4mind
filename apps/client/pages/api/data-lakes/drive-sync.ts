@@ -174,6 +174,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       // gates: a same-folder Re-sync on a lake that already carries a GitHub row must still reach the
       // reuse branch. Not gated on EnableDataLakeGitHub: with that flag off the client cannot see a
       // bound repository, so this is the only thing stopping a second connector.
+      // Drive is exempt here: a second Drive folder on this lake falls to the E11000 catch below, whose
+      // message is more specific than the guard's.
       await assertLakeConnectorFree(lake.id, { except: 'googleDrive' });
       try {
         const created = await orgGoogleDriveConnectionRepository.create({

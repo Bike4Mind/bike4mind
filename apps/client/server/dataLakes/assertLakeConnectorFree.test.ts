@@ -49,6 +49,23 @@ describe('assertLakeConnectorFree', () => {
     );
   });
 
+  it('ignores a GitHub row (and never queries it) when except is github, but still refuses Drive', async () => {
+    h.ghFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1' });
+    await expect(assertLakeConnectorFree('lake1', { except: 'github' })).resolves.toBeUndefined();
+    expect(h.ghFindByDataLakeIdAny).not.toHaveBeenCalled();
+
+    h.driveFindByDataLakeIdAny.mockResolvedValue({ id: 'drive1' });
+    await expect(assertLakeConnectorFree('lake1', { except: 'github' })).rejects.toThrow(
+      /already connected to a Google Drive folder/i
+    );
+  });
+
+  it('names GitHub when the lake is bound to both kinds', async () => {
+    h.ghFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1' });
+    h.driveFindByDataLakeIdAny.mockResolvedValue({ id: 'drive1' });
+    await expect(assertLakeConnectorFree('lake1')).rejects.toThrow(/already connected to a GitHub repository/i);
+  });
+
   it('checks both kinds when no options are passed', async () => {
     h.ghFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveFindByDataLakeIdAny.mockResolvedValue(null);
