@@ -29,16 +29,15 @@
 // "require" condition to a CommonJS file and cannot throw under any Node or bundler, rather than
 // depending on require(esm) engaging in whatever context the route is loaded from.
 //
-// Why this probe lives in the Docker builder stage (Option C) rather than option A (a deployer
-// post-build hook) or option B (a dedicated `next build` job in ci.yml): the self-host image
-// workflow already runs a real `next build` on every PR that touches the app, and its builder
-// stage already hosts the post-build guards (pruneTestRoutes.mjs, check-standalone-tree.mjs).
-// Option A fires after the environment is live - an alarm, not a gate - and lives in another
-// repo. Option B duplicates a build this workflow already pays for, at ~12GB of heap per PR,
-// for no extra signal. Running here costs zero extra build minutes. Turbopack reports an
-// external module's load failure as an async unhandled rejection whose message WRAPS the
+// Why here: the self-host image workflow already runs a real `next build` on every PR that
+// touches the app, and its builder stage already hosts the post-build guards (pruneTestRoutes.mjs,
+// check-standalone-tree.mjs). Running this there costs zero extra build minutes.
+//
+// Turbopack reports an external module's load failure as a rejection whose message WRAPS the
 // underlying error code ("Failed to load external module <name>: Error [ERR_REQUIRE_ESM]: ..."),
-// so classification reads the code out of the message too, not just off `error.code`.
+// so classification reads the code out of the message too, not just off `error.code`. It also
+// emits the route as an async module, so the probe awaits the exports promise instead of trusting
+// a fixed window started at require().
 //
 // The builder runs this with --env-file=.env.selfhost.example: without runtime env the resource
 // shim throws at load for most routes (it reads required vars eagerly), which both masks any
@@ -46,7 +45,9 @@
 // aborts on missing config is therefore a FAILURE, not a warning - an env-masked route is an
 // unprobed route, and a missing key in the template is itself a self-host defect.
 //
-// Usage: node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs <.next/standalone/<app>/.next>
+// Usage: node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs <standalone root> <.next dir relative to it>
+// The tree is copied outside the builder before probing, so a module missing from the standalone
+// trace cannot resolve through the builder's own node_modules.
 // Exit 1 on any load failure, or when zero routes are found (the guard cannot pass silently).
 
 import fs from 'node:fs';
@@ -86,22 +87,39 @@ const file = process.argv[1];
 const write = (report) => {
   process.stdout.write(${JSON.stringify(REPORT_MARKER)} + JSON.stringify(report) + '\\n');
 };
+let reported = false;
 const report = (error) => {
+  if (reported) return;
+  reported = true;
   const code = error && error.code;
   const message = error && error.message ? String(error.message) : String(error);
   write({ loaded: false, code, message });
   process.exit(0);
 };
 process.on('unhandledRejection', (error) => report(error));
+let exported;
 try {
-  require(file);
+  exported = require(file);
 } catch (error) {
   report(error);
 }
-setTimeout(() => {
-  write({ loaded: true });
-  process.exit(0);
-}, 25);
+// A short settle after the module settles, so a rejection from a nested async-module promise
+// (which the runtime .catch()es, hiding it from unhandledRejection) still lands here.
+const settle = () => {
+  setTimeout(() => {
+    write({ loaded: true });
+    process.exit(0);
+  }, 25);
+};
+// Turbopack emits these routes as async modules: require() returns the exports as a Promise,
+// and the external-module throw surfaces as a rejection only after the route's awaited ESM
+// imports resolve - often hundreds of ms later. Await the exports promise so it is caught;
+// a fixed window started at require() would read the route as clean.
+if (exported && typeof exported.then === 'function') {
+  exported.then(settle, report);
+} else {
+  settle();
+}
 `;
 
 /**
@@ -214,10 +232,15 @@ export function describeLoadError(message) {
 /**
  * Pass/fail is on a resolution failure only. A route whose load dies on missing self-host config
  * fails too: it never reached its own requires, so a real external-ESM bug behind it would go
- * unseen. A clean load is `{}`; anything else (network, a side effect that throws) is a warning -
- * it is not the failure class this guards and must not fail every build that lacks a credential.
+ * unseen. An unreported child (killed, OOM, an early process.exit) is also a failure: the route
+ * was never probed. A clean load is `{}`; anything else (network, a side effect that throws) is a
+ * warning - it is not the failure class this guards and must not fail every build that lacks a
+ * credential.
  */
-export function classifyLoadResult({ code, message, timedOut } = {}) {
+export function classifyLoadResult({ code, message, timedOut, unreported } = {}) {
+  // No report at all (killed, OOM, a route that exits the child) means the probe learned
+  // nothing about the route. An unprobed route cannot be a silent pass.
+  if (unreported) return FAIL;
   if (timedOut) return WARN;
   const text = String(message ?? '');
   if (text.includes(SELF_HOST_CONFIG_MISSING)) return FAIL;
@@ -264,7 +287,7 @@ function probeRoute(file, timeoutMs) {
     child.stderr.on('data', (chunk) => (stderr += chunk));
     child.on('error', (error) => {
       clearTimeout(timer);
-      resolve({ code: undefined, message: String(error), timedOut });
+      resolve({ code: undefined, message: String(error), timedOut, unreported: true });
     });
     child.on('close', (exitCode, signal) => {
       clearTimeout(timer);
@@ -276,7 +299,7 @@ function probeRoute(file, timeoutMs) {
       const fallback =
         [stderr.trim(), stdout.trim()].filter(Boolean).join('\n') ||
         `child exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`;
-      resolve({ code: undefined, message: fallback, timedOut });
+      resolve({ code: undefined, message: fallback, timedOut, unreported: true });
     });
   });
 }
@@ -295,32 +318,60 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
+/**
+ * Copies the standalone root to a fresh temp dir and returns the `.next` path inside it. Node
+ * resolves a route's externalized deps by walking ancestor node_modules, so probing in place
+ * lets the builder's full install (which sits ABOVE the standalone root) satisfy a module the
+ * trace omitted - the runner image does not carry that install. The copy has no such ancestors.
+ */
+export function isolateStandaloneTree(standaloneRoot, nextDirRel) {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'api-route-probe-'));
+  const isolatedRoot = path.join(tempRoot, 'standalone');
+  fs.cpSync(standaloneRoot, isolatedRoot, { recursive: true });
+  return {
+    nextDir: path.join(isolatedRoot, nextDirRel),
+    cleanup: () => fs.rmSync(tempRoot, { recursive: true, force: true }),
+  };
+}
+
 async function main() {
-  const [nextDir] = process.argv.slice(2);
-  if (!nextDir) {
-    console.error('usage: check-api-routes-cjs-require.mjs <.next/standalone/<app>/.next dir>');
+  const [standaloneRoot, nextDirRel] = process.argv.slice(2);
+  if (!standaloneRoot || !nextDirRel) {
+    console.error(
+      'usage: check-api-routes-cjs-require.mjs <standalone root> <.next dir relative to it> ' +
+        '(e.g. apps/client/.next/standalone apps/client/.next)'
+    );
     process.exit(1);
   }
-  if (!fs.existsSync(nextDir)) {
-    console.error(`check-api-routes-cjs-require: no build output at ${nextDir}`);
+  const sourceNextDir = path.resolve(standaloneRoot, nextDirRel);
+  if (!fs.existsSync(sourceNextDir)) {
+    console.error(`check-api-routes-cjs-require: no build output at ${sourceNextDir}`);
     process.exit(1);
   }
 
-  const modules = listApiRouteModules(nextDir);
+  const modules = listApiRouteModules(sourceNextDir);
   if (modules.length === 0) {
     // A guard that finds nothing to guard must not pass: a moved build root would otherwise
     // read as "all clear" and the load-failure class would go unchecked.
-    console.error(`check-api-routes-cjs-require: no API route modules under ${path.join(nextDir, 'server/pages/api')}`);
+    console.error(
+      `check-api-routes-cjs-require: no API route modules under ${path.join(sourceNextDir, 'server/pages/api')}`
+    );
     process.exit(1);
   }
 
-  const timeoutMs = Number(process.env.API_ROUTE_PROBE_TIMEOUT_MS) || 20_000;
-  const concurrency = typeof os.availableParallelism === 'function' ? os.availableParallelism() : 4;
-  const results = await mapWithConcurrency(modules, concurrency, async (rel) => {
-    const file = path.resolve(nextDir, rel);
-    const result = await probeRoute(file, timeoutMs);
-    return { rel, result, status: classifyLoadResult(result) };
-  });
+  const { nextDir, cleanup } = isolateStandaloneTree(standaloneRoot, nextDirRel);
+  let results;
+  try {
+    const timeoutMs = Number(process.env.API_ROUTE_PROBE_TIMEOUT_MS) || 20_000;
+    const concurrency = typeof os.availableParallelism === 'function' ? os.availableParallelism() : 4;
+    results = await mapWithConcurrency(modules, concurrency, async (rel) => {
+      const file = path.resolve(nextDir, rel);
+      const result = await probeRoute(file, timeoutMs);
+      return { rel, result, status: classifyLoadResult(result) };
+    });
+  } finally {
+    cleanup();
+  }
 
   const failures = results.filter((r) => r.status === FAIL);
   const warnings = results.filter((r) => r.status === WARN);
@@ -353,4 +404,6 @@ async function main() {
 }
 
 // Only run as a CLI; importing this module (the unit test does) must not spawn probes or exit.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+// argv[1] is compared by realpath because `import.meta.url` is already realpath'd, and a
+// symlinked invocation would otherwise exit 0 without probing anything.
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) main();

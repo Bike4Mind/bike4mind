@@ -178,9 +178,10 @@ const nextConfig = {
     'yocto-queue',
     // sanitize-html require()s ESM-only htmlparser2. This entry bundles the pair; the
     // dual-published-htmlparser2 override in root package.json is the backstop. Dropping this
-    // entry alone still loads (the override covers it); dropping both makes every importer 500
-    // with ERR_REQUIRE_ESM at module load, which check-api-routes-cjs-require.mjs reproduces
-    // against the built standalone tree.
+    // entry alone still loads (the override covers it); dropping both makes the two importing
+    // routes (/api/feedback and /api/admin/email/whats-new-content) 500 with ERR_REQUIRE_ESM at
+    // module load, which check-api-routes-cjs-require.mjs reproduces against the built standalone
+    // tree, naming both.
     'sanitize-html',
     // Nivo packages
     '@nivo/pie',
