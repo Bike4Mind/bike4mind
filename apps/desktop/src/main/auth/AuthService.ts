@@ -28,8 +28,11 @@ import type { TokenVault } from './tokenVault';
  * the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
  * `client_id` (RFC 8628 s3.4). Constructing one {@link DeviceFlowClient} with it is what
  * guarantees that.
+ *
+ * Production only registers the CLI's device client; switch back to 'b4m-desktop' once the
+ * desktop client ships server-side.
  */
-export const DESKTOP_OAUTH_CLIENT_ID: OAuthDeviceClientId = 'b4m-desktop';
+export const DESKTOP_OAUTH_CLIENT_ID: OAuthDeviceClientId = 'b4m-cli';
 
 /** Where each blocked state is resolved. MFA lives in a modal on the web app's root. */
 const ACCOUNT_PAGE_PATHS: Record<Exclude<AccountPage, 'verification'>, string> = {

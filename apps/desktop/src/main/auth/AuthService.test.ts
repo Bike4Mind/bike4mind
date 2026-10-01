@@ -87,8 +87,8 @@ function build(options: {
 }
 
 describe('AuthService', () => {
-  it('registers under the desktop client id the server allowlists', () => {
-    expect(DESKTOP_OAUTH_CLIENT_ID).toBe('b4m-desktop');
+  it('registers under the client id production allowlists', () => {
+    expect(DESKTOP_OAUTH_CLIENT_ID).toBe('b4m-cli');
   });
 
   it('drives the device flow to a signed-in session without exposing a token', async () => {
