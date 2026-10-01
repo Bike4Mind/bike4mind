@@ -770,9 +770,10 @@ export const RetrievalSummarySchema = z.object({
    * text - prose could leak a lake's identity through phrasing - so a future exclusion cause (e.g.
    * an archived or quota-limited lake) adds an enum value here rather than a description.
    *
-   * 'access' is the only reason today: the caller's org membership or the lake's public listing
-   * surfaced it as a candidate (they could see it exists) but they hold neither its own
-   * gate/entitlement nor an ownership or grant exception for it.
+   * 'access' is the only reason today: the caller could see the lake exists (their org membership,
+   * the lake's public listing, or having created it; an admin may see any lake) but they hold
+   * neither its own gate/entitlement nor an ownership or grant exception for it. A lake the caller
+   * could not see is never counted, so the count cannot confirm that a guessed lake tag exists.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
