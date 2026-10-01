@@ -874,20 +874,39 @@ describe('driveLakeIngest consumer', () => {
   });
 
   it('does not double-retire duplicates whose driveFileId is gone from the folder', async () => {
-    // Every copy of a vanished driveFileId is already in `removed` and unpicked there; the duplicate
+    // Every copy of a vanished driveFileId is already in `removed` and handled there; the duplicate
     // sweep must skip it rather than unpick it a second time (removeFileFromLake throws NotFoundError
     // the second time, which would abort the reconcile mid-prune). `keep` anchors the walk so the
     // empty-walk guard does not fire and this actually exercises the prune.
     h.walkFolder.mockResolvedValue([{ id: 'keep', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
     setExisting([
-      { id: 'ff-keep', driveFileId: 'keep', createdAt: '2026-01-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
-      { id: 'ff-a', driveFileId: 'gone', createdAt: '2026-01-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
-      { id: 'ff-b', driveFileId: 'gone', createdAt: '2026-02-01T00:00:00.000Z', tags: [{ name: 'lake-tag' }] },
+      {
+        id: 'ff-keep',
+        driveFileId: 'keep',
+        userId: 'user1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tags: [{ name: 'lake-tag' }],
+      },
+      {
+        id: 'ff-a',
+        driveFileId: 'gone',
+        userId: 'user1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        tags: [{ name: 'lake-tag' }],
+      },
+      {
+        id: 'ff-b',
+        driveFileId: 'gone',
+        userId: 'user1',
+        createdAt: '2026-02-01T00:00:00.000Z',
+        tags: [{ name: 'lake-tag' }],
+      },
     ]);
 
     await run();
 
-    // Both vanished copies unpicked exactly once each, by the genuine-delete pass only.
+    // Both vanished copies unpicked exactly once each, by the genuine-delete pass only, and each
+    // deleted as its owner - a file gone from the folder leaves with its source.
     expect(h.removeFileFromLake).toHaveBeenCalledTimes(2);
     expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-a', expect.anything(), {
       origin: 'connector',
@@ -895,8 +914,9 @@ describe('driveLakeIngest consumer', () => {
     expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-b', expect.anything(), {
       origin: 'connector',
     });
-    // A genuine delete is membership-only - the owner keeps their copy, nothing is deleted outright.
-    expect(h.deleteFabFile).not.toHaveBeenCalled();
+    expect(h.deleteFabFile).toHaveBeenCalledTimes(2);
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-a' }, expect.anything());
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-b' }, expect.anything());
   });
 
   it('does NOT retire the stale copy when the edited file fails to re-fetch (no eviction)', async () => {
@@ -957,11 +977,11 @@ describe('driveLakeIngest consumer', () => {
   });
 
   it('removes a file from the lake when it is gone from the folder (no re-ingest)', async () => {
-    // d1 still present (unchanged); d2 vanished from the folder -> prune its lake membership.
+    // d1 still present (unchanged); d2 vanished from the folder -> unpick AND delete it as its owner.
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
     setExisting([
-      { id: 'ff-d1', driveFileId: 'd1' },
-      { id: 'ff-d2', driveFileId: 'd2' },
+      { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+      { id: 'ff-d2', driveFileId: 'd2', userId: 'user1', tags: [] },
     ]);
 
     await run();
@@ -974,9 +994,94 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       { origin: 'connector' }
     );
+    // A connector-minted file leaves with its source: the delete reaps chunks/index/links/S3/quota.
+    expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d2' }, expect.anything());
+    // Reclaimed bytes come off the removed row's own owner.
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'user1' }), -100);
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+  });
+
+  it('only unpicks a removed file that is shared outside its owner', async () => {
+    // The delete is global, so it would take the share vector with it; the sharee keeps reading the
+    // copy rather than losing access. Same gate as an edit-retire.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    setExisting([
+      { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+      { id: 'ff-d2', driveFileId: 'd2', userId: 'user1', tags: [], users: [{ userId: 'bob', permissions: 'read' }] },
+    ]);
+
+    await run();
+
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-d2',
+      expect.anything(),
+      { origin: 'connector' }
+    );
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it('only unpicks a removed file that another lake still holds', async () => {
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    setExisting([
+      { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+      { id: 'ff-d2', driveFileId: 'd2', userId: 'user1', tags: [] },
+    ]);
+    h.findOtherLakeClaims.mockResolvedValue({ metaTagNames: ['datalake:handbuilt-b'], prefixArmLakes: [] });
+
+    await run();
+
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-d2',
+      expect.anything(),
+      { origin: 'connector' }
+    );
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
+  });
+
+  it('only unpicks a removed file whose owner no longer exists, and the run still completes', async () => {
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    setExisting([
+      { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+      { id: 'ff-d2', driveFileId: 'd2', userId: 'deleted-user', tags: [] },
+    ]);
+    h.userRepoFindById.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-d2',
+      expect.anything(),
+      { origin: 'connector' }
+    );
+    expect(h.deleteFabFile).not.toHaveBeenCalled();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
+  });
+
+  it('does not carry forward notebook links or tags when a removed file is deleted', async () => {
+    // A removal has no replacement, so there is nothing to move the links/tags onto - they go with
+    // the source. (An edit's retire carries them; see the edit tests.)
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    setExisting([
+      { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+      { id: 'ff-d2', driveFileId: 'd2', userId: 'user1', tags: [{ name: 'q3-review', strength: 7 }] },
+    ]);
+    h.sessionsWithKnowledgeId.mockResolvedValue([{ id: 'nb1', knowledgeIds: ['ff-d2'] }]);
+
+    await run();
+
+    expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d2' }, expect.anything());
+    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
 
   it('refuses to prune the whole lake when the folder walk comes back empty (transient-glitch guard)', async () => {
@@ -2282,11 +2387,17 @@ describe('driveLakeIngest consumer', () => {
       });
     });
 
-    it('prunes a previously-tracked file that Drive reports removed', async () => {
+    it('deletes a previously-tracked file Drive confirms is trashed (present with trashed: true)', async () => {
       withCursor();
       setExisting([{ id: 'ff-d1', driveFileId: 'd1', userId: 'user1' }]);
       h.listChanges.mockResolvedValue({
-        changes: [{ fileId: 'd1', removed: true }],
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true },
+          },
+        ],
         newStartPageToken: 'cursor-1',
       });
 
@@ -2299,9 +2410,118 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         { origin: 'connector' }
       );
+      expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d1' }, expect.anything());
       expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
         fullWalk: false,
       });
+    });
+
+    it('unpicks, but does NOT delete, tracked files whose removal Drive did not confirm (bare removed: true)', async () => {
+      // `removed: true` with no `file` also means the connecting user LOST ACCESS to the file, and the
+      // two are indistinguishable from the feed. A revoked share on the connected folder arrives as one
+      // such entry per tracked file, so an all-or-nothing guard is not enough: whenever even one tracked
+      // file stays visible (the user's own upload, a domain-wide share), every other file would be
+      // permanently deleted. Unconfirmed removals are unpicked only - reversible - and the disconnect
+      // sweep deletes the orphan later.
+      withCursor();
+      setExisting([
+        { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+        { id: 'ff-d2', driveFileId: 'd2', userId: 'user1' },
+        { id: 'ff-d3', driveFileId: 'd3', userId: 'user1' },
+      ]);
+      h.listChanges.mockResolvedValue({
+        changes: [
+          { fileId: 'd1', removed: true },
+          { fileId: 'd2', removed: true },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+
+      await run();
+
+      expect(h.deleteFabFile).not.toHaveBeenCalled();
+      expect(h.removeFileFromLake).toHaveBeenCalledTimes(2);
+      expect(h.removeFileFromLake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'ff-d1',
+        expect.anything(),
+        { origin: 'connector' }
+      );
+      expect(h.removeFileFromLake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'ff-d2',
+        expect.anything(),
+        { origin: 'connector' }
+      );
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
+        fullWalk: false,
+      });
+    });
+
+    it('still deletes a single confirmed-tracked file when the lake holds more than one', async () => {
+      // A positive confirmation is not swallowed just because other tracked files survive alongside.
+      withCursor();
+      setExisting([
+        { id: 'ff-d1', driveFileId: 'd1', userId: 'user1' },
+        { id: 'ff-d2', driveFileId: 'd2', userId: 'user1' },
+      ]);
+      h.listChanges.mockResolvedValue({
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true },
+          },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+
+      await run();
+
+      expect(h.removeFileFromLake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'ff-d1',
+        expect.anything(),
+        { origin: 'connector' }
+      );
+      expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d1' }, expect.anything());
+      expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
+        fullWalk: false,
+      });
+    });
+
+    it('still ingests the adds in a window that also carries an unconfirmed removal', async () => {
+      // A mixed window must not let the removal handling swallow the adds (the removed all-or-nothing
+      // guard this replaced dropped `pureAdds`/`changed` when it fired).
+      withCursor();
+      setExisting([{ id: 'ff-d1', driveFileId: 'd1', userId: 'user1' }]);
+      h.listChanges.mockResolvedValue({
+        changes: [
+          { fileId: 'd1', removed: true },
+          {
+            fileId: 'd2',
+            removed: false,
+            file: { id: 'd2', name: 'b.txt', mimeType: 'text/plain', parents: ['FOLDER'] },
+          },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledWith(expect.objectContaining({ driveFileId: 'd2' }), expect.anything());
+      expect(h.removeFileFromLake).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'ff-d1',
+        expect.anything(),
+        { origin: 'connector' }
+      );
+      expect(h.deleteFabFile).not.toHaveBeenCalled();
     });
 
     it('prunes a previously-tracked file that moved out of the connected tree (still live in Drive, no longer here)', async () => {
@@ -2328,6 +2548,7 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         { origin: 'connector' }
       );
+      expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-d1' }, expect.anything());
     });
 
     it('falls back to a full walk when the stored cursor is invalid, and re-establishes a fresh one', async () => {
@@ -2386,7 +2607,7 @@ describe('driveLakeIngest consumer', () => {
       );
     });
 
-    it('retires EVERY stored copy of a removed driveFileId, not just the newest', async () => {
+    it('retires EVERY stored copy of a confirmed-removed driveFileId, not just the newest', async () => {
       // The full-walk arm unpicks every copy; this arm used to take newestCopyOf only. The duplicate
       // sweep deliberately skips an id gone from the folder, and Drive never mentions a removed id
       // again - so an older copy missed here would stay a live lake member forever, holding content
@@ -2397,7 +2618,13 @@ describe('driveLakeIngest consumer', () => {
         { id: 'ff-newest', driveFileId: 'd1', userId: 'user1', createdAt: '2026-02-01T00:00:00.000Z' },
       ]);
       h.listChanges.mockResolvedValue({
-        changes: [{ fileId: 'd1', removed: true }],
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true },
+          },
+        ],
         newStartPageToken: 'cursor-1',
       });
 
@@ -2418,6 +2645,10 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         { origin: 'connector' }
       );
+      // Both copies are deleted as their owner - every stored copy of a removed id leaves the lake.
+      expect(h.deleteFabFile).toHaveBeenCalledTimes(2);
+      expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-older' }, expect.anything());
+      expect(h.deleteFabFile).toHaveBeenCalledWith('user1', { id: 'ff-newest' }, expect.anything());
     });
 
     it('holds the cursor back when an ancestry check could not be resolved this run', async () => {
@@ -2501,6 +2732,7 @@ describe('classifyDriveChanges', () => {
       adds: [{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }],
       changed: [],
       removedFileIds: [],
+      unconfirmedRemovalIds: [],
       ambiguous: 0,
     });
   });
@@ -2531,7 +2763,7 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 0 });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 0 });
     expect(h.isUnderRoot).not.toHaveBeenCalled();
   });
 
@@ -2553,7 +2785,9 @@ describe('classifyDriveChanges', () => {
     expect(h.isUnderRoot).not.toHaveBeenCalled();
   });
 
-  it('marks a tracked file removed on Drive removal without checking ancestry', async () => {
+  it('marks a tracked file an UNCONFIRMED removal on a bare Drive removal without checking ancestry', async () => {
+    // `removed: true` with no `file` also means the caller lost access - indistinguishable here - so it
+    // must not land in the delete list, and there is nothing to ancestry-check.
     const result = await classifyDriveChanges(
       drive,
       [{ fileId: 'd1', removed: true }],
@@ -2561,7 +2795,21 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
       logger
     );
+    expect(result.removedFileIds).toEqual([]);
+    expect(result.unconfirmedRemovalIds).toEqual(['d1']);
+    expect(h.isUnderRoot).not.toHaveBeenCalled();
+  });
+
+  it('marks a tracked file a CONFIRMED removal when Drive still shows it trashed', async () => {
+    const result = await classifyDriveChanges(
+      drive,
+      [{ fileId: 'd1', removed: false, file: { id: 'd1', name: 'a.txt', mimeType: 'text/plain', trashed: true } }],
+      'ROOT',
+      id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
+      logger
+    );
     expect(result.removedFileIds).toEqual(['d1']);
+    expect(result.unconfirmedRemovalIds).toEqual([]);
     expect(h.isUnderRoot).not.toHaveBeenCalled();
   });
 
@@ -2618,7 +2866,7 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 1 });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 1 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('tracked file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -2634,7 +2882,7 @@ describe('classifyDriveChanges', () => {
       () => undefined,
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 1 });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 1 });
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('new file'),
       expect.objectContaining({ fileId: 'd1' })
@@ -2656,7 +2904,7 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'SAME' } : undefined),
       logger
     );
-    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], ambiguous: 0 });
+    expect(result).toEqual({ adds: [], changed: [], removedFileIds: [], unconfirmedRemovalIds: [], ambiguous: 0 });
   });
 
   it('collapses repeated entries for one fileId to the last one (the feed is a log, not a snapshot)', async () => {
@@ -2687,7 +2935,9 @@ describe('classifyDriveChanges', () => {
 
   it('emits a removed fileId only once when the feed reports it more than once', async () => {
     // A doubled removal makes the second removeFileFromLake throw NotFoundError mid-prune, outside
-    // the try that settles reclaimed bytes - so the whole run aborts and retries to the DLQ.
+    // the try that settles reclaimed bytes - so the whole run aborts and retries to the DLQ. Last
+    // wins, so a trash record followed by a bare removal in one window is the unconfirmed signal
+    // (a caller that merely lost access emits the bare one), and it must appear exactly once.
     const result = await classifyDriveChanges(
       drive,
       [
@@ -2698,10 +2948,11 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'A' } : undefined),
       logger
     );
-    expect(result.removedFileIds).toEqual(['d1']);
+    expect(result.unconfirmedRemovalIds).toEqual(['d1']);
+    expect(result.removedFileIds).toEqual([]);
   });
 
-  it('takes the LAST entry per fileId, so a file edited and then deleted classifies as removed', async () => {
+  it('takes the LAST entry per fileId, so a file edited and then bare-removed classifies as an unconfirmed removal', async () => {
     h.isUnderRoot.mockResolvedValue(true);
     const result = await classifyDriveChanges(
       drive,
@@ -2717,7 +2968,8 @@ describe('classifyDriveChanges', () => {
       id => (id === 'd1' ? { driveMd5Checksum: 'OLD' } : undefined),
       logger
     );
-    expect(result.removedFileIds).toEqual(['d1']);
+    expect(result.unconfirmedRemovalIds).toEqual(['d1']);
+    expect(result.removedFileIds).toEqual([]);
     expect(result.changed).toEqual([]);
   });
 

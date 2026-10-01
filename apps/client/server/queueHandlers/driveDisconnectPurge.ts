@@ -14,6 +14,7 @@ import type { IDataLakeDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import { deleteDriveOrphans, listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
@@ -95,6 +96,15 @@ export async function runDriveDisconnectPurge(
       logger.info('[driveDisconnectPurge] purged a slice; continuing', { connectionId, sliceSize });
       return 'continued';
     }
+
+    // Every lake MEMBER is gone. Now the ORPHANS: files this connection unpicked (removed from the
+    // folder, or a pre-fix edit-retire) keep their `driveConnectionId` but lost the lake meta-tag, so
+    // purgeSlice above cannot see them. Kept copies - shared, held by another lake, ownerless - are
+    // left alive by the shared gate. Run before release: a throw here leaves the connection
+    // disconnecting so the retry re-sweeps (the finder is soft-delete filtered, so already-deleted
+    // orphans are skipped) rather than revoking the grant over a half-swept set.
+    const orphans = await listDeletableDriveOrphans(lake, connectionId, logger);
+    await deleteDriveOrphans(orphans, logger);
   }
 
   await releaseDriveConnection(connectionId, organizationId);
