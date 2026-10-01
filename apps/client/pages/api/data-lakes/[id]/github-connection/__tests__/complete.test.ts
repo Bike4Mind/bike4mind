@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ForbiddenError } from '@server/utils/errors';
+import { ConflictError, ForbiddenError } from '@server/utils/errors';
 
-// Unit test of the authorize-first callback: exchanges GitHub's code and holds the user token for
-// the picker, binding nothing yet. The state/nonce plumbing and the connect-completion lib (each
-// with their own dedicated unit tests) are mocked; the request body's Zod validation runs for real.
+// Unit test of the repository-pick completion route. The connect lib (which has its own dedicated
+// unit tests) is mocked; the request body's Zod validation runs for real.
 const h = vi.hoisted(() => ({
   readStateNonceHash: vi.fn(),
   clearStateNonce: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
-  authorizeGitHubLakeConnection: vi.fn(),
+  completeGitHubLakeConnection: vi.fn(),
   requireGitHubLakeAppConfig: vi.fn(),
+  toGitHubLakeConnectionResponse: vi.fn(),
   requireFeatureEnabled: vi.fn(() => () => {}),
 }));
 
@@ -34,14 +34,14 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
-  authorizeGitHubLakeConnection: h.authorizeGitHubLakeConnection,
+  completeGitHubLakeConnection: h.completeGitHubLakeConnection,
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,
+  toGitHubLakeConnectionResponse: h.toGitHubLakeConnectionResponse,
 }));
 
-import handler from '../github-callback';
+import handler from '../complete';
 import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 
-// Captured at module load time, before beforeEach clears mock call history.
 const flagGateCallsAtLoad = h.requireFeatureEnabled.mock.calls.map(call => call[0]);
 
 const makeRes = () => {
@@ -49,19 +49,21 @@ const makeRes = () => {
   const status = vi.fn(() => ({ json }));
   return { res: { json, status } as never, json, status };
 };
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const makeReq = (body: Record<string, unknown>) =>
-  ({ method: 'POST', body, user: { id: 'u1', isAdmin: false } }) as never;
+  ({ method: 'POST', query: { id: 'lake1' }, body, user: { id: 'u1', isAdmin: false }, logger }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
-const VALID_BODY = { state: 'state-token', code: 'the-code' };
+const VALID_BODY = { installationId: 42, repositoryId: 100 };
 
-describe('POST /api/data-lakes/github-callback', () => {
+describe('POST /api/data-lakes/[id]/github-connection/complete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.readStateNonceHash.mockReturnValue('nonce-hash');
     h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app' });
     h.requireGitHubLakeAppConfig.mockImplementation(config => config);
-    h.authorizeGitHubLakeConnection.mockResolvedValue({ dataLakeId: 'lake1' });
+    h.completeGitHubLakeConnection.mockResolvedValue({ id: 'conn1' });
+    h.toGitHubLakeConnectionResponse.mockReturnValue({ id: 'conn1', accountLogin: 'acme' });
   });
 
   it('registers the feature-flag gate for both EnableDataLakes and EnableDataLakeGitHub', () => {
@@ -70,46 +72,57 @@ describe('POST /api/data-lakes/github-callback', () => {
 
   it('400s a missing field in the body', async () => {
     const { res } = makeRes();
-    await expect(run(makeReq({ state: 'x' }), res)).rejects.toThrow();
-    expect(h.authorizeGitHubLakeConnection).not.toHaveBeenCalled();
+    await expect(run(makeReq({ installationId: 42 }), res)).rejects.toThrow();
+    expect(h.completeGitHubLakeConnection).not.toHaveBeenCalled();
   });
 
-  it('403s and clears the nonce when state/nonce verification fails', async () => {
-    h.authorizeGitHubLakeConnection.mockRejectedValue(new ForbiddenError('Invalid authorization state.'));
+  it('400s a non-positive repositoryId', async () => {
     const { res } = makeRes();
-    await expect(run(makeReq(VALID_BODY), res)).rejects.toThrow(/invalid authorization state/i);
-    expect(h.clearStateNonce).toHaveBeenCalledWith(res, NONCE_SLOT.githubLakeConnect);
+    await expect(run(makeReq({ ...VALID_BODY, repositoryId: -1 }), res)).rejects.toThrow();
+    expect(h.completeGitHubLakeConnection).not.toHaveBeenCalled();
   });
 
-  it('passes state, code, nonceHash, user and config through to authorizeGitHubLakeConnection', async () => {
+  it('passes the lake id, nonce hash, pick, user, logger, and config through', async () => {
     const { res } = makeRes();
     await run(makeReq(VALID_BODY), res);
-    expect(h.authorizeGitHubLakeConnection).toHaveBeenCalledWith({
+    expect(h.completeGitHubLakeConnection).toHaveBeenCalledWith({
       config: { slug: 'test-app' },
       user: { id: 'u1', isAdmin: false },
-      state: 'state-token',
-      code: 'the-code',
+      dataLakeId: 'lake1',
       nonceHash: 'nonce-hash',
+      installationId: 42,
+      repositoryId: 100,
+      logger,
     });
   });
 
-  it('200s with the dataLakeId on success', async () => {
-    const { res, json } = makeRes();
+  it('201s with the connection on success', async () => {
+    const { res, status, json } = makeRes();
     await run(makeReq(VALID_BODY), res);
-    expect(json).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+    expect(status).toHaveBeenCalledWith(201);
+    expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', accountLogin: 'acme' } });
+    // A connection minted just now has ingested nothing: its first sync is only enqueued.
+    expect(h.toGitHubLakeConnectionResponse).toHaveBeenCalledWith(expect.anything(), 0);
   });
 
-  it('does not clear the nonce cookie on success - it lives on through the repository picker', async () => {
+  it('clears the nonce cookie on success', async () => {
     const { res } = makeRes();
     await run(makeReq(VALID_BODY), res);
+    expect(h.clearStateNonce).toHaveBeenCalledWith(res, NONCE_SLOT.githubLakeConnect);
+  });
+
+  it('does not clear the nonce cookie on failure - the flow stays alive so the user can pick again', async () => {
+    h.completeGitHubLakeConnection.mockRejectedValue(new ForbiddenError('Your GitHub authorization expired.'));
+    const { res } = makeRes();
+    await expect(run(makeReq(VALID_BODY), res)).rejects.toMatchObject({ statusCode: 403 });
     expect(h.clearStateNonce).not.toHaveBeenCalled();
   });
 
-  it('clears the nonce cookie on a failed exchange, so the flow restarts rather than being replayed', async () => {
-    h.authorizeGitHubLakeConnection.mockRejectedValue(new Error('boom'));
+  it('propagates a conflict from a racing connect without clearing the nonce', async () => {
+    h.completeGitHubLakeConnection.mockRejectedValue(new ConflictError('That repository is already connected.'));
     const { res } = makeRes();
-    await expect(run(makeReq(VALID_BODY), res)).rejects.toThrow('boom');
-    expect(h.clearStateNonce).toHaveBeenCalledWith(res, NONCE_SLOT.githubLakeConnect);
+    await expect(run(makeReq(VALID_BODY), res)).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.clearStateNonce).not.toHaveBeenCalled();
   });
 
   it('reads the nonce hash from the github-lake-connect cookie slot', async () => {

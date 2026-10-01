@@ -32,6 +32,7 @@ describe('dataLakeKeys parity', () => {
     expect(dataLakeKeys.driveConnectionRoot).toEqual(['lake-drive-connection']);
     expect(dataLakeKeys.gitHubConnection('lake1')).toEqual(['lake-github-connection', 'lake1']);
     expect(dataLakeKeys.gitHubConnectionRoot).toEqual(['lake-github-connection']);
+    expect(dataLakeKeys.gitHubRepositoryChoices('lake1')).toEqual(['lake-github-repository-choices', 'lake1']);
   });
 
   it('per-lake files: query key, per-lake invalidation prefix, global root', () => {

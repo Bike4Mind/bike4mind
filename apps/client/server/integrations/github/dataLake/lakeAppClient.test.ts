@@ -22,6 +22,7 @@ import {
   getGitHubLakeAppConfig,
   deleteInstallation,
   listInstallerVisibleRepositories,
+  listUserInstallations,
   getInstallationOctokit,
   getRepository,
   getBranchHeadSha,
@@ -114,14 +115,14 @@ describe('listInstallerVisibleRepositories', () => {
     vi.clearAllMocks();
   });
 
-  it('maps the paginated repositories to id/fullName', async () => {
+  it('maps the paginated repositories to id/fullName/defaultBranch/private', async () => {
     h.mockOctokit.paginate.mockResolvedValue([
-      { id: 1, full_name: 'acme/one' },
-      { id: 2, full_name: 'acme/two' },
+      { id: 1, full_name: 'acme/one', default_branch: 'main', private: true },
+      { id: 2, full_name: 'acme/two', default_branch: 'trunk', private: false },
     ]);
     await expect(listInstallerVisibleRepositories('user-token', 42)).resolves.toEqual([
-      { id: 1, fullName: 'acme/one' },
-      { id: 2, fullName: 'acme/two' },
+      { id: 1, fullName: 'acme/one', defaultBranch: 'main', private: true },
+      { id: 2, fullName: 'acme/two', defaultBranch: 'trunk', private: false },
     ]);
   });
 
@@ -134,6 +135,64 @@ describe('listInstallerVisibleRepositories', () => {
     const err = Object.assign(new Error('rate limited'), { status: 429 });
     h.mockOctokit.paginate.mockRejectedValue(err);
     await expect(listInstallerVisibleRepositories('user-token', 42)).rejects.toBe(err);
+  });
+});
+
+describe('listUserInstallations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('maps a personal account installation to accountType User, with its settings URL', async () => {
+    h.mockOctokit.paginate.mockResolvedValue([
+      {
+        id: 10,
+        account: { login: 'octocat', type: 'User' },
+        html_url: 'https://github.com/settings/installations/10',
+        repository_selection: 'selected',
+        permissions: { contents: 'read', metadata: 'read' },
+      },
+    ]);
+    await expect(listUserInstallations('user-token')).resolves.toEqual([
+      {
+        id: 10,
+        accountLogin: 'octocat',
+        accountType: 'User',
+        settingsUrl: 'https://github.com/settings/installations/10',
+        repositorySelection: 'selected',
+        permissions: { contents: 'read', metadata: 'read' },
+      },
+    ]);
+  });
+
+  it('maps an organization account installation to accountType Organization', async () => {
+    h.mockOctokit.paginate.mockResolvedValue([
+      {
+        id: 11,
+        account: { login: 'acme', type: 'Organization' },
+        html_url: 'https://github.com/organizations/acme/settings/installations/11',
+        repository_selection: 'all',
+        permissions: { contents: 'read' },
+      },
+    ]);
+    await expect(listUserInstallations('user-token')).resolves.toEqual([
+      expect.objectContaining({ id: 11, accountLogin: 'acme', accountType: 'Organization' }),
+    ]);
+  });
+
+  it('falls back to the account slug and Organization type when there is no login (e.g. a bot account)', async () => {
+    h.mockOctokit.paginate.mockResolvedValue([
+      {
+        id: 12,
+        account: { slug: 'some-bot', type: 'Bot' },
+        html_url: 'https://github.com/settings/installations/12',
+        repository_selection: 'selected',
+        permissions: {},
+      },
+    ]);
+    await expect(listUserInstallations('user-token')).resolves.toEqual([
+      expect.objectContaining({ accountLogin: 'some-bot', accountType: 'Organization' }),
+    ]);
   });
 });
 

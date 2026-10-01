@@ -21,13 +21,19 @@ export type GitHubLakeAppConfig = {
   clientSecret: string;
 };
 
-export type GitHubLakeRepository = { id: number; fullName: string };
+export type GitHubLakeRepository = { id: number; fullName: string; defaultBranch: string; private: boolean };
 
 export type GitHubLakeInstallation = {
   id: number;
   accountLogin: string;
   repositorySelection: 'all' | 'selected';
   permissions: Record<string, string | undefined>;
+};
+
+/** An installation as the user's own token sees it: GET /user/installations. */
+export type GitHubLakeUserInstallation = GitHubLakeInstallation & {
+  accountType: 'User' | 'Organization';
+  settingsUrl: string;
 };
 
 const isSet = (value: string | undefined): value is string => Boolean(value) && value !== UNSET_SECRET;
@@ -66,7 +72,7 @@ function tokenOctokit(token: string): Octokit {
   return new Octokit({ auth: token, userAgent: USER_AGENT, request: { timeout: GITHUB_REQUEST_TIMEOUT_MS } });
 }
 
-/** Exchanges the `code` GitHub returns after install (user authorization on install) for a user token. */
+/** Exchanges the `code` GitHub returns from the App's OAuth authorize (or user authorization on install) for a user token. */
 export async function exchangeInstallerCode(config: GitHubLakeAppConfig, code: string): Promise<string> {
   const auth = createAppAuth({
     appId: config.appId,
@@ -92,14 +98,39 @@ export async function listInstallerVisibleRepositories(
       'GET /user/installations/{installation_id}/repositories',
       { installation_id: installationId, per_page: 100 }
     );
-    return repositories.map(repo => ({ id: repo.id, fullName: repo.full_name }));
+    return repositories.map(repo => ({
+      id: repo.id,
+      fullName: repo.full_name,
+      defaultBranch: repo.default_branch,
+      private: repo.private,
+    }));
   } catch (error) {
     if (isNotFound(error)) return null;
     throw error;
   }
 }
 
-/** Revokes a user token minted only to verify an installation; it is never stored. */
+/**
+ * The App's installations the token's user can access: their own account's, and an org's when they
+ * are a member of it (not only its owners).
+ */
+export async function listUserInstallations(userToken: string): Promise<GitHubLakeUserInstallation[]> {
+  const installations = await tokenOctokit(userToken).paginate('GET /user/installations', { per_page: 100 });
+  return installations.map(installation => {
+    const account = installation.account;
+    const isUser = account !== null && 'login' in account && account.type === 'User';
+    return {
+      id: installation.id,
+      accountLogin: account && 'login' in account ? account.login : (account?.slug ?? ''),
+      accountType: isUser ? 'User' : 'Organization',
+      settingsUrl: installation.html_url,
+      repositorySelection: installation.repository_selection,
+      permissions: { ...installation.permissions },
+    };
+  });
+}
+
+/** Revokes a user token once its flow is done with it; only its ciphertext is ever stored (GitHubLakeAuthGrant). */
 export async function revokeInstallerToken(config: GitHubLakeAppConfig, userToken: string): Promise<void> {
   await appOctokit(config).request('DELETE /applications/{client_id}/token', {
     client_id: config.clientId,
