@@ -6,7 +6,7 @@ import { DataLakeAccessGrantModel, DataLakeModel, Organization, Session } from '
 import { dataLakeService } from '@bike4mind/services';
 import { resolveRetrievalLakeScopeForUser } from './resolveRetrievalLakeScope';
 import { labelLakeRetrievability } from './labelLakeRetrievability';
-import { admitSessionLakes, findOwnSession } from './resolveLakeListRetrievalScope';
+import { findOwnSession, resolveLakeListRetrievalScope } from './resolveLakeListRetrievalScope';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -22,7 +22,8 @@ const C = new mongoose.Types.ObjectId().toString();
 const KEY = 'acme-premium';
 
 type User = Parameters<typeof resolveRetrievalLakeScopeForUser>[0];
-const userOf = (id: string, isAdmin = false) => ({ id, tags: [], isAdmin }) as unknown as User;
+type ListRequest = Parameters<typeof resolveLakeListRetrievalScope>[0];
+const userOf = (id: string, isAdmin = false, tags: string[] = []) => ({ id, tags, isAdmin }) as unknown as User;
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
 let rows: { id: string; name: string; datalakeTag: string }[];
@@ -43,10 +44,10 @@ const seedLake = async (name: string, createdByUserId: string, extra: Record<str
   return { id: String(doc._id), name, datalakeTag: `datalake:${name}` };
 };
 
+// The route's own composition, end to end; only the entitlement memo is pre-seeded on the request.
 const labelsFor = async (user: User, entitlementKeys: string[] = [], sessionId?: string) => {
-  let scope = await resolveRetrievalLakeScopeForUser(user, { entitlementKeys, staticRegistryBypass: false });
-  const session = await findOwnSession(sessionId, user.id);
-  if (session) scope = await admitSessionLakes(scope, session, user.id);
+  const req = { user, entitlements: entitlementKeys } as unknown as ListRequest;
+  const scope = await resolveLakeListRetrievalScope(req, sessionId);
   return Object.fromEntries(labelLakeRetrievability(rows, scope).map(r => [r.name, r.retrievable]));
 };
 
@@ -108,6 +109,11 @@ describe('GET /api/data-lakes retrievable label against the real retrieval resol
     expect(labels['entitlement-gated']).toBe(false);
   });
 
+  it('labels a requiredUserTag lake true for a caller holding the tag', async () => {
+    expect((await labelsFor(userOf(B, false, ['acme-gold'])))['tag-gated']).toBe(true);
+    expect((await labelsFor(userOf(B)))['tag-gated']).toBe(false);
+  });
+
   it('labels an org-scoped lake for a member and not for an outsider', async () => {
     expect((await labelsFor(userOf(A)))['org-member']).toBe(true);
     expect((await labelsFor(userOf(B)))['org-member']).toBe(false);
@@ -132,6 +138,13 @@ describe('session-aware label (?sessionId=) against the shared chat admission', 
     const sid = await seedSession(B, { preauthorizedLakeIds: [byName('org-managed').id] });
     expect(await findOwnSession(sid, A)).toBeNull();
     expect(await labelsFor(userOf(A), [], sid)).toEqual(await labelsFor(userOf(A)));
+  });
+
+  it('labels by caller reach, not as all-unsearchable, for an explicit empty session scope', async () => {
+    const sid = await seedSession(A, { retrievalTags: [], lakeScopeExplicit: true });
+    const labels = await labelsFor(userOf(A), [], sid);
+    expect(labels).toEqual(await labelsFor(userOf(A)));
+    expect(labels.own).toBe(true);
   });
 
   it('treats a malformed or repeated session id as no session', async () => {

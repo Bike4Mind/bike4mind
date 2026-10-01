@@ -7,8 +7,6 @@ import {
 } from './narrowLakeAccessToSession';
 import { unionPreauthorizedLakeAccess } from './unionPreauthorizedLakeAccess';
 
-export { vetPreauthorizedLakeIds } from '../llm/vetPreauthorizedLakeIds';
-
 export const NO_SESSION_LAKES: ResolvedLakeAccessSet = {
   dataLakeTags: [],
   dataLakeTagPrefixes: [],
