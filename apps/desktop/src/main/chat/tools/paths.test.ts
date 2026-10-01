@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PathAccessDenied, resolveWithinRoots } from './paths';
+import { PathAccessDenied, resolveWithinRoots, resolveWithinRootsPhysically } from './paths';
 
 describe('resolveWithinRoots', () => {
   let base: string;
@@ -85,5 +85,62 @@ describe('resolveWithinRoots', () => {
     );
     expect(error?.message).toContain('/etc/passwd');
     expect(error?.message).not.toContain(granted);
+  });
+});
+
+/**
+ * The resolver for paths the KERNEL will walk rather than ones the caller will open. The pair
+ * below is the whole difference: `path.resolve` applies `..` to the name on its left, and the
+ * kernel applies it to whatever the components before it resolved to.
+ */
+describe('resolveWithinRootsPhysically', () => {
+  let base: string;
+  let granted: string;
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), 'b4m-physical-')));
+    granted = join(base, 'granted');
+    await mkdir(join(granted, 'sub'), { recursive: true });
+    await writeFile(join(granted, 'in.txt'), 'hi', 'utf8');
+    await writeFile(join(base, 'out.txt'), 'secret', 'utf8');
+    await symlink(granted, join(granted, 'self'));
+  });
+
+  it('allows a path inside a granted root', async () => {
+    await expect(resolveWithinRootsPhysically('in.txt', [granted], granted)).resolves.toBe(join(granted, 'in.txt'));
+  });
+
+  it('allows a dot-dot that stays inside once resolved', async () => {
+    await expect(resolveWithinRootsPhysically('../in.txt', [granted], join(granted, 'sub'))).resolves.toBe(
+      join(granted, 'in.txt')
+    );
+  });
+
+  it('denies a dot-dot that leaves the root through a link back to it', async () => {
+    await expect(resolveWithinRootsPhysically('self/../out.txt', [granted], granted)).rejects.toBeInstanceOf(
+      PathAccessDenied
+    );
+  });
+
+  /** The lexical resolver is the one that gets this wrong, and is left alone for its own callers. */
+  it('is the case path.resolve reads the other way', async () => {
+    await expect(resolveWithinRoots('self/../out.txt', [granted], granted)).resolves.toBe(join(granted, 'out.txt'));
+  });
+
+  it('follows a link into the root rather than refusing it', async () => {
+    await expect(resolveWithinRootsPhysically('self/in.txt', [granted], granted)).resolves.toBe(
+      join(granted, 'in.txt')
+    );
+  });
+
+  /** Nothing can hide under a name that does not exist, so the rest is appended as written. */
+  it('resolves a path that does not exist yet against its nearest real ancestor', async () => {
+    await expect(resolveWithinRootsPhysically('sub/new/deeper.txt', [granted], granted)).resolves.toBe(
+      join(granted, 'sub', 'new', 'deeper.txt')
+    );
+  });
+
+  it('denies everything when no folder has been granted', async () => {
+    await expect(resolveWithinRootsPhysically('in.txt', [], granted)).rejects.toBeInstanceOf(PathAccessDenied);
   });
 });

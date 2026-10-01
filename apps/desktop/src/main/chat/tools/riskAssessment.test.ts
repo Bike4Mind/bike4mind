@@ -18,6 +18,10 @@ describe('assessApprovalRisk', () => {
     // Inside the root by name, outside it once resolved - which is the only thing a `cd` check
     // that stopped at the lexical path would miss.
     await symlink(tmpdir(), join(root, 'escape'));
+    // A link from the root back to the root. Harmless to follow, and the one shape that makes a
+    // `..` after it leave: `self/..` is the root's PARENT to the kernel and the root itself to
+    // `path.resolve`.
+    await symlink(root, join(root, 'self'));
     context = { roots: [root], workingDirectory: root, signal: new AbortController().signal };
   });
 
@@ -104,6 +108,35 @@ describe('assessApprovalRisk', () => {
     it('resolves a later step against the directory an earlier cd moved to', async () => {
       expect(await shell(`cd ${join(root, 'sub')} && cat ../notes.txt`)).toBe('contained');
       expect(await shell('cat ../notes.txt')).toBe('sensitive');
+    });
+  });
+
+  /**
+   * `..` is where a lexical answer and the kernel's part company, and a granted root holding a
+   * link back to itself is all it takes: the kernel applies `..` to whatever the symlinks
+   * before it resolved to, `path.resolve` applies it to the name on its left.
+   */
+  describe('a dot-dot that follows a symlink', () => {
+    it.each([
+      ['a link to the root, then out of it', 'cat self/../notes.txt'],
+      ['the same written absolute', 'cat {ROOT}/self/../notes.txt'],
+      ['two links deep', 'cat self/self/../../notes.txt'],
+      ['a cd through the link, then out of it', 'cd {ROOT}/self && cat ../notes.txt'],
+      ['a cd through the link, then out by an absolute path', 'cd {ROOT}/self && cat {ROOT}/self/../notes.txt'],
+      ['a grep rooted past the link', 'grep -rn todo self/..'],
+    ])('asks for %s', async (_label, command) => {
+      expect(await shell(command.split('{ROOT}').join(root))).toBe('sensitive');
+    });
+
+    /** The ordinary shapes the check above must not start refusing. */
+    it.each([
+      'cat sub/../notes.txt',
+      'cat {ROOT}/sub/../notes.txt',
+      'cd {ROOT}/sub && cat ../notes.txt',
+      'cd {ROOT}/self && cat notes.txt',
+      'cat self/notes.txt',
+    ])('still allows %s', async command => {
+      expect(await shell(command.split('{ROOT}').join(root))).toBe('contained');
     });
   });
 

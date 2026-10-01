@@ -1,4 +1,4 @@
-import { resolveWithinRoots } from './paths';
+import { realpathNearest, resolveWithinRootsPhysically } from './paths';
 import { resolveCwd } from './shellTools';
 import type { ApprovalPrompt, ToolContext } from './types';
 
@@ -84,9 +84,9 @@ const DOUBLE_QUOTED_EXPANDS = /[$`\\]/;
 /**
  * Arguments that make any command follow a symlink out of the folder it was pointed at.
  *
- * The path check proves the NAMED path is inside a granted root, and `resolveWithinRoots`
- * resolves a symlink given by name. It cannot speak for a link the command discovers while
- * walking, which is exactly what these turn on.
+ * The path check proves the NAMED path is inside a granted root, and
+ * `resolveWithinRootsPhysically` resolves the symlinks along it. It cannot speak for a link the
+ * command discovers while walking, which is exactly what these turn on.
  */
 const FOLLOWS_SYMLINKS: readonly string[] = ['-L', '-R', '--dereference', '--dereference-recursive', '--follow'];
 
@@ -621,17 +621,24 @@ function tokenizeCommand(command: string): Pipeline[] | null {
  * `$OLDPWD`, and `-L` and `-P` change which directory the shell believes it ended up in. Not
  * one of them begins with a slash, so not one of them gets past the line above.
  *
- * And then the destination goes through `resolveWithinRoots` like any other path, which
- * resolves the symlinks on the way and throws when the answer is outside every granted root.
- * That throw is what keeps this from reopening the hole `git --git-dir` left: a `cd` reaches
- * only directories the user shared, which is exactly the reach `bash_execute`'s own `cwd`
- * parameter already has.
+ * And then the destination goes through `resolveWithinRootsPhysically` like any other path,
+ * which resolves the symlinks on the way and throws when the answer is outside every granted
+ * root. That throw is what keeps this from reopening the hole `git --git-dir` left: a `cd`
+ * reaches only directories the user shared, which is exactly the reach `bash_execute`'s own
+ * `cwd` parameter already has.
+ *
+ * What is threaded on is the RESOLVED directory, not the one that was typed, because that is
+ * the one the following steps read from: bash keeps the typed spelling in `$PWD` for its own
+ * `cd` and `pwd`, but it chdir'd to the real directory, and a `../x` in a later step is
+ * resolved from there by the kernel. The two differ whenever the target is a symlink, which is
+ * also the only reason `cd ..` would have needed the typed form - and a relative `cd` is
+ * already refused above.
  */
-async function changedDirectory(rest: readonly string[], context: ToolContext): Promise<string | null> {
+async function changedDirectory(rest: readonly string[], cwd: string, context: ToolContext): Promise<string | null> {
   if (rest.length !== 1) return null;
   const target = rest[0];
   if (!target.startsWith('/')) return null;
-  return await resolveWithinRoots(target, context.roots);
+  return await resolveWithinRootsPhysically(target, context.roots, cwd);
 }
 
 /**
@@ -642,8 +649,9 @@ async function changedDirectory(rest: readonly string[], context: ToolContext): 
  * Every clause is necessary: a listed executable, so what it does with its argv is bounded - by
  * inertness for most of the list, and by the script name for the three package managers; and
  * every path argument proven inside a granted root by the same resolver the tools use, so it
- * reaches only what the user shared. `resolveWithinRoots` throws rather than returning, and the
- * caller treats that as a reason to ask.
+ * reaches only what the user shared, resolved the way the kernel will resolve it rather than
+ * the way `path.resolve` would. `resolveWithinRootsPhysically` throws rather than returning,
+ * and the caller treats that as a reason to ask.
  */
 async function assessSegment(tokens: readonly string[], cwd: string, context: ToolContext): Promise<string | null> {
   const [executable, ...rest] = tokens;
@@ -651,7 +659,7 @@ async function assessSegment(tokens: readonly string[], cwd: string, context: To
   // both ways of running something this list was never asked about.
   if (!executable || executable.includes('/')) return null;
 
-  if (executable === 'cd') return await changedDirectory(rest, context);
+  if (executable === 'cd') return await changedDirectory(rest, cwd, context);
 
   const inert = Object.prototype.hasOwnProperty.call(INERT_COMMANDS, executable)
     ? INERT_COMMANDS[executable]
@@ -670,7 +678,7 @@ async function assessSegment(tokens: readonly string[], cwd: string, context: To
   for (const token of rest) {
     const candidate = pathArgument(token);
     if (candidate === null) continue;
-    await resolveWithinRoots(candidate, context.roots, cwd);
+    await resolveWithinRootsPhysically(candidate, context.roots, cwd);
   }
 
   return cwd;
@@ -709,8 +717,10 @@ async function assessCommand(input: Record<string, unknown>, context: ToolContex
   const pipelines = tokenizeCommand(command);
   if (!pipelines) return 'sensitive';
 
-  // Throws when `cwd` is outside every granted root, which is itself a reason to ask.
-  let cwd = await resolveCwd(input, context.roots, context.workingDirectory);
+  // Throws when `cwd` is outside every granted root, which is itself a reason to ask. Taken
+  // through `realpathNearest` because the child is chdir'd to this path and the kernel resolves
+  // every relative argument below from the REAL directory that lands it in, not from the name.
+  let cwd = await realpathNearest(await resolveCwd(input, context.roots, context.workingDirectory));
 
   for (const pipeline of pipelines) {
     let next = cwd;
