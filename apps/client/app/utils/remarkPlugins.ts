@@ -62,17 +62,19 @@ function looksLikeMath(content: string): boolean {
 
 // `\[x\]` is also how markdown escapes literal brackets, and turndown writes exactly that into
 // stored Knowledge files (`\[Smith (2020)\]`, `arr\[i\]`, `\[n = 30\]`). An escaped `_`, `[` or `]`
-// inside marks prose; a control sequence marks math. Without one, an unescaped `&`, `#`, `%` or `__`
-// would be a KaTeX error, so the span stays text. Turndown adds no padding but keeps the source's, so
+// inside marks prose; a control sequence marks math. An unescaped `#` or `%` is a KaTeX error or a
+// comment that cuts the body short, so the span stays text; `&` and `__` do too unless a control
+// sequence is present (`aligned` needs `&`). Turndown adds no padding but keeps the source's, so
 // padding alone is no tell: a tight body needs a raw `_` (turndown escapes it) and no `:` or 3+ letter
 // word; a padded body needs `^`, `_` or `=` between operands, and `^`/`_` once it holds a word
 // (`\[ key = value \]` is prose). Parens keep `looksLikeMath`: turndown never escapes them.
 function looksLikeBracketMath(raw: string): boolean {
   const content = raw.trim();
   const odd = String.raw`(?:^|[^\\])(?:\\\\)*\\`;
-  if (new RegExp(odd + String.raw`[_[\]]`).test(content)) return false;
+  const hasUnescaped = (chars: string) => new RegExp(String.raw`(?:^|[^\\])(?:\\\\)*[${chars}]`).test(content);
+  if (new RegExp(odd + String.raw`[_[\]]`).test(content) || hasUnescaped('#%')) return false;
   if (new RegExp(odd + '[a-zA-Z]').test(content)) return true;
-  if (/(?:^|[^\\])(?:\\\\)*[&#%]/.test(content) || content.includes('__')) return false;
+  if (hasUnescaped('&') || content.includes('__')) return false;
   const hasWord = /[a-zA-Z]{3}/.test(content);
   const padded = /^\s/.test(raw) && /\s$/.test(raw);
   if (!padded) return !hasWord && !content.includes(':') && /\S\s*_\s*\S/.test(content);

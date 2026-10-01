@@ -111,6 +111,18 @@ describe('promoteInlineLatexDollars', () => {
       ['own-line padded word equation', '\\[ area = pi r^2 \\]', '$$\narea = pi r^2\n$$'],
       ['own-line padded ratio with colons', '\\[ a:b = c:d \\]', '$$\na:b = c:d\n$$'],
       ['own-line block closing after an escaped backslash', '\\[ a = b \\\\ \\]', '$$\na = b \\\\\n$$'],
+      ['own-line padded subscripted name', '\\[ x_{max} = 5 \\]', '$$\nx_{max} = 5\n$$'],
+      ['own-line padded sample size', '\\[ n = 30 \\]', '$$\nn = 30\n$$'],
+      [
+        'own-line aligned block',
+        '\\[ \\begin{aligned} a &= b \\end{aligned} \\]',
+        '$$\n\\begin{aligned} a &= b \\end{aligned}\n$$',
+      ],
+      [
+        'control sequence with an escaped hash',
+        'so \\[ \\text{Item \\#1} = x \\] holds',
+        'so $$\\text{Item \\#1} = x$$ holds',
+      ],
     ])('%s', (_label, input, expected) => {
       expect(promoteInlineLatexDollars(input)).toBe(expected);
     });
@@ -160,6 +172,21 @@ describe('promoteInlineLatexDollars', () => {
       ['padded percent', 'See \\[ rate = 5% \\] here'],
       ['own-line padded percent', '\\[ rate = 5% \\]'],
       ['padded dunder name', 'See \\[ __init__ \\] here'],
+      ['own-line padded ampersand', '\\[ Q&A = done \\]'],
+      ['own-line padded hash', '\\[ item #3 = x \\]'],
+      ['own-line padded dunder name', '\\[ __init__ \\]'],
+      ['tight ampersand', 'See \\[a&b_c\\] here'],
+      ['tight percent', 'See \\[a%b_c\\] here'],
+      // `\\` is an escaped backslash, so the `%` after it is raw.
+      ['padded percent after an escaped backslash', 'See \\[ 5\\\\% = x \\] here'],
+      // A raw `#` is a KaTeX error and a raw `%` a comment even beside a control sequence.
+      ['control sequence with a raw hash', 'See \\[ \\text{Item #1} = x \\] here'],
+      ['control sequence with a raw percent', 'See \\[ \\text{rate} = 5% \\] here'],
+      ['own-line control sequence with a raw percent', '\\[ \\frac{a}{b} % c \\]'],
+      // Known trade: with a 3+ letter word, `=` alone is not math evidence, so units and bare
+      // function names stay literal along with turndown's `key = value` prose.
+      ['padded equation with a unit', 'so \\[ P = 101 kPa \\] holds'],
+      ['padded bare log', 'so \\[ log(x) = 2 \\] holds'],
     ])('leaves %s alone', (_label, text) => {
       expect(promoteInlineLatexDollars(text)).toBe(text);
     });
