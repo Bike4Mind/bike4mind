@@ -187,6 +187,23 @@ describe('LakeInfoPanel - file count scope qualifier', () => {
   });
 });
 
+describe('LakeInfoPanel - header title', () => {
+  // jsdom has no layout, so this pins the structure: a title sharing the flex row with the
+  // non-shrinking action buttons is what collapsed it to zero width.
+  it('renders a long lake name in full, outside the action-button row', () => {
+    const name = 'Help Center Knowledge Base for Enterprise Customer Support';
+    render(
+      <Wrapper>
+        <LakeInfoPanel lake={{ ...baseLake, name } as ManagerLake} {...noopProps} />
+      </Wrapper>
+    );
+    const title = screen.getByTestId('datalake-manager-title-lake-1');
+    expect(title).toHaveTextContent(name);
+    const startChat = screen.getByTestId('datalake-startchat-btn-lake-1');
+    expect(title.parentElement).not.toBe(startChat.parentElement);
+  });
+});
+
 describe('LakeInfoPanel - lake memory build/rebuild', () => {
   it('shows "Build memory" and calls the build mutation for a never-built lake', async () => {
     useGetLakeMemoryHealth.mockReturnValue({
