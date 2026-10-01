@@ -77,7 +77,7 @@ export interface CreateOptions {
   origin?: ChatSessionOrigin;
   /**
    * What a spawned session inherits from its parent, already clamped by the caller. Absent
-   * means 'ask', which is what a conversation the user just started gets.
+   * means the mode the user last picked for themselves - see ApprovalModePreference.
    */
   approvalMode?: ChatApprovalMode;
 }
@@ -135,6 +135,18 @@ function normalizeOrigin(value: unknown): ChatSessionOrigin | null {
 export type SessionScopeProvider = () => SessionScope | null;
 
 /**
+ * Where the mode a new conversation starts in is read from and written back to.
+ *
+ * An interface rather than the class itself so a store can be built without one, which is what
+ * a test that does not care about the preference wants: it then starts every session at 'auto'
+ * and remembers nothing. See ApprovalModePreference for the live implementation.
+ */
+export interface ApprovalModeMemory {
+  read(): Promise<ChatApprovalMode>;
+  record(mode: ChatApprovalMode): Promise<void>;
+}
+
+/**
  * Conversations as one JSON file per session, mirroring the CLI's `~/.bike4mind/sessions`.
  *
  * Local because the completion endpoint this client uses is stateless; see @shared/chat.
@@ -165,7 +177,9 @@ export class SessionStore {
      * account takes effect on the next call - there is nothing to keep in step, and no window
      * in which the sidebar and the files disagree.
      */
-    private readonly scope?: SessionScopeProvider
+    private readonly scope?: SessionScopeProvider,
+    /** Absent means no preference is kept and every new conversation starts at 'auto'. */
+    private readonly approvalModes?: ApprovalModeMemory
   ) {}
 
   /**
@@ -243,7 +257,10 @@ export class SessionStore {
     // already belongs to, so there is no folder to put it in until an account is identified.
     if (!directory) throw new Error('cannot start a conversation while no account is signed in');
 
-    const { project, origin, approvalMode = 'ask', mode = project ? 'code' : 'chat' } = options;
+    const { project, origin, mode = project ? 'code' : 'chat' } = options;
+    // A mode the caller named is a spawn inheriting its parent's, already clamped there. Only
+    // a conversation the user started themselves reads the preference.
+    const approvalMode = options.approvalMode ?? (await this.approvalModes?.read()) ?? 'auto';
     const now = new Date().toISOString();
     const session: ChatSession = {
       id: randomUUID(),
@@ -360,10 +377,15 @@ export class SessionStore {
    * was last talked to, and bumping it would reorder the sidebar behind the user's back.
    */
   async setApprovalMode(id: string, approvalMode: ChatApprovalMode): Promise<ChatSessionSummary | null> {
-    return this.mutate(id, session => {
+    const updated = await this.mutate(id, session => {
       session.approvalMode = approvalMode;
       return true;
     });
+    // Remembered only for a session that actually took the mode, so a stale id cannot move the
+    // preference. Existing conversations keep whatever they were given; this is about the next
+    // one. The clamp on 'full' lives in the preference itself.
+    if (updated) await this.approvalModes?.record(approvalMode);
+    return updated;
   }
 
   /**

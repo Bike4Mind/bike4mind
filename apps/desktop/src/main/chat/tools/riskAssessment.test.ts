@@ -150,6 +150,11 @@ describe('assessApprovalRisk', () => {
       'pnpm run typecheck',
       'pnpm test:unit',
       'yarn typecheck:all',
+      // The keyword in a later segment, which is how this repository's own commands are spelled
+      // and which an anchored pattern asked about every time.
+      'pnpm turbo:test',
+      'pnpm turbo:typecheck',
+      'pnpm lint:check',
     ])('allows %s', async command => {
       expect(await shell(command)).toBe('contained');
     });
@@ -162,6 +167,7 @@ describe('assessApprovalRisk', () => {
       'pnpm --filter @bike4mind/client test',
       'pnpm --filter=@bike4mind/client test',
       'pnpm -C packages/api lint',
+      'pnpm --filter @bike4mind/desktop typecheck',
     ])('reads the script past a value-taking flag in %s', async command => {
       expect(await shell(command)).toBe('contained');
     });
@@ -187,8 +193,10 @@ describe('assessApprovalRisk', () => {
       ['a build', 'pnpm build'],
       ['a start script', 'npm start'],
       ['a deploy script', 'yarn deploy'],
-      // Anchored on purpose: a script is not allowed in by ending in an allowed word.
-      ['a runner that merely ends in an allowed name', 'pnpm turbo:typecheck'],
+      // The bound is the keyword, not where it sits: a script named nothing like one of the
+      // three is still not the repository's test, lint or typecheck.
+      ['a script that merely contains an allowed word', 'pnpm pretest-everything'],
+      ['a script named after no keyword at all', 'pnpm turbo:deploy'],
       ['run with no script after it', 'pnpm run'],
     ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
@@ -205,6 +213,56 @@ describe('assessApprovalRisk', () => {
       'pnpm test > out.txt',
       'pnpm test || rm -rf .',
     ])('still refuses %s', async command => {
+      expect(await shell(command)).toBe('sensitive');
+    });
+  });
+
+  /**
+   * The other entry the user chose rather than proved. `gh` reaches the network carrying their
+   * GitHub credential, so the bound is the subcommand and nothing else, two words deep.
+   */
+  describe('the read-only GitHub commands the user chose to allow', () => {
+    it.each([
+      'gh pr view 123',
+      'gh pr list',
+      'gh pr diff 123',
+      'gh pr checks 123',
+      'gh pr status',
+      'gh issue view 3622',
+      'gh issue list',
+      'gh run list',
+      'gh run view 42',
+      'gh repo view',
+      'gh release view',
+      'gh release list',
+      'gh status',
+    ])('allows %s', async command => {
+      expect(await shell(command)).toBe('contained');
+    });
+
+    it.each([
+      // The first word decides nothing, which is why the check is two words deep.
+      ['creating a pull request', 'gh pr create'],
+      ['merging one', 'gh pr merge 1'],
+      ['closing one', 'gh pr close 1'],
+      ['editing an issue', 'gh issue edit 1'],
+      ['uploading a release asset', 'gh release upload v1 file.zip'],
+      ['starting a workflow', 'gh workflow run deploy.yml'],
+      ['re-running a job', 'gh run rerun 1'],
+      ['cancelling one', 'gh run cancel 1'],
+      // Reaches any endpoint at all, and writes through one when asked to.
+      ['the raw API', 'gh api /user'],
+      // Prints the user's credential straight into the transcript.
+      ['the stored token', 'gh auth token'],
+      ['opening a browser', 'gh browse'],
+      ['the same by flag on an allowed subcommand', 'gh pr view --web'],
+      ['its short spelling', 'gh pr view -w'],
+      // Both sit there until the run finishes, which is not a thing to start unattended.
+      ['waiting on a run', 'gh run watch 1'],
+      ['waiting on checks', 'gh pr checks --watch'],
+      ['a bare gh, which prints help and nothing else useful', 'gh'],
+      ['a subcommand nobody listed', 'gh gist create'],
+    ])('asks for %s', async (_label, command) => {
       expect(await shell(command)).toBe('sensitive');
     });
   });
