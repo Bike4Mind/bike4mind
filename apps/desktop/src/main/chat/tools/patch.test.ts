@@ -220,11 +220,74 @@ describe('applyChunks', () => {
     });
 
     it('says when the text only occurs before the previous hunk', () => {
-      const file = ['one', 'two', 'three'];
-      const { failures } = run(file, '-three', '+3', '@@', '-one', '+1');
+      const file = [
+        'const first = loadFirstValue();',
+        'const second = loadSecondValue();',
+        'const third = loadThirdValue();',
+      ];
+      const { failures } = run(
+        file,
+        '-const third = loadThirdValue();',
+        '+const third = 3;',
+        '@@',
+        '-const first = loadFirstValue();',
+        '+const first = 1;'
+      );
       expect(failures).toHaveLength(1);
       expect(failures[0].hunk).toBe(2);
       expect(failures[0].message).toMatch(/appears only at line 1, before where the previous hunk ended \(line 3\)/);
+    });
+
+    it('gives no out-of-order hint when only a generic line matches earlier', () => {
+      const file = [
+        'useEffect(() => {',
+        '  syncSomething();',
+        '}, []);',
+        'function later() {',
+        '  return computeLaterValue();',
+        '}',
+      ];
+      const { failures } = run(
+        file,
+        '-  return computeLaterValue();',
+        '+  return 1;',
+        '@@',
+        ' useEffect(() => {',
+        '-  doesNotExistAnywhere();',
+        '+  other();'
+      );
+      expect(failures).toHaveLength(1);
+      expect(failures[0].message).not.toMatch(/before where the previous hunk ended/);
+      expect(failures[0].message).toMatch(/None of those lines appear/);
+    });
+
+    it('points at the other file a hunk was written for', () => {
+      const target = ['export function Chat() {', '  return null;', '}'];
+      const explorer = ['useEffect(() => {', '  openArticle(deepLinkTarget.id);', '}, [deepLinkTarget]);'];
+      const unrelated = ['const nothing = 1;'];
+      const body = ['@@', ' useEffect(() => {', '-  openArticle(deepLinkTarget.id);', '+  openArticle(target.id);'];
+      const { failures } = applyChunks(target, updateChunks(...body), [
+        { display: 'apps/client/Unrelated.tsx', lines: unrelated },
+        { display: 'apps/client/Explorer.tsx', lines: explorer },
+      ]);
+      expect(failures[0].message).toContain(
+        'These lines are in apps/client/Explorer.tsx; did you mean to patch that file?'
+      );
+    });
+
+    it('does not guess when the lines are in no other file, or in several', () => {
+      const target = ['export function Chat() {', '  return null;', '}'];
+      const body = ['-  openArticle(deepLinkTarget.id);', '+  openArticle(target.id);'];
+      const lines = ['  openArticle(deepLinkTarget.id);'];
+      const none = applyChunks(target, updateChunks(...body), [{ display: 'a.tsx', lines: ['const x = 1;'] }]);
+      expect(none.failures[0].message).not.toContain('did you mean');
+      expect(none.failures[0].message).toMatch(/None of those lines appear/);
+
+      const two = applyChunks(target, updateChunks(...body), [
+        { display: 'a.tsx', lines },
+        { display: 'b.tsx', lines },
+      ]);
+      expect(two.failures[0].message).not.toContain('did you mean');
     });
 
     it('names a missing anchor', () => {

@@ -2,6 +2,7 @@ import { glob, lstat, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, matchesGlob, relative } from 'node:path';
 import { git } from '../project/git';
 import { resolveWithinRoots } from './paths';
+import { recordRecentFile } from './recentFiles';
 import { ripgrepSearch, type RipgrepFile } from './ripgrep';
 import {
   capOutput,
@@ -211,6 +212,7 @@ export const fileRead: ToolDefinition = {
     const target = await resolveWithinRoots(requireString(input, 'path'), context.roots, context.workingDirectory);
     const info = await stat(target);
     if (info.isDirectory()) throw new Error(`${target} is a directory. Use glob_files to list it.`);
+    recordRecentFile(context, target);
 
     const buffer = await readFile(target);
     if (isBinary(buffer)) return `${target} is a binary file (${formatBytes(info.size)}), so it is not shown as text.`;
