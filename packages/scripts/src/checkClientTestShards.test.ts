@@ -71,6 +71,40 @@ function readShardFilters(contents: string): string[] {
   });
 }
 
+/**
+ * Every matrix block's `filter:` and `script:` values, one entry per block, for legs that are not
+ * sharded and so never show up in readShardLegs. Same block split and quote handling as the two
+ * readers above; a block with no `filter:` is not a test leg and is skipped.
+ */
+function readLegBlocks(contents: string): Array<{ filter: string; script: string }> {
+  return contents
+    .split(/^\s*- name:/m)
+    .slice(1)
+    .flatMap(block => {
+      const [filter] = readShardFilters(block);
+      if (filter === undefined) return [];
+      const script = /^\s*script:\s*'([^']+)'\s*$/m.exec(block);
+      return [{ filter, script: script ? script[1] : 'test' }];
+    });
+}
+
+describe('apps/workers integration leg in ci.yml', () => {
+  // The workers real-Mongo suites run only in this unsharded leg - the `misc` leg runs the workers
+  // unit lane, not `test:integration`. It has no `--shard` args, so every guard above skips it, and
+  // deleting it would leave CI green with those suites never running.
+  it('declares exactly one `test:integration` leg for @bike4mind/workers', () => {
+    const legs = readLegBlocks(fs.readFileSync(CI_WORKFLOW, 'utf8')).filter(
+      leg => leg.filter === '--filter @bike4mind/workers' && leg.script === 'test:integration'
+    );
+    expect(legs).toHaveLength(1);
+  });
+
+  it('points at a script apps/workers actually defines', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'apps', 'workers', 'package.json'), 'utf8'));
+    expect(pkg.scripts?.['test:integration'], 'apps/workers has no test:integration script').toBeDefined();
+  });
+});
+
 describe('apps/client test-shard legs in ci.yml', () => {
   const contents = fs.readFileSync(CI_WORKFLOW, 'utf8');
   const legs = readShardLegs(contents);
@@ -227,6 +261,26 @@ describe('readShardLegs', () => {
       ].join('\n')
     );
     expect(legs).toEqual([leg(1, 3)]);
+  });
+});
+
+describe('readLegBlocks', () => {
+  it("reads each block's filter and script, defaulting the script to the unit lane", () => {
+    const contents = [
+      '          - name: workers-integration',
+      "            filter: '--filter @bike4mind/workers'",
+      "            script: 'test:integration'",
+      '          - name: services',
+      "            filter: '--filter @bike4mind/services'",
+    ].join('\n');
+    expect(readLegBlocks(contents)).toEqual([
+      { filter: '--filter @bike4mind/workers', script: 'test:integration' },
+      { filter: '--filter @bike4mind/services', script: 'test' },
+    ]);
+  });
+
+  it('skips a block with no filter', () => {
+    expect(readLegBlocks('      - name: Checkout\n        uses: actions/checkout@v4\n')).toEqual([]);
   });
 });
 

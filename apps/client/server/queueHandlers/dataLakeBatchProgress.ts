@@ -1,6 +1,7 @@
 import {
   adminSettingsRepository,
   cacheRepository,
+  dataLakeAccessGrantRepository,
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileRepository,
@@ -92,9 +93,12 @@ export async function finalizeBatchIfComplete(
   try {
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
-      // Batch completion is the canonical way a draft lake first holds files and flips to active,
-      // so this is the dominant producer of the `auto-activate` config-change event. Unwired, the
-      // status change most likely to happen is the one the history would not contain.
+      // Before the recompute so a recompute failure cannot drop the History row. `finalized`, not
+      // `batch`: it is the terminal document, so its counters are the final ones. Never throws.
+      await dataLakeService.recordLakeUploadBatch(lake, finalized, {
+        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository, ...lakeConfigAuditDb },
+        logger,
+      });
       await dataLakeService.recomputeLakeStats(lake, {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
         logger,

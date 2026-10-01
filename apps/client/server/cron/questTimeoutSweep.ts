@@ -9,6 +9,10 @@
  * Uses the same pure decision function (`resolveQuestTimeoutRecovery`) as the
  * read path so the recovery semantics are defined in exactly one place.
  *
+ * Also the backstop for generation completion callbacks: every run re-dispatches
+ * settled quests whose callback is still `pending` (a settle site that died before
+ * its claim, or an enqueue that failed), whether or not any quest was stuck.
+ *
  * Schedule: every 5 minutes
  * Enabled: production + dev
  * Self-host: the worker runs `runQuestTimeoutSweep` on the same cadence (apps/workers/src/selfhost/questTimeoutSweep.ts).
@@ -21,6 +25,7 @@ import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { Resource } from 'sst';
 import { resolveQuestTimeoutRecovery, QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 
 const logger = new Logger({ metadata: { service: 'questTimeoutSweep' } });
 
@@ -40,6 +45,14 @@ const SWEEP_AGE_FLOOR_MS = 7 * 24 * 60 * 60 * 1000;
  * default so a capped run is detectable here, next to the metric that reports it.
  */
 const SWEEP_LIMIT = 500;
+
+/**
+ * A settled quest's callback left `pending` this long was missed by its settle site (a Lambda
+ * that died between the terminal write and the claim, or an enqueue that failed). Long enough
+ * that the settle site's own dispatch has certainly run.
+ */
+const CALLBACK_BACKSTOP_GRACE_MS = 2 * 60 * 1000;
+const CALLBACK_BACKSTOP_LIMIT = 100;
 
 export async function handler() {
   const stage = Resource.App.stage;
@@ -83,12 +96,6 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
     });
   }
 
-  if (staleQuests.length === 0) {
-    logger.info('[QuestTimeoutSweep] No stuck quests found');
-    await metric('TimeoutSweepRecovered', 0);
-    return { status: 'OK', recovered: 0 };
-  }
-
   let recovered = 0;
 
   for (const quest of staleQuests) {
@@ -104,18 +111,46 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
       const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
       if (applied) {
         recovered++;
-        logger.warn('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+        // Error level, not warn: a stuck quest is a user-visible failure LiveOps must
+        // see in the Slack error channel, which is fed by the ERROR-level subscription
+        // on this function's log group (infra/logMonitor.ts).
+        logger.error('[QuestTimeoutSweep] Recovered stuck quest', { questId: quest.id });
+        await dispatchQuestCallback(quest.id, logger);
       }
     } catch (err) {
       logger.error('[QuestTimeoutSweep] Failed to recover quest', { questId: quest.id, err });
     }
   }
 
+  // Not gated on having stuck quests: a missed callback is independent of timeout recovery.
+  const callbacksRedispatched = await redispatchMissedCallbacks(nowMs);
+
   logger.info('[QuestTimeoutSweep] Sweep complete', {
     candidates: staleQuests.length,
     recovered,
+    callbacksRedispatched,
   });
   await metric('TimeoutSweepRecovered', recovered);
+  await metric('TimeoutSweepCallbacksRedispatched', callbacksRedispatched);
 
   return { status: 'OK', recovered };
+}
+
+/** Backstop for generation callbacks whose settle-site dispatch never happened. */
+async function redispatchMissedCallbacks(nowMs: number): Promise<number> {
+  try {
+    const questIds = await questRepository.findUndispatchedCallbacks({
+      settledBefore: new Date(nowMs - CALLBACK_BACKSTOP_GRACE_MS),
+      limit: CALLBACK_BACKSTOP_LIMIT,
+    });
+    for (const questId of questIds) {
+      logger.warn('[QuestTimeoutSweep] Re-dispatching missed generation callback', { questId });
+      await dispatchQuestCallback(questId, logger);
+    }
+    return questIds.length;
+  } catch (err) {
+    // The timeout recovery above already ran; a backstop read failure must not fail the sweep.
+    logger.error('[QuestTimeoutSweep] Generation callback backstop failed', { err });
+    return 0;
+  }
 }

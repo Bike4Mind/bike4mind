@@ -1,8 +1,8 @@
 import { Box, Button, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
-import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
+import LakeSourceConnectActions from '@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions';
+import { canConnectLakeDrive, isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { ManageableDataLakeConfig } from '@bike4mind/common';
 
@@ -49,6 +49,17 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
         >
           {lake.fileTagPrefix}
         </Chip>
+        {isDraftLake(lake) && (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="warning"
+            sx={{ fontSize: '11px' }}
+            data-testid="datalake-selected-draft-chip"
+          >
+            Draft - not grounding answers
+          </Chip>
+        )}
       </Stack>
 
       <Stack direction="row" gap={0.5} flexWrap="wrap">
@@ -79,11 +90,11 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
       </Stack>
 
       {/* The source row: for an org lake this is the whole connect/re-sync/disconnect control, so
-          attaching a Drive folder is one step from the chat instead of three. Its own controls
+          attaching a Drive folder or GitHub repository is one step from the chat instead of three. Its own controls
           wrap, which is what keeps it inside the tree card's width. */}
       {canConnectDrive && (
         <Box data-testid="datalake-selected-lake-source">
-          <DriveConnectAction lake={{ id: lake.id }} />
+          <LakeSourceConnectActions lake={{ id: lake.id }} />
         </Box>
       )}
     </Box>

@@ -75,7 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
             newUser.tags = validatedData.tags;
           }
 
-          await userRepository.update(newUser);
+          await userRepository.update({ id: newUser.id, storageLimit: newUser.storageLimit, tags: newUser.tags });
 
           const brand = process.env.APP_NAME || '';
           const logoUrl = getLogoUrl();

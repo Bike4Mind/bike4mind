@@ -66,10 +66,11 @@ export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
  *
  * Only `metric-disagreement` qualifies, and only because it is the one rule comparing a parsed VALUE
  * across documents. The other two cross-document kinds cannot show disagreement:
- * `superlative-conflict` compares nothing at all, so two documents that AGREE - including two
- * carrying the identical sentence - group as a finding; `relationship-conflict` keys on `ORG`, a bare
- * capitalization proxy, while CUSTOMER/PROSPECT carry generic technical vocabulary, so two sentences
- * about the same capitalized product name satisfy it without describing a relationship at all.
+ * `superlative-conflict` keys on the category and compares whole sentences, so a rewording of one
+ * claim and a genuine rival claim look the same - it cannot assert disagreement;
+ * `relationship-conflict` keys on `ORG`, a bare capitalization proxy, while CUSTOMER/PROSPECT carry
+ * generic technical vocabulary, so two sentences about the same capitalized product name satisfy it
+ * without describing a relationship at all.
  *
  * Both remain fully reported by `detectCorpusInconsistencies` - a human triaging a lake's health
  * wants recall. This list is for the callers that ASSERT a finding rather than offer it.
@@ -312,8 +313,7 @@ function detailSignature(position: Hit[]): string {
  * contain the hits that disagree: a document stating both values agrees with its sibling on whichever
  * it happens to state first, so a real finding rendered two IDENTICAL sentences as its proof. Anchor
  * instead on a detail that some other document does not carry at all - such a pair exists whenever
- * the per-document sets differ, so the tail return is reached only by a rule that sets no `detail`
- * and therefore has no witness pair to promote.
+ * the per-document sets differ; the tail return is a fallback for hits without a `detail`.
  */
 function witnessOrder(positions: Hit[][]): Hit[] {
   for (const [i, hits] of positions.entries()) {
@@ -332,18 +332,14 @@ function witnessOrder(positions: Hit[][]): Hit[] {
  * The cross-document requirement is the whole point: one document restating its own superlative in
  * three sections is not an inconsistency, and flagging it would bury the real findings.
  *
- * `requireDisagreement` additionally requires the DOCUMENTS to hold different SETS of values, since
- * agreement is not a finding. Per-document sets rather than the flat hit list, which is the
+ * A group must also have the DOCUMENTS hold different SETS of details, since agreement is not a
+ * finding. Per-document sets rather than the flat hit list, which is the
  * distinction the rule turns on: a document stating both values contributes two differing details on
  * its own, so a flat comparison reported two byte-identical documents as contradicting each other -
  * naming a document that agrees. Sets still keep the case where one document holds both values and a
  * sibling holds only one of them: those documents really do disagree.
  */
-function crossDocumentGroups(
-  hits: Hit[],
-  kind: InconsistencyKind,
-  requireDisagreement = false
-): InconsistencyFinding[] {
+function crossDocumentGroups(hits: Hit[], kind: InconsistencyKind): InconsistencyFinding[] {
   const bySubject = new Map<string, Hit[]>();
   for (const hit of hits) {
     const existing = bySubject.get(hit.subject);
@@ -363,9 +359,8 @@ function crossDocumentGroups(
     if (byDocument.size < 2) continue;
 
     const positions = [...byDocument.values()];
-    if (requireDisagreement && new Set(positions.map(detailSignature)).size < 2) continue;
-    // Unconditional, so evidence order is one convention rather than one per kind. A rule that sets
-    // no `detail` cannot have a witness pair, and for those this degrades to first-hit-per-document.
+    if (new Set(positions.map(detailSignature)).size < 2) continue;
+    // Unconditional, so evidence order is one convention rather than one per kind.
     const perDocument = witnessOrder(positions);
     findings.push({
       kind,
@@ -382,7 +377,13 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
     collect(documents, sentence => {
       if (!SUPERLATIVE.test(sentence)) return null;
       const subject = SUPERLATIVE_SUBJECT.exec(sentence)?.[1];
-      return subject ? { subject: normalizeSubject(subject) } : null;
+      if (!subject) return null;
+      // Not normalizeSubject: it blanks symbols and non-ASCII, which can be the whole difference between two claims.
+      const detail = sentence
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/[\s.!?]+$/, '');
+      return { subject: normalizeSubject(subject), detail };
     }),
     'superlative-conflict'
   );
@@ -421,8 +422,7 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
         detail: `${canonicalValue(value)}${canonical}`,
       };
     }),
-    'metric-disagreement',
-    true
+    'metric-disagreement'
   );
 }
 
@@ -440,7 +440,7 @@ function detectRelationshipConflicts(documents: CorpusDocument[]): Inconsistency
       }
     }
   }
-  return crossDocumentGroups(hits, 'relationship-conflict', true);
+  return crossDocumentGroups(hits, 'relationship-conflict');
 }
 
 /**

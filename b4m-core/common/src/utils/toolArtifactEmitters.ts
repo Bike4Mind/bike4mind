@@ -5,8 +5,10 @@ import { scanArtifactTags } from './scanArtifactTags';
 // The tools whose results may carry artifacts, each pinned to the one type it emits. Any other
 // tool's output (web pages, files, MCP servers) is untrusted and can carry forged markup. Read by
 // sharedToolBuilder (tool_result extraction) and llm-adapters toolStreamingHelper (reply streaming
-// and the delivered-vs-removed placeholder every backend puts in history); a new artifact-emitting
-// tool must be added here or its artifact is dropped on both paths.
+// and the delivered-vs-removed placeholder every backend puts in history). A built-in
+// artifact-emitting tool must be added here or its artifact is dropped on both paths; a tool
+// supplied at runtime through `externalTools` declares its type instead (ToolDefinition
+// `artifactType` in services), which every reader takes via resolveToolArtifactType.
 //
 // Gating status: every backend strips tool-result artifact markup before it enters history, and
 // every backend wires createRecursiveArtifactGuard to catch a model that reconstructs the tag.
@@ -18,6 +20,16 @@ export const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
   ['blog_draft', ClaudeArtifactMimeTypes.BLOG_DRAFT],
   ['chess_engine', ClaudeArtifactMimeTypes.CHESS],
 ]);
+
+/**
+ * The one artifact type `toolName` may emit, or undefined when it emits none. A static entry
+ * wins over `declaredType`, so a runtime tool that shadows a built-in name cannot repin its type.
+ * `declaredType` must come from a trusted tool registration (never from tool output or an MCP
+ * server), since it is what lets that tool's markup through.
+ */
+export function resolveToolArtifactType(toolName: string, declaredType?: string): string | undefined {
+  return TOOL_ARTIFACT_EMITTERS.get(toolName) ?? (declaredType || undefined);
+}
 
 // Placeholders substituted for a stripped tool-result artifact block (see
 // stripToolArtifactMarkup below), shared by every backend so the model gets a consistent
@@ -40,15 +52,16 @@ export function parseToolArtifactAttributes(attrsStr: string): Record<string, st
 }
 
 /**
- * Returns `text` with every artifact tag not of `toolName`'s pinned type removed, or null when
+ * Returns `text` with every artifact tag not of `toolName`'s pinned type (see
+ * resolveToolArtifactType for `declaredType`) removed, or null when
  * the tool is not an emitter, no tag is kept, or the text holds an artifact opener outside a
  * kept, closed, un-nested tag (a client streaming parser would still render an unclosed tag).
  * Tags are read by scanArtifactOpenTag, the grammar of the reply parser that consumes the
  * streamed text, so a quoted ">" cannot end a tag here that the reply parser reads further.
  * A single forward scan: the input is tool output, so no per-opener rescan to the end.
  */
-export function filterToolArtifactMarkup(toolName: string, text: string): string | null {
-  const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
+export function filterToolArtifactMarkup(toolName: string, text: string, declaredType?: string): string | null {
+  const allowedType = resolveToolArtifactType(toolName, declaredType);
   if (allowedType === undefined) return null;
   const opener = /<artifact\b/gi;
   const memo: ArtifactTagMemo = {};
@@ -81,8 +94,8 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
  * scanArtifactTags with that extraction (rather than re-parsing openers with the reply-parser
  * grammar filterToolArtifactMarkup uses), and mirrors extraction's case-sensitive entry gate.
  */
-export function hasDeliverablePinnedArtifact(toolName: string, text: string): boolean {
-  const allowedType = TOOL_ARTIFACT_EMITTERS.get(toolName);
+export function hasDeliverablePinnedArtifact(toolName: string, text: string, declaredType?: string): boolean {
+  const allowedType = resolveToolArtifactType(toolName, declaredType);
   if (allowedType === undefined || !text.includes('<artifact')) return false;
   return scanArtifactTags(text, true).some(({ attrs }) => parseToolArtifactAttributes(attrs).type === allowedType);
 }

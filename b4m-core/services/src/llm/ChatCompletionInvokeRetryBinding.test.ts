@@ -92,7 +92,7 @@ describe('ChatCompletionInvoke retry path session binding', () => {
       errorCode: 'insufficient_credits',
     });
 
-    await invoke.invoke({ body: body as never, userId: 'user-A' });
+    const quest = await invoke.invoke({ body: body as never, userId: 'user-A' });
 
     // Without this, a retry that succeeds (or fails for an unrelated, uncoded reason) would
     // still report the credit-exhaustion code from the attempt being retried.
@@ -103,8 +103,27 @@ describe('ChatCompletionInvoke retry path session binding', () => {
     // absence and leaves the stored value intact. This mock cannot see that second half actually
     // work; apps/client/server/chatCompletion/questRetryErrorCodeClear.e2e.test.ts re-reads a real
     // document to prove it.
-    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ errorCode: undefined }), {
+    expect(quest?.errorCode).toBeUndefined();
+    expect(questsUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'quest-1', status: 'running' }), {
       unset: ['errorCode'],
     });
+    // Pins the full reset: a key dropped from this partial is a retry field that silently stops
+    // reaching the database.
+    expect(Object.keys(questsUpdate.mock.calls[0][0]).sort()).toEqual(
+      [
+        'agentIds',
+        'fabFileIds',
+        'id',
+        'images',
+        'prompt',
+        'promptMeta',
+        'questMasterReply',
+        'replies',
+        'reply',
+        'status',
+        'timestamp',
+        'type',
+      ].sort()
+    );
   });
 });

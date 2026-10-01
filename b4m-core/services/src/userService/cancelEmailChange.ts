@@ -12,7 +12,7 @@ interface CancelEmailChangeAdapters {
   db: {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
-      update: (user: IUserDocument) => Promise<unknown>;
+      update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
 }
@@ -29,10 +29,11 @@ export const cancelEmailChange = async (
     throw new NotFoundError('User not found');
   }
 
-  user.pendingEmail = null;
-  user.pendingEmailToken = null;
-  user.pendingEmailSentAt = null;
-  user.pendingEmailExpires = null;
-
-  await db.users.update(user);
+  await db.users.update({
+    id: user.id,
+    pendingEmail: null,
+    pendingEmailToken: null,
+    pendingEmailSentAt: null,
+    pendingEmailExpires: null,
+  });
 };

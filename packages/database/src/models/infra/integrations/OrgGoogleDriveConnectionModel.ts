@@ -32,6 +32,18 @@ const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-m
 // that reclaims automatically would be separate work, not something this bound provides.
 const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 12-min visibility windows
 
+// Whether a 'syncing' row's claim is still within claimForSync's staleness windows, i.e. a run could
+// plausibly still own it. A 'syncing' row failing this is wedged and only a Re-sync recovers it. The
+// two windows must stay in sync with the stale arms of claimForSync.
+export function isDriveSyncClaimLive(
+  conn: Pick<IOrgGoogleDriveConnectionDocument, 'status' | 'syncClaimedAt' | 'activeIngestBatchId'>,
+  nowMs: number = Date.now()
+): boolean {
+  if (conn.status !== 'syncing' || !conn.syncClaimedAt) return false;
+  const staleMs = conn.activeIngestBatchId ? CHAINED_SYNC_CLAIM_STALE_MS : SYNC_CLAIM_STALE_MS;
+  return nowMs - new Date(conn.syncClaimedAt).getTime() < staleMs;
+}
+
 /**
  * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
  * `lastError: err.message` from a provider (Gaxios) failure, which can carry URLs, query strings, or
@@ -343,7 +355,7 @@ class OrgGoogleDriveConnectionRepository
    *
    * The staleness arm is SPLIT by whether the claim carries a chain token, because the two measure
    * different durations and stealing a live chain is far more damaging than stealing an idle claim -
-   * see CHAINED_SYNC_CLAIM_STALE_MS.
+   * see CHAINED_SYNC_CLAIM_STALE_MS. isDriveSyncClaimLive mirrors these windows; keep the two in sync.
    *
    * `enabled: { $ne: false }` closes the disconnect race: a message already on the ingest queue (a
    * poll fired just before disconnect, a manual Re-sync, or a fresh connect's first sync) could

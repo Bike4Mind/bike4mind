@@ -78,6 +78,30 @@ const fabFileBucket = new sst.aws.Bucket(
   }
 );
 
+// Notebook exports (notebookExportService storeExportFile) are served via a 1h signed URL and never
+// deleted by the app; 1 day is S3's minimum expiration. Noncurrent rule covers versioned stages.
+const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFileBucketLifecycle', {
+  bucket: fabFileBucket.name,
+  rules: [
+    {
+      id: 'expire-notebook-exports',
+      status: 'Enabled',
+      filter: {
+        prefix: 'exports/',
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+      abortIncompleteMultipartUpload: {
+        daysAfterInitiation: 1,
+      },
+    },
+  ],
+});
+
 /**
  * ===============================
  * GeneratedImagesBucket
@@ -557,6 +581,7 @@ const qaArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('qa
 
 export {
   fabFileBucket,
+  fabFileBucketLifecycle,
   generatedImagesBucket,
   appFilesBucket,
   publishedArtifactsBucket,

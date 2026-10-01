@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
 
 const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
@@ -72,6 +72,10 @@ describe('apiKeyAuth scope gate', () => {
     const { passed, error } = await run([ApiKeyScope.OPTIHASHI_COMPUTE], makeReq());
     expect(passed).toBe(false);
     expect(error?.message).toMatch(/Insufficient API key permissions/);
+    // errorHandler spreads additionalInfo into the body, so this is what the caller reads.
+    // Exact match: the key's held scope (AI_CHAT) must not appear.
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect((error as ForbiddenError).additionalInfo).toEqual({ required_scopes: [ApiKeyScope.OPTIHASHI_COMPUTE] });
   });
 
   it('admits a key that holds a required scope', async () => {
@@ -125,6 +129,8 @@ describe('apiKeyAuth scope gate', () => {
     const { passed, error } = await run(undefined, req);
     expect(passed).toBe(false);
     expect(error?.message).toMatch(/Insufficient API key permissions/);
+    // No scope would widen a confined key's reach, so none is named.
+    expect((error as ForbiddenError).additionalInfo).toEqual({});
     // The gate must reject before the owner is ever loaded - an embed key must not
     // reach a handler as its minter.
     expect(findByIdMock).not.toHaveBeenCalled();
@@ -150,6 +156,10 @@ describe('apiKeyAuth scope gate', () => {
     const { passed, error } = await run([ApiKeyScope.AI_CHAT], req, [ApiKeyScope.OPTIHASHI_COMPUTE]);
     expect(passed).toBe(false);
     expect(error?.message).toMatch(/Insufficient API key permissions/);
+    expect((error as ForbiddenError).additionalInfo).toEqual({
+      required_scopes: [ApiKeyScope.AI_CHAT],
+      also_required_scopes: [ApiKeyScope.OPTIHASHI_COMPUTE],
+    });
     expect(req.logger.warn).toHaveBeenCalledWith(
       'API key scope check failed',
       expect.objectContaining({ alsoRequiredScopes: [ApiKeyScope.OPTIHASHI_COMPUTE] })

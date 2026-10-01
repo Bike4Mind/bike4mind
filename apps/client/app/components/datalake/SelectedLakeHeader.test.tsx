@@ -4,7 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import SelectedLakeHeader from './SelectedLakeHeader';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 // The strip's two buttons are its whole reason to exist, and both are store writers - so the
 // store is a real spy pair rather than a partial stub. A stub missing one of these makes the
@@ -21,9 +21,9 @@ vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
     selector({ openWizardForLake, openManager }),
 }));
 
-// DriveConnectAction fetches Drive status; this suite owns the strip's own wiring, not that chain.
-vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
-  default: () => <div data-testid="drive-connect-action" />,
+// LakeSourceConnectActions fetches connection status; this suite owns the strip's own wiring, not that chain.
+vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
+  default: () => <div data-testid="lake-source-connect-actions" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -101,5 +101,25 @@ describe('SelectedLakeHeader', () => {
     // non-manager, so a control here could only ever fail.
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
+  });
+
+  it('flags a draft lake as not grounding answers', () => {
+    renderHeader({ status: 'draft' });
+    expect(screen.getByTestId('datalake-selected-draft-chip')).toHaveTextContent('Draft - not grounding answers');
+  });
+
+  it('flags a user lake with no status as not grounding answers', () => {
+    renderHeader({ status: undefined });
+    expect(screen.getByTestId('datalake-selected-draft-chip')).toBeInTheDocument();
+  });
+
+  it('shows no draft chip for an active lake', () => {
+    renderHeader({ status: 'active' });
+    expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
+  });
+
+  it('shows no draft chip for a built-in lake with no status', () => {
+    renderHeader({ id: DATA_LAKES[0].id, status: undefined });
+    expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
   });
 });

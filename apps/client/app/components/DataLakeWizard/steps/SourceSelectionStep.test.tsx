@@ -20,13 +20,13 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
     selector({ selectedAccount: selectedAccount.current }),
 }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
-// Both Drive actions pull in React Query (useConfig / lake-connection hooks); stub them so these
+// The source actions pull in React Query (useConfig / lake-connection hooks); stub them so these
 // step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
-// DriveConnectAction.test.tsx and DrivePendingConnectAction.test.tsx.
+// LakeSourceConnectActions.test.tsx and DrivePendingConnectAction.test.tsx.
 // Rendered as markers rather than null: these tests assert WHICH of the two appears, which is the
 // gate this step owns. Their own behaviour stays covered by their own test files.
-vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
-  default: () => <div data-testid="drive-connect-action" />,
+vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
+  default: () => <div data-testid="lake-source-connect-actions" />,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => <div data-testid="drive-pending-connect-action" />,
@@ -267,7 +267,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       renderStep();
 
       expect(screen.getByTestId('drive-connect-personal-lake-btn')).toBeDisabled();
-      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('lake-source-connect-actions')).toBeNull();
       // And not the create-mode fallback either - there IS a target lake, it just cannot connect.
       expect(screen.queryByTestId('drive-pending-connect-action')).toBeNull();
     });
@@ -278,7 +278,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       appendTo({ canManage: false });
       renderStep();
 
-      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('lake-source-connect-actions')).toBeNull();
       expect(screen.queryByTestId('drive-connect-personal-lake-btn')).toBeNull();
     });
 
@@ -286,14 +286,14 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       appendTo({});
       renderStep();
 
-      expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+      expect(screen.getByTestId('lake-source-connect-actions')).toBeInTheDocument();
     });
 
     it('still parks the selection in create mode, where there is no lake to gate on yet', () => {
       renderStep();
 
       expect(screen.getByTestId('drive-pending-connect-action')).toBeInTheDocument();
-      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('lake-source-connect-actions')).toBeNull();
     });
   });
 });

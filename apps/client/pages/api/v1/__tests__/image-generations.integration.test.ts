@@ -21,6 +21,11 @@ const {
   mockInvoke,
   mockResolveImagePrompt,
   mockGetRecentHistory,
+  mockAssertUrlAllowed,
+  mockFindCallbackSigningSecret,
+  mockArmCallback,
+  mockFindCallbackById,
+  mockClaimCallbackDispatch,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -29,6 +34,11 @@ const {
   mockInvoke: vi.fn(),
   mockResolveImagePrompt: vi.fn(),
   mockGetRecentHistory: vi.fn(),
+  mockAssertUrlAllowed: vi.fn(),
+  mockFindCallbackSigningSecret: vi.fn(),
+  mockArmCallback: vi.fn(),
+  mockFindCallbackById: vi.fn(),
+  mockClaimCallbackDispatch: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -69,9 +79,31 @@ vi.mock('@bike4mind/database', async orig => {
     questRepository: {
       ...(actual.questRepository as object),
       getMostRecentChatHistory: (...a: unknown[]) => mockGetRecentHistory(...a),
+      armCallback: (...a: unknown[]) => mockArmCallback(...a),
+      findCallbackById: (...a: unknown[]) => mockFindCallbackById(...a),
+      // Short-circuits dispatchQuestCallback (called from armGenerationCallback) so it never
+      // reaches SQS/sst - dispatch mechanics are covered by dispatchQuestCallback.test.ts.
+      claimCallbackDispatch: (...a: unknown[]) => mockClaimCallbackDispatch(...a),
+    },
+    userApiKeyRepository: {
+      ...(actual.userApiKeyRepository as object),
+      findCallbackSigningSecret: (...a: unknown[]) => mockFindCallbackSigningSecret(...a),
     },
   };
 });
+
+const mockGetGenerationCallbackQueueUrl = vi.fn(
+  () => 'https://sqs.example.com/generationCallbackQueue' as string | undefined
+);
+vi.mock('@server/generationCallback/dispatchQuestCallback', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  getGenerationCallbackQueueUrl: () => mockGetGenerationCallbackQueueUrl(),
+}));
+
+vi.mock('@server/utils/ssrfProtection', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  assertUrlAllowed: (...a: unknown[]) => mockAssertUrlAllowed(...a),
+}));
 
 vi.mock('@server/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
@@ -101,7 +133,8 @@ vi.mock('@server/auth/auth', async orig => {
 
 import handler from '../image-generations';
 import legacyHandler from '../../ai/generate-image';
-import { ApiKeyScope, GenerateImageResponseSchema } from '@bike4mind/common';
+import { questRepository } from '@bike4mind/database';
+import { ApiKeyScope, ApiKeyStatus, GenerateImageResponseSchema } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -145,6 +178,11 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       session: { id: 'sess-1' },
     });
     mockInvoke.mockResolvedValue({ id: 'quest-1', sessionId: 'sess-1', type: 'message' });
+    mockAssertUrlAllowed.mockResolvedValue(undefined);
+    mockFindCallbackSigningSecret.mockResolvedValue(null);
+    mockClaimCallbackDispatch.mockResolvedValue(null);
+    mockArmCallback.mockResolvedValue(undefined);
+    mockFindCallbackById.mockResolvedValue(null);
   });
 
   it('rejects a key lacking ai:generate (403) before enqueuing generation', async () => {
@@ -207,5 +245,69 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(res._getStatusCode()).toBe(200);
     expect(mockValidate).not.toHaveBeenCalled();
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  describe('callbackUrl', () => {
+    const VALID_BODY = { prompt: 'a red bicycle on a white background', model: 'gpt-image-1' };
+
+    it('rejects a callbackUrl from a JWT caller (400) before enqueuing - no per-key signing secret to arm', async () => {
+      const { req, res } = fire({ apiKey: null, body: { ...VALID_BODY, callbackUrl: 'https://example.com/hook' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/api key/i);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-https callbackUrl (422) before enqueuing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { ...VALID_BODY, callbackUrl: 'http://example.com/hook' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().error).toMatch(/callbackUrl|https/i);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('rejects an API-key callbackUrl with 400 on a deployment with no callback queue', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      mockGetGenerationCallbackQueueUrl.mockReturnValueOnce(undefined);
+      const { req, res } = fire({ body: { ...VALID_BODY, callbackUrl: 'https://example.com/hook' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/not supported on this deployment/);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('rejects an API-key caller whose key has no callback signing secret (400) before enqueuing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      mockFindCallbackSigningSecret.mockResolvedValue(null);
+      const { req, res } = fire({ body: { ...VALID_BODY, callbackUrl: 'https://example.com/hook' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/\/api\/user-api-keys\/k1\/callback-secret/);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('arms a pending callback on the quest for an API-key caller with a signing secret (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      mockFindCallbackSigningSecret.mockResolvedValue({
+        secret: 'whsec_test',
+        userId: 'user-1',
+        status: ApiKeyStatus.ACTIVE,
+      });
+      mockArmCallback.mockImplementation(async (_questId: string, target: { url: string; apiKeyId: string }) => {
+        mockFindCallbackById.mockResolvedValue({ ...target, state: 'pending' });
+      });
+      const { req, res } = fire({ body: { ...VALID_BODY, callbackUrl: 'https://example.com/hook' } });
+
+      await handler(req, res);
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockArmCallback).toHaveBeenCalledWith('quest-1', { url: 'https://example.com/hook', apiKeyId: 'k1' });
+      await expect(questRepository.findCallbackById('quest-1')).resolves.toEqual({
+        url: 'https://example.com/hook',
+        apiKeyId: 'k1',
+        state: 'pending',
+      });
+    });
   });
 });

@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   connectMutate: vi.fn(),
   disconnectMutate: vi.fn(),
   openPicker: vi.fn(),
+  onPicked: { current: null as null | ((folder: { driveFolderId: string; folderName?: string }) => void) },
+  toastError: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: 'gcid' } }) }));
@@ -21,7 +23,17 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: vi.fn(), post: vi.fn() } }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: h.toastError } }));
+vi.mock('@client/app/hooks/data/useDriveFolderPicker', async importOriginal => {
+  const actual = await importOriginal<typeof import('@client/app/hooks/data/useDriveFolderPicker')>();
+  return {
+    ...actual,
+    useDriveFolderPicker: (args: Parameters<typeof actual.useDriveFolderPicker>[0]) => {
+      h.onPicked.current = args.onPicked;
+      return actual.useDriveFolderPicker(args);
+    },
+  };
+});
 
 import DriveConnectAction from './DriveConnectAction';
 
@@ -33,6 +45,7 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
   driveFolderId: 'FOLDER',
   folderName: 'Docs',
   status: 'connected',
+  syncStale: false,
   enabled: true,
   lastError: null,
   lastUsedAt: null,
@@ -159,5 +172,45 @@ describe('DriveConnectAction', () => {
 
     fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
     expect(screen.getByTestId('drive-disconnect-warning')).toHaveTextContent('1 file ');
+  });
+
+  it("toasts the server's reason when connecting a folder fails", () => {
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    h.onPicked.current?.({ driveFolderId: 'F1' });
+
+    const [, options] = h.connectMutate.mock.calls[0];
+    options.onError({ isAxiosError: true, response: { data: { error: 'Folder is claimed by another lake.' } } });
+    expect(h.toastError).toHaveBeenCalledWith('Folder is claimed by another lake.');
+  });
+
+  it('falls back to generic copy when connecting a folder fails without a server reason', () => {
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    h.onPicked.current?.({ driveFolderId: 'F1' });
+
+    const [, options] = h.connectMutate.mock.calls[0];
+    options.onError(new Error('Network Error'));
+    expect(h.toastError).toHaveBeenCalledWith('Could not connect that folder. Please try again.');
+  });
+
+  it("toasts the server's reason when disconnecting fails", () => {
+    h.connection.current = connected();
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
+    fireEvent.click(screen.getByTestId('drive-disconnect-confirm-btn'));
+
+    const [, options] = h.disconnectMutate.mock.calls[0];
+    options.onError({ isAxiosError: true, response: { data: { error: 'A sync is in progress.' } } });
+    expect(h.toastError).toHaveBeenCalledWith('A sync is in progress.');
+  });
+
+  it('falls back to generic copy when disconnecting fails without a server reason', () => {
+    h.connection.current = connected();
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    fireEvent.click(screen.getByTestId('drive-disconnect-btn'));
+    fireEvent.click(screen.getByTestId('drive-disconnect-confirm-btn'));
+
+    const [, options] = h.disconnectMutate.mock.calls[0];
+    options.onError(new Error('Network Error'));
+    expect(h.toastError).toHaveBeenCalledWith('Could not disconnect. Please try again.');
   });
 });

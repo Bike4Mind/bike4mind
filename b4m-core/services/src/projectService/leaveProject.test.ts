@@ -69,7 +69,12 @@ describe('projectService - leaveProject', () => {
     const result = await run(ownerId, memberId);
 
     expect(result.users).toEqual([{ userId: coMemberId, permissions: [Permission.read] }]);
-    expect(adapters.db.projects.update).toHaveBeenCalledWith(project);
+    expect(adapters.db.projects.update).toHaveBeenCalledWith({
+      id: project.id,
+      users: project.users,
+      fileIds: project.fileIds,
+      sessionIds: project.sessionIds,
+    });
   });
 
   it('lets a member leave voluntarily', async () => {
@@ -79,7 +84,12 @@ describe('projectService - leaveProject', () => {
     const result = await run(memberId);
 
     expect(result.users).toEqual([{ userId: coMemberId, permissions: [Permission.read] }]);
-    expect(adapters.db.projects.update).toHaveBeenCalledWith(project);
+    expect(adapters.db.projects.update).toHaveBeenCalledWith({
+      id: project.id,
+      users: project.users,
+      fileIds: project.fileIds,
+      sessionIds: project.sessionIds,
+    });
   });
 
   it('refuses a non-owner trying to remove somebody else', async () => {

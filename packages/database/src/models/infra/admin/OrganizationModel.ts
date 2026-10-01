@@ -474,16 +474,30 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return orgs.map(org => org._id.toString());
   }
 
-  async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
-    await this.organizationModel.findByIdAndUpdate(organizationId, [
+  /**
+   * Atomically drop a member from `users`, `userDetails` and `adminUserIds`, and vacate
+   * `managerId` if they held it, in one pipeline update, so a concurrent add or credit `$inc` on
+   * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
+   * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
+   * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
+   * matches. Idempotent (safe under a withTransaction retry).
+   */
+  async removeMember(organizationId: string, userId: string): Promise<void> {
+    const without = (field: string, idPath: string) => ({
+      $filter: {
+        input: { $ifNull: [`$${field}`, []] },
+        cond: { $ne: [{ $toString: idPath }, userId] },
+      },
+    });
+    await this.organizationModel.updateOne({ _id: organizationId }, [
       {
         $set: {
-          currentStorageSize: {
-            $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, count] }],
-          },
+          users: without('users', '$$this.userId'),
+          userDetails: without('userDetails', '$$this.id'),
+          adminUserIds: without('adminUserIds', '$$this'),
+          managerId: { $cond: [{ $eq: [{ $toString: '$managerId' }, userId] }, null, '$managerId'] },
         },
       },
-      { new: true },
     ]);
   }
 

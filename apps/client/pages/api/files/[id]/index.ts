@@ -22,6 +22,7 @@ import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLa
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
 import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
+import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -29,8 +30,10 @@ import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertFilesReadScope(req);
     req.logger.updateMetadata({ userId: req.user.id, fileId: req.query.id });
     return res.json(await loadAccessibleFabFile(req, req.query.id));
   })
@@ -38,6 +41,7 @@ const handler = baseApi()
    * Update FabFile by ID
    */
   .put(async (req: Request<{}, {}, Partial<IFabFile> & { fileContent: string }, { id: string }>, res) => {
+    assertFilesWriteScope(req);
     const userId = req.user.id;
     const fabFileId = req.query.id;
 
@@ -153,6 +157,7 @@ const handler = baseApi()
    * Delete FabFile by ID
    */
   .delete(async (req: Request<{}, {}, {}, { id: string }>, res) => {
+    assertFilesWriteScope(req);
     const userId = req.user.id;
     const fabFileId = req.query.id;
 

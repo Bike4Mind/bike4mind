@@ -12,6 +12,7 @@ import {
   ModalDialog,
   Option,
   Select,
+  Textarea,
   Tooltip,
   Typography,
 } from '@mui/joy';
@@ -24,9 +25,17 @@ import type {
   LakeFindingStatus,
   LakeHealthApiResponse,
 } from '@bike4mind/common';
-import { INCONSISTENCY_KINDS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
-import { useDataLakeFindings, useGetDataLakeHealth, useScanDataLakeFindings } from '@client/app/hooks/data/dataLakes';
+import { INCONSISTENCY_KINDS, LAKE_FINDING_RESOLUTION_MAX_CHARS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
+import {
+  useDataLakeFindings,
+  useGetDataLakeHealth,
+  useLakeAccessView,
+  useRuleOnDataLakeFinding,
+  useScanDataLakeFindings,
+} from '@client/app/hooks/data/dataLakes';
+import { useUser } from '@client/app/contexts/UserContext';
 import FindingSourcePane from './FindingSourcePane';
+import FindingCorpusActions from './FindingCorpusActions';
 import {
   FINDING_DETECTOR_LABEL,
   FINDING_KIND_HINT,
@@ -40,9 +49,12 @@ import {
  * The curator's read of one lake's detected corpus problems (#3044): a filterable list, and the
  * conflicting passages of one finding side by side in the documents they came from.
  *
- * Read-only over the findings themselves: recording what a curator decided is #3045 and changing
- * the corpus is #3046. The one write is "Scan now", which runs detection on demand so a curator who
- * just uploaded a conflicting document need not wait for the nightly sweep to see it here.
+ * The list is read-only, but the DETAIL view is where a curator rules on a finding (#3045): resolve
+ * or dismiss it with an optional note, and set or clear its assignee. It is also where the corpus
+ * controls (merge, supersede, retag) live (#3046), because that is where the conflicting passages
+ * are read and the file names can be shown before anything moves. The one other write is "Scan
+ * now", which runs detection on demand so a curator who just uploaded a conflicting document need
+ * not wait for the nightly sweep to see it here.
  */
 
 /**
@@ -118,7 +130,196 @@ function FindingRow({ finding, onOpen }: { finding: IDataLakeFindingDocument; on
   );
 }
 
-function FindingDetail({ finding, onBack }: { finding: IDataLakeFindingDocument; onBack: () => void }) {
+/**
+ * Resolve or dismiss an open finding, with an optional note. A closed finding shows its ruling
+ * instead - read-only, because the model is terminal by design (no route reopens one). The note is
+ * capped server-side too; the counter and `maxLength` keep a curator from losing the tail of a long
+ * sentence only after they submit.
+ */
+function FindingRuling({ finding, dataLakeId }: { finding: IDataLakeFindingDocument; dataLakeId: string }) {
+  const [note, setNote] = useState('');
+  const rule = useRuleOnDataLakeFinding(dataLakeId);
+
+  if (finding.status !== 'open') {
+    return (
+      <Box data-testid="lake-finding-ruling" sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+        <Typography level="body-xs" textColor="text.secondary">
+          {`${FINDING_STATUS_LABEL[finding.status]} on ${formatFindingDate(finding.resolvedAt)}`}
+        </Typography>
+        {finding.resolution && (
+          <Typography level="body-sm" sx={{ flexBasis: '100%', wordBreak: 'break-word' }}>
+            {finding.resolution}
+          </Typography>
+        )}
+        {/* The row carries this too, but the detail view is where a curator acts; the recurrence is
+            the one fact that should follow them here. */}
+        {hasRecurredSinceResolution(finding) && (
+          <Chip size="sm" variant="soft" color="danger" sx={{ fontSize: '11px' }} data-testid="lake-finding-recurred">
+            Seen again
+          </Chip>
+        )}
+      </Box>
+    );
+  }
+
+  const pending = rule.isPending;
+  const ruleOn = (action: 'resolve' | 'dismiss') =>
+    rule.mutate({ findingId: finding.id, action, resolution: note.trim() || undefined });
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <Textarea
+        size="sm"
+        minRows={2}
+        maxRows={4}
+        value={note}
+        onChange={event => setNote(event.target.value)}
+        placeholder="Optional note: what did you find?"
+        slotProps={{
+          textarea: { maxLength: LAKE_FINDING_RESOLUTION_MAX_CHARS, 'data-testid': 'lake-finding-resolution-input' },
+        }}
+      />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Button
+          size="sm"
+          loading={pending}
+          disabled={pending}
+          onClick={() => ruleOn('resolve')}
+          data-testid="lake-finding-resolve-btn"
+        >
+          Resolve
+        </Button>
+        <Button
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          loading={pending}
+          disabled={pending}
+          onClick={() => ruleOn('dismiss')}
+          data-testid="lake-finding-dismiss-btn"
+        >
+          Dismiss
+        </Button>
+        <Typography level="body-xs" textColor="text.tertiary">
+          {`${note.length}/${LAKE_FINDING_RESOLUTION_MAX_CHARS}`}
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * Set or clear a finding's assignee, available in every status - the route allows an assignment at
+ * any time, and who owns triage is independent of whether the problem is closed.
+ *
+ * Candidates are the lake's owner/curator user grants from `useLakeAccessView`, read only while the
+ * caller may manage the lake (`enabled`). That view is manage-gated, so a refusal simply hides the
+ * picker; "Assign to me" and "Unassign" do not depend on it, because the route does not validate the
+ * assignee against any candidate set. An assignee who no longer appears in the grants reads as
+ * "Assigned to someone not listed" rather than being looked up - no second user fetch for a label.
+ */
+function FindingAssignee({
+  finding,
+  dataLakeId,
+  canManage,
+}: {
+  finding: IDataLakeFindingDocument;
+  dataLakeId: string;
+  canManage: boolean;
+}) {
+  const currentUserId = useUser(state => state.currentUser?.id);
+  const rule = useRuleOnDataLakeFinding(dataLakeId);
+  const access = useLakeAccessView(dataLakeId, canManage);
+
+  const candidates = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const grant of access.data?.view.grants ?? []) {
+      if (grant.principalType !== 'user' || grant.status !== 'active') continue;
+      if (grant.role !== 'owner' && grant.role !== 'curator') continue;
+      if (!byId.has(grant.principalId)) byId.set(grant.principalId, grant.principalName ?? 'Unnamed curator');
+    }
+    return [...byId.entries()].map(([id, name]) => ({ id, name }));
+  }, [access.data]);
+
+  const assign = (assigneeUserId: string | null) =>
+    rule.mutate({ findingId: finding.id, action: 'assign', assigneeUserId });
+
+  const assignee = finding.assigneeUserId;
+  const listedName = assignee ? candidates.find(candidate => candidate.id === assignee)?.name : undefined;
+  const label = !assignee
+    ? 'Unassigned'
+    : assignee === currentUserId
+      ? 'Assigned to you'
+      : (listedName ?? 'Assigned to someone not listed');
+  // Keep the Select's value among its own options: an assignee who holds no listed grant (e.g. an
+  // org admin who used "Assign to me") would otherwise leave the control rendering blank.
+  const assigneeUnlisted = !!assignee && !candidates.some(candidate => candidate.id === assignee);
+
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+      <Typography level="body-xs" textColor="text.secondary" data-testid="lake-finding-assignee">
+        {label}
+      </Typography>
+      {candidates.length > 0 && (
+        <Select
+          size="sm"
+          value={assignee ?? ''}
+          disabled={rule.isPending}
+          onChange={(_, value) => assign(value ? value : null)}
+          slotProps={{ button: { 'data-testid': 'lake-finding-assignee-select' } }}
+          sx={{ minWidth: '11rem' }}
+        >
+          <Option value="">Unassigned</Option>
+          {assigneeUnlisted && (
+            <Option value={assignee}>
+              {assignee === currentUserId ? 'Assigned to you' : 'Assigned to someone not listed'}
+            </Option>
+          )}
+          {candidates.map(candidate => (
+            <Option key={candidate.id} value={candidate.id}>
+              {candidate.name}
+            </Option>
+          ))}
+        </Select>
+      )}
+      {!!currentUserId && assignee !== currentUserId && (
+        <Button
+          size="sm"
+          variant="plain"
+          disabled={rule.isPending}
+          onClick={() => assign(currentUserId)}
+          data-testid="lake-finding-assign-me-btn"
+        >
+          Assign to me
+        </Button>
+      )}
+      {!!assignee && (
+        <Button
+          size="sm"
+          variant="plain"
+          color="neutral"
+          disabled={rule.isPending}
+          onClick={() => assign(null)}
+          data-testid="lake-finding-unassign-btn"
+        >
+          Unassign
+        </Button>
+      )}
+    </Box>
+  );
+}
+
+function FindingDetail({
+  finding,
+  dataLakeId,
+  canManage,
+  onBack,
+}: {
+  finding: IDataLakeFindingDocument;
+  dataLakeId: string;
+  canManage: boolean;
+  onBack: () => void;
+}) {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: 0, height: '100%', gap: 1.5 }}>
       <Box>
@@ -154,6 +355,16 @@ function FindingDetail({ finding, onBack }: { finding: IDataLakeFindingDocument;
         </Typography>
       </Alert>
 
+      <FindingRuling finding={finding} dataLakeId={dataLakeId} />
+      <FindingAssignee finding={finding} dataLakeId={dataLakeId} canManage={canManage} />
+
+      {/* The action area: a curator acts here, on the evidence just read. Corpus actions move
+          customer documents, so they sit in their own row apart from anything that only records a
+          decision. */}
+      <Box data-testid="lake-finding-action-area" sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 1.5 }}>
+        <FindingCorpusActions dataLakeId={dataLakeId} finding={finding} />
+      </Box>
+
       {/* Two up, which is the shape of a cross-document conflict; a finding reaching more documents
           wraps into further rows rather than being cut down to the first pair. */}
       <Box
@@ -180,11 +391,15 @@ export function LakeFindingsDialog({
   onClose,
   dataLakeId,
   lakeName,
+  canManage = true,
 }: {
   open: boolean;
   onClose: () => void;
   dataLakeId: string;
   lakeName: string;
+  /** Whether the caller may manage the lake; the access view behind the assignee picker is 403'd
+   * without it, so it is fetched only when true. */
+  canManage?: boolean;
 }) {
   const [status, setStatus] = useState<LakeFindingStatus | undefined>('open');
   const [kind, setKind] = useState<InconsistencyKind | undefined>(undefined);
@@ -223,7 +438,12 @@ export function LakeFindingsDialog({
         <DialogTitle>{`Findings in "${lakeName}"`}</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {selected ? (
-            <FindingDetail finding={selected} onBack={() => setSelectedId(null)} />
+            <FindingDetail
+              finding={selected}
+              dataLakeId={dataLakeId}
+              canManage={canManage}
+              onBack={() => setSelectedId(null)}
+            />
           ) : (
             <>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
@@ -450,7 +670,13 @@ export default function LakeFindingsChip({
           derived from the OPEN query, and the curator inside may be reading dismissed ones - so an
           invalidation that empties the open query would otherwise yank the whole surface off screen
           mid-read. */}
-      <LakeFindingsDialog open={open} onClose={() => setOpen(false)} dataLakeId={lakeId} lakeName={lakeName} />
+      <LakeFindingsDialog
+        open={open}
+        onClose={() => setOpen(false)}
+        dataLakeId={lakeId}
+        lakeName={lakeName}
+        canManage={canManage}
+      />
     </>
   );
 }

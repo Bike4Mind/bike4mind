@@ -362,13 +362,30 @@ export class ImageGenerationService {
       quest.images = [];
       quest.replies = [];
       quest.status = undefined;
+      // A failed run leaves `type: 'error'`, and the success path never resets it, so a successful
+      // retry would still tell pollers and the callback to discard the render.
+      quest.type = 'message';
+      quest.errorCode = undefined;
       quest.promptMeta = promptMeta;
 
       if (promptEnhancement) {
         quest.promptEnhancement = promptEnhancement;
       }
 
-      await this.db.quests.update(quest);
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once, and a stale errorCode
+      // would outlive a successful retry. Unset both explicitly (mirrors ChatCompletionInvoke).
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          type: quest.type,
+          promptMeta: quest.promptMeta,
+          promptEnhancement: quest.promptEnhancement,
+        },
+        { unset: ['status', 'errorCode'] }
+      );
     } else {
       // Persist the user's literal prompt on the quest so the chat bubble shows what they actually
       // typed. The body's `prompt` carries the resolver's rewritten version (used by `process()` for
@@ -433,10 +450,13 @@ export class ImageGenerationService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     Logger.globalInstance.log(`[DEBUG INVOKE] Returning quest:`, {
@@ -1074,7 +1094,14 @@ export class ImageGenerationService {
             };
 
             this.addStatusToQuest(quest, 'Clarification requested', userId);
-            await this.db.quests.update(quest);
+            await this.db.quests.update({
+              id: quest.id,
+              reply: quest.reply,
+              type: quest.type,
+              status: quest.status,
+              promptMeta: quest.promptMeta,
+              creditsUsed: quest.creditsUsed,
+            });
             await clientMessageSender.sendToClient(userId, wsEndpoint, {
               action: 'streamed_chat_completion',
               quest: parseQuestToStreamPayload(quest),
@@ -1464,7 +1491,15 @@ export class ImageGenerationService {
         totalResponseTime,
       });
 
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        reply: quest.reply,
+        replies: quest.replies,
+        images: quest.images,
+        status: quest.status,
+        promptMeta: quest.promptMeta,
+        creditsUsed: quest.creditsUsed,
+      });
 
       if (this.invokeSessionAutoNaming) {
         await this.invokeSessionAutoNaming(sessionId, userId);
@@ -1519,8 +1554,10 @@ export class ImageGenerationService {
           }
         );
 
-        // Dual-write usage event: analytics only, never billing.
-        this.db.usageEvents
+        // Dual-write usage event: analytics only, never billing. Awaited because a write still in
+        // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
+        // from failing the request.
+        await this.db.usageEvents
           ?.record({
             requestId: questId,
             userId,

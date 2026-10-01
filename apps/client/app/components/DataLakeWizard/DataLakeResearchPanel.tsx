@@ -284,7 +284,15 @@ const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.s
 const formatWhen = (value: Date | string | null | undefined): string => {
   if (!value) return 'not yet';
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleString();
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  // Minutes precision reads cleaner in the UI; seconds are noise here.
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 };
 
 /** The Schedule select's own copy - what a manager picks, not what the card later reports. */
@@ -591,12 +599,11 @@ export function DataLakeResearchPanel({
               {cadence !== 'off' && (
                 <>
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="research-config-schedule">
-                    {`Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)}`}
+                    {`Runs ${SCHEDULE_CADENCE_LABEL[cadence]} \u00b7 next ${formatWhen(config.nextRunAt)} \u00b7 pauses at ${reviewBacklogLimit}`}
                   </Typography>
                   {atOrOverBacklogLimit && (
                     <Typography level="body-xs" color="warning" data-testid="research-config-schedule-paused">
-                      {`Scheduled runs are paused: ${pendingProposals} of ${reviewBacklogLimit} pending proposals are ` +
-                        `waiting for review. They resume once the queue is below ${reviewBacklogLimit}.`}
+                      {`${pendingProposals} pending (pauses at ${reviewBacklogLimit}). They resume once the queue is below ${reviewBacklogLimit}.`}
                     </Typography>
                   )}
                   {scheduleOutcome && (
@@ -722,8 +729,8 @@ export function DataLakeResearchPanel({
                 ))}
               </Select>
               <FormHelperText>
-                Judges each search result before it is fetched. A cheaper model costs less per run and reads less
-                carefully.
+                Judges each search result before it is fetched. Models are listed in recommended order, not by price. A
+                cheaper model costs less per run and reads less carefully.
               </FormHelperText>
             </FormControl>
 
@@ -748,13 +755,12 @@ export function DataLakeResearchPanel({
             </FormControl>
 
             {draft.cadence !== 'off' && (
-              <FormControl size="sm">
+              <FormControl size="sm" error={!!errors.reviewBacklogLimit}>
                 <FormLabel>Pause scheduled runs at</FormLabel>
                 <Input
                   type="number"
                   value={draft.reviewBacklogLimit}
                   onChange={e => setField('reviewBacklogLimit')(e.target.value)}
-                  error={!!errors.reviewBacklogLimit}
                   endDecorator="pending proposals"
                   slotProps={{
                     input: {
@@ -773,13 +779,12 @@ export function DataLakeResearchPanel({
             )}
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <FormControl size="sm" sx={{ flex: 1 }}>
+              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.maxResults}>
                 <FormLabel>Search results</FormLabel>
                 <Input
                   type="number"
                   value={draft.maxResults}
                   onChange={e => setField('maxResults')(e.target.value)}
-                  error={!!errors.maxResults}
                   slotProps={{
                     input: {
                       'data-testid': 'datalake-research-max-results-input',
@@ -791,13 +796,12 @@ export function DataLakeResearchPanel({
                 <FormHelperText>{errors.maxResults ?? `Up to ${RESEARCH_MAX_RESULTS_LIMIT}`}</FormHelperText>
               </FormControl>
 
-              <FormControl size="sm" sx={{ flex: 1 }}>
+              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.maxProposals}>
                 <FormLabel>Proposals per run</FormLabel>
                 <Input
                   type="number"
                   value={draft.maxProposals}
                   onChange={e => setField('maxProposals')(e.target.value)}
-                  error={!!errors.maxProposals}
                   slotProps={{
                     input: {
                       'data-testid': 'datalake-research-max-proposals-input',
@@ -811,14 +815,13 @@ export function DataLakeResearchPanel({
             </Stack>
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-              <FormControl size="sm" sx={{ flex: 1 }}>
+              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.recencyDays}>
                 <FormLabel>Only results from the last</FormLabel>
                 <Input
                   type="number"
                   placeholder="Any age"
                   value={draft.recencyDays}
                   onChange={e => setField('recencyDays')(e.target.value)}
-                  error={!!errors.recencyDays}
                   endDecorator="days"
                   slotProps={{
                     input: {
@@ -831,13 +834,12 @@ export function DataLakeResearchPanel({
                 <FormHelperText>{errors.recencyDays ?? 'Leave blank for no recency limit.'}</FormHelperText>
               </FormControl>
 
-              <FormControl size="sm" sx={{ flex: 1 }}>
+              <FormControl size="sm" sx={{ flex: 1 }} error={!!errors.minRelevance}>
                 <FormLabel>Minimum relevance</FormLabel>
                 <Input
                   type="number"
                   value={draft.minRelevance}
                   onChange={e => setField('minRelevance')(e.target.value)}
-                  error={!!errors.minRelevance}
                   slotProps={{
                     input: { 'data-testid': 'datalake-research-min-relevance-input', min: 0, max: 1, step: 0.05 },
                   }}
@@ -848,13 +850,12 @@ export function DataLakeResearchPanel({
               </FormControl>
             </Stack>
 
-            <FormControl size="sm">
+            <FormControl size="sm" error={!!errors.costCeilingUsd}>
               <FormLabel>Cost ceiling</FormLabel>
               <Input
                 type="number"
                 value={draft.costCeilingUsd}
                 onChange={e => setField('costCeilingUsd')(e.target.value)}
-                error={!!errors.costCeilingUsd}
                 startDecorator="$"
                 slotProps={{
                   input: {
@@ -978,7 +979,9 @@ export function DataLakeResearchPanel({
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary">
                     {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
-                    {run.judgeModel && ` \u00b7 judged by ${run.judgeModel}`}
+                    {run.judgeModel && (run.totals.proposed > 0 || run.totals.belowRelevance > 0)
+                      ? ` \u00b7 judged by ${run.judgeModel}`
+                      : ''}
                   </Typography>
                 </Stack>
                 {run.error && (

@@ -83,8 +83,16 @@ export async function runAbandonedExecutionSweep({ emitMetrics = true } = {}) {
   const marked = await agentExecutionRepository.markAbandoned(staleIds, olderThan);
   if (staleIds.length === 0) {
     logger.info('[AgentExecutionAbandonedSweep] No stale executions found');
+  } else if (marked.length === 0) {
+    logger.info('[AgentExecutionAbandonedSweep] Candidates settled before marking', {
+      candidates: staleIds.length,
+      marked: marked.length,
+    });
   } else {
-    logger.warn('[AgentExecutionAbandonedSweep] Marked abandoned', {
+    // Error level so the ERROR subscription on this function's log group forwards the
+    // sweep to the Slack channel LiveOps triage reads; the message text stays constant
+    // so repeated sweeps dedup into one notification.
+    logger.error('[AgentExecutionAbandonedSweep] Marked abandoned', {
       candidates: staleIds.length,
       marked: marked.length,
     });

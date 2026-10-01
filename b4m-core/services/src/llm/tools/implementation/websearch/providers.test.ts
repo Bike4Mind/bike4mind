@@ -309,6 +309,52 @@ describe('createSerpApiProvider', () => {
   });
 });
 
+describe('SerpAPI geo-targeting', () => {
+  const requestUrl = (call = 0) => new URL(String(fetchMock.mock.calls[call][0]));
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+  });
+
+  it('targets the US on an ordinary organic and image search', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [], images_results: [] }));
+    const provider = createSerpApiProvider(adapters);
+
+    await provider.search('q', 3);
+    await provider.searchImages!('q');
+
+    for (const call of [0, 1]) {
+      expect(requestUrl(call).searchParams.get('location')).toBe('United States');
+      expect(requestUrl(call).searchParams.get('gl')).toBe('us');
+    }
+  });
+
+  it('sends a query that names its own place unchanged and untargeted', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [], images_results: [] }));
+    const provider = createSerpApiProvider(adapters);
+    const query = 'best coffee shops near Shibuya Crossing Tokyo';
+
+    await provider.search(query, 3, { locationInQuery: true });
+    await provider.searchImages!(query, undefined, { locationInQuery: true });
+
+    for (const call of [0, 1]) {
+      const params = requestUrl(call).searchParams;
+      expect(params.get('q')).toBe(query);
+      expect(params.has('location')).toBe(false);
+      expect(params.has('gl')).toBe(false);
+    }
+  });
+
+  it('keeps a recency filter alongside an untargeted place query', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'q', 3, { locationInQuery: true, recencyDays: 7 });
+
+    expect(requestUrl().searchParams.get('tbs')).toBe('qdr:w');
+    expect(requestUrl().searchParams.has('gl')).toBe(false);
+  });
+});
+
 describe('resolveWebSearchProvider precedence', () => {
   it('forces SearXNG when the admin choice is searxng and a URL is set', async () => {
     mockGetProvider.mockResolvedValue('searxng');
