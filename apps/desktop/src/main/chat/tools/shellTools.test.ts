@@ -1,8 +1,8 @@
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { bashExecute } from './shellTools';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { bashExecute, bashExecuteRunOptions } from './shellTools';
 import { resolveUserPath } from './userPath';
 
 vi.mock('./userPath', () => ({ resolveUserPath: vi.fn(async () => process.env.PATH ?? '') }));
@@ -101,6 +101,73 @@ describe('bash_execute', () => {
     const result = await bashExecute.run({ command: 'sleep 30' }, { ...context, signal: controller.signal });
     expect(result).toMatch(/killed by|exit \d+/);
   }, 15_000);
+
+  describe('watch mode', () => {
+    beforeEach(() => {
+      bashExecuteRunOptions.watchGraceMs = 100;
+    });
+
+    afterEach(() => {
+      delete bashExecuteRunOptions.watchGraceMs;
+    });
+
+    it('stops a command idling in watch mode, well before the timeout, and says so', async () => {
+      const started = Date.now();
+      const result = await bashExecute.run(
+        {
+          command:
+            "printf ' Test Files  1 passed (1)\\n      Tests  3 passed (3)\\n'; printf ' PASS  Waiting for file changes...\\n'; sleep 30",
+          timeout: 20_000,
+        },
+        context
+      );
+
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(result).toContain('3 passed');
+      expect(result).toContain('entered watch mode');
+      expect(result).toContain('vitest run');
+      expect(result).toContain('[exit 0');
+      expect(result).not.toContain('[timed out');
+    }, 15_000);
+
+    it('detects a marker wrapped in ANSI colour codes', async () => {
+      const result = await bashExecute.run(
+        {
+          command:
+            "printf '\\033[32mPASS\\033[39m  \\033[2mWaiting for\\033[22m \\033[2mfile changes...\\033[22m\\n'; sleep 30",
+        },
+        context
+      );
+      expect(result).toContain('entered watch mode');
+    }, 15_000);
+
+    it('reports failures seen before the marker as a non-zero exit', async () => {
+      const result = await bashExecute.run(
+        { command: "printf 'Tests  2 failed | 1 passed\\nFAIL  Waiting for file changes...\\n'; sleep 30" },
+        context
+      );
+      expect(result).toContain('entered watch mode');
+      expect(result).toContain('[exit 1');
+    }, 15_000);
+
+    it('leaves a normal command alone', async () => {
+      const result = await bashExecute.run({ command: 'echo all done' }, context);
+      expect(result).toContain('[exit 0]');
+      expect(result).not.toContain('watch mode');
+    });
+
+    it('kills the processes the command spawned', async () => {
+      const marker = join(root, 'child-alive');
+      await bashExecute.run(
+        {
+          command: `(sleep 1; touch ${marker}) & echo 'Waiting for file changes...'; sleep 30`,
+        },
+        context
+      );
+      await new Promise(resolve => setTimeout(resolve, 1_500));
+      await expect(readFile(marker, 'utf8')).rejects.toThrow();
+    }, 15_000);
+  });
 
   it('declares approval carrying the exact command, keyed so it cannot carry to another', async () => {
     const first = await bashExecute.approval?.({ command: 'git status', cwd: root }, context);

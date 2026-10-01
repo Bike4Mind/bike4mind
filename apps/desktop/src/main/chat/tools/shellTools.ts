@@ -13,6 +13,31 @@ const MAX_STREAM_BYTES = 40_000;
 /** Grace between asking the process group to stop and killing it outright. */
 const SIGKILL_DELAY_MS = 3_000;
 
+/** Long enough for the runner's final summary lines to land after the idle marker. */
+const WATCH_GRACE_MS = 1_500;
+
+/** A marker can straddle two chunks; this much of the previous text is rescanned. */
+const WATCH_SCAN_CARRY = 256;
+
+// eslint-disable-next-line no-control-regex
+const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g;
+
+/** What a watch-mode tool prints once it has finished its pass and is idling for edits. */
+const WATCH_MARKERS: readonly RegExp[] = [
+  /waiting for file changes/i,
+  /press h to show help/i,
+  /watch usage/i,
+  /press w to show more/i,
+  /watching for file changes/i,
+  /waiting for changes/i,
+];
+
+const WATCH_FAILURE = /\b[1-9]\d* failed\b|\bFAIL\b|\b[1-9]\d* errors?\b|error TS\d+/;
+
+export interface RunOptions {
+  watchGraceMs?: number;
+}
+
 /**
  * Commands refused before they are run.
  *
@@ -48,6 +73,7 @@ interface CommandOutcome {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   timedOut: boolean;
+  watchStopped: boolean;
 }
 
 /**
@@ -85,7 +111,8 @@ function runCommand(
   cwd: string,
   env: NodeJS.ProcessEnv,
   timeoutMs: number,
-  signal: AbortSignal
+  signal: AbortSignal,
+  options: RunOptions = {}
 ): Promise<CommandOutcome> {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, [...args], {
@@ -100,6 +127,9 @@ function runCommand(
     const stdout = new CappedOutput();
     const stderr = new CappedOutput();
     let timedOut = false;
+    let watchStopped = false;
+    let watchTimer: NodeJS.Timeout | undefined;
+    let scanTail = '';
     let killTimer: NodeJS.Timeout | undefined;
 
     const signalGroup = (value: NodeJS.Signals) => {
@@ -127,12 +157,34 @@ function runCommand(
 
     const finish = () => {
       clearTimeout(timer);
+      if (watchTimer) clearTimeout(watchTimer);
       if (killTimer) clearTimeout(killTimer);
       signal.removeEventListener('abort', onAbort);
     };
 
-    child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));
-    child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
+    // One decoder per stream so a split multi-byte character cannot corrupt the scan text.
+    const scanDecoders = [new StringDecoder('utf8'), new StringDecoder('utf8')];
+    const scan = (chunk: Buffer, decoder: StringDecoder) => {
+      if (watchTimer) return;
+      const text = (scanTail + decoder.write(chunk)).replace(ANSI, '');
+      if (WATCH_MARKERS.some(marker => marker.test(text))) {
+        watchTimer = setTimeout(() => {
+          watchStopped = true;
+          stopChild();
+        }, options.watchGraceMs ?? WATCH_GRACE_MS);
+        return;
+      }
+      scanTail = text.slice(-WATCH_SCAN_CARRY);
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout.push(chunk);
+      scan(chunk, scanDecoders[0]);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr.push(chunk);
+      scan(chunk, scanDecoders[1]);
+    });
 
     child.on('error', error => {
       finish();
@@ -147,6 +199,7 @@ function runCommand(
         exitCode: code,
         signal: closeSignal,
         timedOut,
+        watchStopped,
       });
     });
 
@@ -160,7 +213,17 @@ function formatOutcome(command: string, cwd: string, timeoutMs: number, outcome:
   if (outcome.stdout.trim()) sections.push('', outcome.stdout.trimEnd());
   if (outcome.stderr.trim()) sections.push('', '[stderr]', outcome.stderr.trimEnd());
 
-  if (outcome.timedOut) {
+  if (outcome.watchStopped) {
+    const failed = WATCH_FAILURE.test(`${outcome.stdout}\n${outcome.stderr}`.replace(ANSI, ''));
+    sections.push(
+      '',
+      '[stopped: the command entered watch mode and was waiting for file changes. It ran once; the results are above.',
+      'Run it without watch mode, e.g. `vitest run`, or drop -w/--watch.]',
+      failed
+        ? '[exit 1: the output before watch mode shows failures]'
+        : '[exit 0: the output before watch mode shows no failures]'
+    );
+  } else if (outcome.timedOut) {
     sections.push('', `[timed out and was killed after ${Math.round(timeoutMs / 1000)}s]`);
   } else if (outcome.exitCode === 0) {
     sections.push('', '[exit 0]');
@@ -197,6 +260,9 @@ export async function resolveCwd(
   return roots[0];
 }
 
+/** Exported so tests can shrink the grace period. */
+export const bashExecuteRunOptions: RunOptions = {};
+
 export const bashExecute: ToolDefinition = {
   schema: {
     name: 'bash_execute',
@@ -215,6 +281,10 @@ export const bashExecute: ToolDefinition = {
       `command exits or the timeout elapses (default ${DEFAULT_TIMEOUT_MS / 1000}s, max`,
       `${MAX_TIMEOUT_MS / 1000}s), so it is the wrong tool for a dev server, a watcher or anything`,
       'else meant to keep running: start those with bash_background instead.',
+      '',
+      'Commands must exit on their own. Never use watch flags (-w, --watch) here: use `vitest run` /',
+      '`jest --watchAll=false`. pnpm passes flags after the script name to the script, so',
+      '`pnpm test -w` runs the tests in watch mode, which is stopped after its first pass.',
     ].join('\n'),
     parameters: {
       type: 'object',
@@ -262,7 +332,15 @@ export const bashExecute: ToolDefinition = {
     const launch = await launchCommand(command, context.roots, context.protectedPaths ?? []);
     try {
       const env = await commandEnv();
-      const outcome = await runCommand(launch.executable, launch.args, cwd, env, timeoutMs, context.signal);
+      const outcome = await runCommand(
+        launch.executable,
+        launch.args,
+        cwd,
+        env,
+        timeoutMs,
+        context.signal,
+        bashExecuteRunOptions
+      );
       return capOutputMiddle(formatOutcome(command, cwd, timeoutMs, outcome));
     } finally {
       await launch.cleanup();
