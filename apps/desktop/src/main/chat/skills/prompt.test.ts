@@ -46,8 +46,12 @@ describe('buildSkillsSection', () => {
     expect(section).toContain('deploy');
   });
 
-  it('keeps a skill whose own description would fill the budget, rather than listing nothing', () => {
-    const section = buildSkillsSection([command('huge', 'x'.repeat(MAX_SKILLS_PROMPT_BYTES * 2))]);
+  it('cuts a single skill whose own description overruns the budget, keeping its name and trigger', () => {
+    const section = buildSkillsSection([
+      command('huge', `Use for huge things. ${'x'.repeat(MAX_SKILLS_PROMPT_BYTES)}`),
+    ]);
     expect(section).toContain('huge');
+    expect(section).toContain('Use for huge things.');
+    expect(Buffer.byteLength(section)).toBeLessThanOrEqual(MAX_SKILLS_PROMPT_BYTES);
   });
 });

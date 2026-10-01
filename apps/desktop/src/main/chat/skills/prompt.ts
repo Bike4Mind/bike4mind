@@ -30,17 +30,25 @@ import type { SkillCatalog } from './SkillCatalog';
 export const MAX_SKILLS_PROMPT_BYTES = 12_000;
 
 /**
+ * The longest one description may be. Far longer than any real one - a description is a sentence
+ * or two of trigger condition - so in practice it never bites. It is what makes the allowance
+ * above a ceiling rather than a target: without it, one skill with an essay in its frontmatter
+ * would be the whole list, and dropping that skill instead would leave nothing listed at all.
+ */
+const MAX_DESCRIPTION_BYTES = 3_000;
+
+/**
  * `commands` rendered to a bounded section, or '' when there is nothing to list.
  *
- * Entries are dropped whole rather than the text being cut mid-description: half a trigger
- * condition is worse than no entry, because it reads as a complete one. Project skills are kept
- * first and global ones dropped first, matching the precedence the CLI's own grouping states.
+ * Entries are dropped whole rather than the text being cut mid-description, because half a
+ * trigger condition reads as a complete one. Project skills are kept first and global ones
+ * dropped first, matching the precedence the CLI's own grouping states.
  */
 export function buildSkillsSection(commands: readonly CustomCommand[], limit = MAX_SKILLS_PROMPT_BYTES): string {
   const ordered = [
     ...commands.filter(command => command.source === 'project'),
     ...commands.filter(command => command.source !== 'project'),
-  ];
+  ].map(shortened);
   if (ordered.length === 0) return '';
 
   let kept = ordered.length;
@@ -49,7 +57,15 @@ export function buildSkillsSection(commands: readonly CustomCommand[], limit = M
     kept--;
     section = withOmissionNote(buildSkillsPromptSection(ordered.slice(0, kept)), ordered.length - kept);
   }
+
   return section;
+}
+
+/** The description cut to {@link MAX_DESCRIPTION_BYTES}, keeping the trigger clause it opens with. */
+function shortened(command: CustomCommand): CustomCommand {
+  const description = Buffer.from(command.description);
+  if (description.length <= MAX_DESCRIPTION_BYTES) return command;
+  return { ...command, description: `${description.subarray(0, MAX_DESCRIPTION_BYTES).toString('utf8')} [...]` };
 }
 
 /**
