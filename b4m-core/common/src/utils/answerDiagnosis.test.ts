@@ -192,8 +192,9 @@ describe('retrieval check', () => {
 });
 
 // A session naming a draft lake narrows to an empty scope, so the forced arm abstains with
-// 'no_lakes' while search_knowledge_base runs over nothing and writes 'ok' with zero chunks. The
-// merge keeps 'ok', so the stored turn is exactly this shape.
+// 'no_lakes'. search_knowledge_base still searches the caller's own and shared files (a draft's
+// files are its owner's own), finds nothing and writes 'ok' with zero chunks. The merge keeps 'ok',
+// so the stored turn is exactly this shape.
 describe("scope abstain (the chat's lake was never searched)", () => {
   const draftAbstain: PromptMeta = {
     retrieval: {
@@ -217,6 +218,15 @@ describe("scope abstain (the chat's lake was never searched)", () => {
     id: 'retrieval',
     label: 'Retrieval',
     status: 'warn',
+    detail:
+      "This chat's data lake is a draft, so it was not searched as a data lake. Your own and shared files were searched, and nothing matched.",
+    remedy:
+      'Publish the lake so retrieval searches it as a data lake. If nothing comes back after that, its files may not cover this question.',
+  };
+  const draftNothingSearchedWarn = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'warn',
     detail: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
     remedy: 'Publish the lake to ground answers in it.',
   };
@@ -224,8 +234,13 @@ describe("scope abstain (the chat's lake was never searched)", () => {
     id: 'retrieval',
     label: 'Retrieval',
     status: 'warn',
-    detail: "This chat's data lake is not one you can currently reach, so it was not searched.",
+    detail:
+      "This chat's data lake is not one you can currently reach, so it was not searched. Your own and shared files were searched, and nothing matched.",
     remedy: 'Check that you still have access to it, or pick a different lake for this chat.',
+  };
+  const accessNothingSearchedWarn = {
+    ...accessWarn,
+    detail: "This chat's data lake is not one you can currently reach, so it was not searched.",
   };
   const volumeFail = {
     id: 'retrieval',
@@ -249,12 +264,25 @@ describe("scope abstain (the chat's lake was never searched)", () => {
   it("does not call the lake that was never searched 'searchable'", () => {
     expect(statusOf(draftAbstain, 'corpus')).toBe('unknown');
     expect(detailOf(draftAbstain, 'corpus')).toBe(
+      "This chat's data lake was not searched as a data lake, so nothing is known about whether it is indexed."
+    );
+  });
+
+  it('says the lake was not searched at all only when no surface searched anything', () => {
+    const nothingSearched = withRetrieval({ outcome: 'no_lakes', injected: undefined });
+    expect(retrievalCheck(nothingSearched)).toEqual(draftNothingSearchedWarn);
+    expect(detailOf(nothingSearched, 'corpus')).toBe(
       "This chat's data lake was not searched, so nothing is known about whether it is indexed."
     );
   });
 
-  it('gives the same answer when the merged outcome kept the abstain', () => {
-    expect(retrievalCheck(withRetrieval({ outcome: 'no_lakes', injected: undefined }))).toEqual(draftWarn);
+  it('leaves the unrecorded-volume reading alone when retrieve_knowledge_content ran', () => {
+    const retrieved: PromptMeta = {
+      ...draftAbstain,
+      functionCalls: [{ name: 'retrieve_knowledge_content', success: true }],
+    };
+    expect(retrievalCheck(retrieved).status).toBe('unknown');
+    expect(retrievalCheck(retrieved).detail).not.toContain('draft');
   });
 
   it('names an access exclusion when the session named a lake and no draft explains the empty scope', () => {
@@ -263,7 +291,9 @@ describe("scope abstain (the chat's lake was never searched)", () => {
       excludedLakes: { count: 1, reason: 'access' as const },
     };
     expect(retrievalCheck(withRetrieval(named))).toEqual(accessWarn);
-    expect(retrievalCheck(withRetrieval({ ...named, outcome: 'no_lakes', injected: undefined }))).toEqual(accessWarn);
+    expect(retrievalCheck(withRetrieval({ ...named, outcome: 'no_lakes', injected: undefined }))).toEqual(
+      accessNothingSearchedWarn
+    );
   });
 
   // No named lake: lakeScope and excludedLakes are account-wide, so they say nothing about "this

@@ -83,20 +83,56 @@ type RetrievalSummary = NonNullable<PromptMeta['retrieval']>;
  * merge ranks a tool's 'ok' above the forced arm's 'no_lakes' (see retrievalSummaryMerge.ts), so the
  * abstain is gone from `outcome` by the time a turn is stored.
  */
-type ScopeAbstain = 'draft' | 'access';
+type ScopeAbstainReason = 'draft' | 'access';
 
-const SCOPE_ABSTAIN_COPY: Record<ScopeAbstain, string> = {
-  draft: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
-  access: "This chat's data lake is not one you can currently reach, so it was not searched.",
+/**
+ * `none`: no surface searched anything (the merged outcome kept 'no_lakes'). `ownFiles`: a tool
+ * still ran and found nothing - search_knowledge_base ORs the caller's own and shared files in
+ * beside the lake arms (knowledgeBaseSearch/index.ts), and a draft's files are its owner's own, so
+ * "not searched" would be false there and the copy says what was searched instead.
+ */
+type ScopeAbstainSearched = 'none' | 'ownFiles';
+
+interface ScopeAbstain {
+  reason: ScopeAbstainReason;
+  searched: ScopeAbstainSearched;
+}
+
+const SCOPE_ABSTAIN_COPY: Record<ScopeAbstainReason, Record<ScopeAbstainSearched, string>> = {
+  draft: {
+    none: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
+    ownFiles:
+      "This chat's data lake is a draft, so it was not searched as a data lake. Your own and shared files were searched, and nothing matched.",
+  },
+  access: {
+    none: "This chat's data lake is not one you can currently reach, so it was not searched.",
+    ownFiles:
+      "This chat's data lake is not one you can currently reach, so it was not searched. Your own and shared files were searched, and nothing matched.",
+  },
 };
 
-const SCOPE_ABSTAIN_REMEDY: Record<ScopeAbstain, string> = {
-  draft: 'Publish the lake to ground answers in it.',
-  access: 'Check that you still have access to it, or pick a different lake for this chat.',
+const SCOPE_ABSTAIN_REMEDY: Record<ScopeAbstainReason, Record<ScopeAbstainSearched, string>> = {
+  draft: {
+    none: 'Publish the lake to ground answers in it.',
+    ownFiles:
+      'Publish the lake so retrieval searches it as a data lake. If nothing comes back after that, its files may not cover this question.',
+  },
+  access: {
+    none: 'Check that you still have access to it, or pick a different lake for this chat.',
+    ownFiles: 'Check that you still have access to it, or pick a different lake for this chat.',
+  },
+};
+
+const SCOPE_ABSTAIN_CORPUS_COPY: Record<ScopeAbstainSearched, string> = {
+  none: "This chat's data lake was not searched, so nothing is known about whether it is indexed.",
+  ownFiles: "This chat's data lake was not searched as a data lake, so nothing is known about whether it is indexed.",
 };
 
 const countDocuments = (promptMeta: PromptMeta): number =>
   promptMeta.citables?.filter(c => c.type === 'document').length ?? 0;
+
+const groundedThroughUninstrumentedTool = (promptMeta: PromptMeta): boolean =>
+  !!promptMeta.functionCalls?.some(call => call.name === UNINSTRUMENTED_CONTENT_TOOL);
 
 // Only an EMPTY recorded scope: a partial abstain (one named lake serving, another a draft) still
 // searched something, so its volume is judged as usual. Draft wins a tie because its remedy is the
@@ -107,18 +143,26 @@ const countDocuments = (promptMeta: PromptMeta): number =>
 function scopeAbstain(promptMeta: PromptMeta): ScopeAbstain | undefined {
   const retrieval = promptMeta.retrieval;
   if (!retrieval?.lakeScope || retrieval.lakeScope.length > 0 || !retrieval.notServingLakes) return undefined;
-  // The keyword fallback's own-file hits write citables but no `injected`.
-  const searchedNothing =
-    retrieval.outcome === 'no_lakes' ||
-    (retrieval.outcome === 'ok' && (retrieval.injected?.chunks ?? 0) === 0 && countDocuments(promptMeta) === 0);
-  if (!searchedNothing) return undefined;
-  if (retrieval.notServingLakes.count > 0) return 'draft';
-  if ((retrieval.excludedLakes?.count ?? 0) > 0) return 'access';
+  let searched: ScopeAbstainSearched;
+  if (retrieval.outcome === 'no_lakes') {
+    searched = 'none';
+  } else if (
+    retrieval.outcome === 'ok' &&
+    (retrieval.injected?.chunks ?? 0) === 0 &&
+    // The keyword fallback's own-file hits write citables but no `injected`.
+    countDocuments(promptMeta) === 0 &&
+    // retrieve_knowledge_content records no volume, so a zero here cannot rule out that it read
+    // something - the same guard diagnoseVolume applies.
+    !groundedThroughUninstrumentedTool(promptMeta)
+  ) {
+    searched = 'ownFiles';
+  } else {
+    return undefined;
+  }
+  if (retrieval.notServingLakes.count > 0) return { reason: 'draft', searched };
+  if ((retrieval.excludedLakes?.count ?? 0) > 0) return { reason: 'access', searched };
   return undefined;
 }
-
-const groundedThroughUninstrumentedTool = (promptMeta: PromptMeta): boolean =>
-  !!promptMeta.functionCalls?.some(call => call.name === UNINSTRUMENTED_CONTENT_TOOL);
 
 function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
   const label = 'Retrieval';
@@ -167,8 +211,8 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
       id: 'retrieval',
       label,
       status: 'warn',
-      detail: SCOPE_ABSTAIN_COPY[abstain],
-      remedy: SCOPE_ABSTAIN_REMEDY[abstain],
+      detail: SCOPE_ABSTAIN_COPY[abstain.reason][abstain.searched],
+      remedy: SCOPE_ABSTAIN_REMEDY[abstain.reason][abstain.searched],
     };
   }
 
@@ -330,12 +374,13 @@ function diagnoseCorpus(promptMeta: PromptMeta): DiagnosisCheck {
   }
 
   // "Searchable" would be a claim about a lake no surface ever compared against.
-  if (scopeAbstain(promptMeta)) {
+  const abstain = scopeAbstain(promptMeta);
+  if (abstain) {
     return {
       id: 'corpus',
       label,
       status: 'unknown',
-      detail: "This chat's data lake was not searched, so nothing is known about whether it is indexed.",
+      detail: SCOPE_ABSTAIN_CORPUS_COPY[abstain.searched],
     };
   }
 
