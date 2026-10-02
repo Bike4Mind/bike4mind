@@ -10,6 +10,7 @@ import type {
   ChatSessionStatus,
   ChatSessionSummary,
   CreateCodeSessionRequest,
+  ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
 import { describeReturn } from './queuedMessages';
@@ -280,6 +281,8 @@ export interface ConversationController {
   rename: (title: string) => Promise<void>;
   /** Pin this conversation to a model; it is used from the next turn on. */
   setModel: (model: string) => Promise<void>;
+  /** How hard that model should think. Sent only on a model that accepts an effort. */
+  setReasoningEffort: (effort: ReasoningEffortSetting) => Promise<void>;
   /**
    * Set how much this conversation may do without asking. Driven by the composer pill, from a
    * click, and from nothing else: this is the only path to the mode in the renderer.
@@ -651,6 +654,17 @@ export function useConversation(
     [sessionId, onSummaryChanged]
   );
 
+  const setReasoningEffort = useCallback(
+    async (effort: ReasoningEffortSetting) => {
+      if (!sessionId) return;
+      const updated = await window.b4m.chat.setSessionReasoningEffort(sessionId, effort);
+      if (!updated) return;
+      setSession(current => (current ? { ...current, reasoningEffort: updated.reasoningEffort } : current));
+      onSummaryChanged(updated);
+    },
+    [sessionId, onSummaryChanged]
+  );
+
   const setApprovalMode = useCallback(
     async (mode: ChatApprovalMode) => {
       if (!sessionId) return;
@@ -788,6 +802,7 @@ export function useConversation(
     settledTurns,
     rename,
     setModel,
+    setReasoningEffort,
     setApprovalMode,
     project,
     respondToApproval,

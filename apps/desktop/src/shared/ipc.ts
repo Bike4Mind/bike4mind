@@ -21,6 +21,7 @@ import type {
   CreateCodeSessionResult,
   ProjectInspection,
   ContextBoundaryResult,
+  ReasoningEffortSetting,
   SendMessageRequest,
   SendMessageResult,
   ToolAccessState,
@@ -53,6 +54,7 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
@@ -191,6 +193,8 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** How hard this conversation's model should think. Null when the session is gone. */
+    setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     /**

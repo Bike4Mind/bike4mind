@@ -17,6 +17,7 @@ import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
 import { MessageThread } from './MessageThread';
 import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
+import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { TodoPanel } from './TodoPanel';
@@ -540,12 +541,21 @@ export function ChatShell({ account }: { account?: ReactNode }) {
               />
             }
             footer={
-              <ModelPicker
-                catalog={catalog}
-                modelId={conversation.session?.model ?? null}
-                disabled={!activeId}
-                onSelect={model => void conversation.setModel(model)}
-              />
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+                <ModelPicker
+                  catalog={catalog}
+                  modelId={conversation.session?.model ?? null}
+                  disabled={!activeId}
+                  onSelect={model => void conversation.setModel(model)}
+                />
+                <ReasoningEffortPicker
+                  models={catalog.models}
+                  modelId={conversation.session?.model ?? null}
+                  effort={conversation.session?.reasoningEffort ?? 'default'}
+                  disabled={!activeId}
+                  onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+              </Stack>
             }
           />
         </Stack>

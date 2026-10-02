@@ -44,7 +44,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
-import { parseReasoningEffortSetting } from './reasoningEffort';
+import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { appWindows } from '../windows';
 
@@ -67,8 +67,9 @@ const MODEL_OVERRIDE = process.env.B4M_DESKTOP_DEFAULT_MODEL?.trim();
 const PREFERRED_MODEL: string = MODEL_OVERRIDE || ChatModels.CLAUDE_5_OPUS;
 
 /**
- * Reasoning effort for models that take one, read per launch so a benchmark can compare efforts
- * without a rebuild. There is no settings store to persist it in yet.
+ * The reasoning effort a conversation starts on, read per launch so a benchmark can compare
+ * efforts without a rebuild. The user's own choice is per session and outranks this - see
+ * SessionStore - so this only reaches a conversation that has never been given one.
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
 
@@ -166,7 +167,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
     PREFERRED_MODEL,
     randomUUID(),
     () => sessionScopeFor(auth.getState()),
-    approvalModes
+    approvalModes,
+    REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
   // Its own file beside tool-access.json, and for the same reason: both record a consent the
@@ -234,7 +236,6 @@ export function registerChat(auth: AuthService): RegisteredChat {
     models,
     logger,
     preferredModel: PREFERRED_MODEL,
-    reasoningEffort: REASONING_EFFORT,
     approvals,
     background,
     foreground,
@@ -268,6 +269,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  // Validated here rather than trusted, like the approval mode below: an unrecognised value
+  // must not reach the store, where it would be sent verbatim on the next turn.
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {
+    const setting = storedReasoningEffortSetting(effort);
+    return setting ? service.setSessionReasoningEffort(sessionId, setting) : null;
+  });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );

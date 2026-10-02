@@ -608,7 +608,31 @@ export interface ChatModelOption {
    * image is refused on an explicit `false` and allowed through on silence.
    */
   supportsVision?: boolean;
+  /**
+   * Whether a reasoning effort may be sent with this model. Decided by the adapter's own list
+   * rather than by the server's catalog, so it is always stated - unlike `supportsVision`, an
+   * absent flag here only means the model was not in a list that had loaded.
+   */
+  supportsReasoningEffort?: boolean;
 }
+
+/**
+ * How hard a model that reasons thinks before answering.
+ *
+ * `default` sends nothing and leaves the provider at its own effort, which is what every
+ * conversation did before the setting existed. It is a real choice in the picker rather than
+ * an empty state, because "let the provider decide" is a different instruction from "low".
+ */
+export type ReasoningEffortSetting = 'default' | 'minimal' | 'low' | 'medium' | 'high';
+
+/** Ascending, which is the order the picker lists them in. */
+export const REASONING_EFFORT_SETTINGS: readonly ReasoningEffortSetting[] = [
+  'default',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+];
 
 /**
  * The answer to `listModels`.
@@ -741,6 +765,15 @@ interface ChatSessionMeta {
    * screen in the composer pill, so it is never a setting the user has forgotten they set.
    */
   approvalMode: ChatApprovalMode;
+  /**
+   * Per conversation for the same reason `model` is: comparing a cheap fast answer against a
+   * careful one is a thing to do WITHIN one app, and reopening a thread should resume the
+   * effort it was held at rather than whatever the last conversation was set to.
+   *
+   * Only a model in the catalog's reasoning set is actually sent one - see
+   * `ChatModelOption.supportsReasoningEffort`. On any other model this is stored and inert.
+   */
+  reasoningEffort: ReasoningEffortSetting;
   /**
    * Set on Code sessions that have been pointed at a directory. Absent on a Chat session, and
    * on a Code session nobody has chosen a folder for yet - which is a usable state, not a

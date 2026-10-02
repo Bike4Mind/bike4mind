@@ -9,6 +9,7 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   CreateCodeSessionRequest,
+  ReasoningEffortSetting,
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
@@ -55,6 +56,8 @@ const api: DesktopApi = {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
+    setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
