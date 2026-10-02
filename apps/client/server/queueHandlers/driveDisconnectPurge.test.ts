@@ -78,7 +78,9 @@ vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ delete: vi.f
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 
 import { dispatch } from './driveDisconnectPurge';
+import type { DriveConnectionOwner } from '@bike4mind/common';
 
+const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const payload = { connectionId: 'conn1', dataLakeId: 'lake1', organizationId: 'orgA' };
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
@@ -112,7 +114,7 @@ describe('driveDisconnectPurge consumer', () => {
 
     await run();
 
-    expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', orgAOwner);
     // includeDeleted, not the reconcile-scoped default, and one slice plus a lookahead row.
     expect(h.findFiles).toHaveBeenCalledWith('conn1', 'datalake:lake1', { includeDeleted: true, limit: 1001 });
     expect(h.purge).toHaveBeenCalledWith(expect.anything(), files, expect.anything());
@@ -120,9 +122,22 @@ describe('driveDisconnectPurge consumer', () => {
     expect(adapters.db.sessions).toBeDefined();
     expect(adapters.db.dataLakeFindings).toBeDefined();
     // Through the revoking seam, and only once every file is gone: the row is the retry anchor.
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', orgAOwner);
     expect(calls).toEqual(['purge', 'recompute', 'release']);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('purges a personal connection (no organizationId) and releases it as its user owner', async () => {
+    const personalPayload = { connectionId: 'conn1', dataLakeId: 'lake1' };
+    const personalConn = { id: 'conn1', connectedBy: 'user1', enabled: false, disconnectRequestedAt: new Date() };
+    h.connFindByDataLakeIdAny.mockResolvedValue(personalConn);
+    h.findFiles.mockResolvedValue([file('f1')]);
+
+    await run(personalPayload);
+
+    const userOwner: DriveConnectionOwner = { kind: 'user', userId: 'user1' };
+    expect(h.connMarkDisconnecting).toHaveBeenCalledWith('conn1', userOwner);
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', userOwner);
   });
 
   it('wires a shredDocumentMemory callback that shreds each purged file against this lake', async () => {
@@ -184,7 +199,7 @@ describe('driveDisconnectPurge consumer', () => {
     // Reclaimed bytes are refunded per owner, from what deleteFabFile reported.
     expect(h.groupStorageDeltaByOwner).toHaveBeenCalledWith([{ id: 'orphan1', userId: 'u1', fileSize: 100 }], -1);
     expect(h.bestEffortAdjustOwnerStorage).toHaveBeenCalled();
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', orgAOwner);
   });
 
   it('does NOT sweep orphans while member slices remain, so it never revokes over a half-purged set', async () => {
@@ -198,7 +213,7 @@ describe('driveDisconnectPurge consumer', () => {
     h.findOrphans.mockResolvedValue([orphan({ id: 'o-shared', users: [{ userId: 'bob', permissions: 'read' }] })]);
     await run();
     expect(h.deleteFabFile).not.toHaveBeenCalled();
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', orgAOwner);
   });
 
   it('rethrows an orphan delete failure without releasing, so the retry re-sweeps the rest', async () => {
@@ -227,14 +242,14 @@ describe('driveDisconnectPurge consumer', () => {
     // With no members left the orphan sweep still runs, finds none, and releases.
     expect(h.findOrphans).toHaveBeenCalledWith('conn1', 'datalake:lake1');
     expect(h.deleteFabFile).not.toHaveBeenCalled();
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', orgAOwner);
   });
 
   it('releases when the lake itself is already gone (its own purge swept the files)', async () => {
     h.dlFindById.mockResolvedValue(null);
     await run();
     expect(h.findFiles).not.toHaveBeenCalled();
-    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.releaseDriveConnection).toHaveBeenCalledWith('conn1', orgAOwner);
   });
 
   it.each([
@@ -256,7 +271,7 @@ describe('driveDisconnectPurge consumer', () => {
     expect(h.findFiles).not.toHaveBeenCalled();
     expect(h.sendToQueue).toHaveBeenCalledWith('purge-queue-url', { ...payload, syncDeferrals: 1 }, 300);
     // Keeps the stall clock fresh, so the UI does not offer a retry on a chain that is still live.
-    expect(h.connTouchDisconnect).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.connTouchDisconnect).toHaveBeenCalledWith('conn1', orgAOwner);
   });
 
   it('gives up into the DLQ once the sync deferrals are exhausted', async () => {

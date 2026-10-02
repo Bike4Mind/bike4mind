@@ -21,9 +21,23 @@ vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
     selector({ openWizardForLake, openManager }),
 }));
 
-// LakeSourceConnectActions fetches connection status; this suite owns the strip's own wiring, not that chain.
-vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
-  default: () => <div data-testid="lake-source-connect-actions" />,
+// LakeSourceConnectActions itself stays real: it gates GitHub on the lake's organizationId, so a
+// header that forwards a trimmed lake silently drops the GitHub control. Only its data and leaves are stubbed.
+const h = vi.hoisted(() => ({ gitHubFlag: { current: true } }));
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({
+    isAdminFeatureEnabled: (key: string) => key === 'EnableDataLakeGitHub' && h.gitHubFlag.current,
+    isFeatureEnabled: vi.fn(),
+    isLoading: false,
+  }),
+}));
+vi.mock('@client/app/hooks/data/googleDrive', () => ({ useLakeDriveConnection: () => ({ data: null }) }));
+vi.mock('@client/app/hooks/data/githubLake', () => ({ useLakeGitHubConnection: () => ({ data: null }) }));
+vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+  default: () => <div data-testid="drive-connect-action" />,
+}));
+vi.mock('@client/app/components/DataLakeWizard/steps/GitHubConnectAction', () => ({
+  default: () => <div data-testid="github-connect-action" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -42,6 +56,7 @@ const lake = (over: Partial<ManageableDataLakeConfig> = {}): ManageableDataLakeC
     requiredEntitlement: undefined,
     organizationId: 'org-1',
     isOwn: true,
+    isCreator: true,
     canRebuild: false,
     canManage: true,
     ...over,
@@ -57,6 +72,7 @@ const renderHeader = (over: Partial<ManageableDataLakeConfig> = {}) =>
 beforeEach(() => {
   openWizardForLake.mockClear();
   openManager.mockClear();
+  h.gitHubFlag.current = true;
 });
 
 describe('SelectedLakeHeader', () => {
@@ -93,12 +109,41 @@ describe('SelectedLakeHeader', () => {
     expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
   });
 
+  it('offers both Drive and GitHub on an org lake with GitHub enabled', () => {
+    renderHeader();
+    expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    expect(screen.getByTestId('github-connect-action')).toBeInTheDocument();
+  });
+
+  it('offers the Drive control on a personal lake the caller created', () => {
+    // A personal lake's connection syncs on its creator's own Google grant (authorizeLakeDriveAccess),
+    // so creation - not org management, and not effective ownership - is the gate here. GitHub stays
+    // org-only.
+    renderHeader({ organizationId: undefined, isCreator: true });
+    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+    expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+    expect(screen.queryByTestId('github-connect-action')).not.toBeInTheDocument();
+  });
+
+  it('withholds the Drive control on a personal lake the caller owns but did not create', () => {
+    // After an ownership transfer, isOwn is true but isCreator is false - membership and the
+    // ingest's admin-actor writes are anchored to createdByUserId, so the control must follow
+    // isCreator, not isOwn.
+    renderHeader({ organizationId: undefined, isOwn: true, isCreator: false });
+    expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
+  });
+
+  it('offers the Drive control on a personal lake the caller created but no longer owns', () => {
+    renderHeader({ organizationId: undefined, isOwn: false, isCreator: true });
+    expect(screen.getByTestId('datalake-selected-lake-source')).toBeInTheDocument();
+  });
+
   it.each([
-    ['a personal lake', { organizationId: undefined }],
+    ['a personal lake the caller did not create', { organizationId: undefined, isCreator: false }],
     ['an org lake the caller cannot manage', { canManage: false }],
   ])('withholds the Drive control on %s', (_label, over) => {
-    // Server-side a personal lake has no org to hold a connection and the status route 404s for a
-    // non-manager, so a control here could only ever fail.
+    // Server-side the status route 404s for anyone but an org lake's owner/manager or a personal
+    // lake's own creator, so a control here could only ever fail.
     renderHeader(over as Partial<ManageableDataLakeConfig>);
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
