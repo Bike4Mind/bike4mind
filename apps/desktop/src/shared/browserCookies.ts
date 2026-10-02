@@ -14,8 +14,15 @@
  *   that crosses this boundary could be repeated into a transcript even by accident.
  */
 
-/** At most this many sites in one import: a slip in the chooser should not sweep the profile. */
-export const MAX_IMPORT_SITES = 20;
+/**
+ * A sanity bound on one import, not a policy one.
+ *
+ * The chooser now arrives with every site ticked, so a whole profile is the ORDINARY request
+ * and a bound tight enough to stop one would only stop the default. What this still rejects is
+ * a request no chooser could have produced - the per-site filter and the user's own ticks are
+ * what decide the scope.
+ */
+export const MAX_IMPORT_SITES = 5_000;
 
 /** A Chrome profile an import can read from. */
 export interface ChromeProfile {

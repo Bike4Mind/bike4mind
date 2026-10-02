@@ -5,7 +5,9 @@ import type { BrowserPaneState } from '@shared/ipc';
 import { BrowserNavbar } from './BrowserNavbar';
 
 const PAGE: BrowserPaneState = {
-  url: 'https://shop.example.com/',
+  // Not one of the imported hosts below: the url bar renders its own address, and an overlap
+  // would make the "no host names" assertions pass or fail on the wrong element.
+  url: 'http://localhost:3000/',
   canGoBack: false,
   canGoForward: false,
   loading: false,
@@ -35,7 +37,7 @@ describe('the standing cookie indicator', () => {
    * toast would not be, which is why this is asserted rather than left to the import's own
    * confirmation.
    */
-  it('names every imported site, standing, with a clear beside it', () => {
+  it('counts the imported sites rather than naming them, standing, with a clear beside it', () => {
     const html = render({
       supported: true,
       unsupported: '',
@@ -46,8 +48,12 @@ describe('the standing cookie indicator', () => {
     });
 
     expect(html).toContain('chat-browser-cookies-indicator');
-    expect(html).toContain('Signed in as you on shop.example.com, forum.example.test');
+    expect(html).toContain('Signed in as you on 2 sites from Chrome');
     expect(html).toContain('chat-browser-cookies-indicator-clear');
+    // The names stay off the pane: with a whole profile imported they are hundreds of rows,
+    // and the chooser folds that list away precisely so the pane does not become it.
+    expect(html).not.toContain('shop.example.com');
+    expect(html).not.toContain('forum.example.test');
   });
 
   it('still offers the menu when importing is not available at all', () => {

@@ -9,6 +9,7 @@ import Divider from '@mui/joy/Divider';
 import Dropdown from '@mui/joy/Dropdown';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
+import Link from '@mui/joy/Link';
 import Menu from '@mui/joy/Menu';
 import MenuButton from '@mui/joy/MenuButton';
 import MenuItem from '@mui/joy/MenuItem';
@@ -65,6 +66,10 @@ export function BrowserCookiesMenu({
   const [hosts, setHosts] = useState<ChromeCookieHost[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  // Folded away until asked for. The list is every site this profile has a cookie for, which is
+  // the user's browsing history - enumerating it on screen to ask permission to read it would
+  // be its own disclosure, and with everything ticked there is nothing to do in it by default.
+  const [listOpen, setListOpen] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<CookieImportResult | null>(null);
 
@@ -78,6 +83,10 @@ export function BrowserCookiesMenu({
     }
     setError('');
     setHosts(found.hosts);
+    // Everything ticked, because taking the whole profile is what this is normally for. The
+    // ticks are still what the import reads, so narrowing it is unticking rather than a
+    // different code path.
+    setPicked(found.hosts.map(host => host.host));
   }, []);
 
   const openChooser = useCallback(async () => {
@@ -85,6 +94,7 @@ export function BrowserCookiesMenu({
     setResult(null);
     setFilter('');
     setError('');
+    setListOpen(false);
     const found = await window.b4m.browser.cookies.listProfiles();
     if (!found.ok) {
       setProfiles([]);
@@ -184,15 +194,44 @@ export function BrowserCookiesMenu({
                     From your Chrome profile {profiles[0].name}.
                   </Typography>
                 )}
-                <Input
-                  size="sm"
-                  placeholder="Filter sites"
-                  value={filter}
-                  onChange={event => setFilter(event.target.value)}
-                  slotProps={{ input: { 'data-testid': 'chat-browser-cookies-filter' } }}
-                />
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <Typography level="body-sm" sx={{ flex: 1, minWidth: 0 }}>
+                    {picked.length === hosts.length
+                      ? `Every site in this profile (${hosts.length})`
+                      : `${picked.length} of ${hosts.length} sites`}
+                  </Typography>
+                  <Link
+                    level="body-xs"
+                    component="button"
+                    onClick={() => setListOpen(open => !open)}
+                    data-testid="chat-browser-cookies-toggle-list"
+                  >
+                    {listOpen ? 'Hide sites' : 'Choose sites'}
+                  </Link>
+                </Stack>
+                {listOpen && (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Input
+                      size="sm"
+                      placeholder="Filter sites"
+                      value={filter}
+                      onChange={event => setFilter(event.target.value)}
+                      sx={{ flex: 1, minWidth: 0 }}
+                      slotProps={{ input: { 'data-testid': 'chat-browser-cookies-filter' } }}
+                    />
+                    <Link
+                      level="body-xs"
+                      component="button"
+                      onClick={() => setPicked(picked.length === hosts.length ? [] : hosts.map(host => host.host))}
+                      data-testid="chat-browser-cookies-select-all"
+                    >
+                      {picked.length === hosts.length ? 'None' : 'All'}
+                    </Link>
+                  </Stack>
+                )}
                 <Box
                   sx={{
+                    display: listOpen ? 'block' : 'none',
                     height: LIST_HEIGHT,
                     overflowY: 'auto',
                     border: '1px solid',
@@ -230,12 +269,15 @@ export function BrowserCookiesMenu({
                   <Stack spacing={0.5}>
                     <Typography level="body-xs">
                       {picked.length === 0
-                        ? 'Pick the sites to import. Only those sites are read; the rest of your Chrome cookies are never decrypted.'
-                        : `These sites will be imported: ${picked.join(', ')}. Only these are read; the rest of your Chrome cookies are never decrypted.`}
+                        ? 'No sites are selected, so nothing would be imported. Choose sites to pick some back.'
+                        : picked.length === hosts.length
+                          ? `Every site this Chrome profile holds a cookie for - ${hosts.length} of them - will be imported. Choose sites to narrow it.`
+                          : `${picked.length} of ${hosts.length} sites will be imported. Only those are read; the rest of your Chrome cookies are never decrypted.`}
                     </Typography>
                     <Typography level="body-xs">
                       macOS will ask for your login password to unlock the Chrome key. The agent will then be signed in
-                      to these sites, in every conversation in this window, until you quit the app or clear the browser.
+                      as you on those sites, in every conversation in this window, until you quit the app or clear the
+                      browser.
                     </Typography>
                   </Stack>
                 </Alert>
@@ -334,10 +376,13 @@ function ManageSitesDialog({
         <DialogContent sx={{ gap: 1.5 }}>
           <Stack spacing={1}>
             <Typography level="body-xs" textColor="text.tertiary">
-              The agent is signed in to these sites as you, in every conversation in this window. They go when you quit
-              the app.
+              The agent is signed in as you on {state.sites.length} site{state.sites.length === 1 ? '' : 's'}, in every
+              conversation in this window. They go when you quit the app.
             </Typography>
-            <Stack spacing={0.5}>
+            {/* The names ARE shown here, unlike anywhere else: this is the screen the user opened
+                to act on them one by one, so withholding them would leave nothing to act on. It
+                scrolls because a whole profile is hundreds of rows. */}
+            <Stack spacing={0.5} sx={{ maxHeight: 280, overflowY: 'auto' }}>
               {state.sites.map(site => (
                 <Stack key={site.host} direction="row" alignItems="center" spacing={1}>
                   <Stack sx={{ flex: 1, minWidth: 0 }}>
