@@ -57,6 +57,8 @@ import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/comm
 interface DataLakeExplorerProps {
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
+  /** Optional cited passage text to highlight when opening a deep-linked article. */
+  articlePassage?: string | null;
   /** Which browse backend to read. Only the react-query cache key differs; a branded
    *  surface passes its own value to keep its cache separate from the main app's. */
   source?: DataLakeBrowseSource;
@@ -138,6 +140,7 @@ const EMPTY_LAKES: ManageableDataLakeConfig[] = [];
 
 export default function DataLakeExplorer({
   articleId,
+  articlePassage,
   source = 'datalakes',
   rootLabel,
   onManage,
@@ -249,9 +252,10 @@ export default function DataLakeExplorer({
   // surface restores it. So we set the selected artifact WITHOUT touching `layout` and mount
   // the viewer in our own rail (with its layout-switching controls hidden, for the same reason).
   const handleViewFile = useCallback(
-    (file: IFabFileDocument) => {
+    (file: IFabFileDocument, citedPassage?: Parameters<typeof openFileInChatViewer>[1]) => {
+      // The passage is only forwarded on the embedded branch: the rail viewer has no cited-passage slot.
       if (chatEmbedded) {
-        openFileInChatViewer(file);
+        openFileInChatViewer(file, citedPassage);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
         setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
@@ -536,9 +540,14 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      handleViewFile(deepLinkTarget);
+      handleViewFile(
+        deepLinkTarget,
+        articlePassage && articlePassage.trim().length > 0
+          ? { fileId: deepLinkTarget.id, chunkId: 'unknown', passage: articlePassage }
+          : undefined
+      );
     }
-  }, [deepLinkTarget, handleViewFile]);
+  }, [deepLinkTarget, handleViewFile, articlePassage]);
 
   // Browsing deliberately leaves the open file alone: the tree and the viewer are separate panels,
   // so browsing categories - including back out of one - must not dismiss what you are reading. The

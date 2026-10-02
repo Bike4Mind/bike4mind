@@ -78,6 +78,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
+import { recordGeneratedImages } from './recordGeneratedImages';
 import { fromZodError } from 'zod-validation-error';
 import {
   OMITTED_QUALITY_TIER,
@@ -142,6 +143,8 @@ interface IImageGenerationServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -1500,6 +1503,8 @@ export class ImageGenerationService {
         promptMeta: quest.promptMeta,
         creditsUsed: quest.creditsUsed,
       });
+
+      await recordGeneratedImages(this.db.sessions, sessionId, imagePaths.length, logger);
 
       if (this.invokeSessionAutoNaming) {
         await this.invokeSessionAutoNaming(sessionId, userId);

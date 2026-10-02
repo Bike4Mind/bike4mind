@@ -2459,9 +2459,9 @@ type LakeScanResult = Pick<LakeInconsistencyScanSummary, 'countsByKind' | 'membe
 
 function describeScanResult({ countsByKind, memberCount }: LakeScanResult): string {
   // Zero members read is "nothing to scan", never "clean" - the detector draws the same line.
-  if (memberCount === 0) return 'Scan complete. No document in this lake has text to compare yet.';
+  if (memberCount === 0) return 'Scanned 0 documents. No document in this lake has text to compare yet.';
   const total = Object.values(countsByKind).reduce((sum, count) => sum + count, 0);
-  return `Scan complete: ${total} finding(s) across ${memberCount} document(s).`;
+  return `Scanned ${memberCount} document(s), found ${total} finding(s).`;
 }
 
 /**

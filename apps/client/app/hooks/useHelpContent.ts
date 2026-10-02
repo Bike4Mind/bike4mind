@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import type { HelpAccessLevel } from '@bike4mind/scripts/help/types';
-import { isPublicAccessLevel } from '@bike4mind/scripts/help/utils';
+import { isPublicAccessLevel, stripFrontmatter } from '@bike4mind/scripts/help/utils';
 import { useHelpIndex } from './useHelpIndex';
 import { useAccessToken } from './useAccessToken';
-import { stripFrontmatter } from '@client/app/utils/stripFrontmatter';
 
 /**
  * Simple non-reversible hash for cache key derivation. This is a local copy of

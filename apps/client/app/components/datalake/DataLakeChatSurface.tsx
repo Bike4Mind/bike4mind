@@ -23,7 +23,7 @@ import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode }) {
   const { currentSession } = useSessions();
   const { isFeatureEnabled } = useAdminSettingsCache();
-  const { article } = useSearch({ strict: false }) as { article?: string };
+  const { article, passage } = useSearch({ strict: false }) as { article?: string; passage?: string };
   const enabled = useDataLakeMode(s => s.enabled);
   const seedFromSession = useDataLakeMode(s => s.seedFromSession);
   // Shared manage-knowledge capability (#841) - the gate and the open-manager wiring live in
@@ -63,6 +63,7 @@ export default function DataLakeChatSurface({ chat }: { chat: React.ReactNode })
       source="datalakes"
       rootLabel="Data Lakes"
       articleId={article ?? null}
+      articlePassage={passage ?? null}
       chatSlot={chat}
       chatEmbedded
       onManage={onManage}

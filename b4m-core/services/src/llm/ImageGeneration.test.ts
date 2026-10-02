@@ -12,6 +12,7 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { getSettingsMap } from '@bike4mind/utils';
 import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
 import type { Logger } from '@bike4mind/observability';
+import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
 import { getSettingsValue } from '@bike4mind/utils';
 import { deductCreditsWithOrgSupport } from '../creditService';
 
@@ -50,14 +51,6 @@ vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () =
 vi.mock('./questHeartbeat', () => ({
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
 }));
-
-const silentLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  updateMetadata: vi.fn(),
-} as unknown as Logger;
 
 const makeService = (overrides: {
   invokeSummarizeSession?: ReturnType<typeof vi.fn>;
@@ -1194,9 +1187,6 @@ describe('ImageGenerationService quest partial writes', () => {
     vi.mocked(getSettingsMap).mockReset().mockResolvedValue({});
   });
 
-  // statusLog timestamps are wall-clock, so only the status sequence is pinned.
-  const statusLog = (...statuses: string[]) => statuses.map(status => ({ status, timestamp: expect.any(Date) }));
-
   // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
   const invokePromptMeta = {
     model: { name: ImageModels.FLUX_PRO_1_1, parameters: { safety_tolerance: 2 }, type: 'image' },
@@ -1291,6 +1281,17 @@ describe('ImageGenerationService quest partial writes', () => {
     const { service, update } = makeService({ startImageGenerationProcess });
     await invoke(service);
 
+    // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][0]).toStrictEqual({
+      id: 'quest1',
+      images: [],
+      replies: [],
+      type: 'message',
+      promptMeta: invokePromptMeta,
+      promptEnhancement: undefined,
+    });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
       type: 'error',
@@ -1307,7 +1308,7 @@ describe('ImageGenerationService quest partial writes', () => {
     enforceCredits(service);
     await processEdit(service);
 
-    expect(callArgs(update).some(arg => arg.type === 'error')).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1);
     expect(callArgs(update).find(arg => arg.status === 'done')).toStrictEqual({
       id: 'quest1',
       reply: '',
@@ -1344,6 +1345,7 @@ describe('ImageGenerationService quest partial writes', () => {
     enforceCredits(service);
     await processEdit(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     const call = callArgs(update).find(arg => arg.type === 'message');
     expect(call).toStrictEqual({
       id: 'quest1',
@@ -1370,9 +1372,10 @@ describe('ImageGenerationService quest partial writes', () => {
     vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
     mockGeminiEdit.mockReset();
     mockGeminiEdit.mockRejectedValue(new Error('provider down'));
-    const { service, update, quest } = makeService();
+    const { service, update } = makeService();
     await processEdit(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
       prompt: 'make it blue',
@@ -1380,7 +1383,13 @@ describe('ImageGenerationService quest partial writes', () => {
       type: 'error',
       status: 'done',
       errorCode: undefined,
-      promptMeta: quest.promptMeta,
+      // A literal, not quest.promptMeta: process() mutates that object in place, so comparing
+      // against it would pass whatever statusLog was written.
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        statusLog: statusLog('Preparing to paint...', 'Now painting...', 'Error: provider down'),
+      },
     });
   });
 });
