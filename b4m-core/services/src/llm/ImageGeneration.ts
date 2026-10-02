@@ -33,7 +33,8 @@ import {
   XAI_IMAGE_MODELS,
   GEMINI_IMAGE_MODELS,
   isGPTImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
+  clampImageQualityForModel,
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
@@ -113,7 +114,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
   if (!isGPTImageModel(model)) return quality;
   if (!quality) return OMITTED_QUALITY_TIER;
-  return quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+  return clampImageQualityForModel(model, quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality);
 }
 
 export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
@@ -273,7 +274,7 @@ export class ImageGenerationService {
     // drops the field rather than erroring). Resolved before billing so credits/promptMeta
     // key off the model actually used.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
     const session = await this.db.sessions.findById(sessionId);

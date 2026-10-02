@@ -2165,6 +2165,8 @@
                   "gpt-image-1.5",
                   "gpt-image-1-mini",
                   "gpt-image-2",
+                  "gpt-image-2.5-sunburst",
+                  "gpt-image-2.5-flare",
                   "flux-pro-1.1",
                   "flux-pro",
                   "flux-pro-1.1-ultra",
@@ -2197,6 +2199,8 @@
               "low",
               "medium",
               "high",
+              "xhigh",
+              "max",
               "auto"
             ]
           },
@@ -2467,6 +2471,8 @@
                   "gpt-image-1.5",
                   "gpt-image-1-mini",
                   "gpt-image-2",
+                  "gpt-image-2.5-sunburst",
+                  "gpt-image-2.5-flare",
                   "flux-pro-1.1",
                   "flux-pro",
                   "flux-pro-1.1-ultra",
@@ -2499,6 +2505,8 @@
               "low",
               "medium",
               "high",
+              "xhigh",
+              "max",
               "auto"
             ]
           },
