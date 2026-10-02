@@ -165,14 +165,23 @@ export function buildGitHubLakeAuthorizeUrl(
 /**
  * The install fallback, signed into the same flow (nonce) so its return completes like an authorize.
  * The install page takes no return URL: GitHub sends it to the App's FIRST callback URL.
+ *
+ * With `targetAccountId` it is the "add repositories" link for that account's existing installation:
+ * GitHub's targeted install page sends an account owner to that installation's repository access and
+ * lets any other org member request the change, which GitHub forwards to every owner (returning
+ * `setup_action=request`). The installation's settingsUrl, by contrast, 404s for a non-owner.
  */
 function buildGitHubLakeInstallUrl(
   config: GitHubLakeAppConfig,
   nonceHash: string,
-  params: { userId: string; dataLakeId: string }
+  params: { userId: string; dataLakeId: string },
+  targetAccountId?: number
 ): string {
   const query = new URLSearchParams({ state: createStateToken(GITHUB_LAKE_STATE_OPTIONS, params, nonceHash) });
-  return `https://github.com/apps/${encodeURIComponent(config.slug)}/installations/new?${query.toString()}`;
+  const base = `https://github.com/apps/${encodeURIComponent(config.slug)}/installations/new`;
+  if (targetAccountId === undefined) return `${base}?${query.toString()}`;
+  query.set('target_id', String(targetAccountId));
+  return `${base}/permissions?${query.toString()}`;
 }
 
 /**
@@ -264,13 +273,21 @@ export async function listGitHubLakeRepositoryChoices(params: {
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
   const installations = await withGitHubLakeUserToken(config, nonceHash, () => listUserInstallations(userToken));
+  const stateParams = { userId: user.id, dataLakeId: lakeId };
+  const installUrl = buildGitHubLakeInstallUrl(config, nonceHash, stateParams);
   const choices = await Promise.all(
-    installations.map(installation => toInstallationChoice(config, nonceHash, userToken, installation, organizationId))
+    installations.map(installation =>
+      toInstallationChoice(config, nonceHash, userToken, installation, organizationId, {
+        // Without an account id there is nothing to target; the plain install page still lets the
+        // user pick the account there.
+        addRepositoriesUrl:
+          installation.accountId === null
+            ? installUrl
+            : buildGitHubLakeInstallUrl(config, nonceHash, stateParams, installation.accountId),
+      })
+    )
   );
-  return {
-    installations: choices,
-    installUrl: buildGitHubLakeInstallUrl(config, nonceHash, { userId: user.id, dataLakeId: lakeId }),
-  };
+  return { installations: choices, installUrl };
 }
 
 async function toInstallationChoice(
@@ -278,9 +295,11 @@ async function toInstallationChoice(
   nonceHash: string,
   userToken: string,
   installation: GitHubLakeUserInstallation,
-  organizationId: string
+  organizationId: string,
+  links: { addRepositoriesUrl: string }
 ): Promise<GitHubLakeInstallationChoice> {
   const { id, accountLogin, accountType, settingsUrl } = installation;
+  const { addRepositoriesUrl } = links;
   const violation = findInstallationPolicyViolation(installation);
   if (violation) {
     return {
@@ -288,6 +307,7 @@ async function toInstallationChoice(
       accountLogin,
       accountType,
       settingsUrl,
+      addRepositoriesUrl,
       violation: { code: violation, message: POLICY_MESSAGES[violation] },
       repositories: [],
     };
@@ -304,6 +324,7 @@ async function toInstallationChoice(
     accountLogin,
     accountType,
     settingsUrl,
+    addRepositoriesUrl,
     violation: null,
     repositories: repositories.map((repo): GitHubLakeRepositoryChoice => ({
       ...repo,

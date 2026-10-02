@@ -142,6 +142,7 @@ const REPO: GitHubLakeRepository = { id: 100, fullName: 'acme/one', defaultBranc
 const USER_INSTALLATION: GitHubLakeUserInstallation = {
   id: 42,
   accountLogin: 'acme',
+  accountId: 9001,
   accountType: 'Organization',
   settingsUrl: 'https://github.com/organizations/acme/settings/installations/42',
   repositorySelection: 'selected',
@@ -423,6 +424,27 @@ describe('listGitHubLakeRepositoryChoices', () => {
     expect(result.installUrl).toMatch(
       new RegExp(`^https://github\\.com/apps/${CONFIG.slug}/installations/new\\?state=`)
     );
+  });
+
+  it('gives each installation an addRepositoriesUrl targeted at its account and bound to the same flow', async () => {
+    const result = await listGitHubLakeRepositoryChoices(params());
+    const url = new URL(result.installations[0].addRepositoriesUrl);
+    expect(`${url.origin}${url.pathname}`).toBe(`https://github.com/apps/${CONFIG.slug}/installations/new/permissions`);
+    expect(url.searchParams.get('target_id')).toBe('9001');
+    // Signed into the same flow as the install fallback, so its return reopens this lake's picker.
+    expect(verifyGitHubLakeState(url.searchParams.get('state') ?? '', NONCE_HASH, USER.id)).toBe('lake1');
+  });
+
+  it('keeps the addRepositoriesUrl on a policy-violating installation too', async () => {
+    h.listUserInstallations.mockResolvedValue([{ ...USER_INSTALLATION, repositorySelection: 'all' }]);
+    const result = await listGitHubLakeRepositoryChoices(params());
+    expect(new URL(result.installations[0].addRepositoriesUrl).searchParams.get('target_id')).toBe('9001');
+  });
+
+  it('falls back to the untargeted installUrl when the installation has no account id', async () => {
+    h.listUserInstallations.mockResolvedValue([{ ...USER_INSTALLATION, accountId: null }]);
+    const result = await listGitHubLakeRepositoryChoices(params());
+    expect(result.installations[0].addRepositoriesUrl).toBe(result.installUrl);
   });
 
   it('lists a policy-violating installation with the violation and empty repositories, never listing its repos', async () => {
