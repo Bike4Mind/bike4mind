@@ -6,7 +6,7 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-const { send } = vi.hoisted(() => ({ send: vi.fn() }));
+const { send, hostedConstructed } = vi.hoisted(() => ({ send: vi.fn(), hostedConstructed: vi.fn() }));
 vi.mock('@aws-sdk/client-sqs', async importOriginal => ({
   ...(await importOriginal<typeof import('@aws-sdk/client-sqs')>()),
   SQSClient: class {
@@ -18,6 +18,7 @@ vi.mock('@aws-sdk/client-sqs', async importOriginal => ({
 vi.mock('@aws-sdk/client-eventbridge', () => ({
   EventBridgeClient: class {
     constructor() {
+      hostedConstructed();
       throw new Error('Unexpected hosted publisher');
     }
   },
@@ -40,7 +41,7 @@ function request(ids: string[]) {
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 }
 beforeAll(async () => {
-  server = await createMongoServer({ instance: { launchTimeout: MONGO_TEST_TIMEOUT_MS } });
+  server = await createMongoServer();
   await mongoose.connect(server.getUri());
 });
 afterAll(async () => {
@@ -55,8 +56,25 @@ beforeEach(async () => {
   await Session.collection.deleteMany({});
   await NotebookCurationJob.collection.deleteMany({});
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  expect(hostedConstructed).not.toHaveBeenCalled();
+  vi.unstubAllEnvs();
+});
 describe('notebook submission acceptance', () => {
+  it('answers 202 with one accepted event per session for a two-session batch', async () => {
+    const ids = [await session(), await session()];
+    const accepted = request(ids);
+    await accepted.promise;
+    expect(accepted.res._getStatusCode()).toBe(202);
+    const { data } = accepted.res._getJSONData();
+    expect(data).toMatchObject({ sessionIds: ids, batchTotal: 2 });
+    expect(data.batchJobId).toEqual(expect.any(String));
+    expect(data.curationJobs).toEqual(
+      ids.map(sessionId => ({ sessionId, curationJobId: expect.any(String), status: 'pending' }))
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.map(([, event]) => event.detail.sessionId).sort()).toEqual([...ids].sort());
+  });
   it('returns an error on broker rejection, creates no pending row, and permits a later accepted request', async () => {
     const id = await session();
     send.mockRejectedValueOnce(new Error('broker rejected'));
