@@ -128,8 +128,8 @@ export function BrowserNavbar({
             }
           }}
           sx={{ flex: 1, minWidth: 0, fontSize: 'xs' }}
-          slotProps={{ input: { 'aria-label': 'Address' } }}
-          data-testid="chat-browser-url"
+          // On the field itself rather than on Joy's wrapper, so what finds it has its value.
+          slotProps={{ input: { 'aria-label': 'Address', 'data-testid': 'chat-browser-url' } }}
         />
       </Stack>
       {error && (

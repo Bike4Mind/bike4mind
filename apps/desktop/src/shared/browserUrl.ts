@@ -51,6 +51,12 @@ const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
  */
 const APP_SCHEMES = ['b4m-media', 'b4m-artifact'];
 
+/** Which of the app's own protocols this text is written in, if any. */
+function appScheme(text: string): string | undefined {
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(text)?.[1].toLowerCase();
+  return scheme && APP_SCHEMES.includes(scheme) ? scheme : undefined;
+}
+
 /**
  * Where free text goes when it is not an address.
  *
@@ -70,10 +76,8 @@ const SEARCH_URL = 'https://duckduckgo.com/?q=';
  */
 export function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(trimmed)?.[1].toLowerCase();
-  if (scheme && APP_SCHEMES.includes(scheme)) {
-    throw new Error(`Only http and https pages can be opened, not ${scheme}:`);
-  }
+  const app = appScheme(trimmed);
+  if (app) throw new Error(`Only http and https pages can be opened, not ${app}:`);
   const bare = BARE_HOST.test(trimmed);
   const withScheme = bare ? `${isLocalUrl(`http://${trimmed}`) ? 'http' : 'https'}://${trimmed}` : trimmed;
   const url = new URL(withScheme);
@@ -93,6 +97,8 @@ export function normalizeUrl(raw: string): string {
  */
 function looksLikeAddress(text: string): boolean {
   if (/\s/.test(text)) return false;
+  // `b4m-media:1234` reads as a host and port too, and must still reach the refusal.
+  if (appScheme(text)) return true;
   if (HAS_SCHEME.test(text) && !BARE_HOST.test(text)) return true;
   const host = text.replace(/^\/\//, '').split(/[/?#]/)[0].replace(/:\d+$/, '');
   return host.includes('.') || host === 'localhost' || /^\[.+\]$/.test(host);

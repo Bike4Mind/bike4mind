@@ -44,6 +44,11 @@ describe('resolveAddress', () => {
       ok: false,
       error: 'Only http and https pages can be opened, not file:',
     });
+    // `b4m-media:1234` parses as a host and a port just as readily as `localhost:3080` does.
+    expect(resolveAddress('b4m-media:1234')).toEqual({
+      ok: false,
+      error: 'Only http and https pages can be opened, not b4m-media:',
+    });
   });
 
   it('says so when nothing was typed', () => {
