@@ -549,8 +549,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // If there is a tool being used, then
         // callback the complete function with the tool messages included
         if (func.some(f => f.name)) {
+          // func is indexed by provider choice index, so a tool at index >= 2 leaves holes that
+          // for...of yields as undefined; filter() skips them.
+          const toolCalls = func.filter(Boolean);
+
           // Track all tool usage first (including ID for history reconstruction, allow empty parameters)
-          for await (const tool of func) {
+          for (const tool of toolCalls) {
             const { id, name, parameters } = tool;
             if (name) {
               toolsUsed.push({ name, arguments: parameters || '{}', id });
@@ -559,7 +563,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
-            // Resolve all executable tools from the func array
+            // Resolve all executable tools from the tool calls
             type ResolvedTool = {
               id: string;
               name: string;
@@ -568,7 +572,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               toolFn: (params: Record<string, unknown>) => Promise<{ toString(): string }>;
             };
             const resolvedTools: ResolvedTool[] = [];
-            for (const tool of func) {
+            for (const tool of toolCalls) {
               const { id, name } = tool;
               if (!id || !name) continue;
               const parameters = tool.parameters || '{}';
