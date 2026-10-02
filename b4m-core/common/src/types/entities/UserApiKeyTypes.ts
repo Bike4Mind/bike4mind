@@ -332,6 +332,7 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
+  /** Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot. */
   countActiveByUserId: (userId: string) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */

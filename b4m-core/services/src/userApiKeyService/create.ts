@@ -1,4 +1,5 @@
 import {
+  API_KEY_USER_CAP_ERROR_CODE,
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyStatus,
@@ -25,6 +26,8 @@ import { generateCallbackSigningSecret } from './callbackSigningSecret';
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
 // path (setEmbedKeySpendCap).
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
+
+export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -249,7 +252,9 @@ export const createUserApiKey = async (
   if (!isSystemUser) {
     const activeCount = await db.userApiKeys.countActiveByUserId(userId);
     if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
-      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`);
+      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
+        errorCode: API_KEY_USER_CAP_ERROR_CODE,
+      });
     }
   }
 
