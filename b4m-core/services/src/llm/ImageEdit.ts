@@ -29,7 +29,7 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
   isGPTImageModel,
   MAX_REFERENCE_IMAGES,
   supportsImageEdit,
@@ -194,7 +194,7 @@ export class ImageEditService {
     // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
     // promptMeta is built, so the persisted model matches what actually renders and bills.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
@@ -411,7 +411,9 @@ export class ImageEditService {
     // silently turn a valid request into an opaque image. Resolved before billing so
     // credits key off the model actually used.
     const model =
-      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
+      background === 'transparent' && rejectsTransparentBackground(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 

@@ -11,7 +11,9 @@ import {
   isGeminiImageModel,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
+  isGPTImage25Model,
+  isExtendedGptImageQuality,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
@@ -202,7 +204,8 @@ export const imageGenerationTool: ToolDefinition = {
       // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
       // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
       const wantsTransparent = background === 'transparent';
-      const model = wantsTransparent && isGPTImage2Model(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      const model =
+        wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
@@ -421,7 +424,10 @@ export const imageGenerationTool: ToolDefinition = {
             type: 'string',
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
-            enum: [...TOOL_SELECTABLE_IMAGE_QUALITIES],
+            // xhigh/max only for a 2.5 model, so the model is never offered a tier that renders as 'high'.
+            enum: isGPTImage25Model(config?.model)
+              ? [...TOOL_SELECTABLE_IMAGE_QUALITIES]
+              : TOOL_SELECTABLE_IMAGE_QUALITIES.filter(quality => !isExtendedGptImageQuality(quality)),
           },
           n: {
             type: 'number',
