@@ -73,7 +73,7 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} citedPassage={source.excerpt} />
+          <MarkdownViewer content={content} citedPassage={source.excerpt} stripFrontmatter />
         ) : (
           // The document could not be read - deleted since detection, or unreadable to this curator.
           // The quoted passage is still shown: it is the evidence the finding rests on, and a pane
