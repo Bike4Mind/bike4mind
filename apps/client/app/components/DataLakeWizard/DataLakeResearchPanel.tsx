@@ -281,7 +281,7 @@ const STOP_REASON_LABEL = {
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
 const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.startedAt ?? run.createdAt;
 
-const formatWhen = (value: Date | string | null | undefined): string => {
+export const formatWhen = (value: Date | string | null | undefined): string => {
   if (!value) return 'not yet';
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return 'unknown';
@@ -977,7 +977,7 @@ export function DataLakeResearchPanel({
                   <Typography level="body-xs" data-testid="datalake-research-run-config">
                     {runConfigLabel(run, configById)}
                   </Typography>
-                  <Typography level="body-xs" textColor="text.tertiary">
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-when">
                     {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
                     {run.judgeModel && (run.totals.proposed > 0 || run.totals.belowRelevance > 0)
                       ? ` \u00b7 judged by ${run.judgeModel}`
