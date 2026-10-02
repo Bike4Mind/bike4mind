@@ -606,3 +606,156 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     ]);
   });
 });
+
+describe('MoonshotBedrockBackend tool-turn replay', () => {
+  const MODEL = ChatModels.KIMI_K2_THINKING_BEDROCK;
+  const toolFrame = {
+    choices: [
+      {
+        delta: {
+          tool_calls: [{ index: 0, id: 't1', function: { name: 'math_evaluate', arguments: '{"e":"12*15"}' } }],
+        },
+      },
+    ],
+  };
+  const tool = { id: 't1', name: 'math_evaluate', parameters: '{"e":"12*15"}' };
+
+  const replayedAssistant = (history: IMessage[]) =>
+    history.find(m => m.role === 'assistant') as unknown as { content: string | null };
+
+  it('replays the streamed reasoning and intro prose on the tool-call turn instead of null', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: '<reasoning>need a tool</reasoning>' } }] });
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'Computing it now.' } }] });
+    fresh.translateStreamChunk(MODEL, toolFrame);
+
+    const history: IMessage[] = [];
+    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
+
+    expect(replayedAssistant(history).content).toBe('<reasoning>need a tool</reasoning>Computing it now.');
+  });
+
+  it('replays reasoning_content-style reasoning and non-streaming message content', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateChunk(MODEL, {
+      choices: [
+        {
+          message: {
+            content: 'Let me compute.',
+            reasoning_content: 'plan',
+            tool_calls: [{ id: 't1', function: { name: 'math_evaluate', arguments: '{"e":"12*15"}' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    });
+
+    const history: IMessage[] = [];
+    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
+
+    expect(replayedAssistant(history).content).toBe('<reasoning>plan</reasoning>Let me compute.');
+  });
+
+  it('replays streamed reasoning_content ahead of the prose', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { reasoning_content: 'plan ' } }] });
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { reasoning_content: 'it' } }] });
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'Starting.' } }] });
+    fresh.translateStreamChunk(MODEL, toolFrame);
+
+    const history: IMessage[] = [];
+    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
+
+    expect(replayedAssistant(history).content).toBe('<reasoning>plan it</reasoning>Starting.');
+  });
+
+  it('replays the reasoning but never the native tool-call tokens, streaming', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateStreamChunk(MODEL, {
+      choices: [
+        {
+          delta: {
+            content:
+              '<reasoning> Computing it. <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|></reasoning>',
+          },
+        },
+      ],
+    });
+    fresh.translateStreamChunk(MODEL, {
+      choices: [
+        {
+          delta: { content: '<reasoning> {"e": "1"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>' },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const history: IMessage[] = [];
+    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
+    const content = replayedAssistant(history).content ?? '';
+
+    expect(content).toContain('Computing it.');
+    expect(content).not.toContain('<|');
+  });
+
+  it('replays the reasoning but never the native tool-call tokens, non-streaming', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateChunk(MODEL, {
+      choices: [
+        {
+          message: {
+            content:
+              '<reasoning>go <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|> {"e": "1"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    });
+
+    const history: IMessage[] = [];
+    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
+
+    expect(replayedAssistant(history).content).toBe('<reasoning>go</reasoning>');
+  });
+
+  it('attaches the round text to the first of several parallel tool calls only', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'Running both.' } }] });
+    fresh.translateStreamChunk(MODEL, toolFrame);
+
+    const history: IMessage[] = [];
+    const blocks = fresh['takeReasoningBlocks']();
+    fresh.pushToolMessages(history, tool, '180', blocks);
+    fresh.pushToolMessages(history, { ...tool, id: 't2' }, '181', blocks);
+
+    const assistants = history.filter(m => m.role === 'assistant') as unknown as Array<{ content: string | null }>;
+    expect(assistants.map(a => a.content)).toEqual(['Running both.', null]);
+  });
+
+  it('keeps content null when the round had no text, and does not leak into the next round', () => {
+    const fresh = new MoonshotBedrockBackend();
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'round one' } }] });
+    fresh.translateStreamChunk(MODEL, toolFrame);
+    fresh['takeReasoningBlocks']();
+
+    fresh.getPayload(MODEL, messages, {});
+    fresh.translateStreamChunk(MODEL, toolFrame);
+    const history: IMessage[] = [];
+    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
+
+    expect(replayedAssistant(history).content).toBeNull();
+  });
+
+  it('still defaults to null when called without blocks', () => {
+    const history: IMessage[] = [];
+    new MoonshotBedrockBackend().pushToolMessages(history, tool, '180');
+    expect(replayedAssistant(history).content).toBeNull();
+  });
+});
