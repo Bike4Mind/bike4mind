@@ -24,6 +24,8 @@ describe('ChatService agent browser', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let root: string;
+  /** Folders shared with the app. Emptied by the test that pins the no-folder prompt. */
+  let granted: string[];
   let closed: string[];
   let models: ChatModelOption[];
 
@@ -49,6 +51,7 @@ describe('ChatService agent browser', () => {
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-browser-')));
+    granted = [root];
     events = [];
     streams = [];
     closed = [];
@@ -66,7 +69,7 @@ describe('ChatService agent browser', () => {
     };
     service = new ChatService({
       store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-browser-sessions-')), 'test-model'),
-      access: { list: async () => [root] } as unknown as AccessStore,
+      access: { list: async () => granted } as unknown as AccessStore,
       media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-browser-media-'))),
       models: { list: async () => ({ models }), cached: () => [] } as unknown as ModelCatalog,
       browser,
@@ -128,6 +131,21 @@ describe('ChatService agent browser', () => {
     expect(names).not.toContain('session_spawn');
     expect(names).not.toContain('session_list');
     expect(request.messages[0].content).toContain('You also have a browser');
+  });
+
+  it('still tells a conversation with no folder at all how to use the browser', async () => {
+    // That system message is a separate branch from the one above: it used to carry nothing
+    // about the browser, because no conversation reaching it could have had one.
+    granted = [];
+    const { id } = await service.createSession();
+    await service.send(id, 'hi');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    const request = post.mock.calls[0][1];
+    expect(request.messages[0].content).toContain('NO access to the user files');
+    expect(request.messages[0].content).toContain('You also have a browser');
+    const names = request.options.tools.map((entry: { toolSchema: { name: string } }) => entry.toolSchema.name);
+    expect(names).toContain('browser_navigate');
+    expect(names).not.toContain('file_read');
   });
 
   it('drives the browser from a Chat session and keeps its screenshot', async () => {
