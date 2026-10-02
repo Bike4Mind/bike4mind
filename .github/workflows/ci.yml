@@ -10,9 +10,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    # Exclude prod-targeted PRs — those are the staging→production promotion
-    # and `main` already validates them; a redundant CI run isn't worth it.
-    branches-ignore: [prod]
     types: [opened, synchronize, reopened, ready_for_review]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable

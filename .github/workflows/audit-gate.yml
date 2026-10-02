@@ -8,7 +8,6 @@ name: Dependency Audit Gate
 
 on:
   pull_request:
-    branches-ignore: [prod]
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     branches: [main]
