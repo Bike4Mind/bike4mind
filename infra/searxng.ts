@@ -1,4 +1,4 @@
-import { isPreviewStage } from './constants';
+import { PRODUCTION_STAGES } from './constants';
 import { cluster, resolvedVpcId } from './vpc';
 
 /**
@@ -21,10 +21,13 @@ import { cluster, resolvedVpcId } from './vpc';
  * the image is missing: search still works on SerpAPI alone, so a missing image skips the
  * service instead of failing the whole deploy.
  *
- * Skipped in previews (cost per PR stage) and in `sst dev` (services are not deployed there).
+ * Deployed only on the two real hosted stages (production, dev/staging) -- PRODUCTION_STAGES,
+ * not merely "not a preview and not sst dev". That excludes shared-dev (a router-only stage,
+ * infra/router.ts) and any ad-hoc personal `sst deploy --stage <name>`, which a broader check
+ * would otherwise also stand this service up on.
  */
 const searxngImage = process.env.SEARXNG_IMAGE;
-const isHostedStage = !$dev && !isPreviewStage;
+const isHostedStage = !$dev && PRODUCTION_STAGES.includes($app.stage);
 const enabled = isHostedStage && !!searxngImage;
 
 if (isHostedStage && !searxngImage && process.env.CI === 'true') {
@@ -53,6 +56,9 @@ function createSearxng() {
 
   // Dedicated per-stage SG rather than a rule on the shared `default` SG: several stages share
   // that SG, and identical self-referencing rules from each stage would collide.
+  //
+  // cidrBlock is the VPC's primary CIDR only -- if this VPC ever gains a secondary CIDR
+  // association, instances on it would not match this ingress rule.
   const vpcCidr = aws.ec2.getVpcOutput({ id: resolvedVpcId }).cidrBlock;
   const taskSecurityGroup = new aws.ec2.SecurityGroup('SearxngTask', {
     vpcId: resolvedVpcId,

@@ -389,6 +389,12 @@ describe('getSearxngUrl / getWebSearchProviderSetting', () => {
     });
   });
 
+  it('treats a blank SEARXNG_BASE_URL as unset (whitespace does not enable the provider)', async () => {
+    await withEnv({ B4M_SELF_HOST: undefined, SEARXNG_BASE_URL: '   ' }, async () => {
+      expect(await getSearxngUrl(adapters({}))).toBeNull();
+    });
+  });
+
   it('returns the provider setting when set, else null', async () => {
     expect(await getWebSearchProviderSetting(adapters({ WebSearchProvider: 'searxng' }))).toBe('searxng');
     expect(await getWebSearchProviderSetting(adapters({}))).toBeNull();
