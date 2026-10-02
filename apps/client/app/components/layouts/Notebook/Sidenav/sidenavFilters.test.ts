@@ -12,6 +12,9 @@ describe('toSessionListFilters', () => {
     expect(toSessionListFilters('all', 'onlyApi')).toEqual({ origin: 'api' });
     expect(toSessionListFilters('all', 'hideApi')).toEqual({ excludeOrigin: 'api' });
     expect(toSessionListFilters('images', 'hideApi')).toEqual({ hasImages: true, excludeOrigin: 'api' });
+    expect(toSessionListFilters('images', 'onlyApi')).toEqual({ hasImages: true, origin: 'api' });
+    expect(toSessionListFilters('chats', 'onlyApi')).toEqual({ hasImages: false, origin: 'api' });
+    expect(toSessionListFilters('chats', 'hideApi')).toEqual({ hasImages: false, excludeOrigin: 'api' });
   });
 });
 

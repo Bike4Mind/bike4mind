@@ -124,23 +124,22 @@ export default function NotebookGroupList({
             return (
               <Box key={`api-group-${row.key}`} data-testid="sidenav-api-group">
                 <Box
-                  role="button"
-                  tabIndex={0}
+                  component="button"
+                  type="button"
                   aria-expanded={expanded}
                   data-testid="sidenav-api-group-toggle"
                   onClick={() => toggleBucket(row.key)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      toggleBucket(row.key);
-                    }
-                  }}
                   sx={theme => ({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
                     px: 1,
+                    width: '100%',
                     height: '32px',
+                    border: 'none',
+                    background: 'none',
+                    font: 'inherit',
+                    textAlign: 'left',
                     borderRadius: '8px',
                     cursor: 'pointer',
                     color: 'text.secondary',

@@ -77,6 +77,57 @@ export const OWN_SESSIONS_LIMIT = 20;
  */
 const listFiltersKey = (filters?: SessionListFilters) => (filters ? [filters] : []);
 
+/**
+ * True when a session satisfies every filter in `filters` (or `filters` is undefined, i.e. the
+ * unfiltered list). Must stay in lockstep with the server's sessionListFilterQuery
+ * (packages/database/src/models/auth/SessionModel.ts) - a session with no recorded origin
+ * predates the field and counts as 'web' on both sides. See updateSessionsQueryData below for
+ * why this exists: it is not a request-shaping helper, it gates a *local cache* write.
+ *
+ * Assumes origin is immutable and imageCount only increases (true for both as of this writing -
+ * see SessionTypes.ts / recordGeneratedImages.ts), so a session already cached under a filter
+ * never needs to be *removed* for having stopped matching it. If either becomes mutable in the
+ * other direction, updateSessionsQueryData must also gate the update-path, not just the create-path.
+ */
+export function sessionMatchesListFilters(
+  session: Pick<ISessionDocument, 'imageCount' | 'origin'>,
+  filters: SessionListFilters | undefined
+): boolean {
+  if (!filters) return true;
+  const channel = session.origin?.channel ?? 'web';
+  if (filters.hasImages !== undefined && (session.imageCount ?? 0) > 0 !== filters.hasImages) return false;
+  if (filters.origin !== undefined && channel !== filters.origin) return false;
+  if (filters.excludeOrigin !== undefined && channel === filters.excludeOrigin) return false;
+  return true;
+}
+
+/** The SessionListFilters fragment of a `['sessions', 'own'|'shared', ...]` queryKey, if any - see
+ *  listFiltersKey. Filters are the only plain-object element either key shape ever carries. */
+const filtersFromQueryKey = (queryKey: readonly unknown[]): SessionListFilters | undefined =>
+  queryKey.find((part): part is SessionListFilters => typeof part === 'object' && part !== null);
+
+/**
+ * updateAllQueryData scoped to the 'sessions' collection, with sessionMatchesListFilters checked
+ * before the create-path insert. Every 'sessions' cache write (create, rename, clone/fork/snip, the
+ * `session.created` realtime fan-out, ...) should go through this instead of calling
+ * updateAllQueryData directly: without the filter check, a session that doesn't match a given
+ * cached list's Content/Origin filter (sidenavFilters.ts) would still get spliced into that list's
+ * first page the moment any write touches it - silently undoing the filter the user chose (e.g. an
+ * API-created session appearing while viewing "Hide API"). Routing every write through one function
+ * means a future call site can't reintroduce that gap by omission.
+ */
+export function updateSessionsQueryData(
+  queryClient: QueryClient,
+  type: 'write' | 'delete',
+  session: ISessionDocument,
+  keysAllowedToCreate: Array<string[]> = [['sessions', 'own']]
+) {
+  updateAllQueryData(queryClient, 'sessions', type, session, {
+    keysAllowedToCreate,
+    canCreateAt: (queryKey, data) => sessionMatchesListFilters(data, filtersFromQueryKey(queryKey)),
+  });
+}
+
 export function useGetOwnSessions(search: string = '', surface?: string, filters?: SessionListFilters) {
   const { currentUser } = useUser();
   const queryClient = useQueryClient();
@@ -305,9 +356,7 @@ export function useDeleteSession(successCallback?: (sessionId: string) => void) 
       // OPTIMISTIC UPDATE
       const session = queryClient.getQueryData<ISessionDocument>(['sessions', id]);
       if (session) {
-        updateAllQueryData(queryClient, 'sessions', 'delete', session, {
-          keysAllowedToCreate: [['sessions', 'own']],
-        });
+        updateSessionsQueryData(queryClient, 'delete', session);
       }
 
       const { newLastNotebookId } = await deleteSessionFromServer(id);
@@ -346,9 +395,7 @@ export function useDeleteSessions() {
       for (const sessionId of sessionIds) {
         const session = queryClient.getQueryData<ISessionDocument>(['sessions', sessionId]);
         if (session) {
-          updateAllQueryData(queryClient, 'sessions', 'delete', session, {
-            keysAllowedToCreate: [['sessions', 'own']],
-          });
+          updateSessionsQueryData(queryClient, 'delete', session);
         }
       }
 
@@ -450,9 +497,7 @@ export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocu
     mutationFn: async (session: UpdateSessionInput) => {
       const result = (await updateSessionToServer(session)) as ISessionDocument;
 
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', result);
       return result;
     },
     onSuccess: callback?.onSuccess,
@@ -467,6 +512,7 @@ export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocu
 const writeCopiedSession = (queryClient: QueryClient, session: ISessionDocument) => {
   updateAllQueryData(queryClient, 'sessions', 'write', session, {
     keysAllowedToCreate: [['sessions', 'own']],
+    canCreateAt: (queryKey, data) => sessionMatchesListFilters(data, filtersFromQueryKey(queryKey)),
   });
   if (session.surface) queryClient.invalidateQueries({ queryKey: ['sessions', 'own'] });
 };
@@ -675,9 +721,7 @@ export const useSubscribeToSession = (sessionId?: string) => {
         prevSessionRef.current = null;
       }
 
-      updateAllQueryData(queryClient, 'sessions', type === 'delete' ? 'delete' : 'write', val, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, type === 'delete' ? 'delete' : 'write', val);
     },
     [queryClient, endJob, isJobRunning]
   );
@@ -772,9 +816,7 @@ export const useCreateNewSession = (callbacks?: {
       return newSession;
     },
     onSuccess: session => {
-      updateAllQueryData(queryClient, 'sessions', 'write', session, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', session);
       if (projectId) {
         queryClient.invalidateQueries({ queryKey: ['sessions', 'projects', projectId] });
         queryClient.invalidateQueries({ queryKey: ['projects', projectId] });
@@ -845,9 +887,7 @@ export const useSnipSession = () => {
       return result;
     },
     onSuccess: result => {
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      updateSessionsQueryData(queryClient, 'write', result);
       toast.success('Session snipped successfully');
     },
     onError: () => {
@@ -887,12 +927,10 @@ export const useAutoRenameSession = () => {
       return result;
     },
     onSuccess: result => {
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [
-          ['sessions', 'own'],
-          ['sessions', 'projects'],
-        ],
-      });
+      updateSessionsQueryData(queryClient, 'write', result, [
+        ['sessions', 'own'],
+        ['sessions', 'projects'],
+      ]);
       toast.success('Notebook renamed successfully');
     },
     onError: () => {
