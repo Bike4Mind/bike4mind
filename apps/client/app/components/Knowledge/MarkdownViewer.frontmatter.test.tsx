@@ -15,10 +15,10 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 const FRONTMATTER = '---\ndate: 2015-06-01\ntitle: Leave policy\n---\n\n';
 const BODY = 'Holidays accrue monthly.\n\nUnused days roll over once.';
 
-const renderDoc = (content: string, citedPassage?: string) =>
+const renderDoc = (content: string, citedPassage?: string, stripFrontmatter = true) =>
   render(
     <TestWrapper>
-      <MarkdownViewer content={content} citedPassage={citedPassage} />
+      <MarkdownViewer content={content} citedPassage={citedPassage} stripFrontmatter={stripFrontmatter} />
     </TestWrapper>
   );
 
@@ -55,5 +55,18 @@ describe('MarkdownViewer frontmatter', () => {
     const marked = Array.from(container.querySelectorAll('[data-cited]')).map(el => el.textContent);
     expect(marked).toEqual(['Unused days roll over once.']);
     expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+  });
+
+  it('hides frontmatter keys with spaces and a leading @', () => {
+    const { container } = renderDoc('---\nLast Updated: 2026-01-05\n"@context": x\n---\n\n' + BODY);
+    expect(container.querySelector('h1, h2')).toBeNull();
+    expect(container.textContent).not.toContain('Last Updated');
+    expect(container.textContent).toContain('Holidays accrue monthly.');
+  });
+
+  it('leaves a leading --- pair around prose untouched when the prop is not set', () => {
+    const { container } = renderDoc('---\nNote: read this first\n---\n\nBody text', undefined, false);
+    expect(container.textContent).toContain('Note: read this first');
+    expect(container.textContent).toContain('Body text');
   });
 });
