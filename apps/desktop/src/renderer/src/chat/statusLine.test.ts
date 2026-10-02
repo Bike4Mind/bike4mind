@@ -11,6 +11,7 @@ import {
   formatTokens,
   inputSide,
   latestReply,
+  occupancyArc,
   occupancyColor,
   statusFields,
   totalTokens,
@@ -356,6 +357,24 @@ describe('latestReply', () => {
     const legacy = reply({ id: 'legacy', toolCalls: [{ id: 'a', name: 'file_read', input: {}, status: 'done' }] });
     expect(latestReply([measured, legacy], false)?.id).toBe('legacy');
     expect(contextTokens(latestReply([measured, legacy], false))).toBeNull();
+  });
+});
+
+describe('occupancyArc', () => {
+  it('draws the occupancy it is given, up to a full ring', () => {
+    expect(occupancyArc(22)).toBe(22);
+    expect(occupancyArc(100)).toBe(100);
+    expect(occupancyArc(140)).toBe(100);
+  });
+
+  /**
+   * The ring is the whole indicator, so an arc too short to see is the same picture as the
+   * empty ring that means nothing was measured. The floor is the ring's version of "<1%".
+   */
+  it('floors a real but tiny occupancy to an arc that can be seen', () => {
+    expect(occupancyArc(0)).toBe(4);
+    expect(occupancyArc(1)).toBe(4);
+    expect(occupancyArc(5)).toBe(5);
   });
 });
 

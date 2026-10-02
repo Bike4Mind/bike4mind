@@ -235,6 +235,19 @@ export function occupancyColor(percent: number | null): 'neutral' | 'primary' | 
 }
 
 /**
+ * The arc the ring draws for an occupancy, as a percentage of the circle.
+ *
+ * Floored, and the floor is the point. The ring is the whole indicator now, so the only thing
+ * telling a measured context from an unmeasured one is whether an arc is there at all - and a
+ * real occupancy under a percent draws two or three pixels on a 14px circle, which is the empty
+ * ring. This is the same distinction formatOccupancy makes by writing "<1%" instead of "0%",
+ * said in the only language a ring has.
+ */
+export function occupancyArc(percent: number): number {
+  return Math.min(100, Math.max(4, percent));
+}
+
+/**
  * How full the window reads on the indicator: "22%", or "<1%" for a real but tiny occupancy.
  *
  * A million-token window sits under half a percent for the first several turns, and rounding
@@ -247,12 +260,13 @@ function formatOccupancy(percent: number, tokens: number): string {
 }
 
 /**
- * The composer's usage indicator: how full the context window is, in one short field.
+ * The composer's usage indicator in words: how full the context window is, in one short field.
  *
- * The text beside the ring, not a replacement for it. The ring is what the user reads at a
- * glance and this is what they read when the glance was not enough, so it keeps the noun -
- * a bare percentage sitting between "Effort: Medium" and a tooltip that also talks about
- * credits would be the one number on the row with nothing saying which number it is.
+ * No longer drawn. The ring took over the composer's status line and this became its ACCESSIBLE
+ * NAME, which is why it still keeps the noun: "3%" announced on its own, on a row that also
+ * carries a model and an effort, names no quantity at all. Dropping the words along with the
+ * glyph would have taken the figure away from a screen reader entirely, which is not what
+ * replacing a label with a picture is supposed to mean.
  *
  * The balance is deliberately NOT here. It belongs to the account rather than to this
  * conversation, it is the slower-moving of the two, and putting both on a row that already

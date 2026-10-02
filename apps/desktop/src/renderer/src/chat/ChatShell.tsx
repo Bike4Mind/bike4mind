@@ -25,6 +25,7 @@ import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { TodoPanel } from './TodoPanel';
+import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
@@ -109,7 +110,16 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  */
 type ChatScreen = 'conversation' | 'artifacts' | 'customize';
 
-export function ChatShell({ account }: { account?: ReactNode }) {
+/**
+ * The sidebar's account strip, given the dot that says whether a reply is running.
+ *
+ * A function rather than a node because the two halves are owned in different places: this
+ * component knows the turn state, and the account strip knows where a glyph goes in its own
+ * row. Handing the finished dot down keeps both where they belong - see TurnDot.
+ */
+export type AccountStrip = (status: ReactNode) => ReactNode;
+
+export function ChatShell({ account }: { account?: AccountStrip }) {
   const {
     sessions,
     loading,
@@ -413,7 +423,9 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
-        footer={account}
+        footer={account?.(
+          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+        )}
       />
 
       {screen === 'artifacts' ? (

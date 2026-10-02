@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Avatar from '@mui/joy/Avatar';
 import Button from '@mui/joy/Button';
@@ -30,7 +30,7 @@ function initials(name: string): string {
  * The blocked states still surface here, because nothing else in the chat UI would explain why
  * replies suddenly stop working.
  */
-export function SignedInPanel({ state }: { state: AuthState }) {
+export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
@@ -78,9 +78,14 @@ export function SignedInPanel({ state }: { state: AuthState }) {
           <Typography level="body-sm" noWrap data-testid="auth-status-chip">
             {displayName}
           </Typography>
-          <Typography level="body-xs" textColor="text.tertiary" noWrap>
-            {state.environment.label}
-          </Typography>
+          {/* The turn dot rides at the end of the environment line rather than ahead of it, so
+              the name above and the label below keep the same left edge. */}
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+            <Typography level="body-xs" textColor="text.tertiary" noWrap>
+              {state.environment.label}
+            </Typography>
+            {status}
+          </Stack>
         </Stack>
         <IconButton
           size="sm"
