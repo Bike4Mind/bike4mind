@@ -601,16 +601,21 @@ describe('DataLakeResearchPanel', () => {
 
     // Joy colours FormHelperText from the FormControl's error class, so `error` set on the Input
     // instead still shows the message but leaves it grey. Assert on the class Joy keys off.
-    it('marks the out-of-range field as an error, and only that field', () => {
+    it.each([
+      ['max-results', String(RESEARCH_MAX_RESULTS_LIMIT + 1), 'max-proposals'],
+      ['max-proposals', '-3', 'max-results'],
+      ['recency', '-7', 'max-results'],
+      ['min-relevance', '5', 'max-results'],
+      ['cost-ceiling', '99', 'max-results'],
+    ])('marks %s as an error when it is %s, and leaves %s alone', (field, value, sibling) => {
       openFilledForm();
-      fireEvent.change(screen.getByTestId('datalake-research-max-results-input'), {
-        target: { value: String(RESEARCH_MAX_RESULTS_LIMIT + 1) },
-      });
-      const helper = screen.getByText(`Enter a whole number from 1 to ${RESEARCH_MAX_RESULTS_LIMIT}.`);
-      expect(helper.closest('.MuiFormControl-root')).toHaveClass('Mui-error');
-      expect(
-        screen.getByTestId('datalake-research-max-proposals-input').closest('.MuiFormControl-root')
-      ).not.toHaveClass('Mui-error');
+      fireEvent.change(screen.getByTestId(`datalake-research-${field}-input`), { target: { value } });
+      expect(screen.getByTestId(`datalake-research-${field}-input`).closest('.MuiFormControl-root')).toHaveClass(
+        'Mui-error'
+      );
+      expect(screen.getByTestId(`datalake-research-${sibling}-input`).closest('.MuiFormControl-root')).not.toHaveClass(
+        'Mui-error'
+      );
     });
 
     it('explains a Save disabled for a missing name or question', () => {
@@ -719,7 +724,7 @@ describe('DataLakeResearchPanel', () => {
       });
       const line = screen.getByTestId('research-config-schedule').textContent ?? '';
       expect(line).toMatch(/Runs weekly/);
-      expect(line).toMatch(/next/);
+      expect(line).toMatch(/next .*2026/);
       expect(line).toMatch(/pauses at 7\b/);
     });
 
