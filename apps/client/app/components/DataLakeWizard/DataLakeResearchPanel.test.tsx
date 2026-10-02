@@ -536,6 +536,49 @@ describe('DataLakeResearchPanel', () => {
     it('does not show a judge label when nothing was judged and nothing was proposed', () => {
       renderPanel({ runs: [run({ status: 'failed', judgeModel: 'gpt-4.1-mini', totals: emptyResearchRunTotals() })] });
       expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
+      expect(screen.queryByText(/judge gpt-4\.1-mini unavailable/)).toBeNull();
+    });
+
+    it('names the judge on a run the judge breaker stopped', () => {
+      renderPanel({
+        runs: [
+          run({
+            status: 'failed',
+            stopReason: 'judge_unavailable',
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+          }),
+        ],
+      });
+      expect(screen.getByText(/judge gpt-4\.1-mini unavailable/)).toBeTruthy();
+      expect(screen.queryByText(/judged by/)).toBeNull();
+    });
+
+    // A weekly re-run whose relevant hits are all already pending or in the lake still paid the
+    // judge for every one of them.
+    it('names the judge on a run whose judged hits were all deduplicated', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 3, alreadyInLake: 2, duplicatePending: 1 },
+          }),
+        ],
+      });
+      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+    });
+
+    it('says judged by, not unavailable, when some judgments succeeded', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 2, judgeFailed: 1, proposed: 1 },
+          }),
+        ],
+      });
+      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+      expect(screen.queryByText(/unavailable/)).toBeNull();
     });
 
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
