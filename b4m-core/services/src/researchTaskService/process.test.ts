@@ -208,6 +208,10 @@ describe('researchTaskService - process', () => {
     await process(mockUser, { id: taskId }, adapters);
 
     // Assert
+    expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
+      id: taskId,
+      status: ResearchTaskStatus.PROCESSING,
+    });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
     // Check that scraper.fetch was called with the first URL from the urls array
     expect(adapters.scraper.fetch).toHaveBeenCalledWith('https://example.com');
