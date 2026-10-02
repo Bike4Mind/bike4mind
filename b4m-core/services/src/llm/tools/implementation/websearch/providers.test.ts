@@ -13,6 +13,7 @@ import {
   createSearxngProvider,
   createSerpApiProvider,
   resolveWebSearchProvider,
+  resolveWebSearchProviders,
   serpApiSearch,
 } from './providers';
 
@@ -306,6 +307,52 @@ describe('createSerpApiProvider', () => {
     const results = await createSerpApiProvider(adapters).search('q', 3);
 
     expect(results.every(r => r.thumbnail === undefined)).toBe(true);
+  });
+});
+
+describe('SerpAPI geo-targeting', () => {
+  const requestUrl = (call = 0) => new URL(String(fetchMock.mock.calls[call][0]));
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+  });
+
+  it('targets the US on an ordinary organic and image search', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [], images_results: [] }));
+    const provider = createSerpApiProvider(adapters);
+
+    await provider.search('q', 3);
+    await provider.searchImages!('q');
+
+    for (const call of [0, 1]) {
+      expect(requestUrl(call).searchParams.get('location')).toBe('United States');
+      expect(requestUrl(call).searchParams.get('gl')).toBe('us');
+    }
+  });
+
+  it('sends a query that names its own place unchanged and untargeted', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [], images_results: [] }));
+    const provider = createSerpApiProvider(adapters);
+    const query = 'best coffee shops near Shibuya Crossing Tokyo';
+
+    await provider.search(query, 3, { locationInQuery: true });
+    await provider.searchImages!(query, undefined, { locationInQuery: true });
+
+    for (const call of [0, 1]) {
+      const params = requestUrl(call).searchParams;
+      expect(params.get('q')).toBe(query);
+      expect(params.has('location')).toBe(false);
+      expect(params.has('gl')).toBe(false);
+    }
+  });
+
+  it('keeps a recency filter alongside an untargeted place query', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'q', 3, { locationInQuery: true, recencyDays: 7 });
+
+    expect(requestUrl().searchParams.get('tbs')).toBe('qdr:w');
+    expect(requestUrl().searchParams.has('gl')).toBe(false);
   });
 });
 
@@ -653,6 +700,37 @@ describe('web_search time budget', () => {
     await expect(pending).resolves.toEqual([]);
   });
 
+  it('throws an explicit timeout from a hung SearXNG search when asked to, so failover can fire', async () => {
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(
+      createSearxngProvider('http://searxng:8080').search('q', 3, { throwOnError: true })
+    ).rejects.toThrow('Web search timed out: SearXNG did not respond within 10s');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await pending;
+  });
+
+  it('throws on a SearXNG HTTP error only when asked to', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 502));
+    const provider = createSearxngProvider('http://searxng:8080');
+
+    await expect(provider.search('q', 3)).resolves.toEqual([]);
+    await expect(provider.search('q', 3, { throwOnError: true })).rejects.toThrow('SearXNG error: HTTP 502');
+  });
+
+  // The failover path (SearXNG timeout, then SerpAPI) must fit the same budget as SerpAPI alone.
+  it('bounds the SerpAPI fallback to a single attempt with no retry delay', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(serpApiSearch(adapters, 'q', 3, { maxAttempts: 1 })).rejects.toThrow('tried 1 times');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('fails a hung organic SerpAPI search by 20.5s, still inside the Lambda', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     fetchMock.mockImplementation(neverSettlingFetch());
@@ -661,5 +739,39 @@ describe('web_search time budget', () => {
     await vi.advanceTimersByTimeAsync(20_500);
 
     await pending;
+  });
+});
+
+describe('resolveWebSearchProviders lead and backup', () => {
+  it.each([
+    ['auto' as const, ['searxng', 'serpapi']],
+    ['serpapi' as const, ['serpapi', 'searxng']],
+    ['searxng' as const, ['searxng', 'serpapi']],
+  ])('under %s with both configured, leads with the choice and backs it up with the other', async (choice, order) => {
+    mockGetProvider.mockResolvedValue(choice);
+    mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup?.name]).toEqual(order);
+  });
+
+  it('has no backup when only the lead is configured', async () => {
+    mockGetProvider.mockResolvedValue('serpapi');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup]).toEqual(['serpapi', null]);
+  });
+
+  it('does not substitute the other provider when the explicit choice is unconfigured', async () => {
+    mockGetProvider.mockResolvedValue('searxng');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    await expect(resolveWebSearchProviders(adapters)).resolves.toEqual([null, null]);
   });
 });

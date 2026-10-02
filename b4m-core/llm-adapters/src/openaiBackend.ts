@@ -41,6 +41,7 @@ import {
   getLatestToolCallIdOpenAI,
 } from './backend';
 import {
+  declaredArtifactType,
   handleToolResultStreaming,
   createRecursiveArtifactGuard,
   stripUnstreamedToolResult,
@@ -873,6 +874,37 @@ export class OpenAIBackend implements ICompletionBackend {
         releaseDate: '2026-04-21',
       },
       {
+        id: ImageModels.GPT_IMAGE_2_5_SUNBURST,
+        type: 'image',
+        name: 'GPT-Image-2.5 Sunburst',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 8 / 1000000, output: 30 / 1000000 }, // Same token rates as GPT-Image-2
+        },
+        description:
+          "OpenAI GPT-Image-2.5 Sunburst - OpenAI's most capable image generation and editing model, best where editing precision matters most.",
+        rank: 6,
+        releaseDate: '2026-09-08',
+      },
+      {
+        id: ImageModels.GPT_IMAGE_2_5_FLARE,
+        type: 'image',
+        name: 'GPT-Image-2.5 Flare',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 8 / 1000000, output: 30 / 1000000 }, // Same token rates as GPT-Image-2
+        },
+        description: 'OpenAI GPT-Image-2.5 Flare - Fast, high-quality everyday image generation and editing.',
+        rank: 7,
+        releaseDate: '2026-09-08',
+      },
+      {
         id: ImageModels.GPT_IMAGE_1_MINI,
         type: 'image',
         name: 'GPT-Image-1 Mini',
@@ -1358,16 +1390,21 @@ export class OpenAIBackend implements ICompletionBackend {
               let thisToolHadArtifact = false;
 
               // Stream artifact-generating tool results immediately to the client.
-              await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                thisToolHadArtifact = true;
-                if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-                await artifactGuard.emitArtifact(results, {
-                  inputTokens: 0,
-                  outputTokens: 0,
-                  toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
-                  ...artifactInfo,
-                });
-              });
+              await handleToolResultStreaming(
+                outcome.name,
+                outcome.result,
+                async (results, artifactInfo) => {
+                  thisToolHadArtifact = true;
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                  await artifactGuard.emitArtifact(results, {
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                    ...artifactInfo,
+                  });
+                },
+                declaredArtifactType(options.tools, outcome.name)
+              );
 
               // GPT tends to echo raw <artifact> markup verbatim, and the reply parser would render
               // the echo: strip it from every tool result, not only the ones that streamed.
@@ -1725,20 +1762,25 @@ export class OpenAIBackend implements ICompletionBackend {
           // Emit accum + this turn's tokens - same shape as the per-chunk emit
           // above so wrappedOnChunk's cumulative running total isn't reset by
           // a smaller this-turn-only value.
-          await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-            thisToolHadArtifact = true;
-            if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-            await artifactGuard.emitArtifact(results, {
-              ...splitCacheInclusiveInput(
-                accumInputTokens + inputTokens,
-                accumCacheReadTokens + cachedTokensFromStream
-              ),
-              outputTokens: accumOutputTokens + outputTokens,
-              toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
-              cacheStats,
-              ...artifactInfo,
-            });
-          });
+          await handleToolResultStreaming(
+            outcome.name,
+            outcome.result,
+            async (results, artifactInfo) => {
+              thisToolHadArtifact = true;
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, {
+                ...splitCacheInclusiveInput(
+                  accumInputTokens + inputTokens,
+                  accumCacheReadTokens + cachedTokensFromStream
+                ),
+                outputTokens: accumOutputTokens + outputTokens,
+                toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                cacheStats,
+                ...artifactInfo,
+              });
+            },
+            declaredArtifactType(options.tools, outcome.name)
+          );
 
           // Same echo guard as the streaming path above.
           const sanitizedResult = stripToolArtifactMarkup(
@@ -2191,7 +2233,7 @@ export class OpenAIBackend implements ICompletionBackend {
       const r = resolved[i];
       if (outcome.ok) {
         const rawResult = outcome.result.result.toString();
-        const delivered = hasDeliverablePinnedArtifact(r.name, rawResult);
+        const delivered = hasDeliverablePinnedArtifact(r.name, rawResult, declaredArtifactType(options.tools, r.name));
         if (delivered) {
           if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
           artifactGuard.markDelivered(rawResult);

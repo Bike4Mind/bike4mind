@@ -33,7 +33,8 @@ import {
   XAI_IMAGE_MODELS,
   GEMINI_IMAGE_MODELS,
   isGPTImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
+  clampImageQualityForModel,
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
@@ -78,6 +79,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
+import { recordGeneratedImages } from './recordGeneratedImages';
 import { fromZodError } from 'zod-validation-error';
 import {
   OMITTED_QUALITY_TIER,
@@ -112,7 +114,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
   if (!isGPTImageModel(model)) return quality;
   if (!quality) return OMITTED_QUALITY_TIER;
-  return quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+  return clampImageQualityForModel(model, quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality);
 }
 
 export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
@@ -142,6 +144,8 @@ interface IImageGenerationServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -270,7 +274,7 @@ export class ImageGenerationService {
     // drops the field rather than erroring). Resolved before billing so credits/promptMeta
     // key off the model actually used.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
     const session = await this.db.sessions.findById(sessionId);
@@ -362,19 +366,30 @@ export class ImageGenerationService {
       quest.images = [];
       quest.replies = [];
       quest.status = undefined;
+      // A failed run leaves `type: 'error'`, and the success path never resets it, so a successful
+      // retry would still tell pollers and the callback to discard the render.
+      quest.type = 'message';
+      quest.errorCode = undefined;
       quest.promptMeta = promptMeta;
 
       if (promptEnhancement) {
         quest.promptEnhancement = promptEnhancement;
       }
 
-      await this.db.quests.update({
-        id: quest.id,
-        images: quest.images,
-        replies: quest.replies,
-        promptMeta: quest.promptMeta,
-        promptEnhancement: quest.promptEnhancement,
-      });
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once, and a stale errorCode
+      // would outlive a successful retry. Unset both explicitly (mirrors ChatCompletionInvoke).
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          type: quest.type,
+          promptMeta: quest.promptMeta,
+          promptEnhancement: quest.promptEnhancement,
+        },
+        { unset: ['status', 'errorCode'] }
+      );
     } else {
       // Persist the user's literal prompt on the quest so the chat bubble shows what they actually
       // typed. The body's `prompt` carries the resolver's rewritten version (used by `process()` for
@@ -439,10 +454,13 @@ export class ImageGenerationService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     Logger.globalInstance.log(`[DEBUG INVOKE] Returning quest:`, {
@@ -1487,6 +1505,8 @@ export class ImageGenerationService {
         creditsUsed: quest.creditsUsed,
       });
 
+      await recordGeneratedImages(this.db.sessions, sessionId, imagePaths.length, logger);
+
       if (this.invokeSessionAutoNaming) {
         await this.invokeSessionAutoNaming(sessionId, userId);
       }
@@ -1540,8 +1560,10 @@ export class ImageGenerationService {
           }
         );
 
-        // Dual-write usage event: analytics only, never billing.
-        this.db.usageEvents
+        // Dual-write usage event: analytics only, never billing. Awaited because a write still in
+        // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
+        // from failing the request.
+        await this.db.usageEvents
           ?.record({
             requestId: questId,
             userId,

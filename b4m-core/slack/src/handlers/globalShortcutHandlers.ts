@@ -631,9 +631,14 @@ export async function handleCreateNotebookSubmission(
     const ability = defineAbilitiesForCreate(dbUser);
 
     // Create the notebook
-    const session = await (sessionManager as any).createSession(userId, { name: finalName }, ability, {
-      setLastNotebook: true,
-    });
+    const session = await (sessionManager as any).createSession(
+      userId,
+      { name: finalName, origin: { channel: 'slack' } },
+      ability,
+      {
+        setLastNotebook: true,
+      }
+    );
 
     logger.info('[Slack Shortcut] Created notebook from shortcut', {
       userId,
@@ -897,7 +902,7 @@ async function processQuickAskInDM(
     if (!sessionId) {
       const session = await (smQuick as any).createSession(
         b4mUserId,
-        { name: `Slack Chat ${new Date().toLocaleDateString()}` },
+        { name: `Slack Chat ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
         ability,
         { setLastNotebook: true }
       );
@@ -912,7 +917,7 @@ async function processQuickAskInDM(
       if (!existingSession || existingSession.deletedAt) {
         const session = await (smQuick as any).createSession(
           b4mUserId,
-          { name: `Slack Chat ${new Date().toLocaleDateString()}` },
+          { name: `Slack Chat ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
           ability,
           { setLastNotebook: true }
         );

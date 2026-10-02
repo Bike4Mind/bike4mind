@@ -172,7 +172,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — storage adapter consumed by NotebookCurationService.storeFile, which calls the already-gated fabFileService.createFabFile with a converter-produced mimeType that is always markdown/txt/html, never an image',
   'apps/workers/src/events/sessionSummarization.ts':
     'text-only mime (session summary is always SupportedFabFileMimeTypes.TXT_PLAIN) — DI passthrough to already-gated fabFileService.update/create',
-  'apps/client/server/emailIngestion/emailParser.ts':
+  'apps/workers/src/emailIngestion/emailParser.ts':
     'DI passthrough — storage adapter consumed by the email-ingestion pipeline (processAttachments/processEmailBody), which creates FabFiles via the already-gated fabFileService.create',
   'apps/client/server/queueHandlers/slackQuestProcessor.ts':
     'DI passthrough — raw storage object handed to ChatCompletionProcess/LLM tool implementations that already gate on isImageServeable before touching it (imageEdit/editFile); the imageGenerateStorage.download call is the generated-images bucket, not fabFileBucket',

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS } from '../create';
-import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
+import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS, API_KEY_USER_CAP_ERROR_CODE } from '../create';
+import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -91,11 +91,21 @@ describe('createUserApiKey — overwatch ingest scope', () => {
     ).resolves.toBeDefined();
   });
 
-  it('rogue-admin scenario: non-system user hits 10-key cap', async () => {
+  it('rogue-admin scenario: non-system user hits 10-key cap, tagged with a stable code', async () => {
     repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(10) });
-    await expect(
-      createUserApiKey('admin-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' })
-    ).rejects.toThrow('Maximum 10 active API keys allowed per user');
+    const error = await createUserApiKey('admin-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    }).then(
+      () => null,
+      (err: unknown) => err
+    );
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect((error as BadRequestError).message).toBe('Maximum 10 active API keys allowed per user');
+    // The tag is the contract the OAuth ai-token route matches on; the message is not.
+    expect((error as BadRequestError).additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
+    expect(repo.create).not.toHaveBeenCalled();
   });
 
   it('stores createdByUserId in metadata', async () => {
@@ -108,6 +118,43 @@ describe('createUserApiKey — overwatch ingest scope', () => {
   it('sets status ACTIVE on creation', async () => {
     await createUserApiKey('sys-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' });
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ status: ApiKeyStatus.ACTIVE }));
+  });
+});
+
+describe('createUserApiKey - callback signing secret', () => {
+  let repo: ReturnType<typeof makeRepo>;
+
+  beforeEach(() => {
+    repo = makeRepo();
+  });
+
+  it('returns a plaintext callbackSigningSecret prefixed whsec_', async () => {
+    const result = await createUserApiKey('sys-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    });
+    expect(result.callbackSigningSecret).toMatch(/^whsec_/);
+  });
+
+  it('persists a callbackSigningSecretCreatedAt on the created document', async () => {
+    await createUserApiKey('sys-1', baseParams, { db: { userApiKeys: repo as any }, systemUserId: 'sys-1' });
+    const [document] = repo.create.mock.calls[0];
+    expect(document.callbackSigningSecretCreatedAt).toBeInstanceOf(Date);
+  });
+
+  // encryptAtRest (b4m-core/utils/src/security/secretsAtRest.ts) degrades to a
+  // pass-through when no SECRET_ENCRYPTION_KEY is configured, which is the case in
+  // this test environment - so the persisted field is not guaranteed to differ from
+  // the plaintext here. We only pin that the document carries *some* string field
+  // for it, not its ciphertext shape (that belongs to secretsAtRest's own tests).
+  it('passes a callbackSigningSecret string through to the persisted document', async () => {
+    const result = await createUserApiKey('sys-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    });
+    const [document] = repo.create.mock.calls[0];
+    expect(typeof document.callbackSigningSecret).toBe('string');
+    expect(result.callbackSigningSecret).toMatch(/^whsec_/);
   });
 });
 

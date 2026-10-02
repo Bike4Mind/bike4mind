@@ -73,8 +73,8 @@ export const getFileContract = defineEndpoint({
     '`POST /api/v1/files`) and the way to fetch any file id another endpoint hands back. ' +
     '`download_url` is `null` until `moderation_status` is `clean`; ' +
     'it expires at `download_url_expires_at`, so re-read this endpoint rather than storing it. ' +
-    'Safe (GET) requests are exempt from the per-day API-key quota so polling costs one daily ' +
-    'slot; the per-minute burst limit still applies. Authenticate with an API key (`b4m_live_`) ' +
+    'Safe (GET) requests are exempt from the per-day API-key quota: a poll consumes no daily ' +
+    'slot, and only the per-minute burst limit applies. Authenticate with an API key (`b4m_live_`) ' +
     'carrying `files:read`, or a JWT.',
   tags: ['Files'],
   auth: 'apiKeyOrJwt',

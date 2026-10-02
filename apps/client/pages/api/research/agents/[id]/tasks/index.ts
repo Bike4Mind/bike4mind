@@ -8,7 +8,7 @@ import {
   researchDataRepository,
   taskScheduleRepository,
 } from '@bike4mind/database';
-import { researchTaskJobs } from '@server/jobs/researchTasks';
+import { researchTaskJobs } from '@server/utils/researchTasks';
 import { ResearchTaskType, ResearchTaskExecutionType } from '@bike4mind/common';
 import * as z from 'zod';
 

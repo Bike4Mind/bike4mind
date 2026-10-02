@@ -326,6 +326,37 @@ describe('ImageGenerationModelSelectionModal - Quality select', () => {
     expect(mockSetLLM).toHaveBeenCalledWith({ quality: 'low' });
   });
 
+  it('offers and keeps xhigh/max on a gpt-image-2.5 model', async () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2_5_SUNBURST;
+    mockQuality = 'max';
+
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(qualityWrites()).toEqual([]);
+    expect(getByTestId('image-setting-quality-select').textContent).toBe('Max');
+  });
+
+  it('steps a max carried over to gpt-image-2 down to high, not the default', async () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'max';
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(mockSetLLM).toHaveBeenCalledWith({ quality: 'high' });
+  });
+
   it('does not touch quality while the dialog is closed', async () => {
     // ToolsSection mounts this component unconditionally, so a closed dialog must not
     // write to the shared LLM store - AdvancedAIModal edits the same field.

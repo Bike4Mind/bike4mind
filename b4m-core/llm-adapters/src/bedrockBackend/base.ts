@@ -22,7 +22,7 @@ import {
   ICompletionResponseChunk,
 } from '../backend';
 import { getCachingAdapter } from '../caching/adapters';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from '../toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard, declaredArtifactType } from '../toolStreamingHelper';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from '../responseFormatHelpers';
 import {
   BedrockRuntimeClient,
@@ -549,8 +549,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // If there is a tool being used, then
         // callback the complete function with the tool messages included
         if (func.some(f => f.name)) {
+          // func is indexed by provider choice index, so any index never referenced (e.g. a tool at
+          // index 2 with nothing below it) is a hole that for...of yields as undefined; filter() skips them.
+          const toolCalls = func.filter(Boolean);
+
           // Track all tool usage first (including ID for history reconstruction, allow empty parameters)
-          for await (const tool of func) {
+          for (const tool of toolCalls) {
             const { id, name, parameters } = tool;
             if (name) {
               toolsUsed.push({ name, arguments: parameters || '{}', id });
@@ -559,7 +563,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
           // Check if we should execute tools or just report them
           if (options.executeTools !== false) {
-            // Resolve all executable tools from the func array
+            // Resolve all executable tools from the tool calls
             type ResolvedTool = {
               id: string;
               name: string;
@@ -568,7 +572,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               toolFn: (params: Record<string, unknown>) => Promise<{ toString(): string }>;
             };
             const resolvedTools: ResolvedTool[] = [];
-            for (const tool of func) {
+            for (const tool of toolCalls) {
               const { id, name } = tool;
               if (!id || !name) continue;
               const parameters = tool.parameters || '{}';
@@ -648,11 +652,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  thisToolHadArtifact = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-                  await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
-                });
+                await handleToolResultStreaming(
+                  outcome.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
+                  },
+                  declaredArtifactType(options.tools, outcome.name)
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that
                 // streamed, so the model never sees markup it could echo into its reply.
@@ -810,11 +819,16 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(name, result, async (results, artifactInfo) => {
-                  thisToolHadArtifact = true;
-                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
-                  await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
-                });
+                await handleToolResultStreaming(
+                  name,
+                  result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
+                  },
+                  declaredArtifactType(options.tools, name)
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that
                 // streamed, so the model never sees markup it could echo into its reply.

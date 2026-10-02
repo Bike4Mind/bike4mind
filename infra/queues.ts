@@ -12,7 +12,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId, appUrlForLambdaEnv } from './router';
+import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -101,9 +101,10 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
 // SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
 const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
 const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
-  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge is not
-  // sliced like driveDisconnectPurge, but a run cut off by the timeout resumes on the next receive:
-  // the connection stays disabled and the purge re-finds only the files still left.
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge runs in
+  // slices that re-enqueue (REVOKE_PURGE_SLICE_SIZE, githubLakeConnection.ts), and a run cut off by
+  // the timeout still resumes on the next receive: the connection stays disabled and the purge
+  // re-finds only the files still left.
   visibilityTimeout: '12 minutes',
   dlq: {
     queue: githubLakeRevokeQueueDLQ.arn,
@@ -284,6 +285,59 @@ const fabFileBucketNotification = fabFileBucket.notify({
   ],
 });
 
+// Generation Callback Queue - declared before the image/video generation queues below because
+// their subscriptions (and the quest-timeout sweep cron) need to link it too: each enqueues a
+// signed HTTPS completion callback here after a job settles, for delivery to API-key callers.
+const generationCallbackQueueDLQ = new sst.aws.Queue('generationCallbackQueueDLQ', {
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs', // Encrypt payloads (carries the caller's callback URL)
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const generationCallbackQueue = new sst.aws.Queue('generationCallbackQueue', {
+  visibilityTimeout: '2 minutes', // 30s Lambda timeout + safety margin for retries
+  dlq: {
+    queue: generationCallbackQueueDLQ.arn,
+    retry: 5, // Industry standard: 5 retries with exponential backoff
+  },
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs', // Encrypt payloads (carries the caller's callback URL)
+    },
+  },
+});
+const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/generationCallback.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '1 week', // Extended retention for delivery debugging
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // The callback body mirrors GET /api/quests/{id}, whose `files[].url` needs the CDN base.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          reserved: 10,
+        }
+      : undefined,
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Image Generation Queue
 const imageGenerationDLQ = new sst.aws.Queue('imageGenerationDLQ', {});
 const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
@@ -299,7 +353,16 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor, eventBus],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      imageProcessor,
+      eventBus,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -341,7 +404,15 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      imageProcessor,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -728,6 +799,8 @@ const questExportQueueSubscription = questExportQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Recognizes `<cdnUrl>/generated/<key>` image URLs embedded in exported plans.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     },
     permissions: [
       {
@@ -756,7 +829,9 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, fabFileBucket],
+    // githubLakeRevokeQueue: releasing a lake's GitHub connection hands a failed post-release uninstall
+    // to it (releaseGitHubLakeConnection, githubLakeConnection.ts).
+    link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
       retention: '3 days',
     },
@@ -936,9 +1011,9 @@ const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    // fabFileBucket only: unlike githubLakeIngestQueue, this handler never re-enqueues itself, so it
-    // does not link its own queue.
-    link: [...allSecrets, fabFileBucket],
+    // Links its own queue: the handler re-enqueues for each remaining purge slice, and its release
+    // hands a failed post-release uninstall back to this queue (githubLakeConnection.ts).
+    link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
       retention: '3 days',
     },
@@ -1028,7 +1103,15 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '15 minutes', // Max Lambda timeout (900 seconds)
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, eventBus],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      eventBus,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -1063,7 +1146,7 @@ const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
 });
 const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
   {
-    handler: 'apps/client/server/cron/liveopsTriageWorker.handler',
+    handler: 'apps/workers/src/cron/liveopsTriageWorker.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
@@ -1112,7 +1195,7 @@ const secopsTriageQueue = new sst.aws.Queue('secopsTriageQueue', {
 
 const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
   {
-    handler: 'apps/client/server/cron/secopsTriageWorker.handler',
+    handler: 'apps/workers/src/cron/secopsTriageWorker.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
@@ -1564,6 +1647,7 @@ export {
   // Queues
   fabFileChunkQueue,
   fabFileVectorizeQueue,
+  generationCallbackQueue,
   imageGenerationQueue,
   imageEditQueue,
   videoGenerationQueue,
@@ -1598,6 +1682,7 @@ export {
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
   fabFileModerationDLQ,
+  generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
@@ -1633,6 +1718,7 @@ export {
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
   imageGenerationQueueSubscription,
   imageEditQueueSubscription,
   videoGenerationQueueSubscription,

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "6.3.0",
+  "version": "6.4.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -178,12 +178,12 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
-    "axios": "1.18.0",
+    "axios": "1.20.0",
     "cheerio": "1.2.0",
     "csv-parse": "^7.0.2",
     "dayjs": "^1.11.23",
     "file-type": "^22.1.0",
-    "image-size": "^1.2.1",
+    "image-size": "^2.0.3",
     "jimp": "^1.6.1",
     "jszip": "^3.10.2",
     "lodash": "^4.18.1",

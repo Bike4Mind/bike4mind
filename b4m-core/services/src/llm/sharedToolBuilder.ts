@@ -9,7 +9,7 @@
 import {
   parseToolArtifactAttributes,
   scanArtifactTags,
-  TOOL_ARTIFACT_EMITTERS,
+  resolveToolArtifactType,
   type IChatHistoryItemDocument,
   type ModelInfo,
 } from '@bike4mind/common';
@@ -48,6 +48,8 @@ export interface ToolBuilderDeps {
   entitlementKeys?: string[];
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
+  /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
+  apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
@@ -333,6 +335,7 @@ export function buildSharedTools(
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
     organizationId,
+    apiKeyId,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -354,6 +357,7 @@ export function buildSharedTools(
       sessionLakeScopeExplicit,
       sessionPreauthorizedLakeIds,
       organizationId,
+      apiKeyId,
       questId: callbacks.questId,
       getAbortSignal,
     },
@@ -454,7 +458,8 @@ export function buildSharedTools(
     const isAgentOnly = agentOnlyMcpServers.includes(serverName);
 
     for (const item of serverTools) {
-      const { name, toolFn: originalToolFn, ...rest } = item;
+      // artifactType is dropped: an MCP server is untrusted output and must not unlock artifact markup.
+      const { name, toolFn: originalToolFn, artifactType: _ignored, ...rest } = item;
       // Denied by name, not by server: a session may forbid one tool of a server it otherwise
       // uses. `name` is already the namespaced `server__tool` id, which is the id the denylist
       // speaks and the one the model would have seen.
@@ -637,6 +642,7 @@ function wrapToolsForSentinels(
   for (let i = 0; i < tools.length; i++) {
     const originalToolFn = tools[i].toolFn;
     const toolName = tools[i].toolSchema?.name || `tool-${i}`;
+    const allowedArtifactType = resolveToolArtifactType(toolName, tools[i].artifactType);
     tools[i] = {
       ...tools[i],
       toolFn: async (args: unknown) => {
@@ -671,7 +677,6 @@ function wrapToolsForSentinels(
         }
 
         // Extract artifacts from tool results
-        const allowedArtifactType = TOOL_ARTIFACT_EMITTERS.get(toolName);
         if (
           callbacks.onArtifactExtracted &&
           allowedArtifactType !== undefined &&

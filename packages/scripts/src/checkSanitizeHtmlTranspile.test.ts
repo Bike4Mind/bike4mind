@@ -11,6 +11,8 @@ import path from 'node:path';
  * load and Next serves a 500 before auth middleware runs. Vitest resolves through node rather
  * than Turbopack, so tests importing the real sanitizer pass on the broken build too -- hence a
  * declaration-site pin. Importers come from git grep so a third one is covered without an edit.
+ * The built-artifact counterpart is apps/client/scripts/check-api-routes-cjs-require.mjs, which
+ * loads the compiled routes; the htmlparser2 override at root package.json is its backstop.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CONFIG_PATH = path.join(REPO_ROOT, 'apps/client/next.config.mjs');

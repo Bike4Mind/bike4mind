@@ -57,6 +57,7 @@ import {
 } from '@bike4mind/common';
 import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
+import { gateWriteWidensReadership } from '@bike4mind/services/lakeGateWideningRule';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
 import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
@@ -149,6 +150,8 @@ export interface EditableLake {
    * Origin, Required passage size).
    */
   canManage: boolean;
+  /** Owner per isEffectiveOwner, server-computed (see ManageableDataLakeConfig.isOwn). Gates who may widen sharing. */
+  isOwn: boolean;
   /**
    * Lifetime embedding-spend meter, ALWAYS present (defaulted to 0) when canManage - its
    * presence, not its value, is the signal that gates the Spend tab (see
@@ -182,6 +185,9 @@ const formSeed = (lake: EditableLake) => ({
  * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
  * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
+
+const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
+
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
   const setVisibility = useSetLakeVisibility();
@@ -258,11 +264,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       ? 'settings'
       : tab;
   const showTabs = showSpendTab || showHistoryTab || showProposalsTab || showResearchTab;
-  // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
-  // them means a future narrow read-only tab silently gets a Save button it must not have.
-  // Every non-settings panel is tabular and needs the room; the settings form does not.
-  const isWideTab =
-    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
+  const dialogWidth = showTabs ? '44rem' : '28rem';
   // Research saves through its own per-configuration buttons, so the modal's Save must stay away
   // from it - it would submit the lake settings form the user is not looking at.
   const isReadOnlyTab =
@@ -406,8 +408,18 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       parsedTarget < MIN_PASSAGE_TOKEN_TARGET ||
       parsedTarget > OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
 
+  // Mirrors the server rule in updateDataLake: a non-owner may narrow a gate but not widen readership.
+  const widensAsNonOwner =
+    !!lake &&
+    !lake.isOwn &&
+    gateWriteWidensReadership(lake, {
+      requiredUserTag: requiredUserTag.trim(),
+      requiredEntitlement: requiredEntitlement.trim(),
+    });
+
   const handleSave = () => {
     if (!lake) return;
+    if (widensAsNonOwner) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
     if (targetInvalid) return;
@@ -514,7 +526,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session. Users given read-only access by tag, entitlement, or a reader grant don't get them unless you turn on "Apply to readers" below. They never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag or entitlement don't get them unless you turn on "Apply to readers". Users with only a reader grant never get them. Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
@@ -687,17 +699,32 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           }}
           data-testid="datalake-settings-visibility"
         >
-          <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+          {/* Non-owner rules must stay in sync with setLakeVisibility's owner-only checks (b4m-core/services). */}
+          <Radio
+            value="private"
+            label="Private"
+            disabled={
+              setVisibility.isPending || (!lake?.isOwn && visibility !== 'private' && !!lake?.organizationId && hasGate)
+            }
+          />
           <Radio
             value="organization"
             label="Organization"
-            disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+            disabled={
+              setVisibility.isPending ||
+              (!canShareToOrg && visibility !== 'organization') ||
+              (!lake?.isOwn && visibility !== 'organization')
+            }
             data-testid="datalake-settings-visibility-org"
           />
           <Radio
             value="public"
             label="Public"
-            disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+            disabled={
+              setVisibility.isPending ||
+              (hasGate && visibility !== 'public') ||
+              (!lake?.isOwn && visibility !== 'public')
+            }
             data-testid="datalake-settings-visibility-public"
           />
         </RadioGroup>
@@ -714,6 +741,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
+        {lake && !lake.isOwn && (
+          <FormHelperText data-testid="datalake-settings-visibility-owner-only">{ownerOnlyMsg}</FormHelperText>
+        )}
       </FormControl>
       <FormControl>
         <FormLabel>Access tag</FormLabel>
@@ -743,6 +773,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             : 'Namespaced key (e.g. \u201Cproduct:pro\u201D). Leave blank for no entitlement gate.'}
         </FormHelperText>
       </FormControl>
+      {widensAsNonOwner && (
+        <FormHelperText sx={{ color: 'danger.plainColor' }} data-testid="datalake-settings-gate-owner-only">
+          {ownerOnlyMsg}
+        </FormHelperText>
+      )}
     </Stack>
   );
 
@@ -758,8 +793,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         <ModalDialog
           data-testid="datalake-settings-modal"
           sx={{
-            width: { xs: '95%', sm: isWideTab ? '44rem' : '28rem' },
-            maxWidth: isWideTab ? '44rem' : '28rem',
+            width: { xs: '95%', sm: dialogWidth },
+            maxWidth: dialogWidth,
           }}
         >
           <ModalClose aria-label="Close data lake settings" data-testid="datalake-settings-close-btn" />
@@ -897,7 +932,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 variant="solid"
                 color="primary"
                 loading={updateLake.isPending}
-                disabled={!name.trim() || targetInvalid}
+                disabled={!name.trim() || targetInvalid || widensAsNonOwner}
                 onClick={handleSave}
                 data-testid="datalake-settings-save-btn"
               >

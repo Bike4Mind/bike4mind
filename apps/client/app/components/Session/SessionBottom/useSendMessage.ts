@@ -67,7 +67,7 @@ import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
 import { CommandKey, extractCommandAndParams, handleCommand, isImageModel } from '@client/app/utils/commands';
 import { validateChatInput } from '@client/app/utils/validateChatInput';
 import { recordSessionActivity } from '@client/app/utils/sessionActivityCleanup';
-import { updateAllQueryData } from '@client/app/utils/react-query';
+import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 import { generateNewSession, stopChatMessage } from '@client/app/utils/sessionsAPICalls';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAISettings';
@@ -914,9 +914,7 @@ export function useSendMessage({
           // minimum viable equivalent. `keysAllowedToCreate` mirrors the hook
           // so the entry lands on the sidebar's `['sessions', 'own']` infinite
           // query without disturbing other session lists (shared, projects).
-          updateAllQueryData(queryClient, 'sessions', 'write', realSession, {
-            keysAllowedToCreate: [['sessions', 'own']],
-          });
+          updateSessionsQueryData(queryClient, 'write', realSession);
           // Match the invalidation set in `useGenerateNewSession.onSuccess`
           // (sessions.ts:643-651) so a session created via the agent_execute
           // flow refreshes the project view + activity feed identically to

@@ -9,7 +9,7 @@ import {
   CompareArrowsRounded as ConflictIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
@@ -74,26 +74,56 @@ const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, strin
   return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
 };
 
+/**
+ * Label (and optional full-list tooltip) for an internal chip's origin.
+ *
+ * Falls back to DATA_LAKE because legacy chips and agent-scoped chips carry no `sourceOrigin`.
+ * Labels are deliberately not viewer-relative: `owned` is relative to the conversation owner whose
+ * retrieval made the chip, and share viewers see the same chip.
+ *
+ * `metadata` is an open bag read from stored docs, so the origin is narrowed from `unknown` and a
+ * malformed value falls back rather than throwing inside the reply.
+ */
+const internalLabelOf = (source: CitableSource): { label: string; title?: string } => {
+  const origin: unknown = source.metadata?.sourceOrigin;
+  if (typeof origin === 'object' && origin !== null) {
+    const { kind, lakes, owned } = origin as Record<string, unknown>;
+    if (kind === 'lake' && Array.isArray(lakes)) {
+      const names = lakes.flatMap((lake: unknown) => {
+        const name = typeof lake === 'object' && lake !== null ? (lake as Record<string, unknown>).name : undefined;
+        return typeof name === 'string' && name ? [name] : [];
+      });
+      if (names.length === 1) return { label: names[0] };
+      if (names.length > 1) return { label: `${names[0]} +${names.length - 1}`, title: names.join(', ') };
+    } else if (kind === 'library' && typeof owned === 'boolean') {
+      return { label: owned ? PERSONAL_LIBRARY : SHARED_LIBRARY };
+    }
+  }
+  return { label: DATA_LAKE };
+};
+
 const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
   source,
   conflictingTitles,
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
-  // Opt-in host override: when a surface provides onCitationClick (e.g. the
-  // LibreOncology source drawer), the click is handled in-surface instead of
-  // navigating. Default (no provider) keeps the existing navigation behavior.
-  const { onCitationClick } = useCitationInteraction();
+  // Opt-in host overrides: when a surface provides onCitationClick (any source) or
+  // onInternalCitationClick (relative URLs only), the click is handled in-surface instead of
+  // navigating. onCitationClick wins when both are set. Default (no provider) keeps the existing
+  // navigation behavior.
+  const { onCitationClick, onInternalCitationClick } = useCitationInteraction();
 
   // Detect internal (relative) vs external URLs
   const isInternal = !!source.url && source.url.startsWith('/');
 
   // Extract hostname for display if URL exists
   let hostname = '';
+  let hostnameTitle: string | undefined;
   let faviconUrl: string | null = null;
   if (isInternal) {
     // Show a friendly label for internal deep-links instead of the raw path
-    hostname = DATA_LAKE;
+    ({ label: hostname, title: hostnameTitle } = internalLabelOf(source));
   } else {
     try {
       if (source.url) {
@@ -115,19 +145,21 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       }
     : undefined;
 
-  const handleClick =
-    handleHostClick ??
-    (isInternal
-      ? () => {
-          // Hand the reader's destination the passage this chip cited, so the viewer can mark it
-          // instead of dropping them at the top of the document (#3038). Written on EVERY internal
-          // click, clearing on a chip that carries no passage: a leftover anchor from the previous
-          // citation would otherwise mark a stale extent in the newly-opened file.
-          setSessionLayout({ citedPassage: citedPassageOf(source) });
-          const url = new URL(source.url!, window.location.origin);
-          navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
-        }
-      : undefined);
+  const navigateToInternal = () => {
+    // Hand the reader's destination the passage this chip cited, so the viewer can mark it
+    // instead of dropping them at the top of the document (#3038). Written on EVERY internal
+    // click, clearing on a chip that carries no passage: a leftover anchor from the previous
+    // citation would otherwise mark a stale extent in the newly-opened file.
+    setSessionLayout({ citedPassage: citedPassageOf(source) });
+    const url = new URL(source.url!, window.location.origin);
+    navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
+  };
+
+  const handleInternalClick = () => {
+    if (!onInternalCitationClick?.(source)) navigateToInternal();
+  };
+
+  const handleClick = handleHostClick ?? (isInternal ? handleInternalClick : undefined);
 
   // When the host handles clicks, render as a button (no external navigation).
   const renderAsButton = isInternal || !!handleHostClick;
@@ -237,19 +269,29 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             }}
           >
             {source.title}
-            {hostname && (
+          </Typography>
+          {/* A sibling of the title, not inside it, so a long title cannot ellipsise the lake name
+              away; capped so a long lake name or hostname clips itself rather than the title. */}
+          {hostname && (
+            <Tooltip size="sm" placement="top" title={hostnameTitle}>
               <Typography
                 component="span"
                 level="body-xs"
+                data-testid={isInternal ? 'citable-source-origin-label' : undefined}
                 sx={{
                   color: 'text.tertiary',
-                  ml: 1,
+                  ml: 0.5,
+                  flexShrink: 0,
+                  maxWidth: '50%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {hostname}
               </Typography>
-            )}
-          </Typography>
+            </Tooltip>
+          )}
           {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
               default bottom lands the box on the next chip down. Note this does not clear the
               conflict case entirely - conflicts are stamped symmetrically, so the lower chip of

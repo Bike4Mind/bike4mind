@@ -44,6 +44,7 @@ export const generateTools = (
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
     organizationId,
+    apiKeyId,
     questId,
     getAbortSignal,
   }: {
@@ -58,6 +59,7 @@ export const generateTools = (
     sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];
+    apiKeyId?: ToolContext['apiKeyId'];
     questId?: ToolContext['questId'];
     getAbortSignal?: ToolContext['getAbortSignal'];
   },
@@ -109,6 +111,7 @@ export const generateTools = (
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
     organizationId,
+    apiKeyId,
     codeMinifier,
     availableModels,
     onToolLlmUsage,
@@ -116,10 +119,10 @@ export const generateTools = (
   };
 
   return Object.entries(tools).reduce(
-    (acc, [key, tool]) => ({
-      ...acc,
-      [key]: tool.implementation(context, config[key as LlmTools]),
-    }),
+    (acc, [key, tool]) => {
+      const built = tool.implementation(context, config[key as LlmTools]);
+      return { ...acc, [key]: tool.artifactType ? { ...built, artifactType: tool.artifactType } : built };
+    },
     {} as Record<LlmTools, ICompletionOptionTools>
   );
 };

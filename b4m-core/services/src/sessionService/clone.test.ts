@@ -142,6 +142,133 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ taggedAt }));
   });
 
+  // A copy made inside a product surface must stay in that surface's list, for a share holder too,
+  // as long as the caller can use that surface.
+  it.each(['caller-1', 'owner-1'])('carries the source session surface onto the clone (owner %s)', async ownerId => {
+    const { db } = makeAdapters(ownerId);
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+
+    await cloneSession(
+      'caller-1',
+      { id: 'session-1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }
+    );
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+  });
+
+  // A share holder without the workspace's entitlement could not open a copy left there.
+  it('copies into the main list when the caller cannot use the registered source workspace', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+
+    await cloneSession(
+      'caller-1',
+      { id: 'session-1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+    );
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
+  // Private surfaces are unknown here, so there is no rule to check them against: they inherit.
+  it('inherits an unregistered surface unchanged, with no access read', async () => {
+    const { db } = makeAdapters('owner-1');
+    const resolveSurfaceAccess = vi.fn(async () => ({ entitlements: [] }));
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'some-private-surface',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db, resolveSurfaceAccess });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'some-private-surface' }));
+    expect(resolveSurfaceAccess).not.toHaveBeenCalled();
+  });
+
+  describe('targetSurface', () => {
+    const OPTI_ACCESS = async () => ({ entitlements: ['optihashi:pro'] });
+    const NO_ACCESS = async () => ({ entitlements: [] });
+    const cloneFrom = (
+      surface: string | undefined,
+      targetSurface: string | null,
+      resolveSurfaceAccess?: () => Promise<{ entitlements: string[] }>
+    ) => {
+      const { db } = makeAdapters('caller-1');
+      db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+        id: 'session-1',
+        userId: 'caller-1',
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        surface,
+      });
+      return { db, run: cloneSession('caller-1', { id: 'session-1', targetSurface }, { db, resolveSurfaceAccess }) };
+    };
+
+    it('clones a main-list session into opti for an entitled caller', async () => {
+      const { db, run } = cloneFrom(undefined, 'opti', OPTI_ACCESS);
+      await run;
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+    });
+
+    it('clones an opti session into the main list', async () => {
+      const { db, run } = cloneFrom('opti', null, NO_ACCESS);
+      await run;
+      expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+    });
+
+    it('403s a destination the caller is not entitled to, copying nothing', async () => {
+      const { db, run } = cloneFrom(undefined, 'opti', NO_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+      expect(db.chatHistories.create).not.toHaveBeenCalled();
+    });
+
+    it('400s an unregistered destination', async () => {
+      const { db, run } = cloneFrom(undefined, 'some-private-surface', OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s a targeted clone out of an unregistered surface', async () => {
+      const { db, run } = cloneFrom('some-private-surface', null, OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a targeted clone when the route supplied no access resolver', async () => {
+      const { run } = cloneFrom(undefined, 'opti');
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+    });
+  });
+
+  it('leaves the clone of a main-list session without a surface', async () => {
+    const { db } = makeAdapters('caller-1');
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
   /**
    * Mirror image of the bug this field guards: a source carrying tags from before `taggedAt` existed
    * must not come out of the copy looking already-tagged, or the spider skips the tag pass it never

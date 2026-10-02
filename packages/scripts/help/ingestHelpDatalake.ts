@@ -26,7 +26,7 @@
  * Two drivers come through here, so neither can drift from the other:
  *  - `ingest-help-datalake.ts`, run by hand through `sst shell` (the bootstrap: it is what first
  *    creates the lake, and therefore what fixes the owner the scheduled driver reuses);
- *  - `apps/client/server/cron/helpDatalakeIngest.ts`, the scheduled re-sync, whose corpus arrives
+ *  - `apps/workers/src/cron/helpDatalakeIngest.ts`, the scheduled re-sync, whose corpus arrives
  *    in the Lambda bundle via copyFiles rather than from a checkout.
  */
 
@@ -200,7 +200,7 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
  * `vectorize-help-content.ts` deliberately do.
  *
  * It is also the ONLY gate on the scheduled path: that caller passes the raw `docs-site/docs`
- * tree (`apps/client/server/cron/helpDatalakeIngest.ts`, copied in by `infra/cron.ts`), which
+ * tree (`apps/workers/src/cron/helpDatalakeIngest.ts`, copied in by `infra/cron.ts`), which
  * holds `admin/` beside `features/`. The CLI caller's root is the public bundle alone, so there
  * the filter has a second layer behind it - here it has none.
  */

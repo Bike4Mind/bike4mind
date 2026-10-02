@@ -14,9 +14,20 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
 // Minimal enum surface the handler reads (avoids loading real @bike4mind/common).
+// BadRequestError is included (and constructed by the tests) so the handler's
+// `instanceof` check sees the same class identity as the rejection it inspects.
 vi.mock('@bike4mind/common', () => ({
   ApiKeyScope: { AI_GENERATE: 'ai:generate', ME_READ: 'me:read' },
   ApiKeyStatus: { ACTIVE: 'active', RATE_LIMITED: 'rate_limited', DISABLED: 'disabled', EXPIRED: 'expired' },
+  BadRequestError: class BadRequestError extends Error {
+    constructor(
+      message?: string,
+      public additionalInfo?: Record<string, unknown>
+    ) {
+      super(message);
+      this.name = 'BadRequestError';
+    }
+  },
 }));
 
 const mockTryIncrement = vi.fn();
@@ -47,6 +58,7 @@ vi.mock('@bike4mind/database/auth', () => ({
 const mockCreateUserApiKey = vi.fn();
 const mockRevokeUserApiKey = vi.fn();
 vi.mock('@bike4mind/services', () => ({
+  API_KEY_USER_CAP_ERROR_CODE: 'api_key_user_cap',
   userApiKeyService: {
     createUserApiKey: (...a: any[]) => mockCreateUserApiKey(...a),
     revokeUserApiKey: (...a: any[]) => mockRevokeUserApiKey(...a),
@@ -70,6 +82,8 @@ vi.mock('@server/auth/verifyFederatedIdToken', () => ({
 
 import handler from '../../../pages/api/oauth/ai-token';
 import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
+import { BadRequestError } from '@bike4mind/common';
+import { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
 
 const FEDERATED_CLIENT = {
   name: 'VibesWire',
@@ -184,6 +198,18 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
     expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
+  });
+
+  it('identities subjectSource (grace mode): mints successfully and logs would-reject with client_id', async () => {
+    // FEDERATED_CLIENT has no subjectSource set (undefined !== 'sub'), so the call-site
+    // grace log fires. Verify it names client_id, not the issuer URL.
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('client-1'));
+    expect((req as any).logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('cognito-idp'));
   });
 
   it('grant gate (enforce): a first-party client with no grant still mints - the gate never runs for it', async () => {
@@ -346,6 +372,44 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockRevokeUserApiKey.mock.invocationCallOrder[0]).toBeLessThan(
       mockCreateUserApiKey.mock.invocationCallOrder[0]
     );
+  });
+
+  it.each(['Maximum 10 active API keys allowed per user', 'Revoke an active key before creating another'])(
+    'maps the cap tag independently of its message: %s',
+    async message => {
+      mockCreateUserApiKey.mockRejectedValue(new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE }));
+      const { req, res } = makeReq();
+      await handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1]);
+
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData()).toEqual({
+        error: 'invalid_request',
+        error_description: message,
+      });
+      expect(mockAuditCreate).not.toHaveBeenCalled();
+      expect(req.logger.warn).toHaveBeenCalledWith(expect.stringContaining('cap reached'));
+    }
+  );
+
+  it.each([
+    new BadRequestError('Maximum 10 active API keys allowed per user'),
+    new BadRequestError('Maximum 10 active API keys allowed per user', { errorCode: 'spend_cap_exceeded' }),
+    new BadRequestError('Maximum 10 active API keys allowed per user', { code: API_KEY_USER_CAP_ERROR_CODE }),
+    Object.assign(new Error('Maximum 10 active API keys allowed per user'), {
+      additionalInfo: { errorCode: API_KEY_USER_CAP_ERROR_CODE },
+    }),
+    new BadRequestError('something else went wrong'),
+    new Error('mongo down'),
+  ])('propagates a non-cap error unchanged: %s', async error => {
+    mockCreateUserApiKey.mockRejectedValue(error);
+    const { req, res } = makeReq();
+    await expect(
+      handler(req as unknown as Parameters<typeof handler>[0], res as unknown as Parameters<typeof handler>[1])
+    ).rejects.toBe(error);
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+    // The handler's step-4 subjectSource grace warning fires on every request here, so assert
+    // only that the cap branch did not log - a blanket no-warn check is stale against it.
+    expect(req.logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('cap reached'));
   });
 
   it('AC8: per-client rate limit exceeded → 429', async () => {

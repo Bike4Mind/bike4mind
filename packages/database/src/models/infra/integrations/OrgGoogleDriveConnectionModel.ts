@@ -1,4 +1,5 @@
 import {
+  DriveConnectionOwner,
   IOrgGoogleDriveConnectionDocument,
   IOrgGoogleDriveConnectionRepository,
   IGoogleDriveConnectionHealthUpdate,
@@ -32,6 +33,18 @@ const SYNC_CLAIM_STALE_MS = 20 * 60 * 1000; // 20 min, comfortably past the 10-m
 // that reclaims automatically would be separate work, not something this bound provides.
 const CHAINED_SYNC_CLAIM_STALE_MS = 60 * 60 * 1000; // 60 min, ~5 back-to-back 12-min visibility windows
 
+// Whether a 'syncing' row's claim is still within claimForSync's staleness windows, i.e. a run could
+// plausibly still own it. A 'syncing' row failing this is wedged and only a Re-sync recovers it. The
+// two windows must stay in sync with the stale arms of claimForSync.
+export function isDriveSyncClaimLive(
+  conn: Pick<IOrgGoogleDriveConnectionDocument, 'status' | 'syncClaimedAt' | 'activeIngestBatchId'>,
+  nowMs: number = Date.now()
+): boolean {
+  if (conn.status !== 'syncing' || !conn.syncClaimedAt) return false;
+  const staleMs = conn.activeIngestBatchId ? CHAINED_SYNC_CLAIM_STALE_MS : SYNC_CLAIM_STALE_MS;
+  return nowMs - new Date(conn.syncClaimedAt).getTime() < staleMs;
+}
+
 /**
  * lastError is client-visible (a response-DTO member, no select:false) and its predictable writer is
  * `lastError: err.message` from a provider (Gaxios) failure, which can carry URLs, query strings, or
@@ -47,13 +60,16 @@ export function redactLastError(message: string): string {
  * Organization-level Google Drive connection: binds one Drive folder to one data lake as an
  * ingest source. Org-owned credential (not the per-user User.googleDrive), following the
  * OrgGitHubConnection / OrgJiraConnection pattern (org-scoped, secret excluded from default
- * reads, encrypted at rest by the service layer). See the #1587 auth-model resolution.
+ * reads, encrypted at rest by the service layer). See the #1587 auth-model resolution. A personal
+ * connection (no organizationId) feeds an org-less lake and is owned by `connectedBy` instead; it
+ * stores no credential and syncs on that user's User.googleDrive grant (see DriveConnectionOwner).
  *
  * v1 auth mode is 'oauth'; 'service_account' is reserved for a deferred cloud-only mode.
  */
 const OrgGoogleDriveConnectionSchema = new Schema<IOrgGoogleDriveConnectionDocument>(
   {
-    organizationId: { type: String, required: true },
+    // Optional: a personal connection (feeding an org-less lake) has none and is owned by connectedBy.
+    organizationId: { type: String },
     authMode: { type: String, enum: ['oauth', 'service_account'], required: true },
     // trim + match at the DB layer too: isValidDriveFolderId lives in apps/client and isn't
     // reachable from packages/database, so without this 'F' / 'F ' / ' F' would be distinct unique
@@ -135,6 +151,17 @@ OrgGoogleDriveConnectionSchema.index(
   { name: 'org_gdrive_conn_due_for_poll' }
 );
 
+/**
+ * The tenant filter for an owner-scoped accessor. A personal connection is one with no org, owned by
+ * the user who connected it; `organizationId: null` also matches the field being absent, which is how
+ * a personal row persists.
+ */
+function ownerFilter(owner: DriveConnectionOwner): Record<string, unknown> {
+  return owner.kind === 'organization'
+    ? { organizationId: owner.organizationId }
+    : { organizationId: null, connectedBy: owner.userId };
+}
+
 export interface IOrgGoogleDriveConnectionModel extends Model<IOrgGoogleDriveConnectionDocument & IMongoDocument> {}
 
 export const OrgGoogleDriveConnection: IOrgGoogleDriveConnectionModel =
@@ -171,9 +198,9 @@ class OrgGoogleDriveConnectionRepository
    */
   async findByDataLakeId(
     targetDataLakeId: string,
-    organizationId: string
+    owner: DriveConnectionOwner
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    return this.findOne({ targetDataLakeId, organizationId, enabled: true });
+    return this.findOne({ targetDataLakeId, ...ownerFilter(owner), enabled: true });
   }
 
   /**
@@ -234,23 +261,23 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * Load a connection WITH its encrypted credential, scoped to an org.
-   * SECURITY: org-scoped so it cannot hand one org's `oauthRefreshToken` to another. Decrypt
+   * Load a connection WITH its encrypted credential, scoped to its owner.
+   * SECURITY: owner-scoped so it cannot hand one tenant's `oauthRefreshToken` to another. Decrypt
    * server-side only; never expose it.
    */
   async findByIdWithCredentials(
     id: string,
-    organizationId: string
+    owner: DriveConnectionOwner
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
-    const result = await this.model.findOne({ _id: id, organizationId }).select('+oauthRefreshToken');
+    const result = await this.model.findOne({ _id: id, ...ownerFilter(owner) }).select('+oauthRefreshToken');
     return result?.toJSON() || null;
   }
 
   /**
    * (Re)write the org-owned encrypted refresh token and re-stamp `connectedBy` to the re-syncing user
-   * (the identity ingest runs as - see driveLakeIngest), org-scoped so one org can't overwrite
+   * (the identity ingest runs as - see driveLakeIngest), owner-scoped so one tenant can't overwrite
    * another's. The value must already be encrypted by the caller (crypto is not reachable from
-   * packages/database).
+   * packages/database). A null token removes the stored copy: a personal connection keeps none.
    *
    * The credential + connectedBy are written UNCONDITIONALLY, but status/lastError are healed to
    * 'connected' only from a NON-'syncing' state (pipeline `$cond`): a Re-sync issued while an ingest
@@ -268,18 +295,18 @@ class OrgGoogleDriveConnectionRepository
    */
   async updateCredential(
     id: string,
-    organizationId: string,
-    encryptedRefreshToken: string,
+    owner: DriveConnectionOwner,
+    encryptedRefreshToken: string | null,
     connectedBy: string
   ): Promise<(IOrgGoogleDriveConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
       // A pending disconnect is refused: re-enabling here would let an ingest land files after the
       // queued purge resolved its slice, and the release would then strand them.
-      { _id: id, organizationId, disconnectRequestedAt: null },
+      { _id: id, ...ownerFilter(owner), disconnectRequestedAt: null },
       [
         {
           $set: {
-            oauthRefreshToken: encryptedRefreshToken,
+            oauthRefreshToken: encryptedRefreshToken ?? '$$REMOVE',
             connectedBy,
             enabled: true,
             status: { $cond: [{ $eq: ['$status', 'syncing'] }, '$status', 'connected'] },
@@ -343,7 +370,7 @@ class OrgGoogleDriveConnectionRepository
    *
    * The staleness arm is SPLIT by whether the claim carries a chain token, because the two measure
    * different durations and stealing a live chain is far more damaging than stealing an idle claim -
-   * see CHAINED_SYNC_CLAIM_STALE_MS.
+   * see CHAINED_SYNC_CLAIM_STALE_MS. isDriveSyncClaimLive mirrors these windows; keep the two in sync.
    *
    * `enabled: { $ne: false }` closes the disconnect race: a message already on the ingest queue (a
    * poll fired just before disconnect, a manual Re-sync, or a fresh connect's first sync) could
@@ -398,9 +425,9 @@ class OrgGoogleDriveConnectionRepository
    * 'syncing', enabled flips false, and claimForSync's own guard then refuses any claim that lands
    * after) or a claim already won (status is 'syncing') and this matches nothing - never both.
    *
-   * organizationId is REQUIRED, matching its sibling mutators (`updateCredential`, `release`): the
-   * caller's own gate (verifyOrgAccess + findLakeConnection's org comparison) already stops a
-   * cross-org id from reaching here, so nothing is exploitable without it today, but a repository
+   * The owner is REQUIRED, matching its sibling mutators (`updateCredential`, `release`): the
+   * caller's own gate (authorizeLakeDriveAccess + findLakeConnection's owner comparison) already stops
+   * a cross-tenant id from reaching here, so nothing is exploitable without it today, but a repository
    * method that would otherwise disable ANY connection by id alone is the piece that turns that
    * caller-side comparison into the only thing standing between them.
    *
@@ -409,21 +436,21 @@ class OrgGoogleDriveConnectionRepository
    */
   async markDisconnecting(
     id: string,
-    organizationId: string
+    owner: DriveConnectionOwner
   ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
     const stamp = new Date();
     // Returns the PRE-update document, which is what tells a creator apart from a re-stamp.
     const previous = await this.model.findOneAndUpdate(
-      { _id: id, organizationId, status: { $ne: 'syncing' } },
+      { _id: id, ...ownerFilter(owner), status: { $ne: 'syncing' } },
       { $set: { enabled: false, disconnectRequestedAt: stamp } }
     );
     if (!previous) return null;
     return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
   }
 
-  async cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean> {
+  async cancelDisconnect(id: string, owner: DriveConnectionOwner, stamp: Date, enabled: boolean): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, organizationId, disconnectRequestedAt: stamp },
+      { _id: id, ...ownerFilter(owner), disconnectRequestedAt: stamp },
       { $set: { enabled }, $unset: { disconnectRequestedAt: '' } }
     );
     return result.matchedCount > 0;
@@ -434,9 +461,9 @@ class OrgGoogleDriveConnectionRepository
     return result.matchedCount > 0;
   }
 
-  async touchDisconnect(id: string, organizationId: string): Promise<boolean> {
+  async touchDisconnect(id: string, owner: DriveConnectionOwner): Promise<boolean> {
     const result = await this.model.updateOne(
-      { _id: id, organizationId, disconnectRequestedAt: { $ne: null } },
+      { _id: id, ...ownerFilter(owner), disconnectRequestedAt: { $ne: null } },
       { $set: { disconnectRequestedAt: new Date() } }
     );
     return result.matchedCount > 0;
@@ -562,11 +589,11 @@ class OrgGoogleDriveConnectionRepository
   }
 
   /**
-   * Delete a connection (org-scoped), releasing its global Drive-folder claim. HARD delete on purpose:
+   * Delete a connection (owner-scoped), releasing its global Drive-folder claim. HARD delete on purpose:
    * a soft-deleted/disabled row would keep the unique driveFolderId index populated and block re-claim.
    */
-  async release(id: string, organizationId: string): Promise<boolean> {
-    const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
+  async release(id: string, owner: DriveConnectionOwner): Promise<boolean> {
+    const res = await this.model.deleteMany({ _id: id, ...ownerFilter(owner) }, { hardDelete: true });
     return (res?.deletedCount ?? 0) > 0;
   }
 }

@@ -1249,6 +1249,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
     }
   ): Promise<{ tag: string; count: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -1305,6 +1307,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -1863,12 +1867,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ driveConnectionId }, datalakeTag));
   }
 
+  async findLiveNonMembersByDriveConnectionId(
+    driveConnectionId: string,
+    datalakeTag: string
+  ): Promise<IFabFileDocument[]> {
+    // No element of `tags` may name this lake: the unpick pulled exactly that meta-tag, so a row
+    // still carrying the connection's provenance but not the tag is the orphan this connection's
+    // meta-tag-scoped purge cannot see. `find` (unlike `countDocuments` above) is soft-delete
+    // plugin-filtered, so leaving deletedAt unmentioned is exactly the intent: skip reaped rows.
+    const docs = await this.fabFileModel.find({
+      driveConnectionId,
+      'tags.name': { $ne: datalakeTag },
+      status: { $ne: 'pending' },
+      archivedAt: null,
+    });
+    return docs.map(d => d.toJSON());
+  }
+
   async findByGitHubConnectionIdInDataLake(
     githubConnectionId: string,
     datalakeTag: string,
     options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]> {
     return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
+  }
+
+  async countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number> {
+    // Same includeDeleted set the disconnect purge reaches, as countByDriveConnectionIdInDataLake.
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ githubConnectionId }, datalakeTag));
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {

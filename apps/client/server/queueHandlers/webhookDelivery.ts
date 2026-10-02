@@ -14,7 +14,6 @@
  * - 10-second timeout per delivery attempt
  */
 
-import crypto from 'crypto';
 import { z } from 'zod';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import {
@@ -28,6 +27,12 @@ import { Logger } from '@bike4mind/observability';
 import { decryptSecret } from '@server/security/secretEncryption';
 import { validateTargetUrl } from '@server/utils/ssrfProtection';
 import { Config } from '@server/utils/config';
+import {
+  buildSignedWebhookHeaders,
+  PERMANENT_FAILURE_CODES,
+  RetryableError,
+  WEBHOOK_HTTP_TIMEOUT_MS,
+} from '@server/webhooks/signedWebhook';
 import {
   recordWebhookDeliverySuccess,
   recordWebhookDeliveryFailure,
@@ -75,11 +80,6 @@ const DEDUP_KEY_PREFIX = 'webhook-delivery-';
 const DEDUP_TTL_MS = 60 * 60 * 1000;
 
 /**
- * HTTP timeout for delivery attempts (10 seconds)
- */
-const HTTP_TIMEOUT_MS = 10000;
-
-/**
  * Maximum retries before giving up
  */
 const MAX_RETRIES = 5;
@@ -88,24 +88,6 @@ const MAX_RETRIES = 5;
  * Circuit breaker threshold (consecutive failures)
  */
 const CIRCUIT_BREAKER_THRESHOLD = 10;
-
-/**
- * HTTP status codes that indicate permanent failure (don't retry)
- */
-const PERMANENT_FAILURE_CODES = [400, 401, 403, 404, 410];
-
-/**
- * Custom error class for retryable errors
- */
-class RetryableError extends Error {
-  constructor(
-    message: string,
-    public retryAfterSeconds: number | null = null
-  ) {
-    super(message);
-    this.name = 'RetryableError';
-  }
-}
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = JSON.parse(event.Records[0].body);
@@ -243,27 +225,23 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   }
 
   // 6. Build request with timestamp-based signature
-  const timestamp = Math.floor(Date.now() / 1000);
   const payloadString = JSON.stringify(payload.payload);
-  const signedPayload = `${timestamp}.${payloadString}`;
-  const signature = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex');
+  const headers = buildSignedWebhookHeaders({
+    secret,
+    body: payloadString,
+    eventId: payload.eventId,
+    deliveryId: payload.deliveryId,
+    eventType: payload.eventType,
+  });
 
   // 7. Execute HTTP with timeout (10s)
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), HTTP_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), WEBHOOK_HTTP_TIMEOUT_MS);
 
   try {
     const response = await fetch(payload.targetUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Webhook-Event-ID': payload.eventId,
-        'X-Webhook-Delivery-ID': payload.deliveryId,
-        'X-Webhook-Timestamp': String(timestamp),
-        'X-Webhook-Signature-256': `sha256=${signature}`,
-        'X-Event-Type': payload.eventType,
-        'User-Agent': 'Lumina5-Webhook/1.0',
-      },
+      headers,
       body: payloadString,
       signal: controller.signal,
     });
@@ -348,7 +326,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
     // Handle abort (timeout)
     if (error instanceof Error && error.name === 'AbortError') {
-      const errorMessage = `Request timeout after ${HTTP_TIMEOUT_MS / 1000}s`;
+      const errorMessage = `Request timeout after ${WEBHOOK_HTTP_TIMEOUT_MS / 1000}s`;
       logger.warn('Request timeout, will retry', {
         processingDurationMs,
       });

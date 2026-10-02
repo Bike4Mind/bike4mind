@@ -39,6 +39,7 @@ import {
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
   visibleReplyText,
+  tokenEstimateMultiplier,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -74,6 +75,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
   effectiveContextWindow,
   safeInputWindow,
+  withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
@@ -107,6 +109,7 @@ import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedRep
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
@@ -120,6 +123,7 @@ import {
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -176,7 +180,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
-import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
   unionPreauthorizedLakeAccess,
@@ -2900,6 +2904,7 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
@@ -3068,6 +3073,14 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
+      // Research Mode runs its configurations in parallel over one tool list, so a shared budget
+      // would let one configuration's searches cap another's.
+      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+      if (allTools && !isResearchMode) {
+        allTools = webSearchBudget.apply(allTools);
+      }
+
       // Local (Ollama) models are small and easily confused by tools they weren't
       // asked to use - they pick the wrong one or loop. Restrict them to the tools
       // the user explicitly enabled, dropping the auto/admin-added extras
@@ -3179,10 +3192,26 @@ export class ChatCompletionProcess {
         const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
           tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
         );
-        const excludedByAccessCount =
-          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
-            : narrowedAccess?.excludedByAccessCount;
+        // Both ways a named lake drops out of scope, measured only where the session named one:
+        // gate-excluded (above), and draft - retrieval is active-only, so a draft narrows to
+        // nothing; counted over the identity-named tags that did not survive into lakeScope.
+        // Independent reads, so they run together.
+        const namesALake = accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags);
+        const [excludedByAccessCount, notServingCount] = namesALake
+          ? await Promise.all([
+              this.getDataLakeAccessContext().then(accessContext =>
+                measureIdentityNamedExclusion(accessContext, identityTagsToMeasure, {
+                  callerMaySeeAllLakes: this.user?.isAdmin === true,
+                })
+              ),
+              countNotServingNamedLakes(
+                this.db.dataLakes,
+                this.user.id,
+                datalakeTagsFrom(session.retrievalTags ?? []).filter(tag => !lakeScope.includes(tag)),
+                this.logger
+              ),
+            ])
+          : [narrowedAccess?.excludedByAccessCount, undefined];
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
         // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
@@ -3190,6 +3219,8 @@ export class ChatCompletionProcess {
         // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
           excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
+        const notServingLakes =
+          notServingCount !== undefined ? { count: notServingCount, reason: 'draft' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3197,6 +3228,7 @@ export class ChatCompletionProcess {
           dataLakeTags: [],
           lakeScope,
           ...(excludedLakes ? { excludedLakes } : {}),
+          ...(notServingLakes ? { notServingLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
@@ -3501,6 +3533,10 @@ export class ChatCompletionProcess {
         imageGenerationAvailable,
         systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
+      // Every input count this turn (assembly budget, overflow guard, pre-reservation, [BILLING_DRIFT])
+      // goes through this one tokenizer, so they all agree on the model's units: cl100k_base scaled up to
+      // the model's own tokenizer (see tokenEstimateMultiplier).
+      const estimateTokenizer = withTokenEstimateMultiplier(this.tokenizer, tokenEstimateMultiplier(modelInfo.id));
       // messageTruncationInfo is captured ONLY from this first build - the overflow-recovery rebuild
       // further down does not refresh it, so downstream telemetry always reflects the first attempt.
       const firstBuild = await buildAndSortMessages(
@@ -3511,7 +3547,7 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer,
+        estimateTokenizer,
         buildOptions
       );
       let messages = firstBuild.messages;
@@ -3564,7 +3600,7 @@ export class ChatCompletionProcess {
 
       // Calculate input tokens and per-source breakdown in parallel
       const tokenCalculationStartTime = Date.now();
-      const tokenCalcOptions = { estimateOnly: false, tokenizer: this.tokenizer };
+      const tokenCalcOptions = { estimateOnly: false, tokenizer: estimateTokenizer };
       let tokensBySource:
         | {
             systemPrompts: number;
@@ -3622,7 +3658,7 @@ export class ChatCompletionProcess {
                 })
               )
               .join('');
-            toolSchemaTokens = await this.tokenizer.countTokens(serializedToolSchemas);
+            toolSchemaTokens = await estimateTokenizer.countTokens(serializedToolSchemas);
           } catch (toolTokenError) {
             logger.warn(
               '📊 Failed to count tool-schema tokens; leaving tools uncounted for this estimate',
@@ -3686,7 +3722,7 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer,
+              estimateTokenizer,
               buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
@@ -4199,6 +4235,7 @@ export class ChatCompletionProcess {
         chunkCount = 0;
         quest.promptMeta!.performance!.firstChunkTime = undefined;
         quest.promptMeta!.performance!.firstTokenTime = undefined;
+        webSearchBudget.reset();
       };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
@@ -4310,7 +4347,7 @@ export class ChatCompletionProcess {
       startCancellationWatcher();
 
       // Check if Research Mode is enabled and handle parallel processing
-      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
+      if (isResearchMode) {
         logger.info(
           `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
         );
@@ -5267,9 +5304,13 @@ export class ChatCompletionProcess {
       // Post-streaming processing: token counting, credits, performance metrics, features.
       // Wrapped in protective try/catch so failures here never overwrite quest.reply or leave quest stuck.
       try {
-        // Calculate output tokens
+        // Calculate output tokens, in the units of the model that actually answered
+        const answeringMultiplier = tokenEstimateMultiplier(currentModel.id);
         const outputTokenCalculationStartTime = Date.now();
-        const outputTokens = await this.tokenizer.countTokens(Object.values(replies), currentModel.id);
+        const outputTokens = await withTokenEstimateMultiplier(this.tokenizer, answeringMultiplier).countTokens(
+          Object.values(replies),
+          currentModel.id
+        );
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Output token calculation completed (${outputTokens} tokens) in ${
             Date.now() - outputTokenCalculationStartTime
@@ -5325,11 +5366,18 @@ export class ChatCompletionProcess {
           (actualTokenUsage?.cacheCreationInputTokens ?? 0);
         const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
+        // inputTokens was counted in the requested model's units (estimateTokenizer). When a fallback that
+        // tokenizes differently answered, restate it in that model's units before it prices or drift-checks.
+        const requestedMultiplier = tokenEstimateMultiplier(modelInfo.id);
+        const localInputTokens =
+          requestedMultiplier === answeringMultiplier
+            ? inputTokens
+            : Math.ceil((inputTokens * answeringMultiplier) / requestedMultiplier);
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : localInputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
-          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, localInputTokens);
         // Provider-basis only: the local fallback deliberately never bills cache creation,
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
@@ -5343,7 +5391,7 @@ export class ChatCompletionProcess {
             )
           : getTextModelCost(
               currentModel,
-              inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
               outputTokens
             );
         // Single stochastic settlement draw, shared by the quest meta, the
@@ -5371,11 +5419,13 @@ export class ChatCompletionProcess {
         // guards billing; it monitors the quality of the local estimate that still
         // drives pre-reservation (and fallback settlement). Causes worth
         // investigating: a new content-block shape we don't measure, or a provider
-        // accounting change. Tool schemas ARE now counted (see the breakdown site),
-        // so the expected residual gap on tool-carrying turns is wire-shape
-        // approximation (our {name,description,input_schema} proxy vs each backend's
-        // exact formatTools) plus provider-side overhead the provider injects when
-        // tools are present (e.g. a tool-use preamble). Threshold is symmetric +/-30%.
+        // accounting change, or a Claude release whose tokenizer tokenEstimateMultiplier
+        // does not cover. For calibrated Claude models the estimate is a deliberate lower
+        // bound, so expect ratios a little under 1, and lower on code-heavy turns (Claude
+        // spends ~2x cl100k on code against a 1.5x factor). Tool-carrying turns add
+        // wire-shape approximation (our {name,description,input_schema} proxy vs each
+        // backend's formatTools) and any preamble the provider injects for tools.
+        // Threshold is symmetric +/-30%.
         // Compare against the provider's FULL input accounting, not just the uncached tail.
         // Provider `input_tokens` reports only the tokens NOT served from / written to cache;
         // on a prompt-cache hit or write the rest lands in cache_read/cache_creation. Summing
@@ -5389,7 +5439,7 @@ export class ChatCompletionProcess {
               (actualTokenUsage.cacheCreationInputTokens ?? 0)
             : undefined;
         if (apiInputForDrift != null && apiInputForDrift > 0) {
-          const ratio = inputTokens / apiInputForDrift;
+          const ratio = localInputTokens / apiInputForDrift;
           if (ratio < 0.7 || ratio > 1.3) {
             logger.warn('[BILLING_DRIFT] Local vs provider input-token count diverges', {
               questId: quest.id,
@@ -5397,7 +5447,7 @@ export class ChatCompletionProcess {
               sessionId: quest.sessionId,
               model: currentModel.id,
               backend: currentModel.backend,
-              localInputTokens: inputTokens,
+              localInputTokens,
               providerInputTokens: apiInputForDrift,
               ratio: Number(ratio.toFixed(2)),
               tokensBySource: quest.promptMeta?.context?.tokensBySource,

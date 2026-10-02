@@ -23,4 +23,5 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
+export { generateVideoContract } from './contracts/videoGeneration.contract';
 export { CONTRACTS } from './contracts';

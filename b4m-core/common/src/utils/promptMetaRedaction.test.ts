@@ -172,6 +172,22 @@ describe('redactPromptMetaForViewer: citable passage text', () => {
     expect(out?.citables?.[0]?.metadata?.conflictsWith).toEqual(['file-2']);
   });
 
+  it('keeps the source origin for a non-owner, which labels the chip rather than carrying content', () => {
+    // Pinned like conflictsWith: stripping it would turn every viewer's chip back to "Data Lake".
+    const sourceOrigin = { kind: 'lake', lakes: [{ id: 'lake-a', name: 'Lake A' }] };
+    const shared = {
+      model: { name: 'gpt-4' },
+      citables: [
+        { id: 'file-1', metadata: { sourceSystem: 'knowledge_base', fullContext: 'SECRET PASSAGE', sourceOrigin } },
+      ],
+    };
+
+    const out = redactPromptMetaForViewer(shared, false);
+
+    expect(out?.citables?.[0]?.metadata?.fullContext).toBeUndefined();
+    expect(out?.citables?.[0]?.metadata?.sourceOrigin).toEqual(sourceOrigin);
+  });
+
   it('redacts citables even when the turn made no function calls', () => {
     // The early return used to bail on `!functionCalls`, which would have skipped citables
     // entirely on a forced-retrieval turn - the one that ALWAYS emits them.

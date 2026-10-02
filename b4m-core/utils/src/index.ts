@@ -99,6 +99,7 @@ export * from './artifactParser';
 export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
+export * from './calibratedTokenizer';
 export * from './url';
 export {
   withRetry,

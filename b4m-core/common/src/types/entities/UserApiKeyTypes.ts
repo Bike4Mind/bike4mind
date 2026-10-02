@@ -198,6 +198,16 @@ export interface IUserApiKeyRateLimit {
 }
 
 /**
+ * Ceilings a key gets when minted without explicit ones. Lives here rather than
+ * in services so the public OpenAPI overview (openapi/document.ts) can quote the
+ * real numbers; userApiKeyService/rateLimit.ts re-exports it for the enforcer.
+ */
+export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Object.freeze({
+  requestsPerMinute: 60,
+  requestsPerDay: 1000,
+});
+
+/**
  * White-label config for an embed key (epic #41), rendered by the widget serve
  * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
@@ -235,6 +245,14 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /**
+   * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
+   * `select: false`, so it is absent from every read except findCallbackSigningSecret. The
+   * plaintext is returned once, when it is minted.
+   */
+  callbackSigningSecret?: string;
+  /** When the current signing secret was minted; absent = the key has none yet. */
+  callbackSigningSecretCreatedAt?: Date;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;
@@ -314,6 +332,7 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
+  /** Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot. */
   countActiveByUserId: (userId: string) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
@@ -331,4 +350,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Stores (encrypted) a freshly minted signing secret, replacing any previous one. */
+  setCallbackSigningSecret: (id: string, secret: string, createdAt: Date) => Promise<void>;
+  /** The decrypted signing secret plus the fields a delivery must re-check; null if the key is gone or has none. */
+  findCallbackSigningSecret: (
+    id: string
+  ) => Promise<{ secret: string; userId: string; status: ApiKeyStatus; expiresAt?: Date } | null>;
 }

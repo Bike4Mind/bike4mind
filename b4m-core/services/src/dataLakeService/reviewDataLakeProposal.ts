@@ -277,7 +277,7 @@ export async function approveDataLakeProposal(
       lake,
       grants,
       action: 'approve-proposal',
-      changes: [proposalReviewChange(proposal.sourceUrl, 'approved')],
+      changes: [proposalReviewChange(proposal, 'approved')],
     },
     { db, logger }
   );
@@ -312,7 +312,7 @@ export async function declineDataLakeProposal(
       lake,
       grants,
       action: 'decline-proposal',
-      changes: [proposalReviewChange(declined.sourceUrl, 'declined')],
+      changes: [proposalReviewChange(declined, 'declined')],
     },
     { db, logger }
   );
@@ -364,7 +364,7 @@ export async function restoreDataLakeProposal(
       lake,
       grants,
       action: 'restore-proposal',
-      changes: [proposalReviewChange(result.proposal.sourceUrl, 'restored')],
+      changes: [proposalReviewChange(result.proposal, 'restored')],
     },
     { db, logger }
   );

@@ -120,7 +120,10 @@ test.describe.serial('Profile - Settings', () => {
 });
 
 test.describe('Profile - Agent connect', () => {
-  test('should copy a key-free agent prompt and MCP snippets from the API tab', async ({ profilePage, context }) => {
+  test('should copy a key-free agent prompt and MCP snippets from the API Keys tab', async ({
+    profilePage,
+    context,
+  }) => {
     const { page } = profilePage;
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await profilePage.gotoProfile();

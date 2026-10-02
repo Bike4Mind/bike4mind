@@ -5,7 +5,9 @@ import {
   useRevokeUserApiKey,
   useDeleteUserApiKey,
   useBillingOrganizations,
+  useRotateCallbackSigningSecret,
   CreateUserApiKeyRequest,
+  CreateUserApiKeyResponse,
 } from '@client/app/hooks/data/userApiKeys';
 import { useTheme } from '@mui/joy';
 import {
@@ -170,7 +172,7 @@ const sameScopeSet = (a: ApiKeyScope[], b: ApiKeyScope[]) => a.length === b.leng
 interface NewKeyModalProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: (key: string) => void;
+  onSuccess: (result: CreateUserApiKeyResponse) => void;
 }
 
 function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
@@ -189,7 +191,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
-      onSuccess(result.key);
+      onSuccess(result);
       onClose();
       resetForm();
     },
@@ -445,21 +447,64 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   );
 }
 
+interface OneTimeSecretFieldProps {
+  label: string;
+  value: string;
+  idPrefix: string;
+}
+
+/**
+ * Labeled masked-value field shared by every "shown only once" secret display
+ * (API key, callback signing secret): show/hide toggle plus copy button.
+ */
+function OneTimeSecretField({ label, value, idPrefix }: OneTimeSecretFieldProps) {
+  const { copied, handleCopyToClipboard } = useCopyToClipboard();
+  const [show, setShow] = useState(false);
+
+  return (
+    <FormControl sx={{ mb: 2 }} className={`${idPrefix}-form`}>
+      <FormLabel className={`${idPrefix}-label`}>{label}</FormLabel>
+      <Box sx={{ display: 'flex', gap: 1 }} className={`${idPrefix}-input-group`}>
+        <Input
+          value={show ? value : '\u2022'.repeat(value.length)}
+          readOnly
+          sx={{ flex: 1, fontFamily: 'monospace' }}
+          className={`${idPrefix}-input`}
+        />
+        <IconButton
+          variant="outlined"
+          onClick={() => setShow(!show)}
+          size="sm"
+          className={`${idPrefix}-visibility-button`}
+          data-testid={`${idPrefix}-visibility-btn`}
+        >
+          {show ? <VisibilityOffIcon /> : <VisibilityIcon />}
+        </IconButton>
+        <Button
+          startDecorator={<CopyIcon />}
+          onClick={() => handleCopyToClipboard(value)}
+          variant="outlined"
+          size="sm"
+          className={`${idPrefix}-copy-button`}
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </Button>
+      </Box>
+    </FormControl>
+  );
+}
+
 interface KeyCreatedModalProps {
   open: boolean;
   onClose: () => void;
   apiKey: string;
+  /** Present only for a fresh create response; absent for a rotated key or a pre-feature key. */
+  callbackSigningSecret?: string;
 }
 
-function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
-  const { copied, handleCopyToClipboard } = useCopyToClipboard();
-  const [showKey, setShowKey] = useState(false);
+function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret }: KeyCreatedModalProps) {
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
-
-  const handleCopy = () => {
-    handleCopyToClipboard(apiKey);
-  };
 
   const exampleCode = `curl -X POST \\
   -H "X-API-Key: ${apiKey}" \\
@@ -486,34 +531,26 @@ function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
           </Typography>
         </Alert>
 
-        <FormControl sx={{ mb: 2 }} className="project-api-keys-created-form">
-          <FormLabel className="project-api-keys-created-label">Your API Key</FormLabel>
-          <Box sx={{ display: 'flex', gap: 1 }} className="project-api-keys-created-input-group">
-            <Input
-              value={showKey ? apiKey : '•'.repeat(apiKey.length)}
-              readOnly
-              sx={{ flex: 1, fontFamily: 'monospace' }}
-              className="project-api-keys-created-input"
+        <OneTimeSecretField label="Your API Key" value={apiKey} idPrefix="project-api-keys-created" />
+
+        {callbackSigningSecret && (
+          <>
+            <OneTimeSecretField
+              label="Callback Signing Secret"
+              value={callbackSigningSecret}
+              idPrefix="project-api-keys-created-signing-secret"
             />
-            <IconButton
-              variant="outlined"
-              onClick={() => setShowKey(!showKey)}
-              size="sm"
-              className="project-api-keys-created-visibility-button"
+            <Typography
+              level="body-xs"
+              color="neutral"
+              sx={{ mb: 2 }}
+              className="project-api-keys-created-signing-secret-note"
             >
-              {showKey ? <VisibilityOffIcon /> : <VisibilityIcon />}
-            </IconButton>
-            <Button
-              startDecorator={<CopyIcon />}
-              onClick={handleCopy}
-              variant="outlined"
-              size="sm"
-              className="project-api-keys-created-copy-button"
-            >
-              {copied ? 'Copied!' : 'Copy'}
-            </Button>
-          </Box>
-        </FormControl>
+              Signs generation completion callbacks (the <code>X-Webhook-Signature-256</code> header) - also shown only
+              once.
+            </Typography>
+          </>
+        )}
 
         <Alert
           color="primary"
@@ -548,6 +585,55 @@ function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
           </Button>
           <Button onClick={onClose} className="project-api-keys-created-continue-button">
             Continue
+          </Button>
+        </Stack>
+      </ModalDialog>
+    </Modal>
+  );
+}
+
+interface SigningSecretRevealModalProps {
+  open: boolean;
+  onClose: () => void;
+  keyName: string;
+  secret: string;
+}
+
+/** One-time reveal for a minted or rotated callback signing secret, same style as KeyCreatedModal. */
+function SigningSecretRevealModal({ open, onClose, keyName, secret }: SigningSecretRevealModalProps) {
+  return (
+    <Modal open={open} onClose={onClose} className="project-api-keys-signing-secret-modal">
+      <ModalDialog size="lg" className="project-api-keys-signing-secret-dialog">
+        <Typography level="h4" mb={2} color="success" className="project-api-keys-signing-secret-title">
+          Signing secret ready for {keyName}
+        </Typography>
+
+        <Alert
+          color="warning"
+          startDecorator={<WarningIcon />}
+          sx={{ mb: 2 }}
+          className="project-api-keys-signing-secret-warning"
+        >
+          <Typography level="body-sm">
+            <strong>Important:</strong> This is the only time you&apos;ll see this secret. Copy it now and store it
+            securely.
+          </Typography>
+        </Alert>
+
+        <OneTimeSecretField label="Callback Signing Secret" value={secret} idPrefix="project-api-keys-signing-secret" />
+
+        <Typography level="body-xs" color="neutral" sx={{ mb: 2 }} className="project-api-keys-signing-secret-note">
+          Signs generation completion callbacks (the <code>X-Webhook-Signature-256</code> header) for this key.
+        </Typography>
+
+        <Stack
+          direction="row"
+          spacing={1}
+          justifyContent="flex-end"
+          className="project-api-keys-signing-secret-actions"
+        >
+          <Button onClick={onClose} data-testid="api-key-signing-secret-done-btn">
+            Done
           </Button>
         </Stack>
       </ModalDialog>
@@ -1722,16 +1808,20 @@ export default function UserApiKeysTab() {
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
+  const [newlyCreatedSigningSecret, setNewlyCreatedSigningSecret] = useState<string | undefined>(undefined);
   const [mainTab, setMainTab] = useState(0);
   // Off by default: revoked rows accumulate forever (scopes are write-once, so
   // every scope change mints a replacement and leaves one behind) and their
   // audit value is served by the toggle, not by permanent screen space.
   const [showRevoked, setShowRevoked] = useState(false);
   const [keyPendingDelete, setKeyPendingDelete] = useState<IUserApiKeyDocument | null>(null);
+  const [signingSecretRotationPending, setSigningSecretRotationPending] = useState<IUserApiKeyDocument | null>(null);
+  const [revealedSigningSecret, setRevealedSigningSecret] = useState<{ keyName: string; secret: string } | null>(null);
 
   const rotateMutation = useRotateUserApiKey({
     onSuccess: result => {
       setNewlyCreatedKey(result.key);
+      setNewlyCreatedSigningSecret(undefined);
       setShowKeyCreatedModal(true);
     },
   });
@@ -1747,9 +1837,28 @@ export default function UserApiKeysTab() {
     },
   });
 
-  const handleNewKeySuccess = (key: string) => {
-    setNewlyCreatedKey(key);
+  const signingSecretMutation = useRotateCallbackSigningSecret({
+    onSuccess: result => {
+      setSigningSecretRotationPending(null);
+      setRevealedSigningSecret({ keyName: result.name, secret: result.callbackSigningSecret });
+    },
+  });
+
+  const handleNewKeySuccess = (result: CreateUserApiKeyResponse) => {
+    setNewlyCreatedKey(result.key);
+    setNewlyCreatedSigningSecret(result.callbackSigningSecret);
     setShowKeyCreatedModal(true);
+  };
+
+  // Creating a secret for the first time has nothing to break, so it mints immediately;
+  // replacing one invalidates callbacks already signed with the old secret, so that goes
+  // through the confirmation modal below.
+  const handleSigningSecretAction = (key: IUserApiKeyDocument) => {
+    if (key.callbackSigningSecretCreatedAt) {
+      setSigningSecretRotationPending(key);
+    } else {
+      signingSecretMutation.mutate(key.id);
+    }
   };
 
   const getStatusColor = (key: IUserApiKeyDocument) => {
@@ -1859,6 +1968,7 @@ export default function UserApiKeysTab() {
                     <th>Created</th>
                     <th>Last Used</th>
                     <th>Expires</th>
+                    <th>Signing Secret</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1928,6 +2038,30 @@ export default function UserApiKeysTab() {
                         </Typography>
                       </td>
                       <td>
+                        <Stack spacing={0.5} alignItems="flex-start">
+                          <Typography
+                            level="body-xs"
+                            color="neutral"
+                            data-testid={`api-key-signing-secret-status-${key.id}`}
+                          >
+                            {key.callbackSigningSecretCreatedAt
+                              ? `Signing secret: created ${dayjs(key.callbackSigningSecretCreatedAt).format('MMM D, YYYY')}`
+                              : 'No signing secret'}
+                          </Typography>
+                          {!isRevoked(key) && (
+                            <Button
+                              size="sm"
+                              variant="outlined"
+                              onClick={() => handleSigningSecretAction(key)}
+                              loading={signingSecretMutation.isPending && signingSecretMutation.variables === key.id}
+                              data-testid={`api-key-signing-secret-action-${key.id}`}
+                            >
+                              {key.callbackSigningSecretCreatedAt ? 'Rotate signing secret' : 'Create signing secret'}
+                            </Button>
+                          )}
+                        </Stack>
+                      </td>
+                      <td>
                         <Box display="flex" gap={1}>
                           <Tooltip title="Rotate key">
                             <IconButton
@@ -1994,6 +2128,7 @@ export default function UserApiKeysTab() {
         open={showKeyCreatedModal}
         onClose={() => setShowKeyCreatedModal(false)}
         apiKey={newlyCreatedKey}
+        callbackSigningSecret={newlyCreatedSigningSecret}
       />
 
       <ConfirmationModal
@@ -2008,6 +2143,27 @@ export default function UserApiKeysTab() {
         confirmText="Delete"
         confirmColor="danger"
         showWarningIcon
+      />
+
+      <ConfirmationModal
+        open={signingSecretRotationPending !== null}
+        onClose={() => setSigningSecretRotationPending(null)}
+        onConfirm={() => {
+          if (signingSecretRotationPending) signingSecretMutation.mutate(signingSecretRotationPending.id);
+        }}
+        loading={signingSecretMutation.isPending}
+        title="Rotate signing secret"
+        description={`Deliveries signed after rotation use the new secret for "${signingSecretRotationPending?.name}". Update the receiver with the new secret first, or it will start rejecting callbacks.`}
+        confirmText="Rotate"
+        confirmColor="danger"
+        showWarningIcon
+      />
+
+      <SigningSecretRevealModal
+        open={revealedSigningSecret !== null}
+        onClose={() => setRevealedSigningSecret(null)}
+        keyName={revealedSigningSecret?.keyName ?? ''}
+        secret={revealedSigningSecret?.secret ?? ''}
       />
     </Box>
   );

@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import mongoose, { Model, Schema } from 'mongoose';
 import {
   IChatHistoryItem,
@@ -5,7 +6,10 @@ import {
   IChatHistoryItemDocument,
   PromptMeta,
   IAttachmentDelivery,
+  IQuestCallback,
   MessageContentObject,
+  QuestCallbackState,
+  QuestCallbackStateSchema,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository, { convertId } from '@bike4mind/db-core';
@@ -123,6 +127,12 @@ const ExcludedLakesSchema = subSchema({
   reason: { type: String, required: true },
 });
 
+// Same count + reason only shape and rationale as ExcludedLakesSchema above.
+const NotServingLakesSchema = subSchema({
+  count: { type: Number, required: true },
+  reason: { type: String, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -168,6 +178,8 @@ const RetrievalSummarySchema = subSchema({
   // default: undefined for the same auto-vivification reason as `injected` above - and here it
   // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
   excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
+  // default: undefined for the same presence contract as excludedLakes: absent means NOT MEASURED.
+  notServingLakes: { type: NotServingLakesSchema, required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
@@ -564,6 +576,27 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // set server-side so the client can render a targeted error state. Declared so Mongoose
     // strict mode persists it (otherwise the error UI would not survive a reload).
     errorCode: { type: String, required: false },
+    // Completion callback for an API-key generation job (see IQuestCallback). select: false keeps
+    // the caller's endpoint and key id out of every quest payload and out of the whole-doc
+    // update() writes the generation services make, so a stale in-memory quest can never
+    // rewind `state` and re-arm a callback that already went out.
+    callback: {
+      type: new Schema(
+        {
+          url: { type: String, required: true },
+          apiKeyId: { type: String, required: true },
+          eventId: { type: String, required: true },
+          state: { type: String, enum: QuestCallbackStateSchema.options, required: true },
+          dispatchedAt: { type: Date },
+          completedAt: { type: Date },
+          lastStatusCode: { type: Number },
+          lastError: { type: String },
+        },
+        { _id: false }
+      ),
+      required: false,
+      select: false,
+    },
     creditsUsed: { type: Number, required: false },
     pinned: { type: Boolean, required: false, default: false },
     researchModeResults: [
@@ -756,9 +789,10 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
  * The statuses that mean a quest will never be written to again. Anything else
  * (`pending`, `running`) is still claiming to be live, and is what a settle pass
  * is allowed to take over. Shared by the two halves of that pass so its read and
- * its write cannot drift on what "unfinished" means.
+ * its write cannot drift on what "unfinished" means. Exported so the generation
+ * callback handler can check a quest is still settled before delivering against it.
  */
-const TERMINAL_QUEST_STATUSES = ['done', 'stopped'];
+export const TERMINAL_QUEST_STATUSES: readonly NonNullable<IChatHistoryItemDocument['status']>[] = ['done', 'stopped'];
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1189,6 +1223,108 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     return docs.map(({ _id, ...quest }) => ({ ...quest, id: _id.toString() }));
   }
 
+  /**
+   * Arm a completion callback; re-arming (a retried quest) resets it to `pending` under a fresh
+   * event id, so the receiver does not dedupe the retry's outcome against the first attempt's.
+   */
+  async armCallback(id: string, callback: Pick<IQuestCallback, 'url' | 'apiKeyId'>): Promise<void> {
+    const armed: IQuestCallback = {
+      url: callback.url,
+      apiKeyId: callback.apiKeyId,
+      eventId: `quest_${id}_${randomBytes(8).toString('hex')}`,
+      state: 'pending',
+    };
+    await this.model.updateOne({ _id: id }, { $set: { callback: armed } });
+  }
+
+  /**
+   * The single `pending -> dispatched` transition, and the only thing that makes delivery
+   * exactly-once: every settle site may call it, and only the first caller on a settled quest
+   * gets the claimed event id (null for everyone else). Conditional on a terminal status so
+   * arming before the job settles is safe.
+   */
+  async claimCallbackDispatch(id: string): Promise<string | null> {
+    const doc = await this.model
+      .findOneAndUpdate(
+        { _id: id, 'callback.state': 'pending', status: { $in: TERMINAL_QUEST_STATUSES } },
+        { $set: { 'callback.state': 'dispatched', 'callback.dispatchedAt': new Date() } },
+        { projection: { 'callback.eventId': 1 } }
+      )
+      .lean<{ callback?: Pick<IQuestCallback, 'eventId'> }>()
+      .exec();
+    return doc?.callback?.eventId ?? null;
+  }
+
+  /**
+   * Undo a claim whose enqueue failed, so the sweep backstop retries it. Scoped to the claimed
+   * `eventId`: a slow failure must not rewind a newer claim made after a re-arm.
+   */
+  async releaseCallbackDispatch(id: string, eventId: string): Promise<void> {
+    await this.model.updateOne(
+      { _id: id, 'callback.state': 'dispatched', 'callback.eventId': eventId },
+      { $set: { 'callback.state': 'pending' }, $unset: { 'callback.dispatchedAt': 1 } }
+    );
+  }
+
+  async findCallbackById(id: string): Promise<IQuestCallback | null> {
+    const doc = await this.model.findById(id).select('+callback').lean<{ callback?: IQuestCallback }>().exec();
+    return doc?.callback ?? null;
+  }
+
+  /**
+   * Record one delivery attempt. `delivered` is final. `failed` ends the retry cycle but is still
+   * matched, so a DLQ replay of an exhausted callback can record its outcome over it. A retryable
+   * failure keeps `dispatched` and only updates the diagnostics. Scoped to the claimed `eventId`, mirroring
+   * releaseCallbackDispatch, so a stale message cannot record against a re-armed callback.
+   */
+  async recordCallbackAttempt(
+    id: string,
+    eventId: string,
+    attempt: {
+      state: Extract<QuestCallbackState, 'dispatched' | 'delivered' | 'failed'>;
+      statusCode?: number;
+      error?: string;
+    }
+  ): Promise<void> {
+    const isFinal = attempt.state !== 'dispatched';
+    await this.model.updateOne(
+      { _id: id, 'callback.eventId': eventId, 'callback.state': { $in: ['dispatched', 'failed'] } },
+      {
+        $set: {
+          'callback.state': attempt.state,
+          ...(isFinal && { 'callback.completedAt': new Date() }),
+          ...(attempt.statusCode !== undefined && { 'callback.lastStatusCode': attempt.statusCode }),
+          // Never alongside the `delivered` $unset below: Mongo rejects a $set and $unset on one path.
+          ...(attempt.error !== undefined &&
+            attempt.state !== 'delivered' && { 'callback.lastError': attempt.error.slice(0, 500) }),
+        },
+        // A success after failed attempts must not keep reporting the last failure.
+        ...(attempt.state === 'delivered' && { $unset: { 'callback.lastError': 1 } }),
+      }
+    );
+  }
+
+  /**
+   * Settled quests whose callback was never handed to the queue: the settle-site claim was
+   * missed (a Lambda that died between the terminal write and the claim) or its enqueue failed.
+   * Only quests settled before `settledBefore` so this backstop does not race the settle sites.
+   */
+  async findUndispatchedCallbacks(opts: { settledBefore: Date; limit: number }): Promise<string[]> {
+    const docs = await this.model
+      .find(
+        {
+          'callback.state': 'pending',
+          status: { $in: TERMINAL_QUEST_STATUSES },
+          updatedAt: { $lt: opts.settledBefore },
+        },
+        { _id: 1 }
+      )
+      .sort({ updatedAt: 1 })
+      .limit(opts.limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    return docs.map(doc => doc._id.toString());
+  }
+
   // Returns the most recent quest in the session that has no reply yet, or
   // null if every quest already has one (or none exist).
   async findLatestUnrepliedMessage(sessionId: string) {
@@ -1288,6 +1424,14 @@ function initializeQuestModel() {
     // autoIndex, because prod runs DocumentDB where the build takes a foreground
     // collection lock and would otherwise land on a request path.
     ChatHistoryItemSchema.index({ status: 1, updatedAt: 1 }, { name: 'status_updatedAt' });
+
+    // Serves findUndispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
+    // the handful of quests whose callback is armed but not yet claimed. Pre-built by
+    // 20260921235900_ensure-quest-callback-pending-index for the same DocumentDB reason as above.
+    ChatHistoryItemSchema.index(
+      { 'callback.state': 1, updatedAt: 1 },
+      { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
+    );
   } catch (error) {
     // Plugin already applied, ignore error
   }

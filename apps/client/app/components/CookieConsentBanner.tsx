@@ -22,6 +22,19 @@ export const useCookieSettings = create<{ isOpen: boolean; open: () => void; clo
   close: () => set({ isOpen: false }),
 }));
 
+/**
+ * Records the current page with GA's cookie, once, if the landing page_view went out
+ * without one. The inline tag (utils/gaConsentBootstrap.ts) applies any decision it can read
+ * before that page_view; when there was none to read - a first visit in the opt-in region, or
+ * a visitor who had declined - the page was recorded cookieless, and without this the cookied
+ * session a grant starts would begin on a later event, with no source: "(not set)".
+ */
+function recordPageOnGrant() {
+  if (window.__b4mGaConsentDefault === 'granted') return;
+  window.__b4mGaConsentDefault = 'granted';
+  gtag('event', 'page_view');
+}
+
 /** Point the trackers at a consent state. Deliberately does not persist it as a DECISION, so
  * an auto-allow is re-derived each load rather than freezing the answer for someone who
  * travels. The cookie published below is not that: it caches the resolution this load reached
@@ -35,6 +48,7 @@ function activateConsent(value: Consent) {
 
   if (typeof gtag !== 'undefined') {
     gtag('consent', 'update', { analytics_storage: value });
+    if (value === 'granted') recordPageOnGrant();
   }
   // The ads pixels have no consent-mode equivalent: granted == load the scripts
   // (until then they only queue in memory), denied == they never load. Each

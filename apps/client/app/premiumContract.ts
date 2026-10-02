@@ -39,6 +39,13 @@ export interface PremiumRouteDescriptor {
    */
   appShell?: boolean;
   /**
+   * STRUCTURAL field, meaningful only with `appShell: true`. `true` -> the notebook
+   * layout drops its content padding on this route (and its sub-paths) so the page
+   * runs edge to edge; every other route keeps the default gutter. Read by
+   * `getContentPadding` in components/layouts/Notebook/index.tsx.
+   */
+  edgeToEdge?: boolean;
+  /**
    * STRUCTURAL field, like `appShell`. `true` -> the route renders for signed-out
    * visitors: parented under the root route with no `RestrictedPage`, no
    * `ProviderBundle` and no consent guard, the way `/login` and `/verify-email`

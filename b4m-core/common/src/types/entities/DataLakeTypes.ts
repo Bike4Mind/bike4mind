@@ -248,6 +248,25 @@ export type LakeSettleFields = {
 export type ConflictResolution = 'skip' | 'update' | 'duplicate';
 
 /**
+ * Inputs that decide which lakes a caller REACHES, shared by every query built on the retrieval reach
+ * arms (retrieval, browse, the identity-scoped excluded-lake count) so a new arm input is declared
+ * once and cannot be wired into only some of them.
+ */
+export interface ReachArmsOpts {
+  grantedLakeIds?: string[];
+  orgGrantedLakes?: Record<string, string[]>;
+  /**
+   * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+   * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via `supersededOwnLakeIdsForTurn`,
+   * the same seam `grantedLakeIds` uses, because the answer lives in the grant collection. It
+   * narrows ONLY that arm - a superseded creator who still holds a grant, the lake's tag, or its
+   * entitlement keeps reaching it through the arm that actually authorizes them. Absent leaves the
+   * arm at bare creator provenance, which over-matches once ownership has moved.
+   */
+  supersededOwnLakeIds?: string[];
+}
+
+/**
  * The acting principal, resolved from auth - never from the request body/query.
  * Used by the single lake access gate (assertLakeAccess).
  */
@@ -676,19 +695,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      /**
-       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
-       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
-       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
-       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
-       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
-       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
-       * over-matches once ownership has moved.
-       */
-      supersededOwnLakeIds?: string[];
+    opts?: ReachArmsOpts & {
       /**
        * Widens the status filter from `active` alone to `LAKE_ATTACHABLE_STATUSES` (draft +
        * active) - the set browse already admits. Opt-in and OFF by default, because it is an
@@ -705,12 +712,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     }
   ): Promise<IDataLakeDocument[]>;
   /**
-   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055): active lakes the
-   * caller can see exist - by org membership or public listing - but whose own
+   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055). Account-wide: active
+   * lakes the caller can see exist - by org membership or public listing - but whose own
    * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
    * through the owner or grant bypass (those are never "excluded"; the resolver restores them
    * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
-   * for every org member).
+   * for every org member). With `restrictToTags` the question changes to "which of these named
+   * lakes can the caller not reach at all", so a private or other-org lake counts too.
    *
    * NEVER RETURNS A LAKE DOCUMENT, deliberately - a `countDocuments`, not a `find`. This method
    * exists solely to measure denial for a caller-facing count; it must never become a second way
@@ -721,25 +729,30 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds: string[] | undefined,
     userId: string | undefined,
-    opts?: {
-      grantedLakeIds?: string[];
-      orgGrantedLakes?: Record<string, string[]>;
-      /**
-       * Lakes to withhold from the owner-bypass exemption (#3055): ones the caller
-       * created but no longer effectively owns (`resolveEffectiveOwnerIds`), the same set
-       * `findActiveByUserTagsAndEntitlements` withholds from its own creator arm. `createdByUserId`
-       * is immutable, so without this a caller whose ownership was transferred away keeps reporting
-       * a false zero for a lake they can no longer reach through the owner bypass - the count and
-       * the resolver's own read-side would disagree about who still owns it.
-       */
-      supersededOwnLakeIds?: string[];
+    opts?: ReachArmsOpts & {
       /**
        * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
-       * question "of exactly these lakes, how many are excluded" for a caller that named specific
-       * lakes by identity, as opposed to the whole-account question this method otherwise answers.
-       * Absent or empty runs the unrestricted, account-wide count.
+       * question "of exactly these lakes, how many can the caller not reach" for a caller that named
+       * specific lakes by identity, as opposed to the whole-account question this method otherwise
+       * answers. Counts a named lake the caller cannot reach even when it carries no gate the caller
+       * lacks (private, other-org), but only within what the caller could already see unless
+       * `callerMaySeeAllLakes` is set. Absent or empty runs the unrestricted, account-wide count.
        */
       restrictToTags?: string[];
+      /**
+       * Only read with `restrictToTags`. True for a caller who may already see every lake exist
+       * (an admin), so the count also covers named lakes outside their org that are neither public
+       * nor theirs. Absent or false keeps a visibility prerequisite (public, in the caller's org,
+       * or created by the caller) so the count cannot confirm a lake the caller could not see.
+       */
+      callerMaySeeAllLakes?: boolean;
+      /**
+       * Only read with `restrictToTags`. Orgs the caller holds admin rights in (pre-resolved via
+       * `findIdsWithAdminRights`). Their lakes count as already visible, matching browse's org-admin
+       * arm, so a non-member org admin is not told nothing was excluded. Widens visibility only,
+       * never reach.
+       */
+      administeredOrgIds?: string[];
     }
   ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
@@ -1575,6 +1588,15 @@ export interface IDataLakeSpendResponse {
   days: number;
   /** Lifetime reservation-time meter (see doc comment above); null when unset (pre-existing lake). */
   embeddingSpendMicroUsd: number | null;
+  /**
+   * Lifetime research spend attributed to this lake, in USD, summed from UsageEvent rows
+   * carrying { dataLakeId, feature: 'operations' } across all time. Separate from the
+   * ingestion-only lifetime meter above (which is reserve-first and stored on the lake).
+   * Included in the UI's displayed lifetime total and per-lake budget percentage, so a
+   * research run's cost is visible alongside ingestion spend. Not enforced by the ingestion
+   * spend gate, which reads only the embedding meter.
+   */
+  researchLifetimeUsd: number;
   spendEnabled: boolean;
   perRunBudgetMicroUsd: number;
   perLakeBudgetMicroUsd: number;

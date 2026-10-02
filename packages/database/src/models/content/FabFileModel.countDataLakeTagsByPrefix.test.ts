@@ -140,6 +140,32 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
     });
   });
 
+  describe('creator-anchored lakeMemberships', () => {
+    const scope = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:orga:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    };
+
+    it('counts a creator-owned prefix-only member for a non-creator viewer only when the scope is passed', async () => {
+      await makeFile({ userId: 'creator-1', tags: ['acme:uncategorized'] });
+
+      expect(await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {})).toEqual([]);
+      expect(await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], { lakeMemberships: [scope] })).toEqual([
+        { tag: 'acme:uncategorized', count: 1 },
+      ]);
+    });
+
+    it("does not count a different creator's file carrying the same prefix", async () => {
+      await makeFile({ userId: 'someone-else', tags: ['acme:uncategorized'] });
+
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], { lakeMemberships: [scope] });
+
+      expect(result).toEqual([]);
+    });
+  });
+
   it('returns nothing for an empty prefix list', async () => {
     await makeFile({ tags: ['acme:uncategorized'] });
 

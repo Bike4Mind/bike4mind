@@ -1,25 +1,28 @@
 import type { SQSEvent } from 'aws-lambda';
-import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, adminSettingsRepository, connectDB } from '@bike4mind/database';
+import { adminSettingsRepository, connectDB } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@server/utils/config';
-import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
 import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
 import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
+import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
+import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
+import { dispatch as generationCallbackDispatch } from '@server/queueHandlers/generationCallback';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
-import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
-import { runResearchScheduleTick } from '@server/cron/dataLakeResearchSchedule';
+import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
+import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
+import { registerTaskScheduler } from './taskScheduler';
+import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -30,6 +33,7 @@ import { CHUNK_SCAN_BATCH } from '@server/s3/chunkScan';
 import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
 } from '@server/queueHandlers/sqsDelivery';
 
 /**
@@ -37,11 +41,13 @@ import {
  *
  * Run as its own compose service (reuses Dockerfile.chatcompletion.selfhost with a
  * command override, run from apps/workers) via
- * `tsx --import ../client/server/chatCompletion/selfhostSstAlias.mjs`
+ * `tsx --tsconfig tsconfig.selfhost.json --import ../client/server/chatCompletion/selfhostSstAlias.mjs`
  * so `Resource.*` reads resolve from env. It is the self-host stand-in for the hosted
  * SST queue consumers (infra/queues.ts) and cron (infra/cron.ts):
  *   - polls researchEngineQueue -> researchEngineQueue.dispatch (same handler as hosted)
  *   - polls imageGenerationQueue / imageEditQueue -> the same dispatch handlers hosted uses
+ *   - polls generationCallbackQueue -> generationCallback.dispatch, delivering signed HTTPS
+ *     completion callbacks for those jobs to API-key callers
  *   - runs taskSchedulerService.process every 5 minutes with the same handler map as
  *     the hosted cron/scheduler.ts (kept in sync with it).
  */
@@ -58,8 +64,9 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Matches hosted's 12-minute visibility over the purge handler's 10-minute timeout (infra/queues.ts). */
 const DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC = 720;
-/** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
-const SCHEDULER_INTERVAL_MS = 5 * 60_000;
+/** Both GitHub lake queues mirror hosted: 12-minute visibility over a 10-minute handler timeout (infra/queues.ts). */
+const GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC = 720;
+const GITHUB_LAKE_RUN_BUDGET_MS = 10 * 60_000;
 /** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
 const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
@@ -82,6 +89,7 @@ async function main() {
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
   registerLakeHealthSweep(worker);
+  registerTelemetryCleanup(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -132,6 +140,19 @@ async function main() {
   );
   registerImageQueue('imageEditQueue', 'image edit', Resource.imageEditQueue?.url, imageEditDispatch);
 
+  // Signed HTTPS completion callbacks for image/video generation jobs, delivered to API-key
+  // callers. Optional in the manifest: an install without it just skips callback delivery.
+  const generationCallbackQueueUrl = Resource.generationCallbackQueue?.url;
+  if (generationCallbackQueueUrl) {
+    worker.registerQueueHandler('generationCallbackQueue', generationCallbackQueueUrl, generationCallbackDispatch, {
+      // Matches hosted's 2-minute visibilityTimeout (infra/queues.ts).
+      visibilityTimeoutSec: 120,
+      maxReceiveCount: GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+    });
+  } else {
+    bootLogger.warn('generationCallbackQueue not configured; generation completion callbacks will not be delivered');
+  }
+
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
   // in the self-host manifest - a basic install that never set the env var simply never runs
   // it (the stuck-job reconciler is what keeps the review UI from spinning forever on that).
@@ -147,6 +168,8 @@ async function main() {
   } else {
     bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
   }
+
+  registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
@@ -178,6 +201,23 @@ async function main() {
     bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
   }
 
+  // One message per dispatch and a hosted-length deadline, like the Lambda: the ingest slices by
+  // getRemainingTimeInMillis and re-enqueues, so without a budget a large repo would outlive its
+  // visibility and be redelivered mid-run. maxReceiveCount matches each queue's hosted dlq.retry.
+  const githubLakeQueueOpts = {
+    visibilityTimeoutSec: GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC,
+    runBudgetMs: GITHUB_LAKE_RUN_BUDGET_MS,
+    batchSize: 1,
+  };
+  worker.registerQueueHandler('githubLakeIngestQueue', Resource.githubLakeIngestQueue.url, githubLakeIngestDispatch, {
+    ...githubLakeQueueOpts,
+    maxReceiveCount: 2,
+  });
+  worker.registerQueueHandler('githubLakeRevokeQueue', Resource.githubLakeRevokeQueue.url, githubLakeRevokeDispatch, {
+    ...githubLakeQueueOpts,
+    maxReceiveCount: 7,
+  });
+
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
   // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the
   // Resource shim): this queue is self-host-only, so it isn't in the hosted SST types.
@@ -199,19 +239,7 @@ async function main() {
     bootLogger.warn('SELF_HOST_EVENT_QUEUE not set; enrichment events will not be consumed');
   }
 
-  // Mirrors cron/scheduler.ts (hosted). Keep the handler map in sync with it.
-  worker.registerScheduledTask('scheduler', SCHEDULER_INTERVAL_MS, async () => {
-    await taskSchedulerService.process({
-      db: { taskSchedules: taskScheduleRepository },
-      logger: bootLogger,
-      handlers: {
-        [TaskScheduleHandler.RESEARCH_TASK_PROCESS]: async payload => {
-          await sendToQueue(Resource.researchEngineQueue.url, payload);
-        },
-        [TaskScheduleHandler.CUSTOM_TASK_PROCESS]: async () => {},
-      },
-    });
-  });
+  registerTaskScheduler(worker, bootLogger);
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
   // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose

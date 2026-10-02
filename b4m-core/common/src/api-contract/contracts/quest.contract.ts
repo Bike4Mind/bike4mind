@@ -11,10 +11,11 @@ export const getQuestContract = defineEndpoint({
   description:
     'Polls the outcome of a turn started by `POST /api/chat` or an async generation route. ' +
     '`status` `done` and `stopped` are terminal; `pending` and `running` are not. A finished turn ' +
-    'that failed has `type: "error"` and, where classified, an `errorCode`. A `404` covers a quest ' +
+    'that failed has `type: "error"` and, where classified, an `errorCode`; a `stopped` turn is also a ' +
+    'failure even without `type: "error"`, and its `reply` is an explanation rather than an answer. A `404` covers a quest ' +
     'that does not exist, one whose session was deleted, and one the caller cannot see, so polling ' +
     'after deleting the session returns `404`. Safe (GET) requests are exempt from the per-day ' +
-    'API-key quota so polling one job costs one daily slot; the per-minute burst limit still applies.',
+    'API-key quota: a poll consumes no daily slot, and only the per-minute burst limit applies.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],

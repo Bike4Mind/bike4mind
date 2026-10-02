@@ -75,7 +75,16 @@ export class ChatCompletionInvoke {
    * Creates the quest record and enqueues it; the actual work happens in `process`.
    * Split this way so it can be driven from a queue handler (worker or serverless function).
    */
-  public async invoke({ body, userId }: { body: z.infer<typeof ChatCompletionInvokeParamsSchema>; userId: string }) {
+  public async invoke({
+    body,
+    userId,
+    apiKeyId,
+  }: {
+    body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
+    userId: string;
+    /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
+    apiKeyId?: string;
+  }) {
     const now = new Date();
 
     const {
@@ -453,6 +462,7 @@ export class ChatCompletionInvoke {
         // every path except `wait: true`.
         skipAutoOffers,
         deniedTools,
+        apiKeyId,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
