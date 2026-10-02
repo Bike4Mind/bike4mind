@@ -23,7 +23,7 @@ interface CreateReleaseOptions {
   tag: string;
   name: string;
   body: string;
-  targetCommitish?: string;
+  targetCommitish: string;
 }
 
 /**
@@ -138,10 +138,10 @@ export async function getCommitRange(base: string, head: string = 'HEAD'): Promi
 
 /**
  * Get commits since the last release
- * @param targetBranch - Branch to compare against (defaults to 'HEAD' for flexibility in testing)
+ * @param head - Commit SHA (or ref) to compare against (defaults to 'HEAD' for flexibility in testing)
  * @returns Array of commits since last release
  */
-export async function getCommitsSinceLastRelease(targetBranch: string = 'HEAD'): Promise<GitHubCommit[]> {
+export async function getCommitsSinceLastRelease(head: string = 'HEAD'): Promise<GitHubCommit[]> {
   const latestRelease = await getLatestRelease(/^v\d+\.\d+\.\d+\.\d+$/);
 
   if (!latestRelease) {
@@ -166,11 +166,11 @@ export async function getCommitsSinceLastRelease(targetBranch: string = 'HEAD'):
     }));
   }
 
-  // Compare from the release tag (specific commit) to target branch
+  // Compare from the release tag (specific commit) to head
   // Using tag_name ensures we get commits since the tagged release
   // Using HEAD as default allows testing from any branch (flexible for manual/local testing)
-  // For production, the workflow explicitly checks out 'prod' so HEAD = prod
-  return getCommitRange(latestRelease.tag_name, targetBranch);
+  // For production, the workflow checks out the exact deployed SHA, so HEAD = that commit
+  return getCommitRange(latestRelease.tag_name, head);
 }
 
 /**
@@ -190,7 +190,7 @@ export async function createRelease(options: CreateReleaseOptions): Promise<GitH
       tag_name: options.tag,
       name: options.name,
       body: options.body,
-      target_commitish: options.targetCommitish || 'prod',
+      target_commitish: options.targetCommitish,
       draft: false,
       prerelease: false,
     }),
