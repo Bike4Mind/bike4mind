@@ -117,14 +117,28 @@ describe('ChatService agent browser', () => {
     expect(request.messages[0].content).toContain('You also have a browser');
   });
 
-  it('does not offer the browser to a Chat session', async () => {
+  it('offers the browser to a Chat session, which has no project, and still withholds the host tools', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'hi');
     await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
-    const names = post.mock.calls[0][1].options.tools.map(
-      (entry: { toolSchema: { name: string } }) => entry.toolSchema.name
-    );
-    expect(names).not.toContain('browser_navigate');
+    const request = post.mock.calls[0][1];
+    const names = request.options.tools.map((entry: { toolSchema: { name: string } }) => entry.toolSchema.name);
+    expect(names).toEqual(expect.arrayContaining(['browser_navigate', 'browser_click', 'browser_screenshot']));
+    // Widening the browser must not widen the host family, which really is project-scoped.
+    expect(names).not.toContain('session_spawn');
+    expect(names).not.toContain('session_list');
+    expect(request.messages[0].content).toContain('You also have a browser');
+  });
+
+  it('drives the browser from a Chat session and keeps its screenshot', async () => {
+    const { id } = await service.createSession();
+    const messages = await screenshotRound(id);
+    expect(JSON.stringify(messages)).toContain('"type":"image"');
+    const end = events.find(event => event.type === 'tool-end');
+    expect(end && 'call' in end ? end.call.media?.[0] : undefined).toMatchObject({
+      kind: 'image',
+      mimeType: 'image/png',
+    });
   });
 
   it('sends a screenshot to the model as its own user turn after the tool results, and shows it to the user', async () => {
