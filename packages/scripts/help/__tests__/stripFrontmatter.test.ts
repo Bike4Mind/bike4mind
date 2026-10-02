@@ -81,4 +81,17 @@ describe('stripFrontmatter', () => {
   it('does not end the block on an indented --- inside a block scalar', () => {
     expect(stripFrontmatter('---\nnote: |\n  intro\n  ---\n  outro\ntitle: T\n---\nBody')).toBe('Body');
   });
+
+  it('strips a block whose keys contain spaces', () => {
+    expect(stripFrontmatter('---\nLast Updated: 2026-01-05\nDocument Owner: Ops\n---\n\nBody')).toBe('Body');
+  });
+
+  it('strips a block whose key starts with @', () => {
+    expect(stripFrontmatter('---\n"@context": x\n@type: Article\n---\nBody')).toBe('Body');
+  });
+
+  it('still keeps a prose line that has no colon between two rules', () => {
+    const content = '---\nRead this first\n---\nBody';
+    expect(stripFrontmatter(content)).toBe(content);
+  });
 });
