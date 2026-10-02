@@ -18,9 +18,9 @@ import { BadRequestError } from '@bike4mind/common';
 import * as addFilesModule from './addFiles';
 
 /**
- * Pins WHICH ids `addSessions` copies into `project.sessionIds` and `project.fileIds`. The larger
- * `addSessions.test.ts` suite is skipped, so without this the behaviour changes on this path are
- * untested. Both writes must persist what RESOLVED, never the raw list handed in.
+ * Pins WHICH ids `addSessions` copies into `project.sessionIds` and `project.fileIds`, alongside
+ * the broader `addSessions.test.ts`. Both writes must persist what RESOLVED, never the raw list
+ * handed in.
  *
  * The set pushed is what `shareable.findAllAccessibleByIds` RESOLVED, which is narrower than "the
  * castable ids": `softDeletePlugin` adds `deletedAt: null` to every `find`, so a soft-deleted row
@@ -116,14 +116,18 @@ describe('addSessions - which ids reach the project', () => {
     // findAllAccessibleByIds skips an uncastable id instead of throwing, so a partial resolve is
     // now reachable. Answering 200 with only the reachable notebook attached would give the
     // caller no signal that half its request was ignored.
-    await expect(
-      addSessions(user, { projectId: PROJECT_ID, sessionIds: [JUNK_ID, SESSION_ID] }, {
-        db: { projects, sessions, fabFiles },
-      } as never)
-    ).rejects.toThrow(BadRequestError);
+    const call = addSessions(user, { projectId: PROJECT_ID, sessionIds: [JUNK_ID, SESSION_ID] }, {
+      db: { projects, sessions, fabFiles },
+    } as never);
+    await expect(call).rejects.toThrow(BadRequestError);
+    await expect(call).rejects.toThrow('Some sessions are not accessible');
 
     expect(project.sessionIds).toEqual([]);
+    // addSessions writes the project through updateWithUpdateAccess; `update` is checked too so a
+    // switch back to the unguarded write cannot slip past.
+    expect(projects.updateWithUpdateAccess).not.toHaveBeenCalled();
     expect(projects.update).not.toHaveBeenCalled();
+    expect(sessions.update).not.toHaveBeenCalled();
   });
 
   it('tolerates the same session id twice, since a duplicate resolves one row', async () => {
