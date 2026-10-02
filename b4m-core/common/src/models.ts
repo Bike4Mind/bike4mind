@@ -2,6 +2,7 @@ import { z } from 'zod';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
  * Model backends
@@ -680,6 +681,11 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * Size rules and supported params of an image model. Attached by GET /api/models (see
+   * getImageModelCapabilities), not by the backends, so every image row derives it the same way.
+   */
+  image?: ImageModelCapabilities;
 };
 
 // Pricing info type. Optional cache_read / cache_write override the defaults
