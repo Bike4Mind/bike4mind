@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import type { CookieImportState } from '@shared/browserCookies';
 import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
 import { BrowserNavbar } from './BrowserNavbar';
 import {
@@ -32,6 +33,9 @@ const SETTLE_MS = 400;
 /** A conversation with no browser yet, and what the bar draws while one is being asked for. */
 const NO_PAGE: BrowserPaneState = { url: '', canGoBack: false, canGoForward: false, loading: false, error: '' };
 
+/** Before main has answered. Nothing imported, and the menu item disabled until it says otherwise. */
+const NO_COOKIES: CookieImportState = { supported: false, unsupported: '', sites: [] };
+
 /**
  * The agent's browser, as a pane on the right of the window.
  *
@@ -50,6 +54,14 @@ const NO_PAGE: BrowserPaneState = { url: '', canGoBack: false, canGoForward: fal
 export function BrowserPane({ sessionId, suspended }: { sessionId: string | null; suspended: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<BrowserPaneState>(NO_PAGE);
+  // Not per conversation: the jar is one for the whole window, so what is imported is imported
+  // everywhere. The pane says as much; see CookieImporter for what scoping it would take.
+  const [cookies, setCookies] = useState<CookieImportState>(NO_COOKIES);
+
+  useEffect(() => {
+    void window.b4m.browser.cookies.getState().then(setCookies);
+    return window.b4m.browser.cookies.onChanged(setCookies);
+  }, []);
 
   const report = useCallback(
     (bounds: BrowserPaneBounds | null) => {
@@ -172,7 +184,7 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
       }}
       data-testid="chat-browser-pane"
     >
-      <BrowserNavbar state={state} onNavigate={navigate} onGo={go} />
+      <BrowserNavbar state={state} cookies={cookies} onNavigate={navigate} onGo={go} onCookieState={setCookies} />
       <Box ref={ref} sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
         {!state.url && (
           <Stack spacing={0.5} alignItems="center" sx={{ px: 3, textAlign: 'center' }}>

@@ -34,7 +34,7 @@ function fakePage(start = ''): BrowserPage & { url: string; events: string[] } {
   return page;
 }
 
-function contextFor(page: BrowserPage) {
+function contextFor(page: BrowserPage, importedSites: readonly string[] = []) {
   const media: ChatMedia[] = [];
   const images: { bytes: Buffer; mimeType: string }[] = [];
   const context: ToolContext = {
@@ -42,6 +42,7 @@ function contextFor(page: BrowserPage) {
     signal: new AbortController().signal,
     browser: {
       page: async () => page,
+      usesImportedCookies: url => importedSites.some(site => new URL(url).hostname === site),
       keepScreenshot: async (bytes, caption) => ({
         kind: 'image',
         url: 'b4m-media://m/s/1.png',
@@ -125,6 +126,49 @@ describe('browser tools', () => {
       key: 'browser-script:https://app.example.com',
       askInAuto: true,
       askInFull: true,
+    });
+  });
+
+  /**
+   * A site the USER imported their own Chrome cookies for. Reaching it is reaching it as them,
+   * which is not the decision 'auto' or 'full' was a judgement about - so every tool that
+   * touches it asks, in every mode, under a key of its own. See cookies/CookieImporter.
+   */
+  describe('a site carrying the user imported cookies', () => {
+    it('asks before opening it, in every mode', async () => {
+      const { context } = contextFor(fakePage(), ['shop.example.com']);
+      expect(await browserNavigate.needsApproval!({ url: 'shop.example.com/cart' }, context)).toBe(true);
+      expect(await browserNavigate.approval!({ url: 'shop.example.com/cart' }, context)).toMatchObject({
+        detail: 'Open https://shop.example.com/cart as your signed-in shop.example.com session',
+        key: 'browser-open-as-you:https://shop.example.com',
+        askInAuto: true,
+        askInFull: true,
+      });
+    });
+
+    it('asks before acting on it, apart from the same action taken anonymously', async () => {
+      const { context } = contextFor(fakePage('https://shop.example.com/checkout'), ['shop.example.com']);
+      expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(true);
+      expect(await browserClick.approval!({ ref: '1' }, context)).toMatchObject({
+        detail: 'Click on https://shop.example.com (element 1), signed in as you',
+        key: 'browser-act-as-you:https://shop.example.com',
+        askInAuto: true,
+        askInFull: true,
+      });
+    });
+
+    it('asks even on a local dev server, where an action is otherwise free', async () => {
+      const { context } = contextFor(fakePage('http://localhost:3080/app'), ['localhost']);
+      expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(true);
+      expect(await browserNavigate.needsApproval!({ url: 'localhost:3080' }, context)).toBe(true);
+    });
+
+    it('leaves every other site exactly as it was', async () => {
+      const { context } = contextFor(fakePage('http://localhost:3080/app'), ['shop.example.com']);
+      expect(await browserClick.needsApproval!({ ref: '1' }, context)).toBe(false);
+      expect(await browserNavigate.approval!({ url: 'example.com/cart' }, context)).toMatchObject({
+        key: 'browser-open:https://example.com',
+      });
     });
   });
 

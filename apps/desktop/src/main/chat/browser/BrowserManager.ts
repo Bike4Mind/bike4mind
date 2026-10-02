@@ -6,17 +6,23 @@ import {
   type Session,
   type WebContents,
 } from 'electron';
+import type { CookieImportState } from '@shared/browserCookies';
 import type { ChatMedia } from '@shared/chat';
 import { normalizeUrl } from '@shared/browserUrl';
 import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
 import { markAgentBrowserWindow } from '../../windows';
 import type { BrowserContext, BrowserPage, BrowserProvider } from '../tools/types';
+import { CookieImporter } from './cookies/CookieImporter';
 import { CLICK_REF, FILL_REF, pageCall, SNAPSHOT_PAGE, type ElementOutcome, type SnapshotResult } from './pageScripts';
 
 /**
  * One cookie jar for every conversation's browser, kept apart from anything the user browses:
  * signing in to a dev server once lasts across conversations and restarts, and none of the
  * user's real sessions are reachable from it.
+ *
+ * The one exception is an import the USER asks for, per site, from the pane's own menu - see
+ * cookies/CookieImporter. Those go in as session cookies, so what this partition persists is
+ * still only what the agent signed in to itself.
  */
 const PARTITION = 'persist:b4m-agent-browser';
 const VIEWPORT = { width: 1280, height: 800 };
@@ -338,7 +344,18 @@ export class BrowserManager implements BrowserProvider {
   private pane: { window: BrowserWindow; sessionId: string; bounds: BrowserPaneBounds } | undefined;
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
 
-  constructor(private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined) {}
+  /**
+   * The user's own Chrome sessions, for sites they named. Public because the renderer drives it
+   * and nothing else does: it is reached from IPC handlers answering a click, never from a tool.
+   */
+  readonly cookies: CookieImporter;
+
+  constructor(
+    private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined,
+    onCookieState: (state: CookieImportState) => void = () => undefined
+  ) {
+    this.cookies = new CookieImporter(() => this.session(), onCookieState);
+  }
 
   context(
     sessionId: string,
@@ -347,6 +364,7 @@ export class BrowserManager implements BrowserProvider {
     return {
       page: async () => this.pageFor(sessionId),
       keepScreenshot,
+      usesImportedCookies: url => this.cookies.usesImportedCookies(url),
     };
   }
 

@@ -69,7 +69,11 @@ describe('ChatService agent browser', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
     const browser: BrowserProvider = {
-      context: (_sessionId, keepScreenshot) => ({ page: async () => page, keepScreenshot }),
+      context: (_sessionId, keepScreenshot) => ({
+        page: async () => page,
+        keepScreenshot,
+        usesImportedCookies: () => false,
+      }),
       closeSession: async sessionId => {
         closed.push(sessionId);
       },

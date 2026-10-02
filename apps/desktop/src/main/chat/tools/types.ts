@@ -141,6 +141,12 @@ export interface BrowserContext {
   page(): Promise<BrowserPage>;
   /** Keep a screenshot for the transcript, so the user sees what the model saw. */
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+  /**
+   * Whether this url is a site the USER imported their own Chrome cookies for, which makes
+   * reaching it a different act from reaching it anonymously - so the browser tools ask about
+   * it in every mode. Reading the flag is all a tool may do: nothing here can cause an import.
+   */
+  usesImportedCookies(url: string): boolean;
 }
 
 /**
