@@ -796,7 +796,8 @@ const MessageContent: React.FC<ContentProps> = memo(
         {(messageData.routingSource === 'classifier' || messageData.routingSource === 'complexity') && (
           <AutoRouteBadge source={messageData.routingSource} />
         )}
-        <FallbackModelNote fallbackInfo={messageData.fallbackInfo ?? undefined} />
+        {/* An error turn has no answer to attribute; recovery paths can leave the record behind. */}
+        {messageData.type !== 'error' && <FallbackModelNote fallbackInfo={messageData.fallbackInfo ?? undefined} />}
         {/* Conditional rendering: Research Mode vs Standard Response */}
         {messageData.researchModeResults && messageData.researchModeResults.length > 0 ? (
           <ResearchModeResponseDisplay

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
 import { toQuestPollBody } from './questPollBody';
 
@@ -47,6 +47,19 @@ describe('toQuestPollBody', () => {
     it('is absent when the quest has none', () => {
       expect(toQuestPollBody(quest({}), { isOwner: true }).fallbackInfo).toBeUndefined();
       expect(toQuestPollBody(quest({ fallbackInfo: null }), { isOwner: true }).fallbackInfo).toBeUndefined();
+    });
+
+    it('drops a malformed record and logs which fields were bad', () => {
+      const logger = { warn: vi.fn() };
+      const malformed = { primaryModel: 'm1' } as IChatHistoryItemDocument['fallbackInfo'];
+
+      const body = toQuestPollBody(quest({ fallbackInfo: malformed }), { isOwner: true, logger });
+
+      expect(body.fallbackInfo).toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Dropping malformed fallbackInfo from quest poll body',
+        expect.objectContaining({ questId: 'q1', issues: expect.arrayContaining(['fallbackModel']) })
+      );
     });
 
     it('is withheld on an error turn, e.g. a recovered timeout', () => {

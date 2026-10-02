@@ -1092,7 +1092,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    */
   async settleIfUnfinished(
     id: string,
-    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies'>> & { finishReason?: string }
+    patch: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'fallbackInfo'>> & {
+      finishReason?: string;
+    }
   ): Promise<boolean> {
     const filter = { _id: id, status: { $nin: TERMINAL_QUEST_STATUSES } };
     const { finishReason, ...fields } = patch;

@@ -35,6 +35,7 @@ describe('resolveQuestTimeoutRecovery', () => {
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
   });
 
@@ -90,6 +91,7 @@ describe('resolveQuestTimeoutRecovery', () => {
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
   });
 
@@ -101,12 +103,23 @@ describe('resolveQuestTimeoutRecovery', () => {
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
     expect(resolveQuestTimeoutRecovery(quest({ reply: '<think>some hidden reasoning' }), NOW)).toEqual({
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
+  });
+
+  it('clears a persisted fallbackInfo when the turn settles as an error, but keeps it when content survived', () => {
+    // A timed-out run that had already switched models must not keep claiming a model answered it.
+    const empty = resolveQuestTimeoutRecovery(quest({ replies: [] }), NOW);
+    expect(empty).toMatchObject({ type: 'error', fallbackInfo: null });
+
+    const partial = resolveQuestTimeoutRecovery(quest({ replies: ['half an answer'] }), NOW);
+    expect(partial).not.toHaveProperty('fallbackInfo');
   });
 
   it('does not recover exactly at the threshold (strictly older required)', () => {

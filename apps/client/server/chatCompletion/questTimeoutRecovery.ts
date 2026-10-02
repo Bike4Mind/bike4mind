@@ -38,6 +38,7 @@ export type QuestTimeoutRecovery = {
   type?: 'error';
   reply?: string;
   replies?: string[];
+  fallbackInfo?: null;
   finishReason?: typeof RUN_TIMED_OUT_FINISH_REASON | typeof RUN_ABANDONED_FINISH_REASON;
 } | null;
 
@@ -125,7 +126,8 @@ function withUnfinishedNotice(quest: QuestContentView): Pick<NonNullable<QuestTi
  * drift on the one rule that matters: never destroy content to report a failure.
  */
 export function terminalRecoveryFor(quest: QuestContentView, run: DeadRunKind): NonNullable<QuestTimeoutRecovery> {
-  if (!hasRenderableContent(quest)) return { status: 'done', type: 'error', reply: run.emptyReply };
+  // fallbackInfo is cleared with the error: no model answered a turn that settles with nothing to show.
+  if (!hasRenderableContent(quest)) return { status: 'done', type: 'error', reply: run.emptyReply, fallbackInfo: null };
   const deliveredMedia = Boolean(quest.images?.length || quest.videos?.length);
   return { status: 'done', finishReason: run.finishReason, ...(deliveredMedia ? {} : withUnfinishedNotice(quest)) };
 }
@@ -135,7 +137,7 @@ export function terminalRecoveryFor(quest: QuestContentView, run: DeadRunKind): 
  * return what the write stored without re-reading it.
  */
 export function applyRecoveryInMemory(
-  quest: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'promptMeta'>>,
+  quest: Partial<Pick<IChatHistoryItem, 'status' | 'type' | 'reply' | 'replies' | 'promptMeta' | 'fallbackInfo'>>,
   recovery: NonNullable<QuestTimeoutRecovery>
 ): void {
   const { finishReason, ...fields } = recovery;

@@ -32,6 +32,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: vi.fn(() => vi.fn()) }),
 }));
 vi.mock('@client/app/hooks/data/sessions', () => ({
+  useGetSession: () => ({ data: undefined }),
   useForkSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useSnipSession: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -104,12 +105,12 @@ const baseMessage = {
   status: 'done',
 } as unknown as IChatHistoryItem;
 
-const renderMessage = (fallbackInfo: IChatHistoryItem['fallbackInfo']) =>
+const renderMessage = (fallbackInfo: IChatHistoryItem['fallbackInfo'], type?: IChatHistoryItem['type']) =>
   render(
     <TestWrapper>
       <MessageContent
         sessionId="session-1"
-        messageData={{ ...baseMessage, fallbackInfo }}
+        messageData={{ ...baseMessage, fallbackInfo, type }}
         index={0}
         onDelete={vi.fn()}
         onPinToggle={vi.fn()}
@@ -133,6 +134,20 @@ describe('MessageContent - fallback note reload wiring', () => {
     });
 
     expect(screen.getByTestId('fallback-model-note-chip')).toBeInTheDocument();
+  });
+
+  it('renders no fallback note on an error turn even if a stale fallbackInfo was persisted', () => {
+    renderMessage(
+      {
+        primaryModel: 'gpt-4o',
+        primaryModelName: 'GPT-4o',
+        fallbackModel: 'claude-sonnet-5',
+        fallbackModelName: 'Claude Sonnet 5',
+      },
+      'error'
+    );
+
+    expect(screen.queryByTestId('fallback-model-note-chip')).toBeNull();
   });
 
   it('renders no fallback note when the quest has no fallbackInfo', () => {

@@ -67,7 +67,7 @@ const handler = nextRouteForContract(getQuestContract, {
     }
   }
 
-  return res.json(toQuestPollBody(quest, { isOwner }));
+  return res.json(toQuestPollBody(quest, { isOwner, logger: req.logger }));
 });
 
 export default handler;
