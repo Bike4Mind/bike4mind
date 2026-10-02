@@ -5,7 +5,6 @@ export const MIN_OPTIONS = 2;
 export const MAX_OPTIONS = 4;
 export const MAX_HEADER_CHARS = 12;
 export const MAX_QUESTION_CHARS = 300;
-export const MAX_LABEL_WORDS = 5;
 export const MAX_LABEL_CHARS = 60;
 export const MAX_DESCRIPTION_CHARS = 300;
 export const MAX_OTHER_CHARS = 4000;
@@ -84,8 +83,8 @@ export function parseQuestions(value: unknown): { questions: ChatQuestion[] } | 
       if (typeof option !== 'object' || option === null) return { error: `${where} must be an object.` };
       const optionLabel = typeof option.label === 'string' ? option.label.trim() : '';
       if (!optionLabel) return { error: `${where} needs a non-empty "label".` };
-      if (optionLabel.length > MAX_LABEL_CHARS || optionLabel.split(/\s+/).length > MAX_LABEL_WORDS) {
-        return { error: `${where} label must be ${MAX_LABEL_WORDS} words or fewer; put detail in "description".` };
+      if (optionLabel.length > MAX_LABEL_CHARS) {
+        return { error: `${where} label must be ${MAX_LABEL_CHARS} characters or fewer; put detail in "description".` };
       }
       if (/^other\b/i.test(optionLabel)) {
         return { error: `${where} is an "Other" option; do not include one, the UI adds it.` };
