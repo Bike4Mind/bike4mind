@@ -9,10 +9,13 @@ import {
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
+import { resolveCopySurface, targetSurfaceSchema, type ResolveSurfaceAccess } from './surfaceTransition';
 
 const forkSessionSchema = z.object({
   sessionId: z.string(),
   messageId: z.string(),
+  // Absent: the fork inherits the source's surface. Present: checked by assertSurfaceTransition.
+  targetSurface: targetSurfaceSchema,
 });
 
 type ForkSessionParameters = z.infer<typeof forkSessionSchema>;
@@ -27,11 +30,13 @@ type ForkSessionAdapters = {
       'findBySessionIdAndId' | 'findAllBySessionIdAndLessThanOrEqualToTimestamp' | 'create'
     >;
   };
+  /** Required to honor `targetSurface`; without it a targeted fork is refused. */
+  resolveSurfaceAccess?: ResolveSurfaceAccess;
 } & CreateSessionAdapters;
 
 export const forkSession = async (userId: string, parameters: ForkSessionParameters, adapters: ForkSessionAdapters) => {
   const { db } = adapters;
-  const { sessionId, messageId } = secureParameters(parameters, forkSessionSchema);
+  const { sessionId, messageId, targetSurface } = secureParameters(parameters, forkSessionSchema);
 
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError('User not found');
@@ -41,6 +46,8 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
 
   const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
+
+  const surface = await resolveCopySurface(session.surface, targetSurface, adapters.resolveSurfaceAccess);
 
   const newSession = await createSession(
     user,
@@ -54,7 +61,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       taggedAt: session.taggedAt,
       forkedSourceId: session.id,
       // The session's home: without it a fork made inside a product surface lands in the main list.
-      surface: session.surface ?? undefined,
+      surface,
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
       // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
       // threaded to this path), which cannot see a teammate-authored organization-lake file. That
