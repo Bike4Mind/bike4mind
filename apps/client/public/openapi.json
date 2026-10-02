@@ -9554,7 +9554,7 @@
             }
           },
           "403": {
-            "description": "The key lacks `notebooks:write`, or is not bound to a requested data lake.",
+            "description": "The key lacks `notebooks:write`, is not bound to a requested data lake, or the caller is not entitled to the requested `surface`.",
             "content": {
               "application/json": {
                 "schema": {

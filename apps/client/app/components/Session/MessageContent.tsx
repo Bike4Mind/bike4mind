@@ -32,7 +32,10 @@ import Chip from '@mui/joy/Chip';
 import React, { lazy, memo, useCallback, useEffect, useMemo, useState, Suspense } from 'react';
 
 const TavernArtifactRenderer = lazy(() => import('../tavern/TavernArtifactRenderer'));
-import { useForkSession, useSnipSession } from '@client/app/hooks/data/sessions';
+import { useForkSession, useGetSession, useSnipSession } from '@client/app/hooks/data/sessions';
+import { getWorkspaceSurface, type WorkspaceSurface } from '@bike4mind/common';
+import { surfaceRouteExists, useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
+import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
 import { Refresh } from '@mui/icons-material';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import CodeIcon from '@mui/icons-material/Code';
@@ -168,6 +171,10 @@ const MessageContent: React.FC<ContentProps> = memo(
     const queryClient = useQueryClient();
     const { data: modelInfoRepo } = useModelInfo();
     const forkSession = useForkSession();
+    const { data: sourceSession } = useGetSession(sessionId);
+    const { current: currentWorkspace, copyTargets: forkTargets } = useWorkspaceTargets(sourceSession);
+    // Destination picked from "Fork into"; null = the source's own workspace (a plain fork).
+    const [forkTarget, setForkTarget] = useState<WorkspaceSurface | null>(null);
     const snipSession = useSnipSession();
     const updateQuest = useUpdateQuest(queryClient);
     const { currentSession, setCurrentSession } = useSessions();
@@ -499,13 +506,44 @@ const MessageContent: React.FC<ContentProps> = memo(
       if (!messageData.id) return;
 
       try {
-        const data = await forkSession.mutateAsync({ sessionId, messageId: messageData.id });
-        navigate({ to: '/notebooks/$id', params: { id: data?.id || '' } });
+        const target = forkTarget && forkTarget.id !== currentWorkspace?.id ? forkTarget : null;
+        const data = await forkSession.mutateAsync({
+          sessionId,
+          messageId: messageData.id,
+          ...(target ? { targetSurface: target.id } : {}),
+        });
+        // Open the fork in its home workspace; an unregistered or unshipped one keeps the notebook route.
+        const home = getWorkspaceSurface(data?.surface);
+        if (home && surfaceRouteExists(home) && data?.id) navigate({ href: home.sessionHref(data.id) });
+        else navigate({ to: '/notebooks/$id', params: { id: data?.id || '' } });
       } catch (error) {
         console.log(error);
       }
       setShowForkModal(false);
+      setForkTarget(null);
     };
+
+    // Rendered in both message-bubble variants below.
+    const forkMenuItems =
+      forkTargets.length > 1 ? (
+        <WorkspaceTargetMenuItems
+          label="Fork into"
+          targets={forkTargets}
+          currentId={currentWorkspace?.id}
+          testIdPrefix="message-menu-fork-into"
+          onSelect={target => {
+            setForkTarget(target);
+            setShowForkModal(true);
+          }}
+        />
+      ) : (
+        <MenuItem data-testid="message-menu-fork" onClick={() => setShowForkModal(true)}>
+          <ListItemDecorator>
+            <ForkRightIcon />
+          </ListItemDecorator>
+          Fork Notebook
+        </MenuItem>
+      );
 
     const handleSnip = async (messageData: IChatHistoryItem) => {
       if (!messageData.id) return;
@@ -706,8 +744,15 @@ const MessageContent: React.FC<ContentProps> = memo(
           <ConfirmActionModal
             className="session-middle-fork-modal"
             title="Fork Notebook from this Message?"
-            description="Are you sure you want to fork a new notebook from this message?"
-            onGoBackward={() => setShowForkModal(false)}
+            description={
+              forkTarget && forkTarget.id !== currentWorkspace?.id
+                ? `Are you sure you want to fork a new notebook from this message into ${forkTarget.label}?`
+                : 'Are you sure you want to fork a new notebook from this message?'
+            }
+            onGoBackward={() => {
+              setShowForkModal(false);
+              setForkTarget(null);
+            }}
             onGoForward={() => {
               handleFork(messageData);
             }}
@@ -1047,12 +1092,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Publish
                         </MenuItem>
                       )}
-                      <MenuItem onClick={() => setShowForkModal(true)}>
-                        <ListItemDecorator>
-                          <ForkRightIcon />
-                        </ListItemDecorator>
-                        Fork Notebook
-                      </MenuItem>
+                      {forkMenuItems}
                       <MenuItem onClick={() => setShowSnipModal(true)}>
                         <ListItemDecorator>
                           <StartIcon />
@@ -1206,12 +1246,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Publish
                         </MenuItem>
                       )}
-                      <MenuItem onClick={() => setShowForkModal(true)}>
-                        <ListItemDecorator>
-                          <ForkRightIcon />
-                        </ListItemDecorator>
-                        Fork Notebook
-                      </MenuItem>
+                      {forkMenuItems}
                       <MenuItem onClick={() => setShowSnipModal(true)}>
                         <ListItemDecorator>
                           <StartIcon />

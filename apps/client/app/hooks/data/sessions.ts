@@ -11,6 +11,7 @@ import {
   getSessionsFromServer,
   getSharedSessionsFromServer,
   updateSessionToServer,
+  moveSessionToSurface,
 } from '@client/app/utils/sessionsAPICalls';
 import type { SessionUpdatePayload } from '@client/app/utils/sessionsAPICalls';
 import {
@@ -453,15 +454,29 @@ export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocu
   });
 }
 
+/**
+ * Writes a freshly copied session into the cached lists. `updateAllQueryData` inserts into EVERY
+ * `['sessions', 'own', ...]` list regardless of its surface filter, so a copy that lives in a product
+ * surface also refetches the lists to let the server's surface filter place it.
+ */
+const writeCopiedSession = (queryClient: QueryClient, session: ISessionDocument) => {
+  updateAllQueryData(queryClient, 'sessions', 'write', session, {
+    keysAllowedToCreate: [['sessions', 'own']],
+  });
+  if (session.surface) queryClient.invalidateQueries({ queryKey: ['sessions', 'own'] });
+};
+
+/** A session id clones in place; `targetSurface` (null = the main list) clones into another workspace. */
+export type CloneSessionInput = string | { sessionId: string; targetSurface?: string | null };
+
 export const useCloneSession = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (sessionId: string) => {
-      const result = await cloneSession(sessionId);
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+    mutationFn: async (input: CloneSessionInput) => {
+      const { sessionId, targetSurface } = typeof input === 'string' ? { sessionId: input } : input;
+      const result = await cloneSession(sessionId, targetSurface);
+      writeCopiedSession(queryClient, result);
       return result;
     },
     onSuccess: result => {
@@ -769,21 +784,45 @@ export const useCreateNewSession = (callbacks?: {
 export const useForkSession = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (params: { sessionId: string; messageId: string }) => {
-      const { sessionId, messageId } = params;
+    // `targetSurface` omitted = the fork stays in the source's workspace; null = the main notebook list.
+    mutationFn: (params: { sessionId: string; messageId: string; targetSurface?: string | null }) => {
+      const { sessionId, messageId, targetSurface } = params;
       const result = api
-        .post<ISessionDocument>(`/api/sessions/${sessionId}/chat/${messageId}/fork`)
+        .post<ISessionDocument>(
+          `/api/sessions/${sessionId}/chat/${messageId}/fork`,
+          targetSurface === undefined ? undefined : { targetSurface }
+        )
         .then(data => data?.data);
       return result;
     },
     onSuccess: result => {
-      updateAllQueryData(queryClient, 'sessions', 'write', result, {
-        keysAllowedToCreate: [['sessions', 'own']],
-      });
+      writeCopiedSession(queryClient, result);
       toast.success('Session forked successfully');
     },
     onError: () => {
       toast.error('Failed to fork session');
+    },
+  });
+};
+
+/** Moves a session the caller owns into another workspace and refreshes every session list. */
+export const useMoveSession = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ sessionId, targetSurface }: { sessionId: string; targetSurface: string | null }) =>
+      moveSessionToSurface(sessionId, targetSurface),
+    onSuccess: result => {
+      queryClient.setQueryData(['sessions', result.id], result);
+      // The lists are filtered by surface server-side, so a moved session must be re-placed by refetch.
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'own'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'shared'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions', 'projects'] });
+      toast.success(`Moved ${formatSessionTitle(result.name)}`);
+    },
+    onError: () => {
+      toast.error('Failed to move notebook');
     },
   });
 };
