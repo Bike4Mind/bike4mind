@@ -39,7 +39,12 @@ export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { 
 
   // safeParse: the model tolerates partial records, and one malformed fallbackInfo must not make
   // the whole quest unreadable.
-  const fallbackInfo = quest.fallbackInfo ? PolledFallbackInfoSchema.safeParse(quest.fallbackInfo).data : undefined;
+  // Gated on `type` like errorCode: a timed-out or abandoned run is settled as an error by recovery
+  // paths that never touch fallbackInfo, and a failed turn must not claim a model answered it.
+  const fallbackInfo =
+    quest.fallbackInfo && quest.type !== 'error'
+      ? PolledFallbackInfoSchema.safeParse(quest.fallbackInfo).data
+      : undefined;
 
   return {
     id: quest.id,

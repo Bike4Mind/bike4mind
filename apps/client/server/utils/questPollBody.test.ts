@@ -30,4 +30,28 @@ describe('toQuestPollBody', () => {
     expect(body.images).toEqual([]);
     expect(body.videos).toEqual([]);
   });
+
+  describe('fallbackInfo', () => {
+    const info = {
+      primaryModel: 'm1',
+      primaryModelName: 'M1',
+      fallbackModel: 'm2',
+      fallbackModelName: 'M2',
+      reason: 'rate limited',
+    };
+
+    it('projects the full record on a successful turn', () => {
+      expect(toQuestPollBody(quest({ fallbackInfo: info }), { isOwner: true }).fallbackInfo).toEqual(info);
+    });
+
+    it('is absent when the quest has none', () => {
+      expect(toQuestPollBody(quest({}), { isOwner: true }).fallbackInfo).toBeUndefined();
+      expect(toQuestPollBody(quest({ fallbackInfo: null }), { isOwner: true }).fallbackInfo).toBeUndefined();
+    });
+
+    it('is withheld on an error turn, e.g. a recovered timeout', () => {
+      const body = toQuestPollBody(quest({ type: 'error', fallbackInfo: info }), { isOwner: true });
+      expect(body.fallbackInfo).toBeUndefined();
+    });
+  });
 });
