@@ -74,10 +74,16 @@ export const getSerperKey = async (adapters: GetEffectiveApiKeyAdapters) => {
 
 // Base URL of an admin- or env-configured SearXNG instance for local web search,
 // or null when unconfigured. Consumed by resolveWebSearchProvider (services).
+//
+// Unlike the other envKey() fallbacks on this file, SEARXNG_BASE_URL is read directly here
+// rather than gated through envKey's B4M_SELF_HOST check: it is not a secret like an API key,
+// just the internal Cloud Map DNS name infra/searxng.ts wires onto ChatCompletion in hosted
+// stages (infra never sets B4M_SELF_HOST), so there is no self-host-leaking-into-hosted risk
+// to guard against here.
 export const getSearxngUrl = async (adapters: GetEffectiveApiKeyAdapters): Promise<string | null> => {
   const { db } = adapters;
   const settings = await db.adminSettings.findBySettingName('SearxngUrl');
-  return settings?.settingValue?.trim() || envKey('SEARXNG_BASE_URL');
+  return settings?.settingValue?.trim() || process.env.SEARXNG_BASE_URL?.trim() || null;
 };
 
 // Admin's chosen web-search provider ('auto' | 'serpapi' | 'searxng'), or null
