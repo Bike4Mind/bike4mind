@@ -163,6 +163,7 @@ describe('runQuestNode stale sweep', () => {
       status: 'done',
       type: 'error',
       reply: ABANDONED_REPLY,
+      fallbackInfo: null,
     });
   });
 
