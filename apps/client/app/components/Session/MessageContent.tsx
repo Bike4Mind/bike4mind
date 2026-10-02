@@ -523,6 +523,28 @@ const MessageContent: React.FC<ContentProps> = memo(
       setForkTarget(null);
     };
 
+    // Rendered in both message-bubble variants below.
+    const forkMenuItems =
+      forkTargets.length > 1 ? (
+        <WorkspaceTargetMenuItems
+          label="Fork into"
+          targets={forkTargets}
+          currentId={currentWorkspace?.id}
+          testIdPrefix="message-menu-fork-into"
+          onSelect={target => {
+            setForkTarget(target);
+            setShowForkModal(true);
+          }}
+        />
+      ) : (
+        <MenuItem data-testid="message-menu-fork" onClick={() => setShowForkModal(true)}>
+          <ListItemDecorator>
+            <ForkRightIcon />
+          </ListItemDecorator>
+          Fork Notebook
+        </MenuItem>
+      );
+
     const handleSnip = async (messageData: IChatHistoryItem) => {
       if (!messageData.id) return;
 
@@ -1070,25 +1092,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Publish
                         </MenuItem>
                       )}
-                      {forkTargets.length > 1 ? (
-                        <WorkspaceTargetMenuItems
-                          label="Fork into"
-                          targets={forkTargets}
-                          currentId={currentWorkspace?.id}
-                          testIdPrefix="message-menu-fork-into"
-                          onSelect={target => {
-                            setForkTarget(target);
-                            setShowForkModal(true);
-                          }}
-                        />
-                      ) : (
-                        <MenuItem data-testid="message-menu-fork" onClick={() => setShowForkModal(true)}>
-                          <ListItemDecorator>
-                            <ForkRightIcon />
-                          </ListItemDecorator>
-                          Fork Notebook
-                        </MenuItem>
-                      )}
+                      {forkMenuItems}
                       <MenuItem onClick={() => setShowSnipModal(true)}>
                         <ListItemDecorator>
                           <StartIcon />
@@ -1242,25 +1246,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                           Publish
                         </MenuItem>
                       )}
-                      {forkTargets.length > 1 ? (
-                        <WorkspaceTargetMenuItems
-                          label="Fork into"
-                          targets={forkTargets}
-                          currentId={currentWorkspace?.id}
-                          testIdPrefix="message-menu-fork-into"
-                          onSelect={target => {
-                            setForkTarget(target);
-                            setShowForkModal(true);
-                          }}
-                        />
-                      ) : (
-                        <MenuItem data-testid="message-menu-fork" onClick={() => setShowForkModal(true)}>
-                          <ListItemDecorator>
-                            <ForkRightIcon />
-                          </ListItemDecorator>
-                          Fork Notebook
-                        </MenuItem>
-                      )}
+                      {forkMenuItems}
                       <MenuItem onClick={() => setShowSnipModal(true)}>
                         <ListItemDecorator>
                           <StartIcon />
