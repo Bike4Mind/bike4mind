@@ -7,8 +7,8 @@ export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always'
  * Escape characters that let untrusted text render differently from what
  * actually runs, into a visible escape form. Shared by every prompt that shows
  * untrusted text for the user to decide on: tool previews/arguments here,
- * repo-authored MCP definitions (McpApprovalPrompt), and model-authored
- * ReviewGatePrompt / UserQuestionPrompt text. Display only - never escape the
+ * repo-authored MCP definitions (McpApprovalPrompt), the folder-trust path
+ * (FolderTrustPrompt), and model-authored ReviewGatePrompt / UserQuestionPrompt text. Display only - never escape the
  * value that is acted on or sent back.
  * These ranges are covered, deliberately and no wider:
  *   - C0 controls (minus tab/newline), DEL and C1 controls -> `\xHH`: a raw
