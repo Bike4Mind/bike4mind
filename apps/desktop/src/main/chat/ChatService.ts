@@ -3161,7 +3161,8 @@ const ASK_GUIDANCE: readonly string[] = [
   "rest yourself from the code, the project's conventions and sensible defaults. Never end a turn",
   'with a list of "want me to do X, Y or Z?" options - ask them with the tool instead, with your',
   'recommendation first and " (Recommended)" appended to its label. Never add an "Other" option,',
-  'and never use it to ask "should I proceed?".',
+  'and never use it to ask "should I proceed?". Keep labels short, a few words, and put the detail',
+  'in the description.',
 ];
 
 const MEMORY_GUIDANCE: readonly string[] = [

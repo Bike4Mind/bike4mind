@@ -38,8 +38,9 @@ describe('parseQuestions', () => {
     expect(error([question({ header: '' })])).toMatch(/header/);
   });
 
-  it('holds labels to five words and refuses an Other option', () => {
-    expect(error([question({ options: [option('one two three four five six'), option('B')] })])).toMatch(/5 words/);
+  it('accepts a long label and refuses an Other option', () => {
+    const long = option('Revert the scrub, PR the migration alone (Recommended)');
+    expect(parseQuestions([question({ options: [long, option('B')] })])).not.toHaveProperty('error');
     expect(error([question({ options: [option('Other'), option('B')] })])).toMatch(/Other/);
     expect(error([question({ options: [option('Other (specify)'), option('B')] })])).toMatch(/Other/);
   });

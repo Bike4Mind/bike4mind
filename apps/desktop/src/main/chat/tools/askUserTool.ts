@@ -60,7 +60,10 @@ export const askUser: ToolDefinition = {
                 items: {
                   type: 'object',
                   properties: {
-                    label: { type: 'string', description: 'The choice, 1 to 5 words.' },
+                    label: {
+                      type: 'string',
+                      description: 'The choice, kept short (a few words); put detail in the description.',
+                    },
                     description: {
                       type: 'string',
                       description: `What choosing it means or implies, at most ${MAX_DESCRIPTION_CHARS} characters.`,
