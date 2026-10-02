@@ -694,3 +694,49 @@ describe('MoonshotBedrockBackend reasoning-only final turn', () => {
     expect(out).toBe('<think>b</think>b');
   });
 });
+
+describe('MoonshotBedrockBackend tools-unavailable continuation', () => {
+  const MODEL = ChatModels.KIMI_K2_THINKING_BEDROCK;
+  const toolHistory = (): IMessage[] => {
+    const history: IMessage[] = [{ role: 'user', content: 'compute 12*15' } as IMessage];
+    new MoonshotBedrockBackend().pushToolMessages(
+      history,
+      { id: 't1', name: 'math_evaluate', parameters: '{"expression":"12*15"}' },
+      '180'
+    );
+    return history;
+  };
+  const lastOf = (history: IMessage[], options = {}) => {
+    const body = JSON.parse(new MoonshotBedrockBackend().getPayload(MODEL, history, options).body);
+    return body.messages[body.messages.length - 1] as { role: string; content: string };
+  };
+
+  it('appends an answer-now instruction when continuing after a tool result with no tools', () => {
+    const last = lastOf(toolHistory());
+    expect(last.role).toBe('user');
+    expect(last.content).toContain('Tools are no longer available');
+  });
+
+  it('does not append it while tools are still offered', () => {
+    const tools = [{ toolSchema: { name: 'math_evaluate', description: 'd', parameters: {} } }];
+    expect(lastOf(toolHistory(), { tools }).role).toBe('tool');
+  });
+
+  it('does not append it when the conversation does not end on a tool result', () => {
+    expect(lastOf([...toolHistory(), { role: 'user', content: 'thanks' } as IMessage]).content).toBe('thanks');
+  });
+
+  it('never promotes a reasoning tail that is raw tool-call text', () => {
+    const be = new MoonshotBedrockBackend();
+    be.getPayload(MODEL, messages, {});
+    const out = [
+      '<reasoning>use it\n\n<function=math_evaluate> {"expression": "12*15"} </function></reasoning>',
+      '<reasoning>go\n\n<function_calls><invoke name="math_evaluate"></invoke></function_calls></reasoning>',
+    ].map(content => {
+      be.getPayload(MODEL, messages, {});
+      const { chunk } = be.translateStreamChunk(MODEL, { choices: [{ delta: { content }, finish_reason: 'stop' }] });
+      return chunk.choices.map(c => ('chunkText' in c ? c.chunkText : '')).join('');
+    });
+    for (const rendered of out) expect(rendered.endsWith('</think>')).toBe(true);
+  });
+});
