@@ -4,6 +4,7 @@ import { createStateToken } from '@server/auth/jwtStateStore';
 import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { Logger } from '@bike4mind/observability';
 import { ForbiddenError } from '@server/utils/errors';
+import { GRANT_EXPIRED_MESSAGE } from './githubLakeAuthGrant';
 
 const h = vi.hoisted(() => ({
   exchangeInstallerCode: vi.fn(),
@@ -37,22 +38,30 @@ const h = vi.hoisted(() => ({
   consumeGitHubLakeAuthGrant: vi.fn(),
 }));
 
-vi.mock('./lakeAppClient', () => ({
-  exchangeInstallerCode: h.exchangeInstallerCode,
-  listInstallerVisibleRepositories: h.listInstallerVisibleRepositories,
-  listUserInstallations: h.listUserInstallations,
-  revokeInstallerToken: h.revokeInstallerToken,
-  getInstallation: h.getInstallation,
-  deleteInstallation: h.deleteInstallation,
-  getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
-}));
+vi.mock('./lakeAppClient', async importOriginal => {
+  const actual = await importOriginal<typeof import('./lakeAppClient')>();
+  return {
+    ...actual,
+    exchangeInstallerCode: h.exchangeInstallerCode,
+    listInstallerVisibleRepositories: h.listInstallerVisibleRepositories,
+    listUserInstallations: h.listUserInstallations,
+    revokeInstallerToken: h.revokeInstallerToken,
+    getInstallation: h.getInstallation,
+    deleteInstallation: h.deleteInstallation,
+    getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
+  };
+});
 // The grant store has its own dedicated unit tests (githubLakeAuthGrant.test.ts).
-vi.mock('./githubLakeAuthGrant', () => ({
-  requireGitHubLakeFlowNonce: h.requireGitHubLakeFlowNonce,
-  storeGitHubLakeAuthGrant: h.storeGitHubLakeAuthGrant,
-  readGitHubLakeUserToken: h.readGitHubLakeUserToken,
-  consumeGitHubLakeAuthGrant: h.consumeGitHubLakeAuthGrant,
-}));
+vi.mock('./githubLakeAuthGrant', async importOriginal => {
+  const actual = await importOriginal<typeof import('./githubLakeAuthGrant')>();
+  return {
+    ...actual,
+    requireGitHubLakeFlowNonce: h.requireGitHubLakeFlowNonce,
+    storeGitHubLakeAuthGrant: h.storeGitHubLakeAuthGrant,
+    readGitHubLakeUserToken: h.readGitHubLakeUserToken,
+    consumeGitHubLakeAuthGrant: h.consumeGitHubLakeAuthGrant,
+  };
+});
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 // The sweep itself is covered by purgeDataLakeConnectionFiles's unit tests and the GitHub ingest e2e.
@@ -406,11 +415,30 @@ describe('listGitHubLakeRepositoryChoices', () => {
     h.listUserInstallations.mockResolvedValue([USER_INSTALLATION]);
     h.listInstallerVisibleRepositories.mockResolvedValue([REPO]);
     h.ghConnFindByRepositoryIds.mockResolvedValue([]);
+    h.consumeGitHubLakeAuthGrant.mockResolvedValue(undefined);
   });
 
   it('403s when the flow holds no live grant', async () => {
     h.readGitHubLakeUserToken.mockRejectedValue(new ForbiddenError('expired'));
     await expect(listGitHubLakeRepositoryChoices(params())).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('403s a GitHub 401 on the held user token (listUserInstallations) with the expired-grant message', async () => {
+    h.listUserInstallations.mockRejectedValue(Object.assign(new Error('Bad credentials'), { status: 401 }));
+    await expect(listGitHubLakeRepositoryChoices(params())).rejects.toMatchObject({
+      statusCode: 403,
+      message: GRANT_EXPIRED_MESSAGE,
+    });
+    expect(h.consumeGitHubLakeAuthGrant).toHaveBeenCalledWith(CONFIG, NONCE_HASH);
+  });
+
+  it('403s a GitHub 401 on the held user token (listInstallerVisibleRepositories) with the expired-grant message', async () => {
+    h.listInstallerVisibleRepositories.mockRejectedValue(Object.assign(new Error('Bad credentials'), { status: 401 }));
+    await expect(listGitHubLakeRepositoryChoices(params())).rejects.toMatchObject({
+      statusCode: 403,
+      message: GRANT_EXPIRED_MESSAGE,
+    });
+    expect(h.consumeGitHubLakeAuthGrant).toHaveBeenCalledWith(CONFIG, NONCE_HASH);
   });
 
   it('lists an installUrl bound to the same flow nonce', async () => {
@@ -518,6 +546,16 @@ describe('completeGitHubLakeConnection', () => {
   it('rejects when the installation is not visible to the user token at all (null)', async () => {
     h.listInstallerVisibleRepositories.mockResolvedValue(null);
     await expect(completeGitHubLakeConnection(params())).rejects.toMatchObject({ statusCode: 403 });
+    expect(h.ghConnCreate).not.toHaveBeenCalled();
+  });
+
+  it('403s a GitHub 401 on the held user token (listInstallerVisibleRepositories) with the expired-grant message', async () => {
+    h.listInstallerVisibleRepositories.mockRejectedValue(Object.assign(new Error('Bad credentials'), { status: 401 }));
+    await expect(completeGitHubLakeConnection(params())).rejects.toMatchObject({
+      statusCode: 403,
+      message: GRANT_EXPIRED_MESSAGE,
+    });
+    expect(h.consumeGitHubLakeAuthGrant).toHaveBeenCalledWith(CONFIG, NONCE_HASH);
     expect(h.ghConnCreate).not.toHaveBeenCalled();
   });
 

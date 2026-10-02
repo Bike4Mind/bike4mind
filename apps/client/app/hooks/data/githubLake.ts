@@ -61,7 +61,9 @@ export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
       // lands; refresh them whenever a poll shows the ingested set changed or a sync finished.
       const previous = queryClient.getQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId));
       const syncFinished = previous?.status === 'syncing' && next?.status !== 'syncing';
-      if (dataLakeId && previous && (syncFinished || next?.fileCount !== previous.fileCount)) {
+      // `null` (no connection yet) still counts as a known prior state: a first sync that lands before
+      // the first poll after connecting must refresh the file lists too.
+      if (dataLakeId && previous !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
       return next;

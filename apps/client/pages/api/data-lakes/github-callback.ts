@@ -3,11 +3,13 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { readStateNonceHash, clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
+import { consumeGitHubLakeAuthGrant } from '@server/integrations/github/dataLake/githubLakeAuthGrant';
 import {
   authorizeGitHubLakeConnection,
   requireGitHubLakeAppConfig,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { parseOrBadRequest } from '@server/utils/errors';
+import { serializeError } from '@server/utils/serializeError';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -30,6 +32,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(requireFeatureEnabled('EnableDataLakeGitHub'))
   .post(async (req: Request, res) => {
+    const nonceHash = readStateNonceHash(req, NONCE_SLOT.githubLakeConnect);
     try {
       const { state, code } = parseOrBadRequest(Body, req.body);
       const result = await authorizeGitHubLakeConnection({
@@ -37,12 +40,23 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         user: req.user,
         state,
         code,
-        nonceHash: readStateNonceHash(req, NONCE_SLOT.githubLakeConnect),
+        nonceHash,
       });
       return res.json(result);
     } catch (error) {
-      // The nonce keys the held token, so it lives on through the picker; a failed exchange burns it
-      // so the flow restarts rather than being replayed from this browser.
+      // The nonce keys the held token, so it lives on through the picker; any failure here burns it so
+      // the flow restarts rather than being replayed. A grant an earlier leg stored under it (the
+      // install fallback's return) is released best-effort too, never masking the real error.
+      if (nonceHash) {
+        const config = getGitHubLakeAppConfig();
+        if (config) {
+          await consumeGitHubLakeAuthGrant(config, nonceHash).catch((cleanupError: unknown) =>
+            req.logger.warn('GitHub lake callback: could not release the held grant on failure', {
+              error: serializeError(cleanupError),
+            })
+          );
+        }
+      }
       clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
       throw error;
     }
