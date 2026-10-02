@@ -254,7 +254,12 @@ describe('ChatCompletionProcess', () => {
         update: vi.fn(),
         attachAgent: vi.fn().mockResolvedValue(mockSession),
       },
-      organizations: { findById: vi.fn(), update: vi.fn(), findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      organizations: {
+        findById: vi.fn(),
+        update: vi.fn(),
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
       quests: {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
