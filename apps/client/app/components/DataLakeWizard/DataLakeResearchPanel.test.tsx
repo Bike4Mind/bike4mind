@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IDataLakeResearchConfigDocument, IDataLakeResearchRunDocument } from '@bike4mind/common';
@@ -550,7 +550,9 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByText(/judge gpt-4\.1-mini unavailable/)).toBeTruthy();
+      expect(
+        within(screen.getByTestId('datalake-research-run-meta')).getByText(/judge gpt-4\.1-mini unavailable/)
+      ).toBeTruthy();
       expect(screen.queryByText(/judged by/)).toBeNull();
     });
 
@@ -565,7 +567,9 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+      expect(
+        within(screen.getByTestId('datalake-research-run-meta')).getByText(/judged by gpt-4\.1-mini/)
+      ).toBeTruthy();
     });
 
     it('says judged by, not unavailable, when some judgments succeeded', () => {
@@ -577,8 +581,10 @@ describe('DataLakeResearchPanel', () => {
           }),
         ],
       });
-      expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
-      expect(screen.queryByText(/unavailable/)).toBeNull();
+      expect(
+        within(screen.getByTestId('datalake-research-run-meta')).getByText(/judged by gpt-4\.1-mini/)
+      ).toBeTruthy();
+      expect(screen.queryByText(/judge gpt-4\.1-mini unavailable/)).toBeNull();
     });
 
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {

@@ -413,22 +413,30 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
 };
 
 /**
- * Names the judge model on a run's meta line, or null when the judge never ran. "Judged" counts
- * every bucket a candidate can only reach after a successful score, so must stay in sync with the
+ * Every bucket a candidate can only reach after a successful score: must stay in sync with the
  * post-judgment branches of `executeResearchRun` (b4m-core/services/src/dataLakeResearchService).
+ * Keyed like `DROP_REASON_LABEL`, so a new `ResearchRunTotals` field fails the build until it is
+ * placed here or excluded.
  */
+const JUDGED_BUCKETS: Record<
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged'>,
+  true
+> = {
+  belowRelevance: true,
+  fetchFailed: true,
+  proposed: true,
+  duplicatePending: true,
+  alreadyInLake: true,
+  suppressedByTombstone: true,
+  unusableSource: true,
+};
+
+/** Names the judge model on a run's meta line, or null when the judge never ran. */
 const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
   if (!run.judgeModel) return null;
   const { totals } = run;
-  const judged =
-    totals.belowRelevance +
-    totals.fetchFailed +
-    totals.proposed +
-    totals.duplicatePending +
-    totals.alreadyInLake +
-    totals.suppressedByTombstone +
-    totals.unusableSource;
-  if (judged > 0) return `judged by ${run.judgeModel}`;
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  if (judged) return `judged by ${run.judgeModel}`;
   if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
   return null;
 };
