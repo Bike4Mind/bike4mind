@@ -43,6 +43,16 @@ describe('toolsForRequest', () => {
     expect(names({ roots: ['/tmp'], media: true, host: true })).not.toContain('mcp__notion_search');
   });
 
+  it('offers the browser without a folder, a project or anything else', () => {
+    // The browser rides on nothing: a Chat session with no grant at all still gets it.
+    expect(names({ roots: [], media: false, host: false, browser: true })).toEqual(
+      expect.arrayContaining(['browser_navigate', 'browser_click', 'browser_screenshot'])
+    );
+    // And widening it leaves the host family where it was.
+    expect(names({ roots: [], media: false, host: false, browser: true })).not.toContain('session_spawn');
+    expect(names({ roots: ['/tmp'], media: true, host: true })).not.toContain('browser_navigate');
+  });
+
   it('offers explore only beside the local tools', () => {
     expect(names({ roots: ['/tmp'], media: false, host: false, explore: true })).toContain('explore');
     expect(names({ roots: [], media: false, host: false, explore: true })).not.toContain('explore');

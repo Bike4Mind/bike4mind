@@ -1,5 +1,8 @@
+import { isLocalUrl, normalizeUrl } from '@shared/browserUrl';
 import type { ApprovalPrompt, BrowserContext, BrowserPage, ToolContext, ToolDefinition } from './types';
 import { capOutput, requireString } from './types';
+
+export { isLocalUrl, normalizeUrl };
 
 /** A snapshot asked for outright. Action results carry a smaller one, since they come every step. */
 export const SNAPSHOT_CHARS = 20_000;
@@ -8,44 +11,9 @@ export const ACTION_SNAPSHOT_CHARS = 12_000;
 const SETTLE_MS = 5_000;
 const MAX_EVENT_LINES = 25;
 
-/**
- * Hosts the agent may browse and act on without asking: the user's own dev servers. Anything
- * else is a real site, where a click can buy, post or delete, so it is gated per origin.
- */
-export function isLocalUrl(value: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  const host = url.hostname.replace(/^\[|\]$/g, '');
-  return (
-    host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === '::1' ||
-    host === '0.0.0.0' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.test')
-  );
-}
-
 function requireBrowser(context: ToolContext): BrowserContext {
   if (!context.browser) throw new Error('The browser is not available in this session.');
   return context.browser;
-}
-
-function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim();
-  // A bare host or host:port gets a scheme. "localhost:3080" also parses as a URL whose scheme is
-  // "localhost", hence the port test rather than asking URL whether a scheme is present.
-  const bare = /^[^\s/:]+(:\d+)?(\/|$)/.test(trimmed);
-  const withScheme = bare ? `${isLocalUrl(`http://${trimmed}`) ? 'http' : 'https'}://${trimmed}` : trimmed;
-  const url = new URL(withScheme);
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error(`Only http and https pages can be opened, not ${url.protocol}`);
-  }
-  return url.toString();
 }
 
 /** Acting on whatever page is open is free on a local dev server and asked per origin elsewhere. */
@@ -54,20 +22,83 @@ async function actsOnLocalPage(context: ToolContext): Promise<boolean> {
   return !current || isLocalUrl(current);
 }
 
+/**
+ * Whether the page carries cookies the USER imported from their own Chrome.
+ *
+ * Reaching a site as the signed-in person is not the act that 'auto' and 'full' are a decision
+ * about, so everything that touches such a page is asked about in every mode and keyed apart
+ * from the same action on the same origin anonymously. See cookies/CookieImporter: a tool can
+ * only read this flag, never set one.
+ */
+function onUserSession(context: ToolContext, url: string): boolean {
+  return !!url && (context.browser?.usesImportedCookies(url) ?? false);
+}
+
+/** Added to an approval the user has to answer themselves, whatever mode they set. */
+const AS_THE_USER = { askInAuto: true, askInFull: true } as const;
+
 async function actionApproval(
   verb: string,
   input: Record<string, unknown>,
   context: ToolContext
 ): Promise<ApprovalPrompt> {
-  const origin = new URL((await requireBrowser(context).page()).currentUrl()).origin;
+  const current = (await requireBrowser(context).page()).currentUrl();
+  const origin = new URL(current).origin;
   const target = typeof input.ref === 'string' ? ` (element ${input.ref})` : '';
+  if (onUserSession(context, current)) {
+    return {
+      detail: `${verb} on ${origin}${target}, signed in as you`,
+      key: `browser-act-as-you:${origin}`,
+      ...AS_THE_USER,
+    };
+  }
   return { detail: `${verb} on ${origin}${target}`, key: `browser-act:${origin}` };
 }
 
+/** True for a page that is neither a local dev server nor carrying the user's own session. */
+async function actionNeedsApproval(context: ToolContext): Promise<boolean> {
+  if (!(await actsOnLocalPage(context))) return true;
+  return onUserSession(context, (await requireBrowser(context).page()).currentUrl());
+}
+
 const gatedAction = (verb: string): Pick<ToolDefinition, 'needsApproval' | 'approval'> => ({
-  needsApproval: async (_input, context) => !(await actsOnLocalPage(context)),
+  needsApproval: (_input, context) => actionNeedsApproval(context),
   approval: (input, context) => actionApproval(verb, input, context),
 });
+
+/**
+ * Running a script on a page that is not the user's own dev server, which is asked about in
+ * EVERY mode - 'full' included.
+ *
+ * The browser's cookie jar used to hold nothing but dev-server logins the agent had created
+ * itself, and on that reading an ungated `browser_evaluate` was a script running against the
+ * agent's own work. The pane's url bar ends that reading: the user can browse anywhere and sign
+ * in by hand, in this jar, and a script in that page reads `document.cookie` and calls the
+ * site's API as them - with the result going into the model's context and so to the provider.
+ *
+ * Keyed apart from the other actions on purpose. Clicking a button on a site is a thing the user
+ * can see the shape of; "always allow" for that must not quietly also mean "and run whatever
+ * JavaScript you like there".
+ *
+ * Gated on the origin the script would RUN in, rather than on whether this page has ever left a
+ * local origin. Navigating back to localhost is not a way around it: a script in a localhost
+ * page is in localhost's origin, so the same-origin policy is what stops it reading the other
+ * site's cookies or responses, not this check. A sticky rule would ask about every later
+ * `document.querySelector` on the dev server the agent is there to test, which is the kind of
+ * friction that gets a gate switched off wholesale.
+ */
+const gatedScript: Pick<ToolDefinition, 'needsApproval' | 'approval'> = {
+  needsApproval: (_input, context) => actionNeedsApproval(context),
+  async approval(_input, context) {
+    const origin = new URL((await requireBrowser(context).page()).currentUrl()).origin;
+    return {
+      detail: `Run a script on ${origin}, with that site's cookies`,
+      key: `browser-script:${origin}`,
+      askInAuto: true,
+      askInFull: true,
+    };
+  },
+};
 
 function eventsSection(page: BrowserPage): string {
   const events = page.drainEvents();
@@ -103,10 +134,20 @@ export const browserNavigate: ToolDefinition = {
       required: ['url'],
     },
   },
-  needsApproval: input => !isLocalUrl(normalizeUrl(requireString(input, 'url'))),
-  approval(input) {
+  needsApproval: (input, context) => {
+    const url = normalizeUrl(requireString(input, 'url'));
+    return !isLocalUrl(url) || onUserSession(context, url);
+  },
+  approval(input, context) {
     const url = normalizeUrl(requireString(input, 'url'));
     const origin = new URL(url).origin;
+    if (onUserSession(context, url)) {
+      return {
+        detail: `Open ${url} as your signed-in ${new URL(url).hostname} session`,
+        key: `browser-open-as-you:${origin}`,
+        ...AS_THE_USER,
+      };
+    }
     return { detail: `Open ${url}`, key: `browser-open:${origin}` };
   },
   async run(input, context) {
@@ -263,7 +304,7 @@ export const browserEvaluate: ToolDefinition = {
       required: ['expression'],
     },
   },
-  ...gatedAction('Run a script'),
+  ...gatedScript,
   async run(input, context) {
     const expression = requireString(input, 'expression');
     const page = await requireBrowser(context).page();

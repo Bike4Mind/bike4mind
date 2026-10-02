@@ -27,10 +27,13 @@ cdk.context.json
 .env.secrets
 .env.selfhost
 .env.e2e
-# Local env-file secret backups: a *.bak of an env file (tooling and editors
-# write these) and .env.e2e can both hold real secrets - never commit them.
+# Local env-file secret backups: a *.bak of an env file, plain or with a
+# timestamp suffix (tooling, editors and the worktree helper write these), and
+# .env.e2e can all hold real secrets - never commit them.
 .env.bak
 .env.*.bak
+.env.bak-*
+.env.*.bak-*
 .direnv
 
 # Local-only docker compose override (per-developer mongo port/container)

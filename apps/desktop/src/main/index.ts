@@ -118,7 +118,7 @@ void app.whenReady().then(async () => {
     },
     prepareQuit: async () => {
       quitting = true;
-      await Promise.all([background.shutdown(), mcp.shutdown()]).catch(() => undefined);
+      await Promise.all([background.shutdown(), mcp.shutdown(), browser.cookies.clearOnQuit()]).catch(() => undefined);
     },
   });
 
@@ -143,7 +143,9 @@ void app.whenReady().then(async () => {
     if (quitting) return;
     quitting = true;
     event.preventDefault();
-    void Promise.all([background.shutdown(), mcp.shutdown()])
+    // The imported cookies go too. They have no expiry and so were never written to disk, but
+    // this is the pass that can await, and the guarantee is worth holding in two places.
+    void Promise.all([background.shutdown(), mcp.shutdown(), browser.cookies.clearOnQuit()])
       .catch(() => undefined)
       .finally(() => app.quit());
   });

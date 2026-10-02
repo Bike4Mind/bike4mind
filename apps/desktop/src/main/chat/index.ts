@@ -16,13 +16,22 @@ import type {
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
-import { IPC_CHANNELS } from '@shared/ipc';
+import type { CookieImportRequest } from '@shared/browserCookies';
+import {
+  IPC_CHANNELS,
+  type BrowserGoAction,
+  type BrowserGoRequest,
+  type BrowserNavigateRequest,
+  type BrowserPaneBounds,
+  type BrowserPaneRequest,
+  type BrowserPaneState,
+} from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { AttachmentStore } from './AttachmentStore';
-import { BrowserManager } from './browser/BrowserManager';
+import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -44,7 +53,7 @@ import { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
-import { parseReasoningEffortSetting } from './reasoningEffort';
+import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { appWindows } from '../windows';
 
@@ -67,8 +76,9 @@ const MODEL_OVERRIDE = process.env.B4M_DESKTOP_DEFAULT_MODEL?.trim();
 const PREFERRED_MODEL: string = MODEL_OVERRIDE || ChatModels.CLAUDE_5_OPUS;
 
 /**
- * Reasoning effort for models that take one, read per launch so a benchmark can compare efforts
- * without a rebuild. There is no settings store to persist it in yet.
+ * The reasoning effort a conversation starts on, read per launch so a benchmark can compare
+ * efforts without a rebuild. The user's own choice is per session and outranks this - see
+ * SessionStore - so this only reaches a conversation that has never been given one.
  */
 const REASONING_EFFORT = parseReasoningEffortSetting(process.env.B4M_DESKTOP_REASONING_EFFORT);
 
@@ -137,6 +147,22 @@ function mcpStoreFile(path: string): StoreFile {
   };
 }
 
+/**
+ * The pane rectangle, or null for anything that is not one.
+ *
+ * Checked rather than trusted even though the renderer is ours: these numbers go straight to
+ * `setBounds`, and a NaN there puts a web page somewhere nobody can find it - including over
+ * the composer.
+ */
+function paneBounds(value: unknown): BrowserPaneBounds | null {
+  const bounds = value as Partial<BrowserPaneBounds> | null | undefined;
+  if (!bounds) return null;
+  const { x, y, width, height } = bounds;
+  if (![x, y, width, height].every(side => typeof side === 'number' && Number.isFinite(side))) return null;
+  if (width! < 1 || height! < 1) return null;
+  return { x: Math.round(x!), y: Math.round(y!), width: Math.round(width!), height: Math.round(height!) };
+}
+
 /** The OS folder picker, parented to the window that asked when there is one. */
 async function pickDirectory(sender: WebContents): Promise<string | null> {
   const window = BrowserWindow.fromWebContents(sender);
@@ -166,7 +192,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
     PREFERRED_MODEL,
     randomUUID(),
     () => sessionScopeFor(auth.getState()),
-    approvalModes
+    approvalModes,
+    REASONING_EFFORT
   );
   const access = new AccessStore(join(userData, 'tool-access.json'));
   // Its own file beside tool-access.json, and for the same reason: both record a consent the
@@ -225,7 +252,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
 
   const foreground = new ForegroundCommandRegistry();
 
-  const browser = new BrowserManager();
+  const browser = new BrowserManager(
+    (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
+    state => send(IPC_CHANNELS.browserCookiesChanged, state)
+  );
 
   const service = new ChatService({
     store,
@@ -234,7 +264,6 @@ export function registerChat(auth: AuthService): RegisteredChat {
     models,
     logger,
     preferredModel: PREFERRED_MODEL,
-    reasoningEffort: REASONING_EFFORT,
     approvals,
     background,
     foreground,
@@ -268,6 +297,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatSetSessionModel, (_event, sessionId: string, model: string) =>
     service.setSessionModel(sessionId, model)
   );
+  // Validated here rather than trusted, like the approval mode below: an unrecognised value
+  // must not reach the store, where it would be sent verbatim on the next turn.
+  ipcMain.handle(IPC_CHANNELS.chatSetSessionReasoningEffort, (_event, sessionId: string, effort: unknown) => {
+    const setting = storedReasoningEffortSetting(effort);
+    return setting ? service.setSessionReasoningEffort(sessionId, setting) : null;
+  });
   ipcMain.handle(IPC_CHANNELS.chatSetSessionPinned, (_event, sessionId: string, pinned: boolean) =>
     service.setSessionPinned(sessionId, pinned)
   );
@@ -424,6 +459,53 @@ export function registerChat(auth: AuthService): RegisteredChat {
     await mcp.connect(id);
     return mcp.state();
   });
+
+  // The view is attached to the window that asked, so the request carries no window id: a
+  // second app window asking puts the page in ITS pane, and the first one's pane falls back to
+  // its empty state on its next report.
+  ipcMain.handle(IPC_CHANNELS.browserSetPane, (event, request: BrowserPaneRequest): BrowserPaneState => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const sessionId = typeof request?.sessionId === 'string' ? request.sessionId : null;
+    if (!window) return NO_PAGE;
+    return browser.setPane(window, sessionId, paneBounds(request?.bounds));
+  });
+
+  // The url bar. Its requests name a conversation rather than being implied by the open pane,
+  // for the same reason setPane does: a second app window has a pane of its own.
+  ipcMain.handle(IPC_CHANNELS.browserNavigate, (_event, request: BrowserNavigateRequest) => {
+    if (typeof request?.sessionId !== 'string' || typeof request?.url !== 'string') {
+      throw new Error('A conversation and a url are required.');
+    }
+    return browser.navigate(request.sessionId, request.url);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
+    const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];
+    if (typeof request?.sessionId !== 'string' || !actions.includes(request?.action)) {
+      throw new Error('A conversation and one of back, forward or reload are required.');
+    }
+    return browser.go(request.sessionId, request.action);
+  });
+
+  /**
+   * Importing the user's own Chrome cookies.
+   *
+   * Every one of these answers a click in the pane's menu. None of them is reachable from a
+   * tool, and the sites an import reads come from the request the chooser built out of the
+   * user's own Chrome profile - never from the open page, a reply, or anything the model said.
+   */
+  ipcMain.handle(IPC_CHANNELS.browserCookiesGetState, () => browser.cookies.state());
+  ipcMain.handle(IPC_CHANNELS.browserCookiesListProfiles, () => browser.cookies.profiles());
+  ipcMain.handle(IPC_CHANNELS.browserCookiesListHosts, (_event, profileDir: unknown) =>
+    browser.cookies.hosts(typeof profileDir === 'string' ? profileDir : '')
+  );
+  ipcMain.handle(IPC_CHANNELS.browserCookiesImport, (_event, request: CookieImportRequest) => {
+    const hosts = Array.isArray(request?.hosts) ? request.hosts.filter(host => typeof host === 'string') : [];
+    return browser.cookies.importSites(typeof request?.profileDir === 'string' ? request.profileDir : '', hosts);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserCookiesForget, (_event, host: unknown) =>
+    browser.cookies.forget(typeof host === 'string' ? host : '')
+  );
+  ipcMain.handle(IPC_CHANNELS.browserCookiesClear, () => browser.cookies.clear());
 
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));
   // The picker is the ONLY way a root is added. Keeping the grant behind an OS dialog the user

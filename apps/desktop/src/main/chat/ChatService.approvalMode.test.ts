@@ -184,7 +184,10 @@ describe('ChatService approval modes', () => {
 
       const asked = await awaitStatus('awaiting-approval');
       expect(asked.id).toBe('c2');
+      // The two reads run in parallel, so c2 can reach the gate before c1's read has finished.
+      await awaitStatus('done');
       expect(calls('done').map(call => call.id)).toEqual(['c1']);
+      expect(calls('awaiting-approval').map(call => call.id)).toEqual(['c2']);
     });
 
     it('writes an ordinary file without asking', async () => {

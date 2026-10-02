@@ -1,5 +1,12 @@
 import type { AccountCredits } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
+import type {
+  ChromeHostsResult,
+  ChromeProfilesResult,
+  CookieImportRequest,
+  CookieImportResult,
+  CookieImportState,
+} from './browserCookies';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
@@ -21,6 +28,7 @@ import type {
   CreateCodeSessionResult,
   ProjectInspection,
   ContextBoundaryResult,
+  ReasoningEffortSetting,
   SendMessageRequest,
   SendMessageResult,
   ToolAccessState,
@@ -53,6 +61,7 @@ export const IPC_CHANNELS = {
   accountGetCredits: 'account:get-credits',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
+  chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
   chatSetSessionPinned: 'chat:set-session-pinned',
   /**
    * The one way an approval mode changes. Renderer -> main only, driven by the composer pill:
@@ -133,6 +142,46 @@ export const IPC_CHANNELS = {
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  /**
+   * Where the agent's browser should be drawn, if anywhere. Renderer -> main only: the view is
+   * an overlay the renderer cannot see, so the renderer is the only thing that knows where the
+   * hole it has left for it actually is.
+   */
+  browserSetPane: 'browser:set-pane',
+  /**
+   * Open what the user typed in the pane's url bar. Renderer -> main.
+   *
+   * The USER's navigation, not the agent's, so it goes nowhere near the tool approval gate -
+   * but main still resolves the address itself, because the http/https rule is not the
+   * renderer's to enforce. See @shared/browserUrl.
+   */
+  browserNavigate: 'browser:navigate',
+  /** Back, forward or reload from the pane's url bar. Renderer -> main. */
+  browserGo: 'browser:go',
+  /**
+   * main -> renderer push; one conversation's page moved, started loading, or failed to.
+   *
+   * Everything the url bar draws arrives on this one channel, because it all changes together:
+   * a navigation is also what settles whether there is anything to go back to.
+   */
+  browserPageState: 'browser:page-state',
+  /**
+   * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
+   *
+   * There is no tool behind any of these and no model-reachable path to one: an import happens
+   * because the user clicked it in the pane's menu and named the sites. See @shared/browserCookies.
+   */
+  browserCookiesGetState: 'browser:cookies-get-state',
+  browserCookiesListProfiles: 'browser:cookies-list-profiles',
+  /** The chooser's site list. Reads host names only - no Keychain prompt, nothing decrypted. */
+  browserCookiesListHosts: 'browser:cookies-list-hosts',
+  /** The one call that prompts the Keychain and writes to the jar. */
+  browserCookiesImport: 'browser:cookies-import',
+  browserCookiesForget: 'browser:cookies-forget',
+  /** Empties the partition, not only the imported rows. See CookieImporter.clear. */
+  browserCookiesClear: 'browser:cookies-clear',
+  /** main -> renderer push; what the pane's standing indicator draws. */
+  browserCookiesChanged: 'browser:cookies-changed',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
 } as const;
@@ -144,6 +193,62 @@ export interface AppInfo {
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;
+}
+
+/**
+ * The rectangle the renderer has left clear for the agent's browser, in CSS pixels relative to
+ * the app window's content area - which is exactly what getBoundingClientRect reports.
+ */
+export interface BrowserPaneBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * What the renderer is asking for: a conversation's page at these bounds, or nothing.
+ *
+ * Null bounds mean "show no page" while still naming the conversation, so the answer still
+ * carries that conversation's url and the pane can say whether it has anything to show. A null
+ * `sessionId` is the same request with nothing to ask about.
+ */
+export interface BrowserPaneRequest {
+  sessionId: string | null;
+  bounds: BrowserPaneBounds | null;
+}
+
+/**
+ * Everything the pane's url bar draws. The empty url is a conversation whose browser has no
+ * page, or has been nowhere.
+ */
+export interface BrowserPaneState {
+  url: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  loading: boolean;
+  /**
+   * Why the last load did not arrive, or '' when it did. A failed load usually leaves the
+   * PREVIOUS page on screen, so this is the only thing that says so - which is the whole point
+   * of carrying it rather than letting the pane show a page that is quietly out of date.
+   */
+  error: string;
+}
+
+export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
+
+/** Which conversation's browser to send to `url`. The url is resolved again in main. */
+export interface BrowserNavigateRequest {
+  sessionId: string;
+  url: string;
+}
+
+/** The history controls, which take no url. */
+export type BrowserGoAction = 'back' | 'forward' | 'reload';
+
+export interface BrowserGoRequest {
+  sessionId: string;
+  action: BrowserGoAction;
 }
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
@@ -191,6 +296,8 @@ export interface DesktopApi {
     listModels(force?: boolean): Promise<ChatModelCatalog>;
     /** Pin a conversation to a model. Null when the session is gone. */
     setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null>;
+    /** How hard this conversation's model should think. Null when the session is gone. */
+    setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null>;
     /** Pin a conversation to the top of the sidebar. Null when the session is gone. */
     setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null>;
     /**
@@ -339,6 +446,40 @@ export interface DesktopApi {
      * Returns the state the picker should now draw.
      */
     setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+  };
+  /**
+   * The agent's browser, as something the user can watch.
+   *
+   * The page takes the user's own clicks and keystrokes directly, and the agent drives it
+   * through its tools in main. What is here is the url bar: the one part of driving the page
+   * that the user cannot do by clicking on it, because the page has no chrome of its own.
+   */
+  browser: {
+    /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
+    setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
+    /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
+    navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
+    go(request: BrowserGoRequest): Promise<BrowserPaneState>;
+    /** Subscribe to page state; returns the unsubscribe. */
+    onPageState(listener: (event: BrowserPageStateEvent) => void): () => void;
+    /**
+     * The user's own Chrome cookies, for sites they name.
+     *
+     * Reached from the pane's menu and from nowhere else. Nothing here is a tool, and nothing
+     * that crosses it carries a cookie value or a cookie name - see @shared/browserCookies.
+     */
+    cookies: {
+      getState(): Promise<CookieImportState>;
+      listProfiles(): Promise<ChromeProfilesResult>;
+      /** The sites one profile has cookies for. Decrypts nothing; the Keychain is untouched. */
+      listHosts(profileDir: string): Promise<ChromeHostsResult>;
+      /** Prompts the Keychain. Only `hosts` are read, and only they go into the jar. */
+      import(request: CookieImportRequest): Promise<CookieImportResult>;
+      forget(host: string): Promise<CookieImportState>;
+      /** Signs the browser out of everything, imported or not. */
+      clear(): Promise<CookieImportState>;
+      onChanged(listener: (state: CookieImportState) => void): () => void;
+    };
   };
   files: {
     /**

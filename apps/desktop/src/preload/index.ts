@@ -9,11 +9,20 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   CreateCodeSessionRequest,
+  ReasoningEffortSetting,
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
+import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
-import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
+import {
+  IPC_CHANNELS,
+  type BrowserGoRequest,
+  type BrowserNavigateRequest,
+  type BrowserPageStateEvent,
+  type BrowserPaneRequest,
+  type DesktopApi,
+} from '@shared/ipc';
 import type { UpdateState } from '@shared/update';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -55,6 +64,8 @@ const api: DesktopApi = {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),
     setSessionModel: (sessionId: string, model: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionModel, sessionId, model),
+    setSessionReasoningEffort: (sessionId: string, effort: ReasoningEffortSetting) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionReasoningEffort, sessionId, effort),
     setSessionPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetSessionPinned, sessionId, pinned),
     setApprovalMode: (sessionId: string, mode: ChatApprovalMode) =>
@@ -127,6 +138,29 @@ const api: DesktopApi = {
     listSkills: sessionId => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, sessionId),
     setProjectSkillsTrusted: (sessionId, trusted) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
+  },
+  browser: {
+    setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
+    navigate: (request: BrowserNavigateRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, request),
+    go: (request: BrowserGoRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserGo, request),
+    onPageState: listener => {
+      const handler = (_event: unknown, event: BrowserPageStateEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.browserPageState, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.browserPageState, handler);
+    },
+    cookies: {
+      getState: () => ipcRenderer.invoke(IPC_CHANNELS.browserCookiesGetState),
+      listProfiles: () => ipcRenderer.invoke(IPC_CHANNELS.browserCookiesListProfiles),
+      listHosts: (profileDir: string) => ipcRenderer.invoke(IPC_CHANNELS.browserCookiesListHosts, profileDir),
+      import: (request: CookieImportRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserCookiesImport, request),
+      forget: (host: string) => ipcRenderer.invoke(IPC_CHANNELS.browserCookiesForget, host),
+      clear: () => ipcRenderer.invoke(IPC_CHANNELS.browserCookiesClear),
+      onChanged: listener => {
+        const handler = (_event: unknown, state: CookieImportState) => listener(state);
+        ipcRenderer.on(IPC_CHANNELS.browserCookiesChanged, handler);
+        return () => ipcRenderer.removeListener(IPC_CHANNELS.browserCookiesChanged, handler);
+      },
+    },
   },
   files: {
     // Electron removed File.path in v32; webUtils is the replacement and it only works on this

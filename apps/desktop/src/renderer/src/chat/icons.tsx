@@ -270,3 +270,40 @@ export function DownloadIcon() {
     </Glyph>
   );
 }
+
+/** The agent's browser: a globe, the one shape every browser has used for "the web". */
+export function GlobeIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="8" r="5.5" />
+      <path d="M2.5 8h11" />
+      <path d="M8 2.5c1.7 1.6 2.6 3.5 2.6 5.5S9.7 12.4 8 13.5C6.3 11.9 5.4 10 5.4 8S6.3 3.6 8 2.5z" />
+    </Glyph>
+  );
+}
+
+/** The browser pane's url bar: back, forward, and a reload that is the same arc both ways. */
+export function ArrowLeftIcon() {
+  return (
+    <Glyph>
+      <path d="M12.75 8h-9M7.85 12.1 3.75 8l4.1-4.1" />
+    </Glyph>
+  );
+}
+
+export function ArrowRightIcon() {
+  return (
+    <Glyph>
+      <path d="M3.25 8h9M8.15 3.9 12.25 8l-4.1 4.1" />
+    </Glyph>
+  );
+}
+
+export function ReloadIcon() {
+  return (
+    <Glyph>
+      <path d="M13.25 8a5.25 5.25 0 1 1-1.9-4.05" />
+      <path d="M13.4 2.4v3.1h-3.1" />
+    </Glyph>
+  );
+}

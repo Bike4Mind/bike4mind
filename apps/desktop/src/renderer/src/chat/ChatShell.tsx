@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
@@ -11,12 +12,16 @@ import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
 import { readPanelFlag, writePanelFlag } from './backgroundTasks';
+import { BrowserPane } from './BrowserPane';
+import { readBrowserPaneOpen, writeBrowserPaneOpen } from './agentBrowser';
 import { ApprovalModePill } from './ApprovalModePill';
 import { Composer } from './Composer';
 import { CustomizeNavItem, CustomizeScreen } from './CustomizePanel';
+import { GlobeIcon } from './icons';
 import { MessageThread } from './MessageThread';
 import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
+import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { TodoPanel } from './TodoPanel';
@@ -133,6 +138,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   // persistence - see backgroundTasks.ts for the keys and the blocked-storage fallback.
   const [tasksOpen, setTasksOpen] = useState(() => readPanelFlag('open'));
   const [tasksWide, setTasksWide] = useState(() => readPanelFlag('wide'));
+  const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
 
@@ -143,6 +149,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const toggleTasksWide = useCallback(() => {
     setTasksWide(current => {
       writePanelFlag('wide', !current);
+      return !current;
+    });
+  }, []);
+  const toggleBrowser = useCallback(() => {
+    setBrowserOpen(current => {
+      writeBrowserPaneOpen(!current);
       return !current;
     });
   }, []);
@@ -175,27 +187,19 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   // ever reaches it.
   const unbound = conversation.session?.mode === 'code' && !conversation.session.project;
 
+  /**
+   * Whether this conversation HAS an agent browser to show.
+   *
+   * A conversation is all it takes, which is the same condition main offers the browser tools
+   * on: the page is keyed on the conversation id and nothing about it is project-shaped. The
+   * one thing it cannot do is belong to no conversation, so the toggle stays on screen and
+   * disabled on the empty window rather than disappearing from it.
+   */
+  const browserAvailable = !!activeId;
+
   // Re-read when a reply ends anywhere, which is the only moment this window knows the balance
   // moved. See useAccountCredits for why it is not polled.
   const credits = useAccountCredits(conversation.settledTurns);
-
-  /**
-   * What the composer's idle indicator reports: how full the window is, and what is left.
-   *
-   * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
-   * because a percentage of a made-up window is a number the user cannot tell is wrong.
-   */
-  const composerUsage: ComposerUsage = useMemo(() => {
-    const reply = latestReply(conversation.messages);
-    return {
-      contextTokens: contextTokens(reply),
-      contextWindow: modelOption?.contextWindow ?? null,
-      credits: credits.balance,
-      ...(credits.error ? { creditsError: credits.error } : {}),
-      lastTurn: reply?.usage ?? null,
-    };
-  }, [conversation.messages, modelOption?.contextWindow, credits.balance, credits.error]);
 
   /**
    * Whether this conversation has a turn open, for the composer's controls.
@@ -208,6 +212,28 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+
+  /**
+   * What the composer's usage indicator reports: how full the window is, and what is left.
+   *
+   * The context figure comes from the last reply's LAST request, never from the turn's summed
+   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
+   * because a percentage of a made-up window is a number the user cannot tell is wrong.
+   *
+   * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
+   * streamed has measured nothing yet, and without it the indicator would read as unknown from
+   * the moment the user pressed send until the reply landed. See latestReply.
+   */
+  const composerUsage: ComposerUsage = useMemo(() => {
+    const reply = latestReply(conversation.messages, turnOpen);
+    return {
+      contextTokens: contextTokens(reply),
+      contextWindow: modelOption?.contextWindow ?? null,
+      credits: credits.balance,
+      ...(credits.error ? { creditsError: credits.error } : {}),
+      lastTurn: reply?.usage ?? null,
+    };
+  }, [conversation.messages, turnOpen, modelOption?.contextWindow, credits.balance, credits.error]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
@@ -397,20 +423,52 @@ export function ChatShell({ account }: { account?: ReactNode }) {
       ) : (
         <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
-            <Box sx={{ ...contentColumnSx, py: 1.25 }}>
-              {conversation.session ? (
-                <>
-                  <SessionHeader
-                    title={conversation.session.title}
-                    onRename={title => void conversation.rename(title)}
-                  />
-                  {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
-                </>
-              ) : (
-                <Typography level="title-sm" textColor="text.tertiary">
-                  No conversation open
-                </Typography>
-              )}
+            <Box sx={{ ...contentColumnSx, py: 1.25, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                {conversation.session ? (
+                  <>
+                    <SessionHeader
+                      title={conversation.session.title}
+                      onRename={title => void conversation.rename(title)}
+                    />
+                    {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
+                  </>
+                ) : (
+                  <Typography level="title-sm" textColor="text.tertiary">
+                    No conversation open
+                  </Typography>
+                )}
+              </Box>
+              {/* Inside the reading column, not out at the window edge: a tooltip opening from
+                  here cannot reach the pane, and a tooltip over the pane would be drawn behind
+                  the web page - see agentBrowser.ts. */}
+              <Tooltip
+                size="sm"
+                variant="soft"
+                placement="bottom-end"
+                title={
+                  browserAvailable
+                    ? browserOpen
+                      ? 'Hide the browser'
+                      : 'Show the browser'
+                    : 'Open a conversation to use the browser.'
+                }
+              >
+                <Box component="span" sx={{ display: 'inline-flex' }}>
+                  <IconButton
+                    size="sm"
+                    variant={browserOpen && browserAvailable ? 'soft' : 'plain'}
+                    color="neutral"
+                    disabled={!browserAvailable}
+                    aria-pressed={browserOpen && browserAvailable}
+                    aria-label={browserOpen ? 'Hide the browser' : 'Show the browser'}
+                    onClick={toggleBrowser}
+                    data-testid="chat-toggle-browser-btn"
+                  >
+                    <GlobeIcon />
+                  </IconButton>
+                </Box>
+              </Tooltip>
             </Box>
           </Box>
 
@@ -540,12 +598,21 @@ export function ChatShell({ account }: { account?: ReactNode }) {
               />
             }
             footer={
-              <ModelPicker
-                catalog={catalog}
-                modelId={conversation.session?.model ?? null}
-                disabled={!activeId}
-                onSelect={model => void conversation.setModel(model)}
-              />
+              <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+                <ModelPicker
+                  catalog={catalog}
+                  modelId={conversation.session?.model ?? null}
+                  disabled={!activeId}
+                  onSelect={model => void conversation.setModel(model)}
+                />
+                <ReasoningEffortPicker
+                  models={catalog.models}
+                  modelId={conversation.session?.model ?? null}
+                  effort={conversation.session?.reasoningEffort ?? 'default'}
+                  disabled={!activeId}
+                  onSelect={effort => void conversation.setReasoningEffort(effort)}
+                />
+              </Stack>
             }
           />
         </Stack>
@@ -567,6 +634,17 @@ export function ChatShell({ account }: { account?: ReactNode }) {
           onStop={background.stop}
           onClearFinished={background.clearFinished}
         />
+      )}
+
+      {/* Last in the row, so the web page is at the window's own right edge.
+
+        Unlike every other column here, what this one reserves is a hole for a NATIVE view the
+        main process draws in front of the renderer. It is therefore mounted only on the
+        conversation screen - the artifacts and customize screens take the whole pane and a web
+        page floating over them would be unreachable - and it is told to stand down while the
+        drop overlay is up, which is drawn in the React tree and so would be behind it. */}
+      {browserOpen && browserAvailable && screen === 'conversation' && (
+        <BrowserPane sessionId={activeId} suspended={drop.over} />
       )}
     </Box>
   );

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Dropdown from '@mui/joy/Dropdown';
 import Input from '@mui/joy/Input';
@@ -13,8 +13,18 @@ import type { ModelCatalogController } from './useChat';
 /** Above this the list is long enough that scanning it beats scrolling it. */
 const FILTER_THRESHOLD = 8;
 
+/** Keys the menu, not the filter box, should act on - navigation, and the way out. */
+const MENU_KEYS = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageUp', 'PageDown', 'Tab', 'Escape']);
+
 function shortLabel(models: readonly ChatModelOption[], modelId: string): string {
   return models.find(model => model.id === modelId)?.name ?? modelId;
+}
+
+/** The first model row of the menu the filter box sits in - the one the query narrowed to. */
+function topMatch(filterInput: HTMLElement): HTMLElement | null {
+  return (
+    filterInput.closest('[role="menu"]')?.querySelector<HTMLElement>('[data-testid="model-picker-option"]') ?? null
+  );
 }
 
 /**
@@ -38,6 +48,38 @@ export function ModelPicker({
 }) {
   const [filter, setFilter] = useState('');
   const { models, loading, error } = catalog;
+
+  /** False once the user has asked to leave the filter box - see `bindFilter`. */
+  const holdFilter = useRef(true);
+
+  /**
+   * Holds focus in the filter box while a query is being typed.
+   *
+   * Joy's menu re-focuses its highlighted item every time the set of items changes, and it only
+   * declines to when the focus it would steal is OUTSIDE the menu - which a filter box sitting
+   * inside the menu never is. Every keystroke narrows the list, so without this the box loses
+   * focus after one character and the rest of the query goes nowhere.
+   *
+   * It has to be an event listener rather than an effect keyed on the matches: the steal lands in
+   * the render AFTER the one that narrowed the list, which an effect of ours does not see. Taking
+   * focus back on `focusin` catches it whenever it happens. Navigation keys clear `holdFilter`
+   * first, so arrowing into the list still works.
+   */
+  const bindFilter = useCallback((node: HTMLInputElement | null) => {
+    const menu = node?.closest('[role="menu"]');
+    if (!node || !menu) return;
+    holdFilter.current = true;
+    node.focus();
+    const restore = (event: Event) => {
+      if (event.target === node) {
+        holdFilter.current = true; // clicked back into the box after arrowing away
+        return;
+      }
+      if (holdFilter.current) node.focus();
+    };
+    menu.addEventListener('focusin', restore);
+    return () => menu.removeEventListener('focusin', restore);
+  }, []);
 
   // A saved model missing from a list that LOADED is genuinely gone from this deployment.
   // While the list is empty because it could not be read, nothing is known, so nothing is said.
@@ -71,15 +113,32 @@ export function ModelPicker({
         {models.length > FILTER_THRESHOLD && (
           <Box sx={{ px: 1, pb: 0.5 }}>
             <Input
-              autoFocus
               size="sm"
               value={filter}
               placeholder="Filter models..."
               onChange={event => setFilter(event.target.value)}
-              // Typing must reach the box: Joy's menu treats printable keys as type-ahead and
-              // moves the highlight instead, which eats every character after the first.
-              onKeyDown={event => event.stopPropagation()}
-              slotProps={{ input: { 'data-testid': 'model-picker-filter' } }}
+              onKeyDown={event => {
+                // A typed query has one obvious answer, so Enter takes it rather than making the
+                // user arrow down into a list they just narrowed to the thing they wanted. It
+                // clicks the row rather than calling `onSelect` here, because only the row's own
+                // click also closes the menu: Joy's Dropdown re-asserts its internal open state
+                // over an `open` prop driven from outside. And the click has to leave this
+                // handler first - dispatched from inside the keydown, the close never lands.
+                if (event.key === 'Enter' && filter.trim() && matches.length > 0) {
+                  event.stopPropagation();
+                  const row = topMatch(event.currentTarget);
+                  queueMicrotask(() => row?.click());
+                  return;
+                }
+                if (MENU_KEYS.has(event.key)) {
+                  holdFilter.current = false;
+                  return;
+                }
+                // Typing must reach the box: Joy's menu treats printable keys as type-ahead and
+                // moves the highlight instead, which eats every character after the first.
+                event.stopPropagation();
+              }}
+              slotProps={{ input: { ref: bindFilter, 'data-testid': 'model-picker-filter' } }}
             />
           </Box>
         )}

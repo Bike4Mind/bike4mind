@@ -141,6 +141,12 @@ export interface BrowserContext {
   page(): Promise<BrowserPage>;
   /** Keep a screenshot for the transcript, so the user sees what the model saw. */
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
+  /**
+   * Whether this url is a site the USER imported their own Chrome cookies for, which makes
+   * reaching it a different act from reaching it anonymously - so the browser tools ask about
+   * it in every mode. Reading the flag is all a tool may do: nothing here can cause an import.
+   */
+  usesImportedCookies(url: string): boolean;
 }
 
 /**
@@ -349,6 +355,16 @@ export interface ApprovalPrompt {
    * project, or a read of a `.env` file.
    */
   askInAuto?: true;
+  /**
+   * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
+   * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
+   * 'full' is a decision about: a script in a page the user has signed in to reads that site's
+   * cookies and calls its API as them, and what it returns goes to the model's provider.
+   *
+   * Unlike `irreversible` this still allows an 'always': the consent is specific and the user
+   * gave it, it just cannot be inherited from a mode they set for something else.
+   */
+  askInFull?: true;
   /**
    * For a shell command: what "always allow" remembers. Each sub-command of the script is
    * covered by a prefix pattern, and each directory outside the project by the directory.
