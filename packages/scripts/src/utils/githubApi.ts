@@ -169,7 +169,8 @@ export async function getCommitsSinceLastRelease(head: string = 'HEAD'): Promise
   // Compare from the release tag (specific commit) to head
   // Using tag_name ensures we get commits since the tagged release
   // Using HEAD as default allows testing from any branch (flexible for manual/local testing)
-  // For production, the workflow checks out the exact deployed SHA, so HEAD = that commit
+  // For production, the workflow passes the exact deployed SHA as `head`; the compare
+  // runs through the GitHub API, so the local checkout does not need to match it
   return getCommitRange(latestRelease.tag_name, head);
 }
 

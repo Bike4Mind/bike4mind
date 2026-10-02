@@ -104,11 +104,14 @@ jobs:
 
           echo "app_name=$APP_NAME" | tee -a "$GITHUB_OUTPUT"
 
+      # Check out the dispatch ref, never the deployed SHA: the scripts must match
+      # this workflow, and an older deployed commit's createProductionRelease.ts
+      # ignores --target-sha. The commit range and tag target both go through the
+      # GitHub API, so the deployed tree is never needed locally.
       - name: Checkout code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for proper commit comparison
-          ref: ${{ steps.resolve-sha.outputs.deployed_sha == 'HEAD' && github.sha || steps.resolve-sha.outputs.deployed_sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
