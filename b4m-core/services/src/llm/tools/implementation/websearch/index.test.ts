@@ -600,9 +600,9 @@ describe('performWebSearch - place handling', () => {
   });
 });
 
-describe('webSearchTool - failover and cache', () => {
-  type Reply = { status: number; body?: unknown };
-  const json = (r: Reply) =>
+describe('webSearchTool - hedged backup and cache', () => {
+  type Reply = { status: number; body?: unknown } | 'hang';
+  const json = (r: { status: number; body?: unknown }) =>
     ({
       ok: r.status >= 200 && r.status < 300,
       status: r.status,
@@ -610,18 +610,26 @@ describe('webSearchTool - failover and cache', () => {
       json: async () => r.body ?? {},
       text: async () => '',
     }) as Response;
+  // Never answers; rejects only when the caller's per-attempt timeout aborts it.
+  const hang = (init?: RequestInit) =>
+    new Promise<Response>((_, reject) => {
+      init?.signal?.addEventListener('abort', () =>
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      );
+    });
+  const reply = (r: Reply | undefined, fallback: { status: number; body?: unknown }, init?: RequestInit) =>
+    r === 'hang' ? hang(init) : Promise.resolve(json(r ?? fallback));
 
   // Routes each request by host and engine, recording every call so a test can count them.
-  const stubProviders = (replies: { searxng?: Reply; serpOrganic?: Reply[]; serpImages?: Reply }) => {
+  const stubProviders = (replies: { searxng?: Reply; serpOrganic?: Reply[] }) => {
     const serpOrganic = [...(replies.serpOrganic ?? [])];
-    const fetchStub = vi.fn(async (input: string) => {
+    const fetchStub = vi.fn(async (input: string, init?: RequestInit) => {
       const url = new URL(input);
-      if (url.hostname === 'searxng.local') return json(replies.searxng ?? { status: 200, body: { results: [] } });
-      if (url.searchParams.get('engine') === 'google_images') {
-        return json(replies.serpImages ?? { status: 200, body: { images_results: [] } });
-      }
+      if (url.hostname === 'searxng.local') return reply(replies.searxng, { status: 200, body: { results: [] } }, init);
+      if (url.searchParams.get('engine') === 'google_images')
+        return json({ status: 200, body: { images_results: [] } });
       if (url.searchParams.get('engine') === 'google_maps') return json({ status: 200, body: { local_results: [] } });
-      return json(serpOrganic.shift() ?? { status: 500 });
+      return reply(serpOrganic.shift(), { status: 500 }, init);
     });
     vi.stubGlobal('fetch', fetchStub);
     return fetchStub;
@@ -635,6 +643,10 @@ describe('webSearchTool - failover and cache', () => {
     status: 200,
     body: { organic_results: [{ title: 'Serp', link: 'https://serp.example', snippet: 's' }] },
   };
+  const searxngHit = {
+    status: 200,
+    body: { results: [{ url: 'https://searx.example', title: 'Searx', content: 'c' }] },
+  };
 
   const buildTool = () =>
     webSearchTool.implementation(
@@ -642,17 +654,52 @@ describe('webSearchTool - failover and cache', () => {
       { imageUrlSigningSecret: TEST_SECRET }
     ) as ICompletionOptionTools;
 
-  const configure = (choice: 'auto' | 'serpapi' | 'searxng') => {
+  const configure = (choice: 'auto' | 'serpapi' | 'searxng', { searxng = true, serp = true } = {}) => {
     mockGetProvider.mockReset().mockResolvedValue(choice);
-    mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
-    mockGetSerperKey.mockReset().mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockReset().mockResolvedValue(searxng ? 'http://searxng.local' : null);
+    mockGetSerperKey.mockReset().mockResolvedValue(serp ? 'serp-key' : null);
   };
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  it('falls back from SearXNG to SerpAPI under auto when SearXNG errors', async () => {
+  it('leads with the explicit choice and never starts the backup when the lead answers in time', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [serpHit], searxng: searxngHit });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSearxng)).toBe(0);
+  });
+
+  it('starts the backup once the lead has been silent for the hedge delay, and returns its answer', async () => {
+    vi.useFakeTimers();
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: ['hang'], searxng: searxngHit });
+
+    const pending = buildTool().toolFn({ query: 'q' });
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(calls(fetchStub, isSearxng)).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pending).resolves.toContain('searx.example');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  it('starts the backup at once when the lead fails before the hedge delay', async () => {
+    vi.useFakeTimers();
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }], searxng: searxngHit });
+
+    const pending = buildTool().toolFn({ query: 'q' });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+    await expect(pending).resolves.toContain('searx.example');
+  });
+
+  it('leads with SearXNG under auto and backs it up with SerpAPI', async () => {
     configure('auto');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
 
@@ -670,31 +717,46 @@ describe('webSearchTool - failover and cache', () => {
     expect(calls(fetchStub, isSearxng)).toBe(1);
   });
 
-  it('gives the fallback one attempt and throws when both providers fail, so the call records as failed', async () => {
+  it('gives a SerpAPI backup one attempt and throws naming both providers when both fail', async () => {
     configure('auto');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [{ status: 503 }, { status: 503 }] });
 
-    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('SERP API error');
+    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow(
+      /Web search failed on both providers\. searxng: SearXNG error: HTTP 502; serpapi: SERP API error/
+    );
     expect(calls(fetchStub, isSerpOrganic)).toBe(1);
   });
 
-  it('never falls back under an explicit provider choice', async () => {
+  // The worst case WEB_SEARCH_WORST_CASE_MS budgets for: a SerpAPI lead that hangs through its retry
+  // while the SearXNG backup, started at the hedge delay, also hangs to its timeout.
+  it('fails by 20.5s when both providers hang, inside the organic budget', async () => {
+    vi.useFakeTimers();
     configure('serpapi');
-    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }] });
+    stubProviders({ serpOrganic: ['hang', 'hang'], searxng: 'hang' });
 
-    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('SERP API error');
-    expect(calls(fetchStub, isSearxng)).toBe(0);
+    let settled = false;
+    const pending = buildTool()
+      .toolFn({ query: 'q' })
+      .catch((error: Error) => {
+        settled = true;
+        return error;
+      });
+    await vi.advanceTimersByTimeAsync(20_499);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(String(await pending)).toMatch(/serpapi: Web search timed out.*searxng: Web search timed out/);
   });
 
-  it('keeps SearXNG fail-soft when there is no fallback to try', async () => {
-    configure('searxng');
+  it('keeps SearXNG fail-soft when there is no backup to try', async () => {
+    configure('searxng', { serp: false });
     stubProviders({ searxng: { status: 502 } });
 
     await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
   });
 
   it('serves a repeat query from the cache without calling the provider again', async () => {
-    configure('serpapi');
+    configure('serpapi', { searxng: false });
     const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
     const toolFn = buildTool().toolFn;
 
@@ -704,7 +766,7 @@ describe('webSearchTool - failover and cache', () => {
   });
 
   it('never serves a place search from an ordinary search for the same text', async () => {
-    configure('serpapi');
+    configure('serpapi', { searxng: false });
     const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
 
     await performWebSearch(mockAdapters, { query: 'coffee near Shibuya Crossing' });
@@ -714,7 +776,7 @@ describe('webSearchTool - failover and cache', () => {
   });
 
   it('does not cache a failure, so a retry reaches the provider again', async () => {
-    configure('serpapi');
+    configure('serpapi', { searxng: false });
     const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }, serpHit] });
     const toolFn = buildTool().toolFn;
 
