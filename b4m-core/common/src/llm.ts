@@ -286,6 +286,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   skipAutoOffers: z.boolean().optional(),
   /**
+   * Withhold only the reply-choices guidance, for a caller with no button UI (voice speaks the
+   * raw reply stream, so a choices block would be read aloud). Narrower than `skipAutoOffers`,
+   * which also withholds knowledge and MCP offers such a caller may still need.
+   */
+  skipReplyChoices: z.boolean().optional(),
+  /**
    * Tools to withhold on this turn, unioned with `session.disabledTools` and applied at every
    * denylist site including the final pass after buildTools. A client may send it, but it can only add:
    * a route merges its own server-derived denials (dataLakeToolsDeniedFor) over any

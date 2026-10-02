@@ -49,6 +49,7 @@ import {
   usdToCredits as realUsdToCredits,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  REPLY_CHOICES_GUIDANCE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -4945,7 +4946,7 @@ describe('ChatCompletionProcess', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
     const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
 
-    const runWithTools = async (tools: any[], disabledTools?: string[]) => {
+    const runWithTools = async (tools: any[], disabledTools?: string[], extraBody: Record<string, unknown> = {}) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
@@ -4978,7 +4979,7 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined, ...extraBody };
       await service.process({ body, logger: mockLogger });
 
       buildToolsSpy.mockRestore();
@@ -5019,6 +5020,20 @@ describe('ChatCompletionProcess', () => {
     // requested list still names it. Gating on the requested list described a tool the model lacked.
     it('omits the view registry when navigate_view never reached the built tool list', async () => {
       expect(await hasViewRegistry([])).toBe(false);
+    });
+
+    const hasReplyChoices = async (extraBody: Record<string, unknown>) =>
+      ((await runWithTools([], undefined, extraBody))?.[1] ?? ([] as any[])).some(
+        (m: any) => typeof m?.content === 'string' && m.content === REPLY_CHOICES_GUIDANCE
+      );
+
+    it('includes the reply-choices guidance on an in-app turn', async () => {
+      expect(await hasReplyChoices({})).toBe(true);
+    });
+
+    // Voice sets this: it speaks the raw reply stream and has no buttons to render.
+    it('omits the reply-choices guidance under skipReplyChoices', async () => {
+      expect(await hasReplyChoices({ skipReplyChoices: true })).toBe(false);
     });
   });
 

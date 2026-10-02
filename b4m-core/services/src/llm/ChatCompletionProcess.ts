@@ -3454,7 +3454,9 @@ export class ChatCompletionProcess {
         // withheld with the other auto-offers. The block it asks for is stripped by applyReplyChoices,
         // which Research Mode's early return never reaches - so it is withheld there too.
         replyChoices:
-          skipAutoOffers || isResearchMode ? [] : [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }],
+          skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices
+            ? []
+            : [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }],
         toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
