@@ -9,7 +9,7 @@ import { ContentCopy, Check } from '@mui/icons-material';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
-import { stripFrontmatter } from '@client/app/utils/stripFrontmatter';
+import { stripFrontmatter } from '@bike4mind/scripts/help/utils';
 
 interface Props {
   content: string;
@@ -24,6 +24,12 @@ interface Props {
    * diagrams elsewhere (KnowledgeViewer does) must render UnmarkedCitedPassage themselves.
    */
   citedPassage?: string;
+  /**
+   * Strip a leading YAML frontmatter block. Opt in only where `content` is a stored file or
+   * article: chat, modal and summary text can legitimately open with a `---` pair around prose,
+   * and a loose key rule would delete that middle paragraph.
+   */
+  stripFrontmatter?: boolean;
 }
 
 /** Marks a block the citation covers. The scroll target is simply the first one in DOM order. */
@@ -133,15 +139,23 @@ function trimDanglingLatexDelimiters(text: string): string {
   return rest.slice(0, cutStart).trim();
 }
 
-const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
+const MarkdownViewer: React.FC<Props> = ({
+  content,
+  citedPassage,
+  // Aliased because the prop name would otherwise shadow the imported `stripFrontmatter` function.
+  stripFrontmatter: shouldStripFrontmatter = false,
+}) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Offsets are into the string ReactMarkdown actually parses, so the passage has to be located in
   // the PROMOTED source - locating it in `content` would shift every offset by whatever that
   // transform inserted and mark the wrong blocks.
-  // Frontmatter is stripped in the same step: left in, its closing `---` parses as a setext heading
-  // underline. The Mermaid checks below still read the raw `content`.
-  const promotedContent = useMemo(() => promoteInlineLatexDollars(stripFrontmatter(content)), [content]);
+  // With `stripFrontmatter` set, frontmatter is stripped in the same step: left in, its closing
+  // `---` parses as a setext heading underline. The Mermaid checks below still read the raw `content`.
+  const promotedContent = useMemo(
+    () => promoteInlineLatexDollars(shouldStripFrontmatter ? stripFrontmatter(content) : content),
+    [content, shouldStripFrontmatter]
+  );
   const citedRange = useMemo(() => {
     if (!citedPassage) return null;
     // Preserve literal matches inside code; otherwise apply the document's math transform.

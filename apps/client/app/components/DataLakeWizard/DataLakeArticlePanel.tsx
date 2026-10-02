@@ -222,7 +222,7 @@ export default function DataLakeArticlePanel({
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} citedPassage={citedPassage} />
+          <MarkdownViewer content={content} citedPassage={citedPassage} stripFrontmatter />
         ) : (
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             Unable to load file content.

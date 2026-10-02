@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { stripFrontmatter } from './stripFrontmatter';
+import { stripFrontmatter } from '../utils';
 
 describe('stripFrontmatter', () => {
   it('removes a leading frontmatter block and the blank lines after it', () => {
@@ -72,5 +72,26 @@ describe('stripFrontmatter', () => {
 
   it('keeps a horizontal rule that follows the block', () => {
     expect(stripFrontmatter('---\ntitle: Hello\n---\n\n---\n\nBody')).toBe('---\n\nBody');
+  });
+
+  it('keeps a tab-indented continuation line inside the block', () => {
+    expect(stripFrontmatter('---\ndescription: first\n\tsecond line\n---\nBody')).toBe('Body');
+  });
+
+  it('does not end the block on an indented --- inside a block scalar', () => {
+    expect(stripFrontmatter('---\nnote: |\n  intro\n  ---\n  outro\ntitle: T\n---\nBody')).toBe('Body');
+  });
+
+  it('strips a block whose keys contain spaces', () => {
+    expect(stripFrontmatter('---\nLast Updated: 2026-01-05\nDocument Owner: Ops\n---\n\nBody')).toBe('Body');
+  });
+
+  it('strips a block whose key starts with @', () => {
+    expect(stripFrontmatter('---\n"@context": x\n@type: Article\n---\nBody')).toBe('Body');
+  });
+
+  it('still keeps a prose line that has no colon between two rules', () => {
+    const content = '---\nRead this first\n---\nBody';
+    expect(stripFrontmatter(content)).toBe(content);
   });
 });

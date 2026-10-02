@@ -2590,7 +2590,7 @@ export const FileContent = ({
 
         const wrappedContent = content.includes('```mermaid') ? `\`\`\`mermaid\n${content}\n\`\`\`` : content;
 
-        return <MarkdownViewer content={wrappedContent} citedPassage={citedPassage} />;
+        return <MarkdownViewer content={wrappedContent} citedPassage={citedPassage} stripFrontmatter />;
       } else {
         return (
           <>

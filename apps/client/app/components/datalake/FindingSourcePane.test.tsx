@@ -18,7 +18,7 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 // Stands in for the #3038 chunk renderer so the pane's contract with it - the passage is handed
 // over as `citedPassage`, in the whole document - is asserted rather than assumed.
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
-  default: (props: { content: string; citedPassage?: string }) => {
+  default: (props: { content: string; citedPassage?: string; stripFrontmatter?: boolean }) => {
     h.markdown(props);
     return <div data-testid="markdown-viewer">{props.content}</div>;
   },
@@ -57,7 +57,11 @@ describe('FindingSourcePane', () => {
 
     expect(screen.getByTestId('markdown-viewer')).toHaveTextContent('ARR reached $4.2M in Q1.');
     expect(h.markdown).toHaveBeenCalledWith(
-      expect.objectContaining({ content: '# Update\n\nARR reached $4.2M in Q1.', citedPassage: source.excerpt })
+      expect.objectContaining({
+        content: '# Update\n\nARR reached $4.2M in Q1.',
+        citedPassage: source.excerpt,
+        stripFrontmatter: true,
+      })
     );
   });
 
