@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
+import CircularProgress from '@mui/joy/CircularProgress';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Textarea from '@mui/joy/Textarea';
@@ -25,7 +26,14 @@ import { QueuedMessageList } from './QueuedMessageList';
 import { mergeIntoDraft } from './queuedMessages';
 import { matchSkills, skillQuery } from './skillMenu';
 import { SkillPicker } from './SkillPicker';
-import { describeUsage, usageLabel, type ComposerUsage } from './statusLine';
+import {
+  contextPercent,
+  describeUsage,
+  occupancyArc,
+  occupancyColor,
+  usageLabel,
+  type ComposerUsage,
+} from './statusLine';
 import { toAttachmentInputs, type AttachmentDraft } from './useAttachments';
 import type { SkillsController } from './useSkills';
 
@@ -134,12 +142,27 @@ export function Composer({
   const hasContent = text.trim().length > 0 || attachments.attachments.length > 0;
   const blocked = !!blockedReason || !!notReady;
 
-  // Only ever read by the idle branch of the indicator below. A turn in flight has its own line
-  // under the transcript (see TurnStatus) and the dot says "Working"; a second reading of a
-  // half-finished turn here would be two elements answering the same question.
-  const idleUsage = !streaming && !disabled && !notReady ? (usage ?? null) : null;
-  const idleLabel = idleUsage && usageLabel(idleUsage);
-  const idleDetail = idleUsage && idleLabel ? describeUsage(idleUsage) : null;
+  /**
+   * The usage the ring reports, in flight or not.
+   *
+   * It used to be blanked while a reply streamed, on the grounds that the turn already has its
+   * own line under the transcript. The two do not report the same fact: TurnStatus counts what
+   * THIS turn has spent so far, and this reports how full the window was when the last request
+   * went out. A turn is also the moment the answer matters most, and a field that empties
+   * itself exactly then is a worse answer than a figure a round trip behind.
+   *
+   * What keeps them from disagreeing is that neither one estimates. The streamed 'usage' events
+   * carry the turn's running bill, which is not window occupancy, so this deliberately does not
+   * read them: the figure holds the last COMPLETED request and steps when the next one lands -
+   * see latestReply, which is where the holding happens. `disabled` and `notReady` stay, because
+   * in those there is no conversation and nothing was ever measured to hold - and with the word
+   * beside it gone, a ring in those states would be a glyph standing for nothing. The dot in the
+   * sidebar is what speaks for them now; see TurnDot.
+   */
+  const shownUsage = !disabled && !notReady ? (usage ?? null) : null;
+  const usageText = shownUsage && usageLabel(shownUsage);
+  const usageDetail = shownUsage && usageText ? describeUsage(shownUsage) : null;
+  const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextWindow) : null;
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });
@@ -499,52 +522,51 @@ export function Composer({
 
         {footer}
 
-        {/* Always here now, and it is the only thing that says WHETHER a reply is running. The
-            line at the foot of the reply says what that reply is DOING, and never claims a turn
-            this dot does not - so the two report different facts rather than the same fact
-            twice, which is what made a second indicator wrong before.
+        {/* The whole status line: one ring, and the detail one hover behind it.
 
-            They are not redundant either: this dot knows about a turn the window never saw
-            start (a reload mid-reply), where the transcript line has no clock or token count to
-            show and correctly shows nothing. */}
-        <Tooltip
-          title={idleDetail ?? ''}
-          placement="top"
-          variant="soft"
-          size="sm"
-          disableHoverListener={!idleDetail}
-          // Preserved so the tooltip keeps the one-fact-per-line shape it is built with.
-          sx={{ whiteSpace: 'pre-line', maxWidth: 360 }}
-        >
-          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }} data-testid="composer-status">
-            <Box
-              sx={{
-                width: 7,
-                height: 7,
-                borderRadius: '50%',
-                bgcolor: streaming
-                  ? 'primary.solidBg'
-                  : disabled
-                    ? 'neutral.softBg'
-                    : notReady
-                      ? 'warning.solidBg'
-                      : 'success.solidBg',
-              }}
-            />
-            {/* Tabular figures so the row cannot reflow as the numbers move: the balance drops
-                by a few credits every turn, and proportional digits would shuffle the whole
-                line each time one of them changed. */}
-            <Typography
-              level="body-xs"
-              textColor="text.tertiary"
-              noWrap
-              sx={{ fontVariantNumeric: 'tabular-nums' }}
-              data-testid="composer-status-text"
-            >
-              {streaming ? 'Working' : disabled ? 'No session' : (notReady ?? idleLabel ?? 'Ready')}
-            </Typography>
-          </Stack>
-        </Tooltip>
+            The dot and the figure that used to flank it are gone, and nothing went with them.
+            A reply in flight already turns the send button into Stop and draws its own line
+            under the transcript; a Code session with no folder has the "Choose a folder" chip
+            a few pixels above, which is the thing to act on rather than a word repeating it;
+            and a window with no conversation says so in the composer's own placeholder. The
+            words those two carried were each the second place something was said.
+
+            The figure itself is not lost either - it is the ring's accessible name, and the
+            tooltip states it in full alongside the balance. See usageLabel. */}
+        {shownUsage && (
+          <Tooltip
+            title={usageDetail ?? ''}
+            placement="top"
+            variant="soft"
+            size="sm"
+            disableHoverListener={!usageDetail}
+            // Preserved so the tooltip keeps the one-fact-per-line shape it is built with.
+            sx={{ whiteSpace: 'pre-line', maxWidth: 360 }}
+          >
+            {/* A wrapper rather than the ring itself, so the hover target keeps its own box
+                and the tooltip has something to hold on to at any ring size. */}
+            <Box sx={{ display: 'inline-flex' }} data-testid="composer-status">
+              <CircularProgress
+                determinate
+                // An occupancy nobody stated draws the bare track: no arc, and dimmed, so
+                // "nothing measured" cannot be read as "the window is empty". A determinate
+                // ring has no other way to say unknown, and the tooltip says it in words.
+                value={occupancy === null ? 0 : occupancyArc(occupancy)}
+                color={occupancyColor(occupancy)}
+                // Sized off the text rather than off Joy's own scale: this sits in a row of
+                // body-xs controls, and the smallest preset is half again as tall as they are.
+                sx={{
+                  '--CircularProgress-size': '14px',
+                  '--CircularProgress-trackThickness': '2px',
+                  '--CircularProgress-progressThickness': '2px',
+                  ...(occupancy === null ? { opacity: 0.5 } : {}),
+                }}
+                aria-label={usageText ?? 'Context window'}
+                data-testid="composer-status-ring"
+              />
+            </Box>
+          </Tooltip>
+        )}
       </Stack>
     </Box>
   );

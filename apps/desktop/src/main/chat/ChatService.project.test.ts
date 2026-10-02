@@ -30,6 +30,9 @@ async function repository(name: string): Promise<{ container: string; main: stri
   const bare = join(container, '.bare');
   const main = join(container, 'main');
   await git(bare, ['worktree', 'add', '--quiet', main, 'main']);
+  // The gitlink the user's `worktree` helper writes, which is what makes git answer from the
+  // container at all - and so what makes the container look pickable.
+  await writeFile(join(container, '.git'), 'gitdir: ./.bare\n', 'utf8');
 
   return { container, main };
 }
@@ -189,5 +192,92 @@ describe('ChatService.updateProject', () => {
     const { id } = await service.createSession();
 
     expect(await service.updateProject({ sessionId: id })).toMatchObject({ ok: false });
+  });
+
+  /**
+   * The container is not somewhere a session can run: no branch is checked out in it, so its
+   * tools would sit beside every worktree rather than in one, and git answers there for the
+   * bare repo - which is where the chip's confident wrong branch name came from.
+   */
+  it('refuses the worktree container as a project and points at the checkouts inside', async () => {
+    const { container, main } = await repository('gamma');
+    const id = await codeSession(main);
+
+    const result = await service.updateProject({ sessionId: id, directory: container });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toMatch(/not a checkout/i);
+    expect((await service.getSession(id))?.project).toMatchObject({ directory: main });
+  });
+
+  it('refuses to start a session in the container in the first place', async () => {
+    const { container } = await repository('delta');
+
+    const created = await service.createCodeSession({ directory: container, branch: '', workspace: false });
+
+    expect(created).toMatchObject({ ok: false });
+    expect(created.ok === false && created.error).toMatch(/not a checkout/i);
+  });
+});
+
+/**
+ * The group header's "+" starts another session in a project the user already has one in. What
+ * it may carry from the session beside it is decided in the renderer (newSessionInProject); what
+ * each choice COSTS is here, against a real container in the layout that produced the bug: a
+ * `main` folder that has since been checked out onto another branch.
+ */
+describe('starting a second session in a project whose main worktree moved', () => {
+  async function serviceOn(): Promise<{ service: ChatService; main: string }> {
+    const { main } = await repository('theta-sibling');
+    await git(main, ['config', 'user.email', 'test@example.com']);
+    await git(main, ['config', 'user.name', 'Test']);
+    await git(main, ['checkout', '--quiet', '-b', 'fix/scrub-missing-knowledge-ids']);
+
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-chip-sessions-')), 'test-model');
+    const service = new ChatService({
+      store,
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: vi.fn(),
+    });
+    return { service, main };
+  }
+
+  it('fails when the sibling binding is carried across', async () => {
+    const { service, main } = await serviceOn();
+
+    const result = await service.createCodeSession({ directory: main, branch: 'main', workspace: true });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toContain('is a git worktree holding the branch');
+  });
+
+  it('succeeds carrying the folder alone, and the session starts with no branch', async () => {
+    const { service, main } = await serviceOn();
+
+    const result = await service.createCodeSession({ directory: main });
+
+    expect(result).toMatchObject({ ok: true });
+    const project = result.ok ? (await service.getSession(result.session.id))?.project : null;
+    expect(project).toMatchObject({
+      directory: main,
+      branch: '',
+      workspace: false,
+      workingDirectory: main,
+      contextDirectories: [],
+    });
+  });
+
+  it('still refuses when the user picks that branch deliberately on the new session', async () => {
+    const { service, main } = await serviceOn();
+    const created = await service.createCodeSession({ directory: main });
+    if (!created.ok) throw new Error(created.error);
+
+    const result = await service.updateProject({ sessionId: created.session.id, branch: 'main', workspace: true });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toContain('is a git worktree holding the branch');
   });
 });

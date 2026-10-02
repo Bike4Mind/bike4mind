@@ -46,7 +46,7 @@ import { ModelCatalog } from './ModelCatalog';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import { sessionScopeFor } from './sessionScope';
-import { currentBranch, isGitRepository, listBranches, projectDisplayName } from './project/git';
+import { currentBranch, isGitRepository, listBranches, projectDisplayName, unusableProjectReason } from './project/git';
 import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { SkillCatalog } from './skills/SkillCatalog';
 import { AccessStore } from './tools/AccessStore';
@@ -331,7 +331,15 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatInspectProject, async (_event, directory: string): Promise<ProjectInspection> => {
     const resolved = resolve(directory);
     if (!(await isGitRepository(resolved))) {
-      return { directory: resolved, name: basename(resolved), isRepository: false, branches: [], currentBranch: null };
+      const base = {
+        directory: resolved,
+        name: basename(resolved),
+        isRepository: false,
+        branches: [],
+        currentBranch: null,
+      };
+      const refusal = await unusableProjectReason(resolved);
+      return refusal ? { ...base, refusal } : base;
     }
     const base = { directory: resolved, name: await projectDisplayName(resolved) };
     try {

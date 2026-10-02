@@ -11,6 +11,8 @@ import {
   formatTokens,
   inputSide,
   latestReply,
+  occupancyArc,
+  occupancyColor,
   statusFields,
   totalTokens,
   usageLabel,
@@ -312,6 +314,84 @@ describe('latestReply', () => {
     const after = reply({ id: 'after', usage: { inputTokens: 9000 } });
     expect(latestReply([before, boundary, after])?.id).toBe('after');
     expect(contextTokens(latestReply([before, boundary, after]))).toBe(9000);
+  });
+
+  /**
+   * The reply being streamed has measured nothing: its rounds and its own usage both arrive
+   * with the terminal event. Reported as the latest reply it would blank the indicator for the
+   * whole turn, which is precisely when the user is watching it.
+   */
+  it('passes over the reply in flight so the last measured request is still the answer', () => {
+    const settled = reply({ id: 'settled', usage: { inputTokens: 44_000 } });
+    const typed: ChatMessage = { id: 'typed', role: 'user', content: 'go on', createdAt: '2026-01-01T00:00:01.000Z' };
+    const open = reply({ id: 'open' });
+    expect(latestReply([settled, typed, open], true)?.id).toBe('settled');
+    expect(contextTokens(latestReply([settled, typed, open], true))).toBe(44_000);
+  });
+
+  it('reports the turn it just finished as soon as the turn is no longer open', () => {
+    const settled = reply({ id: 'settled', usage: { inputTokens: 44_000 } });
+    const landed = reply({ id: 'landed', usage: { inputTokens: 51_000 } });
+    expect(latestReply([settled, landed], false)?.id).toBe('landed');
+  });
+
+  // The boundary still wins over the holding: a turn running after `/compact` measures the new
+  // window, and reaching back past the boundary for a figure would be the old one.
+  it('holds nothing from before a boundary, turn open or not', () => {
+    const boundary: ChatMessage = {
+      id: 'b1',
+      role: 'user',
+      content: '',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      system: true,
+      boundary: { kind: 'compact' },
+    };
+    const before = reply({ id: 'before', usage: { inputTokens: 180_000 } });
+    expect(latestReply([before, boundary, reply({ id: 'open' })], true)).toBeNull();
+  });
+
+  // Only while the turn is open. A stored reply that measured nothing still reads as unknown,
+  // rather than quietly reporting an older turn's smaller window as this one's.
+  it('does not reach past an unmeasured reply once the turn has settled', () => {
+    const measured = reply({ id: 'measured', usage: { inputTokens: 44_000 } });
+    const legacy = reply({ id: 'legacy', toolCalls: [{ id: 'a', name: 'file_read', input: {}, status: 'done' }] });
+    expect(latestReply([measured, legacy], false)?.id).toBe('legacy');
+    expect(contextTokens(latestReply([measured, legacy], false))).toBeNull();
+  });
+});
+
+describe('occupancyArc', () => {
+  it('draws the occupancy it is given, up to a full ring', () => {
+    expect(occupancyArc(22)).toBe(22);
+    expect(occupancyArc(100)).toBe(100);
+    expect(occupancyArc(140)).toBe(100);
+  });
+
+  /**
+   * The ring is the whole indicator, so an arc too short to see is the same picture as the
+   * empty ring that means nothing was measured. The floor is the ring's version of "<1%".
+   */
+  it('floors a real but tiny occupancy to an arc that can be seen', () => {
+    expect(occupancyArc(0)).toBe(4);
+    expect(occupancyArc(1)).toBe(4);
+    expect(occupancyArc(5)).toBe(5);
+  });
+});
+
+describe('occupancyColor', () => {
+  it('names the band rather than a colour, so both themes get their own value', () => {
+    expect(occupancyColor(0)).toBe('primary');
+    expect(occupancyColor(74)).toBe('primary');
+    expect(occupancyColor(75)).toBe('warning');
+    expect(occupancyColor(89)).toBe('warning');
+    expect(occupancyColor(90)).toBe('danger');
+    expect(occupancyColor(100)).toBe('danger');
+  });
+
+  // An unstated window is not a full one, and borrowing the full-window colour for it would
+  // be the same something-shown-as-a-fact this file refuses everywhere else.
+  it('is neutral for an occupancy nobody stated', () => {
+    expect(occupancyColor(null)).toBe('neutral');
   });
 });
 

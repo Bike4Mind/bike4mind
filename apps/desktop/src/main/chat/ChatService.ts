@@ -41,7 +41,7 @@ import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
-import { branchExists, isGitDirectory, listWorktrees, projectDisplayName } from './project/git';
+import { branchExists, isGitDirectory, listWorktrees, projectDisplayName, unusableProjectReason } from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
@@ -502,6 +502,8 @@ export class ChatService {
     }
 
     const directory = resolve(request.directory);
+    const unusable = await unusableProjectReason(directory);
+    if (unusable) return { ok: false, error: unusable };
     const branch = (request.branch ?? '').trim();
 
     let workingDirectory = directory;
@@ -570,6 +572,10 @@ export class ChatService {
     const current = session.project;
     const directory = request.directory ? resolve(request.directory) : current?.directory;
     if (!directory) return { ok: false, error: 'Choose a project folder for this conversation first.' };
+    // Checked on every change, not only on a move: a session already bound to a container has
+    // to be told why nothing it picks there can work, and re-picking the folder is the way out.
+    const unusable = await unusableProjectReason(directory);
+    if (unusable) return { ok: false, error: unusable };
     // An unbound session is "moved" by its first binding, which is what drops the branch and
     // context folders it never had - the same rule that applies to moving between projects.
     const movedProject = directory !== current?.directory;
@@ -2920,7 +2926,13 @@ function projectPreamble(project: ChatProject): string[] {
       'changes made in the project directory itself would be on a different branch.'
     );
   } else if (project.branch) {
-    lines.push(`The branch is ${project.branch}.`);
+    // Not "the branch is": outside a worktree nothing ever checks this out, so it is the name
+    // the session recorded and not a fact about HEAD. Stated as one, it became the model's
+    // answer to "what branch am I on?" while the working directory sat on something else.
+    lines.push(
+      `${project.branch} is the branch this session recorded; nothing checked it out, so ask`,
+      'git what the working directory is actually on before you rely on it.'
+    );
   }
   return lines;
 }

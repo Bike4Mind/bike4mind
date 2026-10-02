@@ -187,11 +187,24 @@ export function contextTokens(message: ChatMessage | null | undefined): number |
  * boundary measured a window that no longer exists, and reporting it would tell the user their
  * compaction did nothing. With no reply since, the answer is null - not measured yet - and the
  * figure reads as unknown until the next turn states a real one.
+ *
+ * `turnOpen` exists because a reply being streamed has stated nothing to measure yet. Its
+ * `rounds` and its own `usage` both arrive with the terminal event, and the 'usage' events in
+ * between carry the turn's running BILL, which is the wrong quantity for occupancy - see
+ * inputSide. Read off the open reply, the figure would be unknown for the whole turn, so the
+ * indicator would blank itself the moment the user pressed send. With it set, an assistant
+ * message that measures nothing is passed over and the last request that DID state a figure is
+ * the one reported, which is why the ring holds still through a turn and steps at the end of
+ * it. Only while the turn is open: a settled conversation still reports its newest reply, so a
+ * stored message that measured nothing still reads as unknown rather than as an older turn.
  */
-export function latestReply(messages: readonly ChatMessage[]): ChatMessage | null {
+export function latestReply(messages: readonly ChatMessage[], turnOpen = false): ChatMessage | null {
   for (let index = messages.length - 1; index >= 0; index--) {
-    if (messages[index].boundary) return null;
-    if (messages[index].role === 'assistant') return messages[index];
+    const message = messages[index];
+    if (message.boundary) return null;
+    if (message.role !== 'assistant') continue;
+    if (turnOpen && contextTokens(message) === null) continue;
+    return message;
   }
   return null;
 }
@@ -200,6 +213,38 @@ export function latestReply(messages: readonly ChatMessage[]): ChatMessage | nul
 export function contextPercent(tokens: number | null, window: number | null): number | null {
   if (tokens === null || window === null || window <= 0) return null;
   return Math.round((tokens / window) * 100);
+}
+
+/**
+ * What the ring is coloured by: how much room is left, in the three bands that change a
+ * decision.
+ *
+ * The number itself is one hover and one squint away, and the user glancing at the composer is
+ * asking one question - do I still have room? Primary up to three quarters, warning past it,
+ * danger once a long reply plus its tool results would not fit. Returned as a Joy palette name
+ * rather than a colour so both themes get their own value for it.
+ *
+ * An unknown occupancy is neutral: there is no band to be in, and borrowing the full-window
+ * colour for a figure nobody stated is the one reading this file never allows.
+ */
+export function occupancyColor(percent: number | null): 'neutral' | 'primary' | 'warning' | 'danger' {
+  if (percent === null) return 'neutral';
+  if (percent >= 90) return 'danger';
+  if (percent >= 75) return 'warning';
+  return 'primary';
+}
+
+/**
+ * The arc the ring draws for an occupancy, as a percentage of the circle.
+ *
+ * Floored, and the floor is the point. The ring is the whole indicator now, so the only thing
+ * telling a measured context from an unmeasured one is whether an arc is there at all - and a
+ * real occupancy under a percent draws two or three pixels on a 14px circle, which is the empty
+ * ring. This is the same distinction formatOccupancy makes by writing "<1%" instead of "0%",
+ * said in the only language a ring has.
+ */
+export function occupancyArc(percent: number): number {
+  return Math.min(100, Math.max(4, percent));
 }
 
 /**
@@ -215,7 +260,13 @@ function formatOccupancy(percent: number, tokens: number): string {
 }
 
 /**
- * The composer's idle indicator: how full the context window is, in one short field.
+ * The composer's usage indicator in words: how full the context window is, in one short field.
+ *
+ * No longer drawn. The ring took over the composer's status line and this became its ACCESSIBLE
+ * NAME, which is why it still keeps the noun: "3%" announced on its own, on a row that also
+ * carries a model and an effort, names no quantity at all. Dropping the words along with the
+ * glyph would have taken the figure away from a screen reader entirely, which is not what
+ * replacing a label with a picture is supposed to mean.
  *
  * The balance is deliberately NOT here. It belongs to the account rather than to this
  * conversation, it is the slower-moving of the two, and putting both on a row that already

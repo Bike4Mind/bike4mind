@@ -25,9 +25,11 @@ import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
 import { TodoPanel } from './TodoPanel';
+import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
+import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
@@ -109,7 +111,16 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  */
 type ChatScreen = 'conversation' | 'artifacts' | 'customize';
 
-export function ChatShell({ account }: { account?: ReactNode }) {
+/**
+ * The sidebar's account strip, given the dot that says whether a reply is running.
+ *
+ * A function rather than a node because the two halves are owned in different places: this
+ * component knows the turn state, and the account strip knows where a glyph goes in its own
+ * row. Handing the finished dot down keeps both where they belong - see TurnDot.
+ */
+export type AccountStrip = (status: ReactNode) => ReactNode;
+
+export function ChatShell({ account }: { account?: AccountStrip }) {
   const {
     sessions,
     loading,
@@ -202,24 +213,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const credits = useAccountCredits(conversation.settledTurns);
 
   /**
-   * What the composer's idle indicator reports: how full the window is, and what is left.
-   *
-   * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
-   * because a percentage of a made-up window is a number the user cannot tell is wrong.
-   */
-  const composerUsage: ComposerUsage = useMemo(() => {
-    const reply = latestReply(conversation.messages);
-    return {
-      contextTokens: contextTokens(reply),
-      contextWindow: modelOption?.contextWindow ?? null,
-      credits: credits.balance,
-      ...(credits.error ? { creditsError: credits.error } : {}),
-      lastTurn: reply?.usage ?? null,
-    };
-  }, [conversation.messages, modelOption?.contextWindow, credits.balance, credits.error]);
-
-  /**
    * Whether this conversation has a turn open, for the composer's controls.
    *
    * `conversation.streaming` is what THIS window knows of, from the stream or from main's live
@@ -230,6 +223,28 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+
+  /**
+   * What the composer's usage indicator reports: how full the window is, and what is left.
+   *
+   * The context figure comes from the last reply's LAST request, never from the turn's summed
+   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
+   * because a percentage of a made-up window is a number the user cannot tell is wrong.
+   *
+   * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
+   * streamed has measured nothing yet, and without it the indicator would read as unknown from
+   * the moment the user pressed send until the reply landed. See latestReply.
+   */
+  const composerUsage: ComposerUsage = useMemo(() => {
+    const reply = latestReply(conversation.messages, turnOpen);
+    return {
+      contextTokens: contextTokens(reply),
+      contextWindow: modelOption?.contextWindow ?? null,
+      credits: credits.balance,
+      ...(credits.error ? { creditsError: credits.error } : {}),
+      lastTurn: reply?.usage ?? null,
+    };
+  }, [conversation.messages, turnOpen, modelOption?.contextWindow, credits.balance, credits.error]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.
@@ -336,24 +351,20 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   /**
    * Another session in the same project, from the group header's "+".
    *
-   * It reuses the existing binding rather than reopening the dialog: the project, branch and
-   * workspace choice are what define the group, so asking for them again to land in the same
-   * group would be a form to fill in with the only answer that works.
+   * The folder is what defines the group, so it carries across and the dialog stays shut.
+   * Nothing else does - see newSessionInProject for why the branch is left for the user to
+   * pick on the new session.
    */
   const onCreateInProject = useCallback(
     async (directory: string) => {
       const sibling = sessions.find(session => session.project?.directory === directory)?.project;
       if (!sibling) return;
       setScreen('conversation');
-      const created = await createCode({
-        directory: sibling.directory,
-        branch: sibling.branch,
-        workspace: sibling.workspace,
-        contextDirectories: sibling.contextDirectories,
-      });
+      clearCodeError();
+      const created = await createCode(newSessionInProject(sibling));
       if (created) setActiveId(created);
     },
-    [sessions, createCode]
+    [sessions, createCode, clearCodeError]
   );
 
   const onDelete = useCallback(
@@ -409,7 +420,9 @@ export function ChatShell({ account }: { account?: ReactNode }) {
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
-        footer={account}
+        footer={account?.(
+          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+        )}
       />
 
       {screen === 'artifacts' ? (

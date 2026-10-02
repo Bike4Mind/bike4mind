@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -50,9 +50,21 @@ export async function isGitRepository(directory: string): Promise<boolean> {
   }
 }
 
+/**
+ * The branch checked out in `directory`, for a directory that is a work tree.
+ *
+ * The work-tree check is what makes this agree with `isGitRepository`, and it is not
+ * redundant with the rev-parse beside it: a worktree CONTAINER holds the shared git dir
+ * without being a checkout, so asking it for HEAD answers for the BARE repo - a branch no
+ * session is on, returned with every appearance of being the right one. Both facts come from
+ * one invocation so the answer cannot be assembled out of two different moments.
+ */
 export async function currentBranch(directory: string): Promise<string | null> {
   try {
-    const name = (await git(directory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    const [workTree, name] = (await git(directory, ['rev-parse', '--is-inside-work-tree', '--abbrev-ref', 'HEAD']))
+      .split('\n')
+      .map(line => line.trim());
+    if (workTree !== 'true') return null;
     // Detached HEAD answers with the literal string, which is not a branch anyone can check out.
     return name && name !== 'HEAD' ? name : null;
   } catch {
@@ -172,6 +184,57 @@ export async function listWorktrees(directory: string): Promise<WorktreeEntry[]>
     checkouts.push(entry);
   }
   return checkouts;
+}
+
+/** How many checkouts the refusal below names before it stops listing them. */
+const NAMED_CHECKOUTS = 6;
+
+/**
+ * Why `directory` cannot ground a session, or null when it can.
+ *
+ * The one case today is a worktree CONTAINER: the folder the shared git dir lives in, with one
+ * folder per branch beside it. It is not a work tree, so nothing is checked out there and no
+ * branch can be; git nonetheless answers rev-parse for the bare repo, which is how a container
+ * comes to look like a repository on a branch while being nowhere a session could run. Picking
+ * one leaves every tool rooted beside the checkouts rather than in one of them - the same
+ * confusion that makes `pnpm --filter` there resolve a different manifest than it does inside.
+ *
+ * Refused rather than resolved to one of the checkouts: which one is a guess, and a guess here
+ * would silently run the session's commands somewhere other than the folder the user picked.
+ */
+export async function unusableProjectReason(directory: string): Promise<string | null> {
+  const checkouts = await containerCheckouts(directory);
+  if (!checkouts) return null;
+
+  const named = checkouts.slice(0, NAMED_CHECKOUTS);
+  const rest = checkouts.length - named.length;
+  const inside = named.length
+    ? `Pick one of the checkouts inside it instead: ${named.join(', ')}${rest > 0 ? `, and ${rest} more` : ''}.`
+    : 'It has no checkouts in it - create one with a worktree before pointing a session at it.';
+  return `${directory} holds the repository but is not a checkout of it: it is the folder the worktrees live in, so no branch is checked out there. ${inside}`;
+}
+
+/**
+ * The folder names to point at, when `directory` is a worktree container.
+ *
+ * Only the container's own children, sorted. git lists every worktree it has ever registered,
+ * in registration order, which on a long-lived repository opens with tooling's own nested
+ * checkouts (.claude/worktrees, .manifold/worktrees) - not folders anyone picks, and not what
+ * this layout means by "beside the bare repo".
+ */
+async function containerCheckouts(directory: string): Promise<string[] | null> {
+  try {
+    if (await isGitRepository(directory)) return null;
+    const container = resolve(await containerDirectory(directory));
+    if (container !== resolve(directory)) return null;
+    return (await listWorktrees(directory))
+      .filter(entry => dirname(resolve(entry.path)) === container)
+      .map(entry => basename(entry.path))
+      .sort();
+  } catch {
+    // Not a repository at all, which is an ordinary folder a session is welcome to run in.
+    return null;
+  }
 }
 
 /**

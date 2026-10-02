@@ -26,8 +26,8 @@ const draft: AttachmentDraft = {
 
 const usage: ComposerUsage = { contextTokens: 44_000, contextWindow: 200_000, credits: 31_667 };
 
-function indicator(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
-  const html = renderToStaticMarkup(
+function statusMarkup(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
+  return renderToStaticMarkup(
     <CssVarsProvider>
       <Composer
         sessionId="s1"
@@ -41,32 +41,74 @@ function indicator(props: Partial<Parameters<typeof Composer>[0]> = {}): string 
       />
     </CssVarsProvider>
   );
-  const text = html.match(/data-testid="composer-status-text"[^>]*>([^<]*)</);
-  return text?.[1] ?? '';
+}
+
+/** The ring's accessible name, which is where the figure went when the label was dropped. */
+function ringLabel(props: Partial<Parameters<typeof Composer>[0]> = {}): string | null {
+  const ring = statusMarkup(props).match(/aria-label="([^"]*)"[^>]*data-testid="composer-status-ring"/);
+  return ring?.[1] ?? null;
+}
+
+/** The arc the ring draws, as Joy writes it into its own custom property. */
+function ringValue(props: Partial<Parameters<typeof Composer>[0]> = {}): number | null {
+  const markup = statusMarkup(props);
+  if (!markup.includes('data-testid="composer-status-ring"')) return null;
+  const percent = markup.match(/--CircularProgress-percent:\s*([\d.]+)/);
+  return percent ? Number(percent[1]) : null;
+}
+
+function hasRing(props: Partial<Parameters<typeof Composer>[0]> = {}): boolean {
+  return statusMarkup(props).includes('data-testid="composer-status-ring"');
 }
 
 describe('the composer indicator', () => {
-  it('replaces the idle word with how full the context window is', () => {
-    expect(indicator()).toBe('Context 22%');
+  /**
+   * The whole status line is one ring now. The dot moved to the account strip and the words
+   * went with it, so nothing here is drawn as text - which is exactly why the figure has to
+   * survive as the ring's accessible name rather than disappearing with the label.
+   */
+  it('draws the ring and nothing else, keeping the figure as its name', () => {
+    expect(statusMarkup()).not.toContain('composer-status-text');
+    expect(statusMarkup()).not.toContain('turn-dot');
+    expect(ringLabel()).toBe('Context 22%');
+    expect(ringValue()).toBe(22);
   });
 
-  // The three states that say something the user may need to act on. They outrank the usage
-  // line, which is the one state that used to carry no information at all.
-  it('still speaks for a turn in flight', () => {
-    expect(indicator({ streaming: true })).toBe('Working');
+  // The behaviour the ring was added to protect: a turn in flight is when the figure matters
+  // most, and it holds the last measured request rather than blanking.
+  it('keeps the ring up through a turn in flight', () => {
+    expect(hasRing({ streaming: true })).toBe(true);
+    expect(ringLabel({ streaming: true })).toBe('Context 22%');
   });
 
-  it('still says when there is no session', () => {
-    expect(indicator({ disabled: true })).toBe('No session');
+  /**
+   * A measured context under a percent would draw an arc a few pixels long, which is the empty
+   * ring that means nothing was measured at all. The floor is what keeps the two apart - the
+   * same thing "<1%" does for the words.
+   */
+  it('floors the arc so a tiny measured context still reads as measured', () => {
+    const tiny = { contextTokens: 900, contextWindow: 1_050_000, credits: 31_667 };
+    expect(ringValue({ usage: tiny })).toBe(4);
+    // Escaped because this reads the attribute out of static markup, not out of the DOM.
+    expect(ringLabel({ usage: tiny })).toBe('Context &lt;1%');
   });
 
-  it('still names a Code session with no folder', () => {
-    expect(indicator({ notReady: 'No folder' })).toBe('No folder');
+  /**
+   * A determinate ring draws 0% and "no idea" identically, so an unstated window draws the bare
+   * track instead of an arc. The ring stays: it is the tooltip's hover target, and the balance
+   * lives in that tooltip whether or not a window was ever stated.
+   */
+  it('draws an empty ring, not a full-looking one, for a window the catalog does not state', () => {
+    const unstated = { contextTokens: 44_000, contextWindow: null, credits: 31_667 };
+    expect(ringValue({ usage: unstated })).toBe(0);
+    expect(ringLabel({ usage: unstated })).toBe('Context --');
   });
 
-  it('falls back to the old word when it has no figure to show', () => {
-    expect(indicator({ usage: { contextTokens: null, contextWindow: null, credits: null } })).toBe('Ready');
-    expect(indicator({ usage: null })).toBe('Ready');
+  // Nothing to measure and nothing to say: the sidebar dot speaks for these, so a ring here
+  // would be a glyph standing for nothing.
+  it('draws no ring where there is no conversation to measure', () => {
+    expect(hasRing({ disabled: true })).toBe(false);
+    expect(hasRing({ notReady: 'No folder' })).toBe(false);
   });
 });
 
