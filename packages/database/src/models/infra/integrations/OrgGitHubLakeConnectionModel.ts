@@ -3,6 +3,7 @@ import {
   IOrgGitHubLakeConnectionDocument,
   IOrgGitHubLakeConnectionRepository,
   IMongoDocument,
+  GITHUB_DISCONNECT_STALL_MS,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -150,9 +151,21 @@ class OrgGitHubLakeConnectionRepository
   ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
     const stamp = new Date();
     // The pre-update document is what tells a creator apart from a re-stamp.
-    const previous = await this.model.findOneAndUpdate(noLiveSyncClaimFilter(id, organizationId), {
-      $set: { enabled: false, disconnectRequestedAt: stamp },
-    });
+    // $and, not $or: the base filter's top-level $or is the live-sync guard.
+    const previous = await this.model.findOneAndUpdate(
+      {
+        ...noLiveSyncClaimFilter(id, organizationId),
+        $and: [
+          {
+            $or: [
+              { disconnectRequestedAt: { $in: [null] } },
+              { disconnectRequestedAt: { $lte: new Date(stamp.getTime() - GITHUB_DISCONNECT_STALL_MS) } },
+            ],
+          },
+        ],
+      },
+      { $set: { enabled: false, disconnectRequestedAt: stamp } }
+    );
     if (!previous) return null;
     return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
   }

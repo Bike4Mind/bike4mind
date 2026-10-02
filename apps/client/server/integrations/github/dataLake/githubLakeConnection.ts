@@ -365,6 +365,11 @@ export async function requestGitHubLakeDisconnect(
   // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
   const marked = await orgGitHubLakeConnectionRepository.markDisconnecting(connection.id, connection.organizationId);
   if (!marked) {
+    // A concurrent DELETE stamped first; its message is the one purge chain.
+    const current = await orgGitHubLakeConnectionRepository.findById(connection.id);
+    if (current?.disconnectRequestedAt && !isGitHubDisconnectStalled(current.disconnectRequestedAt)) {
+      return { queued: false };
+    }
     throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
   }
   try {

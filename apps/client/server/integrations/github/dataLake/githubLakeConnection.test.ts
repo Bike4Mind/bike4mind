@@ -649,7 +649,15 @@ describe('requestGitHubLakeDisconnect', () => {
 
   it('409s when a sync claim is live, without enqueuing', async () => {
     h.ghConnMarkDisconnecting.mockResolvedValue(null);
+    h.ghConnFindById.mockResolvedValue(CONNECTION);
     await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('returns queued false when a concurrent DELETE stamped a fresh disconnect first', async () => {
+    h.ghConnMarkDisconnecting.mockResolvedValue(null);
+    h.ghConnFindById.mockResolvedValue({ ...CONNECTION, disconnectRequestedAt: new Date() });
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).resolves.toEqual({ queued: false });
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
@@ -658,6 +666,14 @@ describe('requestGitHubLakeDisconnect', () => {
     h.ghConnCancelDisconnect.mockResolvedValue(true);
     await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toThrow('sqs down');
     expect(h.ghConnCancelDisconnect).toHaveBeenCalledWith('conn1', 'orgA', STAMP, true);
+  });
+
+  it('restores enabled: false when rolling back a mark on an already-paused connection', async () => {
+    h.ghConnMarkDisconnecting.mockResolvedValue({ stamp: STAMP, created: true, previousEnabled: false });
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    h.ghConnCancelDisconnect.mockResolvedValue(true);
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toThrow('sqs down');
+    expect(h.ghConnCancelDisconnect).toHaveBeenCalledWith('conn1', 'orgA', STAMP, false);
   });
 
   it('does not roll back a re-stamp it did not create', async () => {

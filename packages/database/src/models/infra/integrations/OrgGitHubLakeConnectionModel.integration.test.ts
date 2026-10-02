@@ -315,10 +315,18 @@ describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
   it('reports created false and the already-disabled previousEnabled on a re-stamp', async () => {
     const { id } = await repo.create(base);
     const first = await repo.markDisconnecting(id, 'org-1');
+    await ageDisconnect(id, 30);
     const second = await repo.markDisconnecting(id, 'org-1');
     expect(first?.created).toBe(true);
     expect(second).toMatchObject({ created: false, previousEnabled: false });
     expect(second?.stamp.getTime()).toBeGreaterThanOrEqual(first!.stamp.getTime());
+  });
+
+  it('refuses a second mark while the first disconnect is fresh', async () => {
+    const { id } = await repo.create(base);
+    const first = await repo.markDisconnecting(id, 'org-1');
+    expect(await repo.markDisconnecting(id, 'org-1')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ disconnectRequestedAt: first!.stamp, enabled: false });
   });
 
   it('refuses while a sync claim is live', async () => {
