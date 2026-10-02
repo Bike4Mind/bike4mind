@@ -84,7 +84,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'cc-bridge/events.ts',
   'cc-bridge/pair.ts',
   'chat-completion-status.ts',
-  'credits/balance.ts',
   'credits/transactions.ts',
   'deep-agent/agents/[agentId].ts',
   'deep-agent/agents/index.ts',

@@ -887,6 +887,20 @@ issues no browser session \u2014 unlike \`/api/identify\`, which does both.
 > in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
 > object the handler validates against.
 
+#### Get the Caller's Credit Balance
+
+\`\`\`
+GET /api/v1/credits
+\`\`\`
+
+**Required API-key scope:** any one of \`me:read\`, \`ai:chat\`, \`ai:generate\`.
+
+Returns only \`balance\` - the same number as \`credits.balance\` on \`GET /api/v1/me\` -
+so a key scoped for spend can check it can afford a batch before starting one.
+
+> **This endpoint is generated from its contract.** See \`getCreditBalance\` in the
+> [generated API docs](/api/v1/docs).
+
 ---
 
 ### Embeddings
