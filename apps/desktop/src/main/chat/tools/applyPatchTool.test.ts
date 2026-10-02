@@ -212,7 +212,7 @@ describe('apply_patch', () => {
 
       expect(message).toContain('Nothing was written.');
       expect(message).toContain('b.ts, hunk 1 of 1: could not find these lines:\nred\ngreenish');
-      expect(message).toContain('its first line at line 1');
+      expect(message).toContain('starts at line 1 and agrees for 1 line, then differs at line 2');
       expect(message).not.toContain('a.ts,');
     });
 

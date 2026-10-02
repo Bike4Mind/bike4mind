@@ -266,8 +266,32 @@ describe('file tools', () => {
       await expect(grepSearch.run({ pattern: 'beta' }, context)).resolves.not.toContain('blob.dat');
     });
 
-    it('reports a bad regular expression as such', async () => {
-      await expect(grepSearch.run({ pattern: '([' }, context)).rejects.toThrow(/Invalid regular expression/);
+    it('searches an invalid regular expression as literal text and says so', async () => {
+      await writeFile(join(root, 'paren.txt'), 'see attached file (id 7)\nother\n', 'utf8');
+      const result = await grepSearch.run({ pattern: 'attached file (id' }, context);
+      expect(result).toMatch(
+        /^Note: "attached file \(id" is not a valid regular expression \(.*Unterminated group\), so it was searched as literal text\./
+      );
+      expect(result).not.toMatch(/Invalid regular expression: .*Invalid regular expression/);
+      expect(result).not.toContain('Invalid regular expression');
+      expect(result).toContain('1 matching line(s)');
+      expect(result).toContain('see attached file (id 7)');
+    });
+
+    it('reports the note even when the literal text is not found', async () => {
+      const result = await grepSearch.run({ pattern: 'nothing here ([' }, context);
+      expect(result).toMatch(/^Note: .*searched as literal text\./);
+      expect(result).toContain('No matches for');
+    });
+
+    it('searches as plain text on request, and leaves a valid regex alone', async () => {
+      await writeFile(join(root, 'dots.txt'), 'a.c\nabc\n', 'utf8');
+      const literal = await grepSearch.run({ pattern: 'a.c', literal: true }, context);
+      expect(literal).toContain('1 matching line(s)');
+      expect(literal).not.toContain('Note:');
+      const regex = await grepSearch.run({ pattern: 'a.c' }, context);
+      expect(regex).toContain('2 matching line(s)');
+      expect(regex).not.toContain('Note:');
     });
   });
 });
