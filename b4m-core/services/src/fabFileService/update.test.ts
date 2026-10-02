@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { IFabFileDocument, IUserDocument } from '@bike4mind/common';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
+import { FAB_FILE_CONTENT_REWRITE_PATCH, IFabFileDocument, IUserDocument } from '@bike4mind/common';
 import { updateFabFile } from './update';
 
 describe('updateFabFile (upload moderation gate)', () => {
@@ -329,5 +329,181 @@ describe('updateFabFile (lake-tag reconciliation wiring)', () => {
     );
     const persisted = dbUpdate.mock.calls[0][0];
     expect(persisted.tags).toEqual(result.tags);
+  });
+});
+
+describe('updateFabFile (narrowed write pins)', () => {
+  const NOW = new Date('2026-01-01T00:00:00Z');
+  const mockUser = { id: 'user-123' } as IUserDocument;
+
+  let findUpdateAccessById: Mock;
+  let dbUpdate: Mock;
+  let mockAdapters: {
+    db: {
+      fabFiles: {
+        shareable: { findUpdateAccessById: Mock };
+        update: Mock;
+        findById: Mock;
+        pullTagsByFabFileId: Mock;
+        computeDataLakeStats: Mock;
+      };
+      dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock; activateIfDraft: Mock };
+    };
+    storage: { upload: Mock; generateSignedUrl: Mock };
+  };
+
+  const textFile = (overrides: Partial<IFabFileDocument> = {}): IFabFileDocument =>
+    ({
+      id: 'file-1',
+      userId: 'user-123',
+      fileName: 'notes.txt',
+      mimeType: 'text/plain',
+      filePath: 'uploads/notes.txt',
+      moderationStatus: 'clean',
+      tags: [],
+      fileUrl: 'https://s3.example.com/stale-signed-url',
+      users: [],
+      groups: [],
+      ...overrides,
+    }) as IFabFileDocument;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    findUpdateAccessById = vi.fn();
+    dbUpdate = vi.fn().mockResolvedValue(undefined);
+    mockAdapters = {
+      db: {
+        fabFiles: {
+          shareable: { findUpdateAccessById },
+          update: dbUpdate,
+          findById: vi.fn().mockResolvedValue(null),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+          computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+        },
+        dataLakes: {
+          findByDatalakeTag: vi.fn().mockResolvedValue(null),
+          find: vi.fn().mockResolvedValue([]),
+          setStats: vi.fn(),
+          activateIfDraft: vi.fn(),
+        },
+      },
+      storage: {
+        upload: vi.fn().mockResolvedValue(undefined),
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/new-signed-url'),
+      },
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('writes only the changed fields and no unset option for a serveable file (notes)', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', notes: 'a note' }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      { id: 'file-1', notes: 'a note', systemPriority: undefined, updatedAt: NOW },
+      undefined,
+    ]);
+  });
+
+  it('writes the reconciled tags array and no other file fields when tags change', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', tags: [{ name: 'design', strength: 1 }] }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        tags: [{ name: 'design', strength: 1 }],
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('writes the lake meta-tag and backfilled folder tag in the persisted array on a join', async () => {
+    mockAdapters.db.dataLakes.findByDatalakeTag.mockResolvedValue({
+      id: 'lake1',
+      datalakeTag: 'datalake:acme',
+      fileTagPrefix: 'acme:',
+      createdByUserId: 'user-123',
+      status: 'active',
+    });
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    await updateFabFile(
+      mockUser,
+      { id: 'file-1', tags: [{ name: 'datalake:acme', strength: 1 }] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mockAdapters as any
+    );
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        tags: [
+          { name: 'datalake:acme', strength: 1 },
+          { name: 'acme:uncategorized', strength: 1 },
+        ],
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('defaults systemPriority to 999 when system is set without one', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', system: true }, mockAdapters as any);
+
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      { id: 'file-1', system: true, systemPriority: 999, updatedAt: NOW },
+      undefined,
+    ]);
+  });
+
+  it('writes the content-rewrite patch with the new url when fileContent changes', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        fileUrl: 'https://s3.example.com/new-signed-url',
+        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
+        ...FAB_FILE_CONTENT_REWRITE_PATCH,
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('sends the unset option, and no url fields in the partial, for a file held by moderation', async () => {
+    findUpdateAccessById.mockResolvedValue(textFile({ moderationStatus: 'pending' }));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', fileName: 'renamed.txt' }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      { id: 'file-1', fileName: 'renamed.txt', systemPriority: undefined, updatedAt: NOW },
+      { unset: ['fileUrl', 'fileUrlExpireAt'] },
+    ]);
   });
 });
