@@ -746,6 +746,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * or created by the caller) so the count cannot confirm a lake the caller could not see.
        */
       callerMaySeeAllLakes?: boolean;
+      /**
+       * Only read with `restrictToTags`. Orgs the caller holds admin rights in (pre-resolved via
+       * `findIdsWithAdminRights`). Their lakes count as already visible, matching browse's org-admin
+       * arm, so a non-member org admin is not told nothing was excluded. Widens visibility only,
+       * never reach.
+       */
+      administeredOrgIds?: string[];
     }
   ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
