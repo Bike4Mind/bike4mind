@@ -147,7 +147,7 @@ describe('listUserInstallations', () => {
     h.mockOctokit.paginate.mockResolvedValue([
       {
         id: 10,
-        account: { login: 'octocat', type: 'User' },
+        account: { id: 501, login: 'octocat', type: 'User' },
         html_url: 'https://github.com/settings/installations/10',
         repository_selection: 'selected',
         permissions: { contents: 'read', metadata: 'read' },
@@ -157,6 +157,7 @@ describe('listUserInstallations', () => {
       {
         id: 10,
         accountLogin: 'octocat',
+        accountId: 501,
         accountType: 'User',
         settingsUrl: 'https://github.com/settings/installations/10',
         repositorySelection: 'selected',
@@ -192,6 +193,21 @@ describe('listUserInstallations', () => {
     ]);
     await expect(listUserInstallations('user-token')).resolves.toEqual([
       expect.objectContaining({ accountLogin: 'some-bot', accountType: 'Organization' }),
+    ]);
+  });
+
+  it('maps a missing account to a null accountId rather than inventing one', async () => {
+    h.mockOctokit.paginate.mockResolvedValue([
+      {
+        id: 13,
+        account: null,
+        html_url: 'https://github.com/settings/installations/13',
+        repository_selection: 'selected',
+        permissions: {},
+      },
+    ]);
+    await expect(listUserInstallations('user-token')).resolves.toEqual([
+      expect.objectContaining({ id: 13, accountLogin: '', accountId: null }),
     ]);
   });
 });

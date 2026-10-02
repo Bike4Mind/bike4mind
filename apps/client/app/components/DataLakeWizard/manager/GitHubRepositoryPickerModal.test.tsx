@@ -49,6 +49,8 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 
 const INSTALL_URL = 'https://github.com/apps/lake-app/installations/new?state=s1';
+const addReposUrl = (installationId: number) =>
+  `https://github.com/apps/lake-app/installations/new/permissions?state=s1&target_id=${installationId}00`;
 const assign = vi.fn();
 const writeText = vi.fn().mockResolvedValue(undefined);
 
@@ -83,6 +85,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [
             { id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null },
@@ -115,6 +118,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [
             {
@@ -143,6 +147,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [
             { id: 102, fullName: 'acme/shared', defaultBranch: 'main', private: true, boundTo: { dataLakeName: null } },
@@ -155,7 +160,7 @@ describe('GitHubRepositoryPickerModal', () => {
     expect(screen.getByTestId('github-repo-picker-row-102')).toHaveTextContent('Connected to another data lake');
   });
 
-  it('shows the violation message and settings link, with no repository rows', () => {
+  it('shows the violation message and a "Fix on GitHub" link, with no repository rows or add-repositories action', () => {
     h.data = choices({
       installations: [
         {
@@ -163,6 +168,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'naoya',
           accountType: 'User',
           settingsUrl: 'https://github.com/settings/installations/20',
+          addRepositoriesUrl: addReposUrl(20),
           violation: { code: 'all_repositories', message: 'This installation grants access to all repositories.' },
           repositories: [],
         },
@@ -172,11 +178,13 @@ describe('GitHubRepositoryPickerModal', () => {
 
     const violation = screen.getByTestId('github-repo-picker-violation-20');
     expect(violation).toHaveTextContent('This installation grants access to all repositories.');
-    const link = screen.getByTestId('github-repo-picker-settings-link-20');
+    const link = screen.getByTestId('github-repo-picker-fix-link-20');
+    expect(link).toHaveTextContent('Fix on GitHub');
     expect(link).toHaveAttribute('href', 'https://github.com/settings/installations/20');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     expect(screen.queryByTestId(/github-repo-picker-row-/)).toBeNull();
+    expect(screen.queryByTestId('github-repo-picker-add-repos-btn-20')).toBeNull();
   });
 
   it('filters repositories by full name, case-insensitively', () => {
@@ -187,6 +195,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [
             { id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null },
@@ -213,6 +222,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [{ id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null }],
         },
@@ -235,6 +245,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [{ id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null }],
         },
@@ -271,11 +282,13 @@ describe('GitHubRepositoryPickerModal', () => {
     expect(h.beginReconnect).toHaveBeenCalled();
   });
 
-  it('saves the handoff and leaves for the install page from "Install on my account"', () => {
+  it('saves the handoff and leaves for the install page from "Install on another account"', () => {
     h.data = choices({ installations: [] });
     wrap(<GitHubRepositoryPickerModal />);
 
-    fireEvent.click(screen.getByTestId('github-repo-picker-install-btn'));
+    const install = screen.getByTestId('github-repo-picker-install-btn');
+    expect(install).toHaveTextContent('Install on another account');
+    fireEvent.click(install);
 
     expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
     expect(assign).toHaveBeenCalledWith(INSTALL_URL);
@@ -288,7 +301,7 @@ describe('GitHubRepositoryPickerModal', () => {
     expect(screen.getByText(/needs an owner to install the App/)).toBeInTheDocument();
   });
 
-  it('copies the ask-an-owner request for an organization installation', () => {
+  it('leads with "Add repositories to <account>" for an org, leaving for its targeted install URL', () => {
     h.data = choices({
       installations: [
         {
@@ -296,12 +309,68 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [],
         },
       ],
     });
     wrap(<GitHubRepositoryPickerModal />);
+
+    const add = screen.getByTestId('github-repo-picker-add-repos-btn-10');
+    expect(add).toHaveTextContent('Add repositories to acme');
+    expect(screen.getByTestId('github-repo-picker-add-repos-10')).toHaveTextContent(
+      "Needs a GitHub org owner. If you're not one, GitHub lets you request it."
+    );
+    // The copyable request is a collapsed fallback, not a peer of the primary action.
+    expect(screen.queryByTestId('github-repo-picker-request-repo-input-10')).toBeNull();
+
+    fireEvent.click(add);
+    expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+    expect(assign).toHaveBeenCalledWith(addReposUrl(10));
+  });
+
+  it('offers "Add repositories" on a personal installation without the org-owner hint or request fallback', () => {
+    h.data = choices({
+      installations: [
+        {
+          id: 20,
+          accountLogin: 'naoya',
+          accountType: 'User',
+          settingsUrl: 'https://github.com/settings/installations/20',
+          addRepositoriesUrl: addReposUrl(20),
+          violation: null,
+          repositories: [],
+        },
+      ],
+    });
+    wrap(<GitHubRepositoryPickerModal />);
+
+    expect(screen.getByTestId('github-repo-picker-add-repos-btn-20')).toHaveTextContent('Add repositories to naoya');
+    expect(screen.getByTestId('github-repo-picker-add-repos-20')).not.toHaveTextContent(/org owner/);
+    expect(screen.queryByTestId('github-repo-picker-request-toggle-btn-20')).toBeNull();
+  });
+
+  it('copies the ask-an-owner request for an organization installation once the fallback is expanded', () => {
+    h.data = choices({
+      installations: [
+        {
+          id: 10,
+          accountLogin: 'acme',
+          accountType: 'Organization',
+          settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
+          violation: null,
+          repositories: [],
+        },
+      ],
+    });
+    wrap(<GitHubRepositoryPickerModal />);
+
+    const toggle = screen.getByTestId('github-repo-picker-request-toggle-btn-10');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
     fireEvent.change(screen.getByTestId('github-repo-picker-request-repo-input-10').querySelector('input')!, {
       target: { value: 'acme/private-repo' },
@@ -330,6 +399,7 @@ describe('GitHubRepositoryPickerModal', () => {
             accountLogin: 'acme',
             accountType: 'Organization',
             settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+            addRepositoriesUrl: addReposUrl(10),
             violation: null,
             repositories: [first, repo(101), repo(102)],
           },
@@ -371,6 +441,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [{ id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null }],
         },
@@ -394,6 +465,7 @@ describe('GitHubRepositoryPickerModal', () => {
           accountLogin: 'acme',
           accountType: 'Organization',
           settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          addRepositoriesUrl: addReposUrl(10),
           violation: null,
           repositories: [{ id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null }],
         },

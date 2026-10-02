@@ -32,6 +32,8 @@ export type GitHubLakeInstallation = {
 
 /** An installation as the user's own token sees it: GET /user/installations. */
 export type GitHubLakeUserInstallation = GitHubLakeInstallation & {
+  /** The account's numeric GitHub id - the `target_id` of a targeted install link. Null without an account. */
+  accountId: number | null;
   accountType: 'User' | 'Organization';
   settingsUrl: string;
 };
@@ -122,6 +124,7 @@ export async function listUserInstallations(userToken: string): Promise<GitHubLa
     return {
       id: installation.id,
       accountLogin: account && 'login' in account ? account.login : (account?.slug ?? ''),
+      accountId: account?.id ?? null,
       accountType: isUser ? 'User' : 'Organization',
       settingsUrl: installation.html_url,
       repositorySelection: installation.repository_selection,

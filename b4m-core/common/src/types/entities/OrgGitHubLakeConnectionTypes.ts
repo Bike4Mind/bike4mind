@@ -108,8 +108,16 @@ export type GitHubLakeInstallationChoice = {
   id: number;
   accountLogin: string;
   accountType: 'User' | 'Organization';
-  /** The installation's settings page on GitHub, where an owner changes its repository access. */
+  /**
+   * The installation's settings page on GitHub, where an owner changes its repository access or fixes
+   * a policy violation. Owner-only: GitHub 404s it for anyone else.
+   */
   settingsUrl: string;
+  /**
+   * GitHub's install page targeted at this account, bound to the same flow as installUrl: an owner
+   * lands on this installation's repository access, any other member can request the change there.
+   */
+  addRepositoriesUrl: string;
   /** Set when the installation breaks the lake App policy; its repositories are then empty. */
   violation: { code: GitHubLakeInstallationPolicyViolation; message: string } | null;
   repositories: GitHubLakeRepositoryChoice[];

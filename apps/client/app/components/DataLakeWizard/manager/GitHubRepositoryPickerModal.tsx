@@ -65,6 +65,7 @@ export default function GitHubRepositoryPickerModal() {
   const [search, setSearch] = useState('');
   const [manualSelection, setManualSelection] = useState<SelectedRepo | null>(null);
   const [requestRepoNames, setRequestRepoNames] = useState<Record<number, string>>({});
+  const [openRequestIds, setOpenRequestIds] = useState<ReadonlySet<number>>(new Set());
 
   // A fresh lake (or a close) starts the picker's own UI state clean - the server's list is already
   // handled by react-query's own cache per lake id. Resetting here, during render, avoids an
@@ -74,6 +75,7 @@ export default function GitHubRepositoryPickerModal() {
     setSearch('');
     setManualSelection(null);
     setRequestRepoNames({});
+    setOpenRequestIds(new Set());
   }
 
   const { data, isLoading, isFetching, error, refetch } = useLakeGitHubRepositoryChoices(lakeId ?? undefined, open);
@@ -82,10 +84,13 @@ export default function GitHubRepositoryPickerModal() {
 
   const installations = useMemo(() => data?.installations ?? [], [data]);
   const eligible = useMemo(() => listEligible(installations), [installations]);
-  const organizationInstallations = useMemo(
-    () => installations.filter(installation => installation.accountType === 'Organization'),
+  // A policy-violating installation gets its own "Fix on GitHub" link instead: adding a repository
+  // to it would still leave it unusable.
+  const addableInstallations = useMemo(
+    () => installations.filter(installation => !installation.violation),
     [installations]
   );
+  const hasOrganizationInstallation = installations.some(installation => installation.accountType === 'Organization');
 
   const filteredInstallations = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -128,16 +133,25 @@ export default function GitHubRepositoryPickerModal() {
     );
   };
 
-  const handleInstall = () => {
-    if (!lakeId || !data?.installUrl) return;
+  // Same tab, with the handoff saved: both URLs carry this flow's `state`, so GitHub's return
+  // (an install, an update, or a non-owner's request) lands back in this lake's picker.
+  const leaveForGitHub = (url: string | undefined) => {
+    if (!lakeId || !url) return;
     try {
       saveGitHubLakeConnectHandoff({ dataLakeId: lakeId });
     } catch {
       toast.error('Could not start the GitHub connection: this browser blocked session storage.');
       return;
     }
-    window.location.assign(data.installUrl);
+    window.location.assign(url);
   };
+
+  const toggleRequest = (installationId: number) =>
+    setOpenRequestIds(ids => {
+      const next = new Set(ids);
+      if (!next.delete(installationId)) next.add(installationId);
+      return next;
+    });
 
   const handleCopyRequest = (installation: GitHubLakeInstallationChoice) => {
     const repoName = requestRepoNames[installation.id]?.trim() || 'the repository';
@@ -243,9 +257,9 @@ export default function GitHubRepositoryPickerModal() {
                         target="_blank"
                         rel="noopener noreferrer"
                         endDecorator={<OpenInNewIcon fontSize="small" />}
-                        data-testid={`github-repo-picker-settings-link-${installation.id}`}
+                        data-testid={`github-repo-picker-fix-link-${installation.id}`}
                       >
-                        Open installation settings
+                        Fix on GitHub
                       </Link>
                     </Sheet>
                   ) : (
@@ -298,63 +312,95 @@ export default function GitHubRepositoryPickerModal() {
 
             <Divider sx={{ my: 1 }} />
             <Typography level="title-sm">Don&apos;t see your repository?</Typography>
-            <Stack gap={1}>
+            <Stack gap={1.5}>
+              {addableInstallations.map(installation => {
+                const isOrganization = installation.accountType === 'Organization';
+                const requestOpen = openRequestIds.has(installation.id);
+                return (
+                  <Stack
+                    key={installation.id}
+                    gap={0.5}
+                    data-testid={`github-repo-picker-add-repos-${installation.id}`}
+                  >
+                    <Button
+                      data-testid={`github-repo-picker-add-repos-btn-${installation.id}`}
+                      variant="soft"
+                      color="primary"
+                      startDecorator={<GitHubIcon />}
+                      onClick={() => leaveForGitHub(installation.addRepositoriesUrl)}
+                      sx={{ alignSelf: 'flex-start' }}
+                    >
+                      Add repositories to {installation.accountLogin}
+                    </Button>
+                    {/* A personal account's owner is the user, so only an org needs the owner hint and the fallback. */}
+                    {isOrganization && (
+                      <>
+                        <Typography level="body-xs" color="neutral">
+                          Needs a GitHub org owner. If you&apos;re not one, GitHub lets you request it.
+                        </Typography>
+                        <Link
+                          component="button"
+                          level="body-xs"
+                          color="neutral"
+                          aria-expanded={requestOpen}
+                          data-testid={`github-repo-picker-request-toggle-btn-${installation.id}`}
+                          onClick={() => toggleRequest(installation.id)}
+                          sx={{ alignSelf: 'flex-start' }}
+                        >
+                          Or copy a request to send an owner
+                        </Link>
+                        {requestOpen && (
+                          <Stack
+                            direction="row"
+                            gap={1}
+                            data-testid={`github-repo-picker-org-request-${installation.id}`}
+                          >
+                            <Input
+                              size="sm"
+                              data-testid={`github-repo-picker-request-repo-input-${installation.id}`}
+                              placeholder="owner/repo"
+                              slotProps={{
+                                input: { 'aria-label': `Repository to request on ${installation.accountLogin}` },
+                              }}
+                              value={requestRepoNames[installation.id] ?? ''}
+                              onChange={e => {
+                                const { value } = e.target;
+                                setRequestRepoNames(names => ({ ...names, [installation.id]: value }));
+                              }}
+                              sx={{ flex: 1 }}
+                            />
+                            <IconButton
+                              size="sm"
+                              data-testid={`github-repo-picker-copy-request-btn-${installation.id}`}
+                              variant="outlined"
+                              color="neutral"
+                              aria-label={`Copy the request for ${installation.accountLogin}`}
+                              onClick={() => handleCopyRequest(installation)}
+                            >
+                              <ContentCopyIcon />
+                            </IconButton>
+                          </Stack>
+                        )}
+                      </>
+                    )}
+                  </Stack>
+                );
+              })}
               <Button
                 data-testid="github-repo-picker-install-btn"
                 variant="outlined"
                 color="neutral"
                 startDecorator={<GitHubIcon />}
                 disabled={!data?.installUrl}
-                onClick={handleInstall}
+                onClick={() => leaveForGitHub(data?.installUrl)}
                 sx={{ alignSelf: 'flex-start' }}
               >
-                Install on my account
+                Install on another account
               </Button>
-              {organizationInstallations.length > 0 ? (
-                organizationInstallations.map(installation => (
-                  <Stack
-                    key={installation.id}
-                    gap={0.5}
-                    data-testid={`github-repo-picker-org-request-${installation.id}`}
-                  >
-                    <Link
-                      data-testid={`github-repo-picker-settings-link-${installation.id}`}
-                      href={installation.settingsUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      endDecorator={<OpenInNewIcon fontSize="small" />}
-                      level="body-sm"
-                    >
-                      Open installation settings ({installation.accountLogin})
-                    </Link>
-                    <Stack direction="row" gap={1}>
-                      <Input
-                        data-testid={`github-repo-picker-request-repo-input-${installation.id}`}
-                        placeholder="owner/repo"
-                        slotProps={{ input: { 'aria-label': `Repository to request on ${installation.accountLogin}` } }}
-                        value={requestRepoNames[installation.id] ?? ''}
-                        onChange={e => {
-                          const { value } = e.target;
-                          setRequestRepoNames(names => ({ ...names, [installation.id]: value }));
-                        }}
-                        sx={{ flex: 1 }}
-                      />
-                      <IconButton
-                        data-testid={`github-repo-picker-copy-request-btn-${installation.id}`}
-                        variant="outlined"
-                        color="neutral"
-                        aria-label={`Copy the request for ${installation.accountLogin}`}
-                        onClick={() => handleCopyRequest(installation)}
-                      >
-                        <ContentCopyIcon />
-                      </IconButton>
-                    </Stack>
-                  </Stack>
-                ))
-              ) : (
+              {!hasOrganizationInstallation && (
                 <Typography level="body-xs" color="neutral">
                   An organization repository needs an owner to install the App on that organization. Use &quot;Install
-                  on my account&quot; to pick the org and request it.
+                  on another account&quot; to pick the org and request it.
                 </Typography>
               )}
             </Stack>
