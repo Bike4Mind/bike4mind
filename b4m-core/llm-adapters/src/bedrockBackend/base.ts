@@ -549,8 +549,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // If there is a tool being used, then
         // callback the complete function with the tool messages included
         if (func.some(f => f.name)) {
-          // func is indexed by provider choice index, so a tool at index >= 2 leaves holes that
-          // for...of yields as undefined; filter() skips them.
+          // func is indexed by provider choice index, so any index never referenced (e.g. a tool at
+          // index 2 with nothing below it) is a hole that for...of yields as undefined; filter() skips them.
           const toolCalls = func.filter(Boolean);
 
           // Track all tool usage first (including ID for history reconstruction, allow empty parameters)
