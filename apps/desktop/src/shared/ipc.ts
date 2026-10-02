@@ -133,6 +133,14 @@ export const IPC_CHANNELS = {
   updateInstall: 'update:install',
   /** main -> renderer push; a check, a download or an install offer changed state. */
   updateStateChanged: 'update:state-changed',
+  /**
+   * Where the agent's browser should be drawn, if anywhere. Renderer -> main only: the view is
+   * an overlay the renderer cannot see, so the renderer is the only thing that knows where the
+   * hole it has left for it actually is.
+   */
+  browserSetPane: 'browser:set-pane',
+  /** main -> renderer push; one conversation's page went somewhere. */
+  browserPageUrl: 'browser:page-url',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
 } as const;
@@ -144,6 +152,39 @@ export interface AppInfo {
   electronVersion: string;
   nodeVersion: string;
   chromeVersion: string;
+}
+
+/**
+ * The rectangle the renderer has left clear for the agent's browser, in CSS pixels relative to
+ * the app window's content area - which is exactly what getBoundingClientRect reports.
+ */
+export interface BrowserPaneBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * What the renderer is asking for: a conversation's page at these bounds, or nothing.
+ *
+ * Null bounds mean "show no page" while still naming the conversation, so the answer still
+ * carries that conversation's url and the pane can say whether it has anything to show. A null
+ * `sessionId` is the same request with nothing to ask about.
+ */
+export interface BrowserPaneRequest {
+  sessionId: string | null;
+  bounds: BrowserPaneBounds | null;
+}
+
+/** Where the named conversation's page is. Empty when it has none, or has been nowhere. */
+export interface BrowserPaneState {
+  url: string;
+}
+
+export interface BrowserPageUrlEvent {
+  sessionId: string;
+  url: string;
 }
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
@@ -339,6 +380,19 @@ export interface DesktopApi {
      * Returns the state the picker should now draw.
      */
     setProjectSkillsTrusted(sessionId: string, trusted: boolean): Promise<SkillsState>;
+  };
+  /**
+   * The agent's browser, as something the user can watch.
+   *
+   * There is deliberately nothing here that DRIVES the page: the view takes the user's own
+   * clicks and keystrokes directly, and the agent drives it through its tools in main. This
+   * channel only says where to draw it.
+   */
+  browser: {
+    /** Draw this conversation's page at these bounds, or nothing. Returns where that page is. */
+    setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
+    /** Subscribe to page navigations; returns the unsubscribe. */
+    onPageUrl(listener: (event: BrowserPageUrlEvent) => void): () => void;
   };
   files: {
     /**

@@ -16,7 +16,7 @@ import type {
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
-import { IPC_CHANNELS } from '@shared/ipc';
+import { IPC_CHANNELS, type BrowserPaneBounds, type BrowserPaneRequest, type BrowserPaneState } from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
@@ -137,6 +137,22 @@ function mcpStoreFile(path: string): StoreFile {
   };
 }
 
+/**
+ * The pane rectangle, or null for anything that is not one.
+ *
+ * Checked rather than trusted even though the renderer is ours: these numbers go straight to
+ * `setBounds`, and a NaN there puts a web page somewhere nobody can find it - including over
+ * the composer.
+ */
+function paneBounds(value: unknown): BrowserPaneBounds | null {
+  const bounds = value as Partial<BrowserPaneBounds> | null | undefined;
+  if (!bounds) return null;
+  const { x, y, width, height } = bounds;
+  if (![x, y, width, height].every(side => typeof side === 'number' && Number.isFinite(side))) return null;
+  if (width! < 1 || height! < 1) return null;
+  return { x: Math.round(x!), y: Math.round(y!), width: Math.round(width!), height: Math.round(height!) };
+}
+
 /** The OS folder picker, parented to the window that asked when there is one. */
 async function pickDirectory(sender: WebContents): Promise<string | null> {
   const window = BrowserWindow.fromWebContents(sender);
@@ -225,7 +241,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
 
   const foreground = new ForegroundCommandRegistry();
 
-  const browser = new BrowserManager();
+  const browser = new BrowserManager((sessionId, url) => send(IPC_CHANNELS.browserPageUrl, { sessionId, url }));
 
   const service = new ChatService({
     store,
@@ -423,6 +439,16 @@ export function registerChat(auth: AuthService): RegisteredChat {
     await mcp.disconnect(id);
     await mcp.connect(id);
     return mcp.state();
+  });
+
+  // The view is attached to the window that asked, so the request carries no window id: a
+  // second app window asking puts the page in ITS pane, and the first one's pane falls back to
+  // its empty state on its next report.
+  ipcMain.handle(IPC_CHANNELS.browserSetPane, (event, request: BrowserPaneRequest): BrowserPaneState => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const sessionId = typeof request?.sessionId === 'string' ? request.sessionId : null;
+    if (!window) return { url: '' };
+    return browser.setPane(window, sessionId, paneBounds(request?.bounds));
   });
 
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));

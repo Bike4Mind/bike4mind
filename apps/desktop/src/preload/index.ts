@@ -13,7 +13,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
-import { IPC_CHANNELS, type DesktopApi } from '@shared/ipc';
+import { IPC_CHANNELS, type BrowserPageUrlEvent, type BrowserPaneRequest, type DesktopApi } from '@shared/ipc';
 import type { UpdateState } from '@shared/update';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -127,6 +127,14 @@ const api: DesktopApi = {
     listSkills: sessionId => ipcRenderer.invoke(IPC_CHANNELS.chatListSkills, sessionId),
     setProjectSkillsTrusted: (sessionId, trusted) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatSetProjectSkillsTrusted, sessionId, trusted),
+  },
+  browser: {
+    setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
+    onPageUrl: listener => {
+      const handler = (_event: unknown, event: BrowserPageUrlEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.browserPageUrl, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.browserPageUrl, handler);
+    },
   },
   files: {
     // Electron removed File.path in v32; webUtils is the replacement and it only works on this
