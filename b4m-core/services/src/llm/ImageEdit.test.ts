@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { z } from 'zod';
 import {
+  EditImageRequestBodySchema,
   ImageModels,
   IMAGES_PER_EDIT_REQUEST,
   ModelBackend,
@@ -11,7 +13,7 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { aiImageService, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
 import { deductCreditsWithOrgSupport } from '../creditService';
-import { ImageEditService } from './ImageEdit';
+import { ImageEditService, type ImageEditBody } from './ImageEdit';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -126,7 +128,11 @@ describe('ImageEditService.validateUserCredits', () => {
 describe('ImageEditService.process model dispatch', () => {
   const editSpy = vi.fn();
 
-  const makeService = (dbExtra: Record<string, unknown> = {}) => {
+  const makeService = (
+    dbExtra: Record<string, unknown> = {},
+    // In production this enqueues; pass one that calls process() to drive invoke() end to end.
+    startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn()
+  ) => {
     const quest = {
       id: 'quest1',
       sessionId: 'session1',
@@ -155,7 +161,7 @@ describe('ImageEditService.process model dispatch', () => {
           ]),
         },
       },
-      startImageEditProcess: vi.fn(),
+      startImageEditProcess,
       deleteFabFile: vi.fn(),
       wsHttpsUrl: 'wss://example.invalid',
       abilityGetter: vi.fn(),
@@ -204,6 +210,26 @@ describe('ImageEditService.process model dispatch', () => {
 
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('bfl');
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.FLUX_PRO_FILL });
+  });
+
+  it('carries a client-sent seed through invoke() to the BFL edit call', async () => {
+    // Goes through invoke() because its EditImageRequestBodySchema parse is what used to strip seed.
+    const serviceRef: { current?: ImageEditService } = {};
+    const { service } = makeService({}, body => serviceRef.current!.process({ body, logger: silentLogger }));
+    serviceRef.current = service;
+
+    const body: z.infer<typeof EditImageRequestBodySchema> = {
+      sessionId: 'session1',
+      questId: 'quest1',
+      prompt: 'make it blue',
+      model: ImageModels.FLUX_PRO_FILL,
+      image: 'https://example.invalid/source.png',
+      fabFileIds: ['mask1'],
+      seed: 12345,
+    };
+    await service.invoke({ body, userId: 'user1' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
   });
 
   it('sends the selected OpenAI model instead of defaulting to gpt-image-1', async () => {

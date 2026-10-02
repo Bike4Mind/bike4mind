@@ -165,6 +165,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
   // ImageEditBodySchema's own (narrower) field.
   output_format: ImageOutputFormatSchema.nullable().optional(),
+  // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
+  seed: z.number().nullable().optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 
