@@ -23,7 +23,10 @@ import {
   BadRequestError,
   ForbiddenError,
   NotFoundError,
+  canUseSurface,
+  getWorkspaceSurface,
 } from '@bike4mind/common';
+import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@client/config/activities';
@@ -47,6 +50,17 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
   const namesALakeByTagsOnly = !body.dataLakeId && Array.isArray(body.retrievalTags) && body.retrievalTags.length > 0;
   if (!namesALakeByTagsOnly) {
     delete body.corpusGroundingMode;
+  }
+
+  // Only REGISTERED surfaces are entitlement-checked. Private modules create sessions under surface
+  // strings this repo does not register (see surfaces.ts) and rely on that write passing through as
+  // it always has, so an unknown surface is deliberately left alone here.
+  if (
+    body.surface &&
+    getWorkspaceSurface(body.surface) &&
+    !canUseSurface(await surfaceAccessForRequest(req)(), body.surface)
+  ) {
+    throw new ForbiddenError('You do not have access to that workspace');
   }
 
   // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
