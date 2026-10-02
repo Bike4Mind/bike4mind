@@ -1,6 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
+import type { GitHubLakeConnectionStatus, GitHubLakeRepositoryChoicesResponse } from '@bike4mind/common';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import { invalidateLakeFileQueries } from '@client/app/hooks/data/invalidateLakeFileQueries';
 
@@ -25,8 +25,6 @@ export type LakeGitHubConnection = {
   /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
 };
-
-export type GitHubLakeConnectUrls = { installUrl: string; authorizeUrl: string };
 
 export const GITHUB_CONNECTION_ACTIVE_POLL_MS = 4_000;
 /** Keeps polling once connected for the same reason as DRIVE_CONNECTION_IDLE_POLL_MS (googleDrive.ts). */
@@ -60,7 +58,9 @@ export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
       // lands; refresh them whenever a poll shows the ingested set changed or a sync finished.
       const previous = queryClient.getQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId));
       const syncFinished = previous?.status === 'syncing' && next?.status !== 'syncing';
-      if (dataLakeId && previous && (syncFinished || next?.fileCount !== previous.fileCount)) {
+      // `null` (no connection yet) still counts as a known prior state: a first sync that lands before
+      // the first poll after connecting must refresh the file lists too.
+      if (dataLakeId && previous !== undefined && (syncFinished || next?.fileCount !== previous?.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
       return next;
@@ -69,27 +69,69 @@ export function useLakeGitHubConnection(dataLakeId?: string, enabled = true) {
   });
 }
 
-/** Mint the signed install/authorize URLs for a lake (POST /api/data-lakes/:id/github-connection). */
+/** Mint the signed authorize URL for a lake (POST /api/data-lakes/:id/github-connection). */
 export function useStartLakeGitHubConnect() {
   return useMutation({
     mutationFn: async (dataLakeId: string) => {
-      const response = await api.post<GitHubLakeConnectUrls>(`/api/data-lakes/${dataLakeId}/github-connection`);
+      const response = await api.post<{ authorizeUrl: string }>(`/api/data-lakes/${dataLakeId}/github-connection`);
       return response.data;
     },
   });
 }
 
-/** Bind the installed repository to the lake signed into `state` (POST /api/data-lakes/github-callback). */
+/**
+ * The authorize leg's exchange (POST /api/data-lakes/github-callback): hands GitHub's `code` back
+ * with the `state` that minted it, and gets back which lake to reopen the repository picker for.
+ * Binds nothing - the server only holds the user's GitHub token for the picker to read.
+ */
+export function useAuthorizeLakeGitHubConnect() {
+  return useMutation({
+    mutationFn: async (input: { state: string; code: string }) => {
+      const response = await api.post<{ dataLakeId: string }>('/api/data-lakes/github-callback', input);
+      return response.data;
+    },
+  });
+}
+
+/**
+ * The repository picker's list for one lake's connect flow (GET .../github-connection/repositories),
+ * read with the GitHub user token the authorize exchange left held server-side. `retry: false`
+ * because a failure here is a 403 (the flow expired) - retrying it cannot succeed. No polling and no
+ * refetch-on-focus: the user drives freshness explicitly with the picker's Refresh button.
+ */
+export function useLakeGitHubRepositoryChoices(dataLakeId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId),
+    enabled: !!dataLakeId && enabled,
+    retry: false,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    queryFn: async () => {
+      const response = await api.get<GitHubLakeRepositoryChoicesResponse>(
+        `/api/data-lakes/${dataLakeId}/github-connection/repositories`
+      );
+      return response.data;
+    },
+  });
+}
+
+/** Bind the repository picked from the list (POST /api/data-lakes/:id/github-connection/complete). */
 export function useCompleteLakeGitHubConnect() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { state: string; code: string; installationId: number }) => {
-      const response = await api.post<{ connection: LakeGitHubConnection }>('/api/data-lakes/github-callback', input);
+    mutationFn: async (input: { dataLakeId: string; installationId: number; repositoryId: number }) => {
+      const { dataLakeId, ...body } = input;
+      const response = await api.post<{ connection: LakeGitHubConnection }>(
+        `/api/data-lakes/${dataLakeId}/github-connection/complete`,
+        body
+      );
       return response.data.connection;
     },
-    onSuccess: async () => {
-      // The lake id lives only inside the signed state, so refresh every lake's connection read.
-      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnectionRoot });
+    onSuccess: async (_connection, { dataLakeId }) => {
+      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+      // The picker's list is now stale (the bound repository must show as taken); a closed picker
+      // just refetches fresh next time it opens rather than carrying this invalidation forward.
+      queryClient.removeQueries({ queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId) });
     },
   });
 }

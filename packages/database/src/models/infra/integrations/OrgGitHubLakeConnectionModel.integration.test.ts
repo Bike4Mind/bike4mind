@@ -91,6 +91,31 @@ describe('OrgGitHubLakeConnectionModel - accessors', () => {
     expect((await orgGitHubLakeConnectionRepository.findByDataLakeIdAny('lake-1'))?.id).toBe(created.id);
     expect(await orgGitHubLakeConnectionRepository.findByDataLakeIdAny('lake-missing')).toBeFalsy();
   });
+
+  it('findByRepositoryIds resolves every connection binding any of the given repository ids, across orgs', async () => {
+    const first = await OrgGitHubLakeConnection.create(base);
+    const second = await OrgGitHubLakeConnection.create({
+      ...base,
+      organizationId: 'org-2',
+      targetDataLakeId: 'lake-2',
+      installationId: 222,
+      repositoryId: 2,
+      repositoryFullName: 'acme/two',
+    });
+
+    const found = await orgGitHubLakeConnectionRepository.findByRepositoryIds([1, 2, 999]);
+    expect(found.map(c => c.id).sort()).toEqual([first.id, second.id].sort());
+  });
+
+  it('findByRepositoryIds returns an empty array for an empty input, without querying', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findByRepositoryIds([])).toEqual([]);
+  });
+
+  it('findByRepositoryIds returns an empty array when none of the ids bind a lake', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findByRepositoryIds([999])).toEqual([]);
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - release', () => {

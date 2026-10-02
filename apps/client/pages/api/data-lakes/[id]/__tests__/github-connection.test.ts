@@ -9,7 +9,7 @@ const h = vi.hoisted(() => ({
   connFindByDataLakeIdAny: vi.fn(),
   countByGitHubConnectionIdInDataLake: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
-  buildGitHubLakeConnectUrls: vi.fn(),
+  buildGitHubLakeAuthorizeUrl: vi.fn(),
   disconnectGitHubLakeConnection: vi.fn(),
   requireGitHubLakeAppConfig: vi.fn(),
   resolveConnectableLake: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
-  buildGitHubLakeConnectUrls: h.buildGitHubLakeConnectUrls,
+  buildGitHubLakeAuthorizeUrl: h.buildGitHubLakeAuthorizeUrl,
   disconnectGitHubLakeConnection: h.disconnectGitHubLakeConnection,
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,
   resolveConnectableLake: h.resolveConnectableLake,
@@ -135,10 +135,9 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     beforeEach(() => {
       h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app', clientId: 'client-1' });
       h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA' });
-      h.buildGitHubLakeConnectUrls.mockReturnValue({
-        installUrl: 'https://github.com/apps/test-app/installations/new?state=abc',
-        authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=client-1&state=abc',
-      });
+      h.buildGitHubLakeAuthorizeUrl.mockReturnValue(
+        'https://github.com/login/oauth/authorize?client_id=client-1&state=abc'
+      );
     });
 
     it('asserts the write scope before doing anything else', async () => {
@@ -146,7 +145,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       const req = makeReq('POST', { apiKeyInfo: { scopes: [] } });
       await expect(run(req, res)).rejects.toThrow(/read-only for data lakes/i);
       expect(h.resolveConnectableLake).not.toHaveBeenCalled();
-      expect(h.buildGitHubLakeConnectUrls).not.toHaveBeenCalled();
+      expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
 
     it('500s when the GitHub App is not configured on this deployment', async () => {
@@ -156,13 +155,20 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(h.resolveConnectableLake).not.toHaveBeenCalled();
     });
 
-    it('returns both installUrl and authorizeUrl', async () => {
+    it('returns the authorizeUrl', async () => {
       const { res, json } = makeRes();
       await run(makeReq('POST'), res);
       expect(json).toHaveBeenCalledWith({
-        installUrl: 'https://github.com/apps/test-app/installations/new?state=abc',
         authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=client-1&state=abc',
       });
+      expect(h.buildGitHubLakeAuthorizeUrl).toHaveBeenCalledWith(
+        expect.anything(),
+        { slug: 'test-app', clientId: 'client-1' },
+        {
+          userId: 'u1',
+          dataLakeId: 'lake1',
+        }
+      );
     });
 
     it('propagates a resolveConnectableLake error (e.g. a conflicting existing connection)', async () => {
@@ -171,7 +177,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       );
       const { res } = makeRes();
       await expect(run(makeReq('POST'), res)).rejects.toThrow(/already connected/i);
-      expect(h.buildGitHubLakeConnectUrls).not.toHaveBeenCalled();
+      expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
   });
 

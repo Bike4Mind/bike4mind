@@ -280,6 +280,11 @@ interface DataLakeWizardStore {
    * Cleared on close so re-deep-linking the SAME lake still fires the panel's sync effect.
    */
   managerLakeId: string | null;
+  /**
+   * Lake id the GitHub repository picker is open for, or null when closed. Opened only by the GitHub
+   * callback page; read by GitHubRepositoryPickerModal, mounted once in DataLakeManagerPanel.
+   */
+  gitHubRepoPickerLakeId: string | null;
 
   // Navigation
   openWizard: () => void;
@@ -287,6 +292,8 @@ interface DataLakeWizardStore {
   closeWizard: () => void;
   openManager: (tab?: ManagerTab, lakeId?: string | null) => void;
   closeManager: () => void;
+  openGitHubRepoPicker: (lakeId: string) => void;
+  closeGitHubRepoPicker: () => void;
   setStep: (step: WizardStep) => void;
 
   // Source step
@@ -340,6 +347,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
+  gitHubRepoPickerLakeId: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -350,7 +358,12 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // An optional tab lets callers deep-link straight to the public discover catalog.
   openManager: (tab: ManagerTab = 'mine', lakeId: string | null = null) =>
     set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
-  closeManager: () => set({ isManagerOpen: false, managerLakeId: null }),
+  // The picker is mounted inside the manager, so closing the manager closes it too; left set, it
+  // would pop back up on the next, unrelated manager open.
+  closeManager: () => set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null }),
+
+  openGitHubRepoPicker: lakeId => set({ gitHubRepoPickerLakeId: lakeId }),
+  closeGitHubRepoPicker: () => set({ gitHubRepoPickerLakeId: null }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values.
