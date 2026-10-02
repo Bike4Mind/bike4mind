@@ -1283,6 +1283,14 @@ describe('ImageGenerationService quest partial writes', () => {
 
     // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
     expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][0]).toStrictEqual({
+      id: 'quest1',
+      images: [],
+      replies: [],
+      type: 'message',
+      promptMeta: invokePromptMeta,
+      promptEnhancement: undefined,
+    });
     expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
@@ -1301,7 +1309,6 @@ describe('ImageGenerationService quest partial writes', () => {
     await processEdit(service);
 
     expect(update).toHaveBeenCalledTimes(1);
-    expect(callArgs(update).some(arg => arg.type === 'error')).toBe(false);
     expect(callArgs(update).find(arg => arg.status === 'done')).toStrictEqual({
       id: 'quest1',
       reply: '',

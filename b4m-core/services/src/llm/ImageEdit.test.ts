@@ -956,21 +956,23 @@ describe('ImageEditService quest partial writes', () => {
     vi.mocked(getSettingsValue).mockImplementation(() => undefined);
   });
 
+  const retryResetWrite = {
+    id: 'quest1',
+    images: [],
+    replies: [],
+    type: 'message',
+    promptMeta: {
+      model: { name: 'gpt-image-1', parameters: {} },
+      session: { id: 'session1', userId: 'user1' },
+    },
+  };
+
   it('invoke retry writes exactly images, replies, type and promptMeta', async () => {
     const { service, update } = makeService();
     await invoke(service);
 
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0]).toStrictEqual({
-      id: 'quest1',
-      images: [],
-      replies: [],
-      type: 'message',
-      promptMeta: {
-        model: { name: 'gpt-image-1', parameters: {} },
-        session: { id: 'session1', userId: 'user1' },
-      },
-    });
+    expect(update.mock.calls[0][0]).toStrictEqual(retryResetWrite);
     expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
@@ -981,6 +983,7 @@ describe('ImageEditService quest partial writes', () => {
 
     // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
     expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][0]).toStrictEqual(retryResetWrite);
     expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
     const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
     expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });

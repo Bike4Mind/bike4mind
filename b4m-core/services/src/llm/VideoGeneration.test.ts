@@ -82,27 +82,29 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
     });
   });
 
+  const retryResetWrite = {
+    id: 'quest1',
+    videos: [],
+    replies: [],
+    type: 'message',
+    promptMeta: {
+      model: {
+        name: VideoModels.SORA_2,
+        parameters: { model: VideoModels.SORA_2, seconds: 4, size: '720x1280' },
+        type: 'video',
+      },
+      session: { id: 'session1', userId: 'user1' },
+      prompt: 'a cat surfing',
+      questId: 'quest1',
+      statusLog: statusLog('Video generation started'),
+    },
+  };
+
   it('writes only the reset fields when retrying a quest', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
     expect(update).toHaveBeenCalledTimes(1);
-    expect((update.mock.calls[0] as unknown[])[0]).toStrictEqual({
-      id: 'quest1',
-      videos: [],
-      replies: [],
-      type: 'message',
-      promptMeta: {
-        model: {
-          name: VideoModels.SORA_2,
-          parameters: { model: VideoModels.SORA_2, seconds: 4, size: '720x1280' },
-          type: 'video',
-        },
-        session: { id: 'session1', userId: 'user1' },
-        prompt: 'a cat surfing',
-        questId: 'quest1',
-        statusLog: statusLog('Video generation started'),
-      },
-    });
+    expect((update.mock.calls[0] as unknown[])[0]).toStrictEqual(retryResetWrite);
     expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
@@ -112,6 +114,7 @@ describe('VideoGenerationService.invoke (retry quest bound to its session)', () 
     await invoke();
     // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
     expect(update).toHaveBeenCalledTimes(2);
+    expect((update.mock.calls[0] as unknown[])[0]).toStrictEqual(retryResetWrite);
     expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
     const calls = update.mock.calls as unknown[][];
     const errorWrite = calls.find(c => (c[0] as { type?: string }).type === 'error');
