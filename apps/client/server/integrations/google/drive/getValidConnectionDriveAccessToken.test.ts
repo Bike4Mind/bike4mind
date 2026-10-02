@@ -86,6 +86,55 @@ describe('getValidConnectionDriveAccessToken', () => {
     expect(h.userFindById).not.toHaveBeenCalled();
   });
 
+  it('marks credential_error on a revoked user grant surfaced as an OAuth invalid_grant body', async () => {
+    h.findByIdWithCredentials.mockResolvedValue({ id: 'conn1', connectedBy: 'user-1' });
+    h.userFindById.mockResolvedValue({ googleDrive: { ...liveUserGrant.googleDrive, expiresAt: new Date(0) } });
+    h.refreshAccessToken.mockRejectedValue(
+      Object.assign(new Error('Token has been expired or revoked.'), { response: { data: { error: 'invalid_grant' } } })
+    );
+
+    await expect(getValidConnectionDriveAccessToken('conn1', personalOwner)).rejects.toThrow(/revoked/);
+    expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'credential_error' }));
+  });
+
+  it('marks credential_error when the org copy cannot be decrypted', async () => {
+    h.findByIdWithCredentials.mockResolvedValue({ id: 'conn2', connectedBy: 'user-1', oauthRefreshToken: 'garbled' });
+
+    await expect(getValidConnectionDriveAccessToken('conn2', orgOwner)).rejects.toThrow(/reconnect required/);
+    expect(h.updateHealth).toHaveBeenCalledWith('conn2', expect.objectContaining({ status: 'credential_error' }));
+    expect(h.refreshAccessToken).not.toHaveBeenCalled();
+  });
+
+  // credential_error is sticky (the poll skips it and only a reconnect clears it), so a blip must
+  // rethrow unmarked and leave the ingest handler to release the claim for the next poll.
+  it.each([
+    ['a Google 5xx on the user grant refresh', 'personal'],
+    ['a Google 5xx on the org copy refresh', 'org'],
+  ])('leaves health untouched on %s', async (_label, kind) => {
+    h.findByIdWithCredentials.mockResolvedValue(
+      kind === 'org'
+        ? { id: 'conn2', connectedBy: 'user-1', oauthRefreshToken: 'enc(org-refresh)' }
+        : { id: 'conn1', connectedBy: 'user-1' }
+    );
+    h.userFindById.mockResolvedValue({ googleDrive: { ...liveUserGrant.googleDrive, expiresAt: new Date(0) } });
+    h.refreshAccessToken.mockRejectedValue(
+      Object.assign(new Error('Backend Error'), { response: { status: 503, data: { error: 'backendError' } } })
+    );
+
+    await expect(
+      getValidConnectionDriveAccessToken(kind === 'org' ? 'conn2' : 'conn1', kind === 'org' ? orgOwner : personalOwner)
+    ).rejects.toThrow('Backend Error');
+    expect(h.updateHealth).not.toHaveBeenCalled();
+  });
+
+  it('leaves health untouched when the user lookup itself fails', async () => {
+    h.findByIdWithCredentials.mockResolvedValue({ id: 'conn1', connectedBy: 'user-1' });
+    h.userFindById.mockRejectedValue(new Error('MongoNetworkError: connection reset'));
+
+    await expect(getValidConnectionDriveAccessToken('conn1', personalOwner)).rejects.toThrow(/MongoNetworkError/);
+    expect(h.updateHealth).not.toHaveBeenCalled();
+  });
+
   it('throws without touching health when the connection is not visible to the owner', async () => {
     h.findByIdWithCredentials.mockResolvedValue(null);
 

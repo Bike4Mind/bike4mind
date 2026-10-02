@@ -15,7 +15,7 @@ interface DataLakeTreeEmptyStateProps {
   /** Add files to the scoped lake - offered only in `lake-empty`. */
   onAddFiles?: () => void;
   /** The scoped lake's org scope, which decides the sources it can hold. Offered only with `onAddFiles`. */
-  sourceLake?: { organizationId?: string | null; isOwn: boolean };
+  sourceLake?: { organizationId?: string | null; isCreator: boolean };
 }
 
 /**

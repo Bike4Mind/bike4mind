@@ -302,12 +302,29 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
 }
 
 /**
+ * Whether a token-resolution failure needs the user to reconnect, as opposed to a blip (Google 5xx,
+ * network, Mongo) that the next poll can retry. Only the former may mark a connection
+ * `credential_error`: nothing but a manual reconnect clears that state, and the poll skips it.
+ */
+function isTerminalDriveGrantError(e: unknown): boolean {
+  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, empty refresh) are all reconnects.
+  if (e instanceof BadRequestError) return true;
+  if (!(e instanceof Error)) return false;
+  // google-auth-library surfaces a revoked/expired grant as a GaxiosError whose body is the OAuth error.
+  const response: unknown = 'response' in e ? e.response : undefined;
+  const data: unknown = response && typeof response === 'object' && 'data' in response ? response.data : undefined;
+  const oauthError: unknown = data && typeof data === 'object' && 'error' in data ? data.error : undefined;
+  return oauthError === 'invalid_grant' || e.message === 'invalid_grant';
+}
+
+/**
  * Resolve a valid Drive access token for a connection (the ingest job's credential).
  *
  * An org connection uses its own org-owned refresh token. A connection without one - every personal
  * connection, and an org row from before the org-owned copy existed - uses the connecting user's live
- * `User.googleDrive` grant (`connectedBy`). On a credential failure either way it marks the connection
- * `credential_error` so the failure is observable rather than silent. Loads the encrypted token via
+ * `User.googleDrive` grant (`connectedBy`). A terminal grant failure either way marks the connection
+ * `credential_error` so it is observable rather than silent; a transient one is rethrown untouched so
+ * the ingest handler releases the claim and the next poll retries. Loads the encrypted token via
  * the owner-scoped credential accessor (the caller passes the connection's owner), never a default read.
  */
 export async function getValidConnectionDriveAccessToken(
@@ -319,7 +336,7 @@ export async function getValidConnectionDriveAccessToken(
 
   try {
     if (connection.oauthRefreshToken) {
-      const refreshToken = decryptToken(connection.oauthRefreshToken);
+      const refreshToken = decryptConnectionRefreshToken(connection.oauthRefreshToken);
       if (refreshToken) {
         const credentials = await refreshAccessToken(refreshToken);
         if (credentials.access_token) return credentials.access_token;
@@ -327,10 +344,22 @@ export async function getValidConnectionDriveAccessToken(
     }
     return await getValidUserDriveAccessToken(connection.connectedBy);
   } catch (e) {
-    await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
-      status: 'credential_error',
-      lastError: e instanceof Error ? e.message : String(e),
-    });
+    if (isTerminalDriveGrantError(e)) {
+      await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
+        status: 'credential_error',
+        lastError: e instanceof Error ? e.message : String(e),
+      });
+    }
     throw e;
+  }
+}
+
+// An undecryptable org copy (post key-rotation / partial restore) cannot heal on retry, so it is a
+// reconnect - the same shape getValidUserDriveAccessToken gives the user's own unreadable token.
+function decryptConnectionRefreshToken(encrypted: string): string | null {
+  try {
+    return decryptToken(encrypted);
+  } catch {
+    throw new BadRequestError('Google Drive connection token unreadable - reconnect required');
   }
 }

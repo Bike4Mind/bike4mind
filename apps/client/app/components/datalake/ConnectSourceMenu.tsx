@@ -9,7 +9,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 export const GITHUB_ORG_ONLY_REASON = `GitHub repositories can only feed an organization ${DATA_LAKE}.`;
 
 type ConnectSourceMenuProps = {
-  lake: { organizationId?: string | null; isOwn: boolean };
+  lake: { organizationId?: string | null; isCreator: boolean };
   /** Take the user to where a Drive folder is picked. */
   onConnectDrive: () => void;
   /** Take the user to where a GitHub repository is connected. */
@@ -30,7 +30,7 @@ type ConnectSourceMenuProps = {
 export default function ConnectSourceMenu({ lake, onConnectDrive, onConnectGitHub }: ConnectSourceMenuProps) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   const gitHubEnabled = isAdminFeatureEnabled('EnableDataLakeGitHub');
-  const driveUnavailableReason = lake.organizationId || lake.isOwn ? undefined : DRIVE_PERSONAL_OWNER_ONLY_REASON;
+  const driveUnavailableReason = lake.organizationId || lake.isCreator ? undefined : DRIVE_PERSONAL_OWNER_ONLY_REASON;
   const gitHubUnavailableReason = lake.organizationId ? undefined : GITHUB_ORG_ONLY_REASON;
 
   return (

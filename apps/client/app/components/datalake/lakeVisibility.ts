@@ -46,19 +46,20 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
  * Whether to offer the Drive connect control for a lake.
  *
  * Mirrors the server gate (authorizeLakeDriveAccess): an org lake needs an org owner/manager, a
- * personal lake needs its owner - the connection syncs on that user's own Google grant, so even a
- * manager of someone else's personal lake is refused. The status route 404s outside the gate, so
- * offering it there is a control that can only fail. Every render site (SelectedLakeHeader, the
- * wizard's SourceSelectionStep, ConnectSourceMenu) derives the gate here - they drifted once when
- * each held its own copy of the expression.
+ * personal lake needs its CREATOR - the connection syncs on that user's own Google grant, and lake
+ * membership (and the ingest's admin-actor writes) is anchored to `createdByUserId`, not the
+ * effective owner, so a personal lake gates on `isCreator` rather than `isOwn`. The status route
+ * 404s outside the gate, so offering it there is a control that can only fail. Every render site
+ * (SelectedLakeHeader, the wizard's SourceSelectionStep, ConnectSourceMenu) derives the gate here -
+ * they drifted once when each held its own copy of the expression.
  *
- * Absent fields fail closed: an unknown manage or ownership status renders no control.
+ * Absent fields fail closed: an unknown manage or creator status renders no control.
  */
 export const canConnectLakeDrive = (lake: {
   organizationId?: string | null;
   canManage?: boolean;
-  isOwn?: boolean;
-}): boolean => (lake.organizationId ? !!lake.canManage : !!lake.isOwn);
+  isCreator?: boolean;
+}): boolean => (lake.organizationId ? !!lake.canManage : !!lake.isCreator);
 
 export const DRAFT_LAKE_TOOLTIP = 'Draft - not grounding answers until published';
 

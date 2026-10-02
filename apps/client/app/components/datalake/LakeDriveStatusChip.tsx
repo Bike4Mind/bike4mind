@@ -10,7 +10,7 @@ import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionD
  * to know something needed releasing before teardown - and purging strands the connection
  * permanently (#1807).
  *
- * Someone else's personal lake is not read at all - only its owner may see its connection, so the
+ * Someone else's personal lake is not read at all - only its creator may see its connection, so the
  * route would only ever 404. Beyond that, renders NOTHING when there is no connection, while the read
  * is in flight, or when the read fails (404 for an org lake's non-manager). Absence therefore
  * means "no connection OR not visible to you" - it is not a guarantee that none exists. Any surface
@@ -20,15 +20,15 @@ import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionD
 export default function LakeDriveStatusChip({
   lakeId,
   organizationId,
-  isOwn,
+  isCreator,
 }: {
   lakeId: string;
   /** The lake's org scope; absent for a personal lake. */
   organizationId?: string;
-  /** Whether the caller owns the lake - the only one who can read a personal lake's connection. */
-  isOwn: boolean;
+  /** Whether the caller created the lake - the only one who can read a personal lake's connection. */
+  isCreator: boolean;
 }) {
-  const { data: connection } = useLakeDriveConnection(lakeId, !!organizationId || isOwn);
+  const { data: connection } = useLakeDriveConnection(lakeId, !!organizationId || isCreator);
   if (!connection) return null;
 
   // Wording and severity both come from describeDriveConnection - notably it does NOT read a

@@ -104,7 +104,8 @@ personal Data Lake, only the person who created it: the folder syncs using their
 Drive, so unlinking Google Drive from their profile stops that sync until they link it again and
 reconnect the folder. Either way the Data Lake must be connector-fed and not archived. A curated
 Data Lake must be switched to connector-fed in its settings first. A Drive folder can feed only one
-Data Lake, personal or organization.
+Data Lake, personal or organization. To move a Drive-fed Data Lake into or out of an organization,
+disconnect its folder first and reconnect it afterwards.
 
 **What happens when I disconnect a Google Drive folder?**
 Every file the connection brought into the Data Lake is permanently deleted, along with its

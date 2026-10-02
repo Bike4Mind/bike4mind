@@ -25,7 +25,7 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
-  // Drive connect needs an org manager on an org lake and the owner on a personal one server-side
+  // Drive connect needs an org manager on an org lake and the creator on a personal one server-side
   // (the status route 404s otherwise). Gating on the same condition keeps a permanently disabled
   // button off every header the caller cannot connect, rather than an action that can only fail.
   const canConnectDrive = canConnectLakeDrive(lake);
@@ -93,7 +93,7 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
           wrap, which is what keeps it inside the tree card's width. */}
       {canConnectDrive && (
         <Box data-testid="datalake-selected-lake-source">
-          <LakeSourceConnectActions lake={{ id: lake.id }} />
+          <LakeSourceConnectActions lake={lake} />
         </Box>
       )}
     </Box>

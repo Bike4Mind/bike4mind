@@ -26,7 +26,7 @@ describe('ConnectSourceMenu', () => {
     const onConnectDrive = vi.fn();
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: 'org-1', isOwn: false }}
+        lake={{ organizationId: 'org-1', isCreator: false }}
         onConnectDrive={onConnectDrive}
         onConnectGitHub={vi.fn()}
       />
@@ -39,11 +39,11 @@ describe('ConnectSourceMenu', () => {
     expect(onConnectDrive).toHaveBeenCalledOnce();
   });
 
-  it('enables Google Drive on a personal lake the caller owns', () => {
+  it('enables Google Drive on a personal lake the caller created', () => {
     const onConnectDrive = vi.fn();
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: null, isOwn: true }}
+        lake={{ organizationId: null, isCreator: true }}
         onConnectDrive={onConnectDrive}
         onConnectGitHub={vi.fn()}
       />
@@ -60,7 +60,7 @@ describe('ConnectSourceMenu', () => {
     const onConnectDrive = vi.fn();
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: null, isOwn: false }}
+        lake={{ organizationId: null, isCreator: false }}
         onConnectDrive={onConnectDrive}
         onConnectGitHub={vi.fn()}
       />
@@ -69,7 +69,7 @@ describe('ConnectSourceMenu', () => {
 
     const item = screen.getByTestId('datalake-connect-source-drive-item');
     expect(item).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByTestId('datalake-connect-source-drive-hint')).toHaveTextContent(/Only the owner/);
+    expect(screen.getByTestId('datalake-connect-source-drive-hint')).toHaveTextContent(/Only the person who created/);
     fireEvent.click(item);
     expect(onConnectDrive).not.toHaveBeenCalled();
   });
@@ -78,7 +78,7 @@ describe('ConnectSourceMenu', () => {
     const onConnectGitHub = vi.fn();
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: 'org-1', isOwn: false }}
+        lake={{ organizationId: 'org-1', isCreator: false }}
         onConnectDrive={vi.fn()}
         onConnectGitHub={onConnectGitHub}
       />
@@ -95,7 +95,7 @@ describe('ConnectSourceMenu', () => {
     const onConnectGitHub = vi.fn();
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: null, isOwn: true }}
+        lake={{ organizationId: null, isCreator: true }}
         onConnectDrive={vi.fn()}
         onConnectGitHub={onConnectGitHub}
       />
@@ -113,7 +113,7 @@ describe('ConnectSourceMenu', () => {
     isAdminFeatureEnabled.mockReturnValue(false);
     wrap(
       <ConnectSourceMenu
-        lake={{ organizationId: 'org-1', isOwn: false }}
+        lake={{ organizationId: 'org-1', isCreator: false }}
         onConnectDrive={vi.fn()}
         onConnectGitHub={vi.fn()}
       />

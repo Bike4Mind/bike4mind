@@ -20,7 +20,7 @@ describe('DataLakeTreeEmptyState - connecting a source', () => {
       <DataLakeTreeEmptyState
         variant="lake-empty"
         onAddFiles={vi.fn()}
-        sourceLake={{ organizationId: 'org-1', isOwn: false }}
+        sourceLake={{ organizationId: 'org-1', isCreator: false }}
       />
     );
 
@@ -33,7 +33,7 @@ describe('DataLakeTreeEmptyState - connecting a source', () => {
       <DataLakeTreeEmptyState
         variant="lake-empty"
         onAddFiles={vi.fn()}
-        sourceLake={{ organizationId: null, isOwn: true }}
+        sourceLake={{ organizationId: null, isCreator: true }}
       />
     );
 
@@ -42,7 +42,7 @@ describe('DataLakeTreeEmptyState - connecting a source', () => {
 
   it('offers no source to a user who cannot add files to the lake', () => {
     // The caller withholds onAddFiles from a non-manager; connecting is the same capability.
-    wrap(<DataLakeTreeEmptyState variant="lake-empty" sourceLake={{ organizationId: 'org-1', isOwn: false }} />);
+    wrap(<DataLakeTreeEmptyState variant="lake-empty" sourceLake={{ organizationId: 'org-1', isCreator: false }} />);
 
     expect(screen.queryByTestId('datalake-connect-source-btn')).toBeNull();
   });
@@ -52,7 +52,7 @@ describe('DataLakeTreeEmptyState - connecting a source', () => {
       <DataLakeTreeEmptyState
         variant="lakes-empty"
         onAddFiles={vi.fn()}
-        sourceLake={{ organizationId: 'org-1', isOwn: false }}
+        sourceLake={{ organizationId: 'org-1', isCreator: false }}
       />
     );
 
