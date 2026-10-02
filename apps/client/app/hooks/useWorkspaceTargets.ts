@@ -45,6 +45,10 @@ export function useWorkspaceTargets(session: Pick<ISessionDocument, 'surface' | 
         canUseSurface(accessUser, surface.id)
     );
     const isOwner = !!currentUser && session.userId === currentUser.id;
-    return { current, copyTargets: [current, ...others], moveTargets: isOwner ? others : [] };
+    // A copy into "current" is sent as a plain clone/fork (no explicit targetSurface), which the
+    // server only inherits when the caller can use that workspace - offering it otherwise would
+    // check the box but silently land the copy in the main list instead. Omit it in that case.
+    const copyTargets = canUseSurface(accessUser, current.id) ? [current, ...others] : others;
+    return { current, copyTargets, moveTargets: isOwner ? others : [] };
   }, [session, currentUser, isAdmin, entitlements]);
 }

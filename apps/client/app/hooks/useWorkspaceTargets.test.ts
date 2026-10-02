@@ -73,4 +73,15 @@ describe('useWorkspaceTargets', () => {
     expect(result.current.copyTargets).toEqual([]);
     expect(result.current.moveTargets).toEqual([]);
   });
+
+  // A plain "Clone/Fork into <current>" sends no targetSurface, which the server only inherits
+  // when the caller can use that workspace (resolveCopySurface) - so offering "current" here when
+  // the caller cannot use it would check a box whose click silently lands the copy somewhere else.
+  it('omits the current workspace from copy targets when the caller cannot use it', () => {
+    h.entitlements = []; // e.g. a share holder, or an owner whose entitlement lapsed
+    const { result } = renderHook(() => useWorkspaceTargets({ userId: 'user-1', surface: 'opti' }));
+
+    expect(result.current.current?.id).toBe('opti');
+    expect(ids(result.current.copyTargets)).toEqual([null]);
+  });
 });
