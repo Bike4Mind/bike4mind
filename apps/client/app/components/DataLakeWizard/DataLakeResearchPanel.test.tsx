@@ -551,7 +551,7 @@ describe('DataLakeResearchPanel', () => {
         ],
       });
       expect(
-        within(screen.getByTestId('datalake-research-run-meta')).getByText(/judge gpt-4\.1-mini unavailable/)
+        within(screen.getByTestId('datalake-research-run-when')).getByText(/judge gpt-4\.1-mini unavailable/)
       ).toBeTruthy();
       expect(screen.queryByText(/judged by/)).toBeNull();
     });
@@ -568,7 +568,7 @@ describe('DataLakeResearchPanel', () => {
         ],
       });
       expect(
-        within(screen.getByTestId('datalake-research-run-meta')).getByText(/judged by gpt-4\.1-mini/)
+        within(screen.getByTestId('datalake-research-run-when')).getByText(/judged by gpt-4\.1-mini/)
       ).toBeTruthy();
     });
 
@@ -582,7 +582,7 @@ describe('DataLakeResearchPanel', () => {
         ],
       });
       expect(
-        within(screen.getByTestId('datalake-research-run-meta')).getByText(/judged by gpt-4\.1-mini/)
+        within(screen.getByTestId('datalake-research-run-when')).getByText(/judged by gpt-4\.1-mini/)
       ).toBeTruthy();
       expect(screen.queryByText(/judge gpt-4\.1-mini unavailable/)).toBeNull();
     });
