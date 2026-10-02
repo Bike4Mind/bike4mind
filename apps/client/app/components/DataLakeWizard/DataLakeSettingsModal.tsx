@@ -57,6 +57,7 @@ import {
 } from '@bike4mind/common';
 import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
+import { gateWriteWidensReadership } from '@bike4mind/services/lakeGateWideningRule';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
 import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
@@ -149,6 +150,8 @@ export interface EditableLake {
    * Origin, Required passage size).
    */
   canManage: boolean;
+  /** Owner per isEffectiveOwner, server-computed (see ManageableDataLakeConfig.isOwn). Gates who may widen sharing. */
+  isOwn: boolean;
   /**
    * Lifetime embedding-spend meter, ALWAYS present (defaulted to 0) when canManage - its
    * presence, not its value, is the signal that gates the Spend tab (see
@@ -182,6 +185,9 @@ const formSeed = (lake: EditableLake) => ({
  * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
  * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
+
+const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
+
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
   const setVisibility = useSetLakeVisibility();
@@ -402,8 +408,18 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       parsedTarget < MIN_PASSAGE_TOKEN_TARGET ||
       parsedTarget > OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
 
+  // Mirrors the server rule in updateDataLake: a non-owner may narrow a gate but not widen readership.
+  const widensAsNonOwner =
+    !!lake &&
+    !lake.isOwn &&
+    gateWriteWidensReadership(lake, {
+      requiredUserTag: requiredUserTag.trim(),
+      requiredEntitlement: requiredEntitlement.trim(),
+    });
+
   const handleSave = () => {
     if (!lake) return;
+    if (widensAsNonOwner) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
     if (targetInvalid) return;
@@ -683,17 +699,32 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           }}
           data-testid="datalake-settings-visibility"
         >
-          <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+          {/* Non-owner rules must stay in sync with setLakeVisibility's owner-only checks (b4m-core/services). */}
+          <Radio
+            value="private"
+            label="Private"
+            disabled={
+              setVisibility.isPending || (!lake?.isOwn && visibility !== 'private' && !!lake?.organizationId && hasGate)
+            }
+          />
           <Radio
             value="organization"
             label="Organization"
-            disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+            disabled={
+              setVisibility.isPending ||
+              (!canShareToOrg && visibility !== 'organization') ||
+              (!lake?.isOwn && visibility !== 'organization')
+            }
             data-testid="datalake-settings-visibility-org"
           />
           <Radio
             value="public"
             label="Public"
-            disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+            disabled={
+              setVisibility.isPending ||
+              (hasGate && visibility !== 'public') ||
+              (!lake?.isOwn && visibility !== 'public')
+            }
             data-testid="datalake-settings-visibility-public"
           />
         </RadioGroup>
@@ -710,6 +741,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
+        {lake && !lake.isOwn && (
+          <FormHelperText data-testid="datalake-settings-visibility-owner-only">{ownerOnlyMsg}</FormHelperText>
+        )}
       </FormControl>
       <FormControl>
         <FormLabel>Access tag</FormLabel>
@@ -739,6 +773,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             : 'Namespaced key (e.g. \u201Cproduct:pro\u201D). Leave blank for no entitlement gate.'}
         </FormHelperText>
       </FormControl>
+      {widensAsNonOwner && (
+        <FormHelperText sx={{ color: 'danger.plainColor' }} data-testid="datalake-settings-gate-owner-only">
+          {ownerOnlyMsg}
+        </FormHelperText>
+      )}
     </Stack>
   );
 
@@ -893,7 +932,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 variant="solid"
                 color="primary"
                 loading={updateLake.isPending}
-                disabled={!name.trim() || targetInvalid}
+                disabled={!name.trim() || targetInvalid || widensAsNonOwner}
                 onClick={handleSave}
                 data-testid="datalake-settings-save-btn"
               >

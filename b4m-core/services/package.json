@@ -30,6 +30,16 @@
         "default": "./dist/imageCost/index.cjs"
       }
     },
+    "./lakeGateWideningRule": {
+      "import": {
+        "types": "./dist/dataLakeService/lakeGateWideningRule.d.mts",
+        "default": "./dist/dataLakeService/lakeGateWideningRule.mjs"
+      },
+      "require": {
+        "types": "./dist/dataLakeService/lakeGateWideningRule.d.cts",
+        "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
+      }
+    },
     "./apiKeyService": {
       "import": {
         "types": "./dist/apiKeyService/index.d.mts",
