@@ -32,7 +32,7 @@ import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
 import LakeSourceConnectActions from './LakeSourceConnectActions';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
-import DriveConnectUnavailableButton, { DRIVE_ORG_ONLY_REASON } from './DriveConnectUnavailableButton';
+import DriveConnectUnavailableButton, { DRIVE_PERSONAL_OWNER_ONLY_REASON } from './DriveConnectUnavailableButton';
 
 const supportsWebkitDirectory =
   typeof HTMLInputElement !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
@@ -312,14 +312,17 @@ export default function SourceSelectionStep() {
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
             does not, so the selection is parked and connected on commit; GitHub is not offered
             there, since its install round-trip leaves the page and must sign a real lake id into
-            its state. A personal lake gets the
-            control disabled with its reason, so Drive stays discoverable where it cannot connect. */}
+            its state. Someone else's personal lake gets the control disabled with its reason, so
+            Drive stays discoverable where it cannot connect. */}
         {targetLake ? (
           canConnectDrive ? (
             <LakeSourceConnectActions lake={targetLake} />
           ) : (
             !targetLake.organizationId && (
-              <DriveConnectUnavailableButton testId="drive-connect-personal-lake-btn" reason={DRIVE_ORG_ONLY_REASON} />
+              <DriveConnectUnavailableButton
+                testId="drive-connect-personal-lake-btn"
+                reason={DRIVE_PERSONAL_OWNER_ONLY_REASON}
+              />
             )
           )
         ) : (

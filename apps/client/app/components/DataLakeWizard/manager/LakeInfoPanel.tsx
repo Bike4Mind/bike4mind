@@ -659,7 +659,7 @@ export function LakeInfoPanel({
           )}
           {/* Attached-source markers: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
-          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
+          <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} isCreator={lake.isCreator} />
           <LakeGitHubStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
           {/* Derived retrievability health (#1666): reachable-content share + affected-file drill-down.
               Advisory only. Fetched lazily for the lake in view; renders nothing for an empty lake. */}

@@ -753,13 +753,13 @@ export default function ManagerNav({
  * contingent on the sweep completing rather than guaranteed by the purge click itself; a sweep that
  * exhausts into the DLQ leaves the lake (and its connection row) sitting in `purging` until retried.
  *
- * Renders nothing when the lake has no connection, including a personal lake (the route resolves
- * `connection: null` for those, never 404); a read that genuinely fails (lake gone, or a 404 for a
- * caller who lacks org owner/manager access) renders the unknown case.
+ * Renders nothing when the lake has no connection; a read that genuinely fails (lake gone, or a 404
+ * for a caller who may not see the connection - an org lake's non-manager, or anyone but a personal
+ * lake's owner) renders the unknown case.
  */
 function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
-  // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
-  // the user opens, so skipping a personal lake's guaranteed null there is worth it. This warning
+  // Deliberately NOT gated on scope or ownership, unlike LakeDriveStatusChip. The chip renders on every
+  // lake the user opens, so skipping a read that can only 404 there is worth it. This warning
   // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
   // populate would trade one wasted request for silently withholding the notice on a lake that
   // does have a connection. A rare failed read on a purge dialog is the cheaper tradeoff.

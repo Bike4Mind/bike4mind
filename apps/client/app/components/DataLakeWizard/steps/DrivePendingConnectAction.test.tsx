@@ -88,22 +88,15 @@ describe('DrivePendingConnectAction', () => {
     expect(useDataLakeWizardStore.getState().pendingDriveFolder).toBeNull();
   });
 
-  it('disables the action in a personal scope, which drive-sync refuses', () => {
-    // POST /api/data-lakes/drive-sync 400s on a lake with no organizationId, so offering this in
-    // Personal scope could only ever create a lake and then fail to connect it.
-    h.selectedAccount.current = { id: 'me', name: 'Me', personal: true };
+  it.each([
+    ['a personal scope', { id: 'me', name: 'Me', personal: true }],
+    ['no selected account', null],
+  ])('offers an enabled Connect button in %s, since drive-sync accepts a personal lake', (_label, account) => {
+    h.selectedAccount.current = account;
 
     wrap(<DrivePendingConnectAction />);
 
-    expect(screen.getByTestId('drive-connect-personal-scope-btn')).toBeDisabled();
-    expect(screen.queryByTestId('drive-connect-btn')).toBeNull();
-  });
-
-  it('disables the action before any account is selected, rather than assuming an org', () => {
-    h.selectedAccount.current = null;
-
-    wrap(<DrivePendingConnectAction />);
-
-    expect(screen.getByTestId('drive-connect-personal-scope-btn')).toBeDisabled();
+    expect(screen.getByTestId('drive-connect-btn')).toBeEnabled();
+    expect(screen.queryByTestId('drive-connect-personal-scope-btn')).toBeNull();
   });
 });

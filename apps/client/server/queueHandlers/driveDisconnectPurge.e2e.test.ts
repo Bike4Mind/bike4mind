@@ -72,6 +72,7 @@ afterEach(async () => {
 
 const OWNER = '5f9d88b8c1d2a30017a1c333';
 const ORG = '5f9d88b8c1d2a30017a1b111';
+const ORG_OWNER = { kind: 'organization', organizationId: ORG } as const;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 const seed = async (driveFileCount: number) => {
@@ -127,7 +128,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
   it('works through a connection larger than one invocation slice by slice, then releases it', async () => {
     const { lake, conn, manual } = await seed(5);
     // The route's half: mark first, then the message.
-    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     expect(marked?.created).toBe(true);
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
@@ -147,7 +148,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('re-stamps the pending disconnect on every run, so a progressing purge never reads as stalled', async () => {
     const { lake, conn } = await seed(3);
-    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     await new Promise(resolve => setTimeout(resolve, 5));
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
@@ -158,7 +159,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('converges under a redelivered message without refunding any owner twice', async () => {
     const { lake, conn } = await seed(4);
-    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     const refunds: number[] = [];
     vi.spyOn(userRepository, 'incrementCurrentStorage').mockImplementation(async (_userId, delta) => {
       refunds.push(delta);
@@ -181,7 +182,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('leaves the row, still marked disconnecting, when a slice fails, so a retry resumes it', async () => {
     const { lake, conn } = await seed(3);
-    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     h.storageDelete.mockRejectedValueOnce(new Error('storage.delete blip'));
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
@@ -224,7 +225,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
     // deleteFabFile refuses a missing actor; stand in for a live owner.
     vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: OWNER } as never);
 
-    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
     await drain(payload, 10);
 

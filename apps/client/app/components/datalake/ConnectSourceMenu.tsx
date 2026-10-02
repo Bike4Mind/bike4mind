@@ -2,14 +2,14 @@ import { Dropdown, ListItemContent, ListItemDecorator, Menu, MenuButton, MenuIte
 import CloudIcon from '@mui/icons-material/Cloud';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
-import { DRIVE_ORG_ONLY_REASON } from '@client/app/components/DataLakeWizard/steps/DriveConnectUnavailableButton';
+import { DRIVE_PERSONAL_OWNER_ONLY_REASON } from '@client/app/components/DataLakeWizard/steps/DriveConnectUnavailableButton';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 
 export const GITHUB_ORG_ONLY_REASON = `GitHub repositories can only feed an organization ${DATA_LAKE}.`;
 
 type ConnectSourceMenuProps = {
-  lake: { organizationId?: string | null };
+  lake: { organizationId?: string | null; isCreator: boolean };
   /** Take the user to where a Drive folder is picked. */
   onConnectDrive: () => void;
   /** Take the user to where a GitHub repository is connected. */
@@ -22,15 +22,15 @@ type ConnectSourceMenuProps = {
  * cannot hold stays listed, disabled, with the reason inline rather than in a tooltip a disabled
  * item cannot raise.
  *
- * The org gate must stay in sync with canConnectLakeDrive (lakeVisibility.ts), which both sources
- * share. The manage half of that gate is the caller's: this renders only where the user can
- * already add files. GitHub is hidden outright while EnableDataLakeGitHub is off, since every one
+ * Drive's personal-owner gate must stay in sync with canConnectLakeDrive (lakeVisibility.ts); GitHub
+ * stays org-only. The org manage half of that gate is the caller's: this renders only where the user
+ * can already add files. GitHub is hidden outright while EnableDataLakeGitHub is off, since every one
  * of its routes 403s until then.
  */
 export default function ConnectSourceMenu({ lake, onConnectDrive, onConnectGitHub }: ConnectSourceMenuProps) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   const gitHubEnabled = isAdminFeatureEnabled('EnableDataLakeGitHub');
-  const driveUnavailableReason = lake.organizationId ? undefined : DRIVE_ORG_ONLY_REASON;
+  const driveUnavailableReason = lake.organizationId || lake.isCreator ? undefined : DRIVE_PERSONAL_OWNER_ONLY_REASON;
   const gitHubUnavailableReason = lake.organizationId ? undefined : GITHUB_ORG_ONLY_REASON;
 
   return (
