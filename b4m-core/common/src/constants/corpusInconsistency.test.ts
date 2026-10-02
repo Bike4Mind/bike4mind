@@ -101,6 +101,43 @@ describe('metric disagreements', () => {
   it('does not flag a metric stated in only one document', () => {
     expect(kinds([doc('a', 'Latency is 40 ms'), doc('b', 'Nothing quantitative here.')])).toEqual([]);
   });
+
+  it('recognizes K/M/B magnitude suffixes and compares scaled values', () => {
+    expect(kinds([doc('a', 'Revenue is 12k USD'), doc('b', 'Revenue is 12000 USD')])).toEqual([]);
+    expect(kinds([doc('a', 'Users is 3.5M'), doc('b', 'Users is 3500000')])).toEqual([]);
+    expect(kinds([doc('a', 'Budget is 2b'), doc('b', 'Budget is 1500000000')])).toEqual(['metric-disagreement']);
+  });
+
+  it('recognizes currency symbols and codes as units, before or after the value', () => {
+    expect(kinds([doc('a', 'Annual revenue is $12k'), doc('b', 'Annual revenue is 12000 USD')])).toEqual([]);
+    expect(kinds([doc('a', 'Annual revenue is USD 99'), doc('b', 'Annual revenue is $99')])).toEqual([]);
+  });
+
+  it('treats an unmapped currency symbol the same as a mapped one for default-mode comparison', () => {
+    // The rupee sign (U+20B9) has no explicit canonicalUnit mapping, unlike dollar/euro/pound/yen -
+    // but METRIC still captures it as curpre via \p{Sc}, and currency is decided from that capture
+    // rather than from whether the canonicalized string happens to be in the explicit ISO list.
+    expect(kinds([doc('a', 'Cost is \u20B95'), doc('b', 'Cost is 5 inr')])).toEqual([]);
+  });
+
+  it('does not read a spaced unit abbreviation as a magnitude', () => {
+    expect(kinds([doc('a', 'Height is 120 m.'), doc('b', 'Height is 120 meters.')])).toEqual([]);
+    expect(kinds([doc('a', 'Timeout is 5 m'), doc('b', 'Timeout is 5 minutes')])).toEqual([]);
+    expect(kinds([doc('a', 'Speed is 5 m/s'), doc('b', 'Speed is 5.')])).toEqual([]);
+    expect(kinds([doc('a', 'Option is 2 B.'), doc('b', 'Option is 2.')])).toEqual([]);
+  });
+
+  it('scales spelled-out magnitudes the same as their suffix form', () => {
+    expect(kinds([doc('a', 'Revenue is $10 million.'), doc('b', 'Revenue is $10M.')])).toEqual([]);
+    expect(kinds([doc('a', 'Revenue is $1.2 billion.'), doc('b', 'Revenue is $1.2B.')])).toEqual([]);
+    expect(kinds([doc('a', 'Revenue is $10 million.'), doc('b', 'Revenue is $12M.')])).toEqual(['metric-disagreement']);
+  });
+
+  it('keeps distinct 13-digit figures distinct', () => {
+    expect(kinds([doc('a', 'Account is 1234567890123.'), doc('b', 'Account is 1234567890124.')])).toEqual([
+      'metric-disagreement',
+    ]);
+  });
 });
 
 describe('metric disagreements with unitRequired', () => {
@@ -128,6 +165,23 @@ describe('metric disagreements with unitRequired', () => {
   it('does not compare one label measured in two different units', () => {
     // 100 ms against 2 s is a unit change, not evidence that the documents disagree.
     expect(unitKinds([doc('a', 'Latency is 100 ms.'), doc('b', 'Latency is 2 s.')])).toEqual([]);
+  });
+
+  it('treats currency symbols and words as the same unit for grouping when required', () => {
+    expect(unitKinds([doc('a', 'Revenue is $1.2M.'), doc('b', 'Revenue is 1200000 dollars.')])).toEqual([]);
+    expect(unitKinds([doc('a', 'Cost is EUR 1,200.'), doc('b', 'Cost is 1.2k euros.')])).toEqual([]);
+  });
+
+  it('groups an unmapped currency symbol with its code', () => {
+    expect(unitKinds([doc('a', 'Cost is \u20B95.'), doc('b', 'Cost is 6 inr.')])).toEqual(['metric-disagreement']);
+  });
+
+  it.each([
+    ['$1,2', 'Annual revenue is $1,2'],
+    ['$1', 'Annual revenue is $1'],
+    ['$12', 'Annual revenue is $12'],
+  ])('drops a passage clipped mid-number after a prefix currency (%s)', (_label, clipped) => {
+    expect(unitKinds([doc('a', 'Annual revenue is $1,200,000 for the year.'), doc('b', clipped)])).toEqual([]);
   });
 
   it('leaves the default behaviour alone', () => {
@@ -172,6 +226,7 @@ describe('metric units', () => {
   // constantly, so this is a systematic false positive rather than an edge case.
   it.each([
     ['Total revenue is 1,200.', 'Total revenue is 1,200 USD.'],
+    ['Total revenue is 1,200.', 'Total revenue is 1,200 in Q1.'],
     ['Monthly active users: 1,200.', 'Monthly active users: 1,200 in Q1.'],
     ['Score is 7.', 'Score is 7 out of 10.'],
     ['Version is 3.4.5.', 'Version is 3.4.5 today.'],
