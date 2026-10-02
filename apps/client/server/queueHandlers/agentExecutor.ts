@@ -3447,6 +3447,9 @@ async function processSubagentDispatch(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
+        // no-ops for every image a delegated subagent generates (same gap as the top-level path).
+        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
       },
       sessionRepository,
       storage: getFilesStorage(),

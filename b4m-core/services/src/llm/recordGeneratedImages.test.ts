@@ -25,4 +25,21 @@ describe('recordGeneratedImages', () => {
     await expect(recordGeneratedImages({ incrementImageCount }, 'session-1', 1, logger)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalled();
   });
+
+  it('logs when a real session and count have no incrementImageCount adapter wired', async () => {
+    const warn = vi.fn();
+    await recordGeneratedImages({}, 'session-1', 2, { warn });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('No incrementImageCount adapter wired'), {
+      sessionId: 'session-1',
+      count: 2,
+    });
+  });
+
+  it('does not log for the benign no-session or zero-count early returns', async () => {
+    const warn = vi.fn();
+    await recordGeneratedImages({ incrementImageCount: vi.fn() }, undefined, 2, { warn });
+    await recordGeneratedImages({ incrementImageCount: vi.fn() }, 'session-1', 0, { warn });
+    expect(warn).not.toHaveBeenCalled();
+  });
 });

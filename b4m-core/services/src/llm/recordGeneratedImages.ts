@@ -16,7 +16,16 @@ export async function recordGeneratedImages(
   count: number,
   logger: Pick<Logger, 'warn'>
 ): Promise<void> {
-  if (!sessionId || count <= 0 || !sessions?.incrementImageCount) return;
+  if (!sessionId || count <= 0) return;
+  if (!sessions?.incrementImageCount) {
+    // Distinguishes a real wiring gap (this ToolBuilderDeps/db object never got a `sessions`
+    // adapter) from the benign early returns above, which fire on every ordinary call.
+    logger.warn('[recordGeneratedImages] No incrementImageCount adapter wired; imageCount not updated', {
+      sessionId,
+      count,
+    });
+    return;
+  }
   try {
     await sessions.incrementImageCount(sessionId, count);
   } catch (err) {
