@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatReplyRound, ChatStreamEvent } from '@shared/chat';
 import { applyReplyDone } from './replyDone';
 import { roundsOf } from './replyRounds';
+import { contextTokens } from './statusLine';
 
 type ReplyDoneEvent = Extract<ChatStreamEvent, { type: 'done' }>;
 
@@ -92,6 +93,28 @@ describe('applyReplyDone', () => {
 
     expect(settled.toolCalls).toHaveLength(1);
     expect(settled.stopReason).toBeUndefined();
+  });
+
+  /**
+   * The settled reply is the window's only copy until the conversation is reloaded, so a usage
+   * dropped here is a usage the composer's context indicator cannot read: it went to "--" the
+   * instant the turn it was measuring ended, and came back only on a reload.
+   */
+  it('carries the usage, which is what the context indicator is read off', () => {
+    const settled = applyReplyDone(
+      streaming([{ text: 'x', toolCallIds: [] }]),
+      done({ content: 'x', usage: { inputTokens: 1357, cacheReadInputTokens: 11_136, outputTokens: 5996 } })
+    );
+
+    expect(settled.usage?.inputTokens).toBe(1357);
+    expect(contextTokens(settled)).toBe(12_493);
+  });
+
+  // A terminal event with no usage on it leaves whatever the stream already folded in, rather
+  // than clearing a figure that was real - see the other `keeps what streamed` case.
+  it('keeps a usage the event does not restate', () => {
+    const message: ChatMessage = { ...streaming([{ text: 'x', toolCallIds: [] }]), usage: { inputTokens: 900 } };
+    expect(applyReplyDone(message, done({ content: 'x' })).usage?.inputTokens).toBe(900);
   });
 
   it('leaves the text a reply with no artifact in it streamed', () => {

@@ -98,8 +98,9 @@ describe('live reply', () => {
     });
 
     it('folds to the same reply as applying every event one at a time', () => {
-      const start: ChatStreamEvent = { type: 'start', ...ids };
-      expect(fold([start, ...coalesceLiveEvents(events)])).toEqual(fold([start, ...events]));
+      // One started reply for both folds: startReply stamps the clock, which can tick between them.
+      const started = startReply([], ids.messageId);
+      expect(fold(coalesceLiveEvents(events), started)).toEqual(fold(events, started));
     });
 
     it('does not merge deltas of different messages', () => {
