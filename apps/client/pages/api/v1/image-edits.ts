@@ -8,6 +8,7 @@
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getImageEdit } from '@server/queueHandlers/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { editImageContract } from '@bike4mind/common';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
@@ -22,6 +23,7 @@ const handler = nextRouteForContract(editImageContract).post(async (req, res) =>
     user: req.user,
     ability: req.ability,
     logger: req.logger,
+    origin: resolveSessionOrigin(req),
   });
 
   // null = personal account, undefined = the caller's own org; any org the caller isn't a member of is rejected.

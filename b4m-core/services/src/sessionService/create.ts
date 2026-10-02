@@ -10,6 +10,7 @@ import {
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
+  ISessionOrigin,
   ISessionRepository,
   IUserDocument,
 } from '@bike4mind/common';
@@ -120,6 +121,13 @@ export interface CreateSessionOptions {
    * access filter would drop the source's lake files. Export still re-checks access on the copy.
    */
   knowledgeIdsFromSourceSession?: boolean;
+  /**
+   * Where the session is being created, resolved by the route from how the request authenticated
+   * (see resolveSessionOrigin in apps/client). An option, not a parameter: the parameters are
+   * parsed from request bodies, and a client must not be able to label its own origin. Copy paths
+   * (clone/fork/snip) leave it unset, so a copy carries no origin.
+   */
+  origin?: ISessionOrigin;
 }
 
 export const createSession = async (
@@ -190,6 +198,7 @@ export const createSession = async (
     ...(forceKnowledgeRetrieval !== undefined ? { forceKnowledgeRetrieval } : {}),
     // A taggedAt with no tags would close the spider's gate on a notebook with nothing to show.
     taggedAt: rest.tags?.length ? rest.taggedAt : undefined,
+    ...(options.origin ? { origin: options.origin } : {}),
     userId: user.id,
     knowledgeIds,
     artifactIds,

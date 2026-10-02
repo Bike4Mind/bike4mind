@@ -11,12 +11,20 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { NotFoundError } from '@server/utils/errors';
-import { Permission, ISessionDocument, ISessionFavoriteItem, ISession, IUserDocument } from '@bike4mind/common';
+import {
+  Permission,
+  ISessionDocument,
+  ISessionFavoriteItem,
+  ISession,
+  ISessionOrigin,
+  IUserDocument,
+  SessionListFilters,
+} from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { User, IUserObject } from '@bike4mind/database';
 import { MongoQuery } from '@casl/ability';
 import { Logger } from '@bike4mind/observability';
-import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
+import { Session as SessionModel, sessionListFilterQuery, sessionRepository } from '@bike4mind/database/auth';
 import { sessionService, projectService } from '@bike4mind/services';
 import {
   notifySessionCreated,
@@ -62,6 +70,8 @@ export interface GetOrCreateSessionParams {
   logger: Logger;
   /** Fab file IDs if session should be associated with fab files */
   fabFileIds?: string[];
+  /** Stamped on a newly created session only (see resolveSessionOrigin); ignored for an existing one. */
+  origin?: ISessionOrigin;
 }
 
 export interface GetOrCreateSessionResult {
@@ -98,7 +108,7 @@ export interface GetOrCreateSessionResult {
  * ```
  */
 export async function getOrCreateSession(params: GetOrCreateSessionParams): Promise<GetOrCreateSessionResult> {
-  const { sessionId: reqSessionId, sessionName, projectId, user, ability, logger, fabFileIds } = params;
+  const { sessionId: reqSessionId, sessionName, projectId, user, ability, logger, fabFileIds, origin } = params;
   const userId = user.id;
 
   const asyncPromises: Promise<unknown>[] = [];
@@ -151,7 +161,8 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
             user,
             logger
           )(),
-      }
+      },
+      { origin }
     );
     // Bind into the outer `let session` and keep a narrowed const for the rest of the block -
     // TS widens `let` back to `T | null` across each await below, but a const preserves narrowing.
@@ -303,7 +314,6 @@ export const getFavoriteSessionByUser = async (userId: string): Promise<ISession
 export const getSharedSessionsByUser = async (
   user: IUserDocument,
   search?: string,
-  // filters: Record<string, unknown>,
   options?: {
     pagination?: {
       limit: number;
@@ -313,6 +323,8 @@ export const getSharedSessionsByUser = async (
       name: string;
       direction: 'asc' | 'desc';
     };
+    /** Same origin/image filters as the own list, applied server-side so pagination holds. */
+    filters?: SessionListFilters;
   }
 ): Promise<{
   data: ISessionDocument[];
@@ -324,6 +336,7 @@ export const getSharedSessionsByUser = async (
   if (search) {
     q.where('name', { $regex: escapeRegex(search), $options: 'si' });
   }
+  q.where(sessionListFilterQuery(options?.filters));
 
   return paginatedSessions(q.getQuery(), options);
 };

@@ -289,6 +289,19 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toBeUndefined();
   });
 
+  it('hands invoke() the authenticating key id, so a tool-driven lake write is audited as the key', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBe('k1');
+  });
+
+  it('hands invoke() no key id for a JWT/browser caller', async () => {
+    const { req, res } = fire({ apiKey: null });
+    await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
+  });
+
   it('accepts an ai:generate-only key (2xx) — proves OR semantics', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire();

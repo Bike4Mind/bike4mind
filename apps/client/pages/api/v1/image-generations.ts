@@ -12,6 +12,7 @@ import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { getImageGeneration } from '@server/queueHandlers/imageGeneration';
 import { generateImageContract, GenerateImageIvokeParams } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
@@ -49,6 +50,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     user: req.user,
     ability: req.ability,
     logger: req.logger,
+    origin: resolveSessionOrigin(req),
   });
 
   try {

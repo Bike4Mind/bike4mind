@@ -62,6 +62,8 @@ describe('CookieConsentBanner', () => {
     mockLoadMetaPixel.mockClear();
     clearCookies();
     useCookieSettings.setState({ isOpen: false });
+    // What the inline tag in layout.tsx would have set; each test states its own.
+    delete window.__b4mGaConsentDefault;
   });
 
   it('shows banner when no consent is stored', () => {
@@ -673,6 +675,69 @@ describe('CookieConsentBanner', () => {
 
         expect(elsewhere).toHaveFocus();
       });
+    });
+  });
+
+  // The inline tag records the landing page with a cookie only when it could read a grant
+  // before sending it. Otherwise a later grant must record the page again, once, or GA's
+  // cookied session starts on a later event with no source and reports "(not set)".
+  describe('recording the page on a grant', () => {
+    const pageViews = () => mockGtag.mock.calls.filter(c => c[0] === 'event' && c[1] === 'page_view');
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    it('records the page once when an undecided visitor accepts', () => {
+      setRegion('eu');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      expect(pageViews()).toHaveLength(0);
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(pageViews()).toHaveLength(1);
+      // After the grant, so the hit carries the cookie.
+      const grant = mockGtag.mock.calls.findIndex(c => c[0] === 'consent' && c[2]?.analytics_storage === 'granted');
+      const pageView = mockGtag.mock.calls.findIndex(c => c[0] === 'event' && c[1] === 'page_view');
+      expect(grant).toBeGreaterThanOrEqual(0);
+      expect(pageView).toBeGreaterThan(grant);
+    });
+
+    it('does not record the page again when the tag already had the grant', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      window.__b4mGaConsentDefault = 'granted';
+      renderBanner();
+      expect(pageViews()).toHaveLength(0);
+    });
+
+    it('records the page at most once, however often consent is granted', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      act(() => useCookieSettings.getState().open());
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      act(() => useCookieSettings.getState().open());
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      expect(pageViews()).toHaveLength(1);
+    });
+
+    // A tag that read the signals differently from the banner: the banner's grant still heals it.
+    it('records the page when the banner grants on load but the tag had defaulted to denied', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      expect(pageViews()).toHaveLength(1);
+    });
+
+    it('never records the page on a decline', () => {
+      setRegion('eu');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      expect(pageViews()).toHaveLength(0);
     });
   });
 });

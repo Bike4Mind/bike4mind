@@ -79,6 +79,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
   useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
+  useGetDataLakesWithRetrievability: (...args: unknown[]) => useGetDataLakesMock(...args),
   // The research tab (#1682). Mocked here rather than in its own file because the modal
   // value-imports every one of these at module load - a missing export throws before a single
   // assertion runs, whether or not the test touches that tab.
@@ -130,8 +131,11 @@ const TRIAGE_ROUTER: MockActivatable = {
 // which internally uses react-query - stub it so these clear-tag tests don't need a
 // QueryClientProvider. No org / no selection -> the Organization toggle is simply disabled,
 // which is irrelevant to the access-gate assertions below.
+const accountsState = vi.hoisted(() => ({
+  value: { accounts: [] as unknown[], selectedAccount: null as unknown },
+}));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
-  useAccounts: () => ({ accounts: [], selectedAccount: null }),
+  useAccounts: () => accountsState.value,
 }));
 
 vi.mock('sonner', () => ({
@@ -154,6 +158,7 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
 // Steady state for the tests that don't care about the picker: allowlist loaded, router present.
 // The preferred-prompt suite below overrides these per test to exercise the load-timing edges.
 beforeEach(() => {
+  accountsState.value = { accounts: [], selectedAccount: null };
   activatablePrompts = [TRIAGE_ROUTER];
   activatableLoading = false;
   activatableError = false;
@@ -204,6 +209,7 @@ const gatedLake = {
   lakeMemoryEnabled: false,
   injectPromptForReaders: false,
   canManage: true,
+  isOwn: true,
 };
 
 const openLake = {
@@ -222,6 +228,7 @@ const openLake = {
   lakeMemoryEnabled: false,
   injectPromptForReaders: false,
   canManage: true,
+  isOwn: true,
 };
 
 const entitlementGatedLake = {
@@ -240,6 +247,7 @@ const entitlementGatedLake = {
   lakeMemoryEnabled: false,
   injectPromptForReaders: false,
   canManage: true,
+  isOwn: true,
 };
 
 describe('DataLakeSettingsModal — clearing an access gate', () => {
@@ -1877,5 +1885,138 @@ describe('DataLakeSettingsModal - dialog width', () => {
     expect(maxWidthOf()).toBe('44rem');
     await user.click(screen.getByTestId('datalake-settings-tab-spend'));
     expect(maxWidthOf()).toBe('44rem');
+  });
+});
+
+describe('DataLakeSettingsModal - owner-only sharing changes', () => {
+  const curator = { ...openLake, id: 'lake-own-1', isOwn: false };
+  const curatorTagged = { ...curator, requiredUserTag: 'Opti' };
+  const curatorOrg = { ...curatorTagged, organizationId: 'org-1' };
+  const msg = 'datalake-settings-gate-owner-only';
+  const renderLake = (lake: typeof curator) =>
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('lets an owner add a tag to a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake({ ...curator, isOwn: true });
+    await user.type(screen.getByTestId('datalake-settings-usertag'), 'Opti');
+    expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+  });
+
+  it('blocks a curator adding a tag to a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake(curator);
+    await user.type(screen.getByTestId('datalake-settings-usertag'), 'Opti');
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('allows a curator clearing a tag on a private org-less lake (narrowing)', async () => {
+    const user = userEvent.setup();
+    renderLake(curatorTagged);
+    await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
+    expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+  });
+
+  it('blocks a curator clearing a tag on an org lake (widening)', async () => {
+    const user = userEvent.setup();
+    renderLake(curatorOrg);
+    await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('disables the exposing radios for a curator and explains why', () => {
+    renderLake(curator);
+    expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Public' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+    expect(screen.getByTestId('datalake-settings-visibility-owner-only')).toBeInTheDocument();
+  });
+
+  it('keeps Private open on an ungated org lake but closes it on a gated one', () => {
+    const { unmount } = renderLake({ ...curator, organizationId: 'org-1' });
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+    unmount();
+    renderLake(curatorOrg);
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeDisabled();
+  });
+
+  it('keeps Private and Public enabled for a curator on a public lake', () => {
+    renderLake({ ...curator, isPublic: true });
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: 'Public' })).toBeEnabled();
+  });
+
+  it('keeps Organization enabled for a curator on an org lake', () => {
+    renderLake(curatorOrg);
+    expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeEnabled();
+  });
+
+  it('keeps Private enabled for an owner on a gated org lake', () => {
+    renderLake({ ...curatorOrg, isOwn: true });
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+  });
+
+  describe('with a team account selected', () => {
+    beforeEach(() => {
+      const team = { id: 'org-1', name: 'Team', personal: false };
+      accountsState.value = { accounts: [team], selectedAccount: team };
+    });
+
+    it('disables Organization for a curator on a private ungated lake', () => {
+      renderLake(curator);
+      expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeDisabled();
+    });
+
+    it('enables Organization for an owner on a private ungated lake', () => {
+      renderLake({ ...curator, isOwn: true });
+      expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeEnabled();
+    });
+  });
+
+  it('lets an owner clear a tag on a gated org lake', async () => {
+    const user = userEvent.setup();
+    renderLake({ ...curatorOrg, isOwn: true });
+    await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
+    expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+  });
+
+  it('blocks a curator adding an entitlement to a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake(curator);
+    await user.type(within(screen.getByTestId('datalake-settings-entitlement')).getByRole('textbox'), 'product:pro');
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('blocks a curator changing a tag on a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake({ ...curator, requiredUserTag: 'a' });
+    const input = within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox');
+    await user.clear(input);
+    await user.type(input, 'b');
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('lets a curator save a description edit on a gated lake', async () => {
+    const user = userEvent.setup();
+    renderLake(curatorOrg);
+    await user.type(screen.getByLabelText('Description'), ' more');
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+    expect(updateMutate).toHaveBeenCalledTimes(1);
   });
 });

@@ -128,6 +128,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
       },
       userId: req.user.id,
+      // Attributes a lake write a tool drives this turn to the key rather than its owner.
+      apiKeyId: req.apiKeyInfo?.keyId,
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)

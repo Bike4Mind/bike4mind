@@ -45,6 +45,8 @@ export const OPENAI_IMAGE_MODELS = [
   ImageModels.GPT_IMAGE_1_5,
   ImageModels.GPT_IMAGE_1_MINI,
   ImageModels.GPT_IMAGE_2,
+  ImageModels.GPT_IMAGE_2_5_SUNBURST,
+  ImageModels.GPT_IMAGE_2_5_FLARE,
 ] as const;
 export const ALL_IMAGE_MODELS = [
   ...OPENAI_IMAGE_MODELS,
@@ -82,9 +84,16 @@ export type ImageSizeFromSchema = z.infer<typeof ImageSizeSchema>;
 // rendered and billed at 'medium'. The tier is pinned on the way to OpenAI rather than left to
 // its auto-selection, so a bare request costs what it says and renders what it costs. Ask for
 // 'auto' if you want OpenAI to choose the effort.
-export const OPENAI_IMAGE_QUALITIES = ['standard', 'hd', 'low', 'medium', 'high', 'auto'] as const;
+//
+// 'xhigh' and 'max' are gpt-image-2.5 only (see EXTENDED_GPT_IMAGE_QUALITIES); any other GPT-Image
+// model is rendered and billed at 'high' for them, via clampImageQualityForModel.
+export const OPENAI_IMAGE_QUALITIES = ['standard', 'hd', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'] as const;
 export const OpenAIImageQualitySchema = z.enum(OPENAI_IMAGE_QUALITIES);
 export type OpenAIImageQuality = z.infer<typeof OpenAIImageQualitySchema>;
+
+/** The tiers above 'high' that only the gpt-image-2.5 models accept. */
+export const EXTENDED_GPT_IMAGE_QUALITIES = ['xhigh', 'max'] as const satisfies readonly OpenAIImageQuality[];
+export type ExtendedGptImageQuality = (typeof EXTENDED_GPT_IMAGE_QUALITIES)[number];
 
 /**
  * The tiers offered to the LLM in the image_generation tool schema: every accepted quality

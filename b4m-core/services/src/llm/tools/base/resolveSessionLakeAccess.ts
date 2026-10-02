@@ -1,19 +1,7 @@
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
-import {
-  narrowLakeAccessToSession,
-  sessionGroundsOnNoLake,
-  type ResolvedLakeAccessSet,
-} from '../../../dataLakeService/narrowLakeAccessToSession';
-import { unionPreauthorizedLakeAccess } from '../../../dataLakeService/unionPreauthorizedLakeAccess';
+import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
+import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
 import type { ToolContext } from './types';
-
-const NO_LAKES: ResolvedLakeAccessSet = {
-  dataLakeTags: [],
-  dataLakeTagPrefixes: [],
-  scopedTagPrefixes: [],
-  lakes: [],
-  excludedByAccessCount: 0,
-};
 
 /**
  * The lake access a knowledge tool should run on for THIS session: the caller's owner-wide access,
@@ -31,9 +19,12 @@ export async function resolveSessionLakeAccess(
 ): Promise<ResolvedLakeAccessSet> {
   // Two different reasons for the same answer, and the narrowing below can express neither: it
   // reads an empty scope as "no opinion" and hands back the caller's full owner-wide access.
-  if (context.suppressLakeArms) return NO_LAKES;
-  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return NO_LAKES;
-  return narrowLakeAccessToSession(await ownerAccess(), context.sessionRetrievalTags);
+  if (context.suppressLakeArms) return noSessionLakes();
+  if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return noSessionLakes();
+  return searchedSessionLakes(await ownerAccess(), {
+    retrievalTags: context.sessionRetrievalTags,
+    lakeScopeExplicit: context.sessionLakeScopeExplicit,
+  });
 }
 
 /**
@@ -46,5 +37,5 @@ export async function resolveOwnerLakeAccess(context: ToolContext): Promise<Reso
   // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
   // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting
   // user, and the identity-substituting worker paths never reach that call at all.
-  return unionPreauthorizedLakeAccess(resolved, context.sessionPreauthorizedLakeIds, context.userId, context.db);
+  return admitSessionLakes(resolved, context.sessionPreauthorizedLakeIds, context.userId, context.db);
 }

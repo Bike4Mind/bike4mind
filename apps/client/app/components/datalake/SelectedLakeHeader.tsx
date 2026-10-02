@@ -4,7 +4,8 @@ import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LakeSourceConnectActions from '@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions';
 import { canConnectLakeDrive, isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
+import { isUnsearchable, UNSEARCHABLE_LAKE_REASON } from '@client/app/components/datalake/lakeRetrievability';
 
 /**
  * What the scoped lake is and the lake-level actions on it - the home those actions never had
@@ -21,7 +22,7 @@ import type { ManageableDataLakeConfig } from '@bike4mind/common';
  * in the manager panel, and Configure deep-links there with this lake preselected. A second set
  * of destructive controls on a second surface is how the two drift apart.
  */
-export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeConfig }) {
+export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabeledDataLake }) {
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const openManager = useDataLakeWizardStore(s => s.openManager);
 
@@ -48,6 +49,20 @@ export default function SelectedLakeHeader({ lake }: { lake: ManageableDataLakeC
         >
           {lake.fileTagPrefix}
         </Chip>
+        {/* The draft chip below already says why a draft is not searched. */}
+        {isUnsearchable(lake) && !isDraftLake(lake) && (
+          <Tooltip size="sm" title={UNSEARCHABLE_LAKE_REASON}>
+            <Chip
+              size="sm"
+              variant="soft"
+              color="warning"
+              sx={{ fontSize: '11px' }}
+              data-testid="datalake-selected-lake-unsearchable"
+            >
+              Not searched by chat
+            </Chip>
+          </Tooltip>
+        )}
         {isDraftLake(lake) && (
           <Chip
             size="sm"

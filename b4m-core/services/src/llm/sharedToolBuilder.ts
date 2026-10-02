@@ -48,6 +48,8 @@ export interface ToolBuilderDeps {
   entitlementKeys?: string[];
   /** The turn's active organization, forwarded to the tool context (see ToolContext.organizationId). */
   organizationId?: ToolContext['organizationId'];
+  /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
+  apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
@@ -333,6 +335,7 @@ export function buildSharedTools(
     sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
     organizationId,
+    apiKeyId,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -354,6 +357,7 @@ export function buildSharedTools(
       sessionLakeScopeExplicit,
       sessionPreauthorizedLakeIds,
       organizationId,
+      apiKeyId,
       questId: callbacks.questId,
       getAbortSignal,
     },

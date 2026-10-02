@@ -201,6 +201,21 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
     expect(quality.enum).toEqual(['standard', 'hd', 'low', 'medium', 'high']);
   });
 
+  it('adds xhigh and max only when the configured model is a gpt-image-2.5 model', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.GPT_IMAGE_2_5_FLARE,
+    });
+    expect(toolSchema.parameters.properties.quality.enum).toEqual([
+      'standard',
+      'hd',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+  });
+
   // #2936: the schema advertised five sizes but the calculator prices three, so four of them
   // rendered at the asked-for size and billed at the 1024x1024 row. Offer only priceable sizes.
   it('offers only sizes the cost calculator can price in the tool schema', () => {

@@ -98,7 +98,9 @@ import {
   useApplyCorpusAction,
   useLakeFileTags,
   useUnderChunkedCount,
+  useGetDataLakesWithRetrievability,
 } from './dataLakes';
+import { dataLakeKeys } from './dataLakeKeys';
 
 const PAGE_SIZE = 24;
 
@@ -134,6 +136,65 @@ const mountBrowse = (initialSearch = '') => {
 
 const requestedUrls = (): string[] => apiGet.mock.calls.map(call => call[0] as string);
 const paramsOf = (url: string) => new URL(url, 'http://test.local').searchParams;
+
+// The only client path that opts into the retrievability label: drop the param and every row
+// renders unlabeled (treated as searchable) while the consumer tests, which mock this hook, stay green.
+describe('useGetDataLakesWithRetrievability', () => {
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: { data: [] } });
+  });
+
+  const mount = (sessionId: string | null) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const view = renderHook(() => useGetDataLakesWithRetrievability(sessionId), { wrapper });
+    return { ...view, queryClient };
+  };
+
+  it('requests the labelled list scoped to the session, under the session-keyed query key', async () => {
+    const { result, queryClient } = mount('sess-1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', {
+      params: { includeRetrievability: 'true', sessionId: 'sess-1' },
+    });
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability('sess-1'))?.status).toBe('success');
+  });
+
+  it('omits sessionId but keeps includeRetrievability with no session', async () => {
+    const { result, queryClient } = mount(null);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', { params: { includeRetrievability: 'true' } });
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability(null))?.status).toBe('success');
+  });
+
+  it('keeps the previous session rows while a new session id refetches, so the selection never empties', async () => {
+    const rows = [{ id: 'a', name: 'A', retrievable: true }];
+    apiGet.mockResolvedValueOnce({ data: { data: rows } });
+    let release: (v: unknown) => void = () => {};
+    apiGet.mockReturnValueOnce(new Promise(resolve => (release = resolve)));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result, rerender } = renderHook(({ sid }) => useGetDataLakesWithRetrievability(sid), {
+      wrapper,
+      initialProps: { sid: 'sess-1' as string | null },
+    });
+    await waitFor(() => expect(result.current.data).toEqual(rows));
+
+    rerender({ sid: 'sess-2' });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
+    expect(result.current.data).toEqual(rows);
+    expect(result.current.isPlaceholderData).toBe(true);
+
+    await act(async () => release({ data: { data: [{ ...rows[0], retrievable: false }] } }));
+    await waitFor(() => expect(result.current.data?.[0]?.retrievable).toBe(false));
+  });
+});
 
 describe('useBrowsePublicDataLakes', () => {
   beforeEach(() => {
@@ -2218,7 +2279,7 @@ describe('useScanDataLakeFindings', () => {
     // The bare prefix, so the dialog's filtered list and the chip's open-only count both refresh.
     expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
-    expect(toast.success).toHaveBeenCalledWith('Scan complete: 3 finding(s) across 4 document(s).');
+    expect(toast.success).toHaveBeenCalledWith('Scanned 4 document(s), found 3 finding(s).');
   });
 
   it('says nothing was read rather than calling an empty lake clean', async () => {
@@ -2228,7 +2289,9 @@ describe('useScanDataLakeFindings', () => {
       await result.current.mutateAsync();
     });
 
-    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/no document in this lake has text/i));
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringMatching(/^Scanned 0 documents\..*no document in this lake has text/i)
+    );
   });
 
   it("surfaces the rate limit's own retry hint, not axios' status line", async () => {

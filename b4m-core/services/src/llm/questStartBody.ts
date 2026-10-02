@@ -42,6 +42,12 @@ export const QuestStartBodySchema = z.object({
   skipAutoOffers: z.boolean().optional(),
   /** See ChatCompletionInvokeParamsSchema.deniedTools - must stay in sync with it. */
   deniedTools: z.array(z.string()).optional(),
+  /**
+   * The `b4m_live_` key that authenticated the turn (see ToolContext.apiKeyId). Deliberately NOT
+   * on ChatCompletionInvokeParamsSchema: that schema parses client bodies, so it reaches here only
+   * through invoke()'s own server-set `apiKeyId` argument.
+   */
+  apiKeyId: z.string().optional(),
   /** See ChatCompletionInvokeParamsSchema.systemPrompt - must stay in sync with it. */
   systemPrompt: z.string().max(PROMPT_TEXT_MAX).optional(),
   enableAgents: z.boolean().optional(),

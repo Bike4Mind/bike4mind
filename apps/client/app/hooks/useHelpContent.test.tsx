@@ -78,6 +78,31 @@ describe('useHelpContent access routing', () => {
     expect(result.current.data).toBe('# Body\n');
   });
 
+  it('strips frontmatter keys that contain spaces', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      statusText: 'OK',
+      text: async () => '---\nLast Updated: 2026-01-05\n---\n\n# Body\n',
+    });
+
+    const { result } = renderHook(() => useHelpContent('features/overview'), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+
+    expect(result.current.data).toBe('# Body\n');
+  });
+
+  it('keeps a non-YAML block between two leading rules', async () => {
+    const prose = '---\nSome intro paragraph.\n---\nBody';
+    fetchMock.mockResolvedValue({ ok: true, statusText: 'OK', text: async () => prose });
+
+    const { result } = renderHook(() => useHelpContent('features/overview'), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBeDefined());
+
+    expect(result.current.data).toBe(prose);
+  });
+
   it('fetches an admin article from the authenticated route with a Bearer token', async () => {
     const { result } = renderHook(() => useHelpContent('admin/overview'), { wrapper });
 

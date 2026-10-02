@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
 import type { PendingMcpApproval } from '../storage/ConfigStore';
+import { escapeTerminalControlChars } from './PermissionPrompt';
 
 export type McpApprovalChoice = 'approve' | 'skip';
 
@@ -16,12 +17,15 @@ type McpApprovalItem = {
   value: McpApprovalChoice;
 };
 
-// Repo-controlled strings could carry terminal escapes; show them as literal text.
+// Each repo field renders on one line, so tab/newline are escaped too (the shared
+// helper keeps them for multi-line previews); otherwise a value could fake a prompt line.
 const displaySafe = (s: string) =>
-  // eslint-disable-next-line no-control-regex -- matching control characters is the point
-  s.replace(/[\u0000-\u001f\u007f-\u009f]/g, c => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+  escapeTerminalControlChars(s).replace(/[\t\n]/g, c => (c === '\n' ? '\\x0a' : '\\x09'));
 
-const displayArg = (a: string) => (/[\s"']/.test(a) ? JSON.stringify(displaySafe(a)) : displaySafe(a));
+const displayArg = (a: string) => {
+  const safe = displaySafe(a);
+  return /[\s"']/.test(a) ? `"${safe.replace(/"/g, '\\"')}"` : safe;
+};
 
 /**
  * Startup prompt for repo-discovered MCP servers (trusted project) whose exact

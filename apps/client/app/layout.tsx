@@ -6,6 +6,7 @@ import { AppRouterCacheProvider } from '@mui/material-nextjs/v16-appRouter';
 import { ClientProviders } from './providers';
 import { ColorSchemeScript } from './ColorSchemeScript';
 import { SerwistProvider } from './serwist';
+import { gaBootstrapScript } from './utils/gaConsentBootstrap';
 import { Metadata } from 'next';
 
 // Pins the GA cookie to an apex instead of gtag's 'auto' default; unset is a
@@ -89,15 +90,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               strategy="afterInteractive"
             />
             <Script id="google-analytics" strategy="afterInteractive">
-              {`
-                window.dataLayer = window.dataLayer || [];
-                function gtag(){dataLayer.push(arguments);}
-                gtag('consent', 'default', { analytics_storage: 'denied' });
-                gtag('js', new Date());
-                gtag('config', '${process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID}'${
-                  GA_COOKIE_DOMAIN ? `, { cookie_domain: '${GA_COOKIE_DOMAIN}' }` : ''
-                });
-              `}
+              {gaBootstrapScript(process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID, GA_COOKIE_DOMAIN)}
             </Script>
           </>
         )}
