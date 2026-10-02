@@ -4,7 +4,7 @@ import { Logger } from '@bike4mind/observability';
 
 export interface ScrubMissingKnowledgeIdsAdapters {
   db: {
-    fabFiles: Pick<IFabFileRepository, 'findExistingIdsByIds'>;
+    fabFiles: Pick<IFabFileRepository, 'findExistingIdsIncludingDeletedByIds'>;
     sessions: Pick<ISessionRepository, 'pullKnowledgeIds'>;
   };
   logger?: Logger;
@@ -25,20 +25,25 @@ export interface ScrubMissingKnowledgeIdsAdapters {
  *   1. Only the `unresolved` band is considered. That is the one band meaning "the id resolved to no
  *      document at all" - see fetchAndConvertFabFiles, which emits it when getAccessibleFiles did not
  *      return the id. Every other band describes a file that WAS found.
- *   2. Of those, only ids `findExistingIdsByIds` confirms are absent are removed. `unresolved` alone
- *      cannot distinguish a deleted row from one the caller lost access to - a revoked share, a
- *      lapsed lake grant, or a transient lake-access lookup failure all drop an id while the document
- *      is intact. `filterAccessibleKnowledgeIds` keeps unresolved ids for exactly that reason, and
- *      detaching on an outage would be unrecoverable. This asks the narrower question - does the row
- *      exist for anyone - with no permission context involved.
+ *   2. Of those, only ids with no FabFile row AT ALL are removed, via the soft-delete-blind
+ *      `findExistingIdsIncludingDeletedByIds` rather than its filtered sibling. Two independent
+ *      reasons to keep an id here. First, `unresolved` alone cannot distinguish a deleted row from
+ *      one the caller lost access to - a revoked share, a lapsed lake grant, or a transient
+ *      lake-access lookup failure all drop an id while the document is intact;
+ *      `filterAccessibleKnowledgeIds` keeps unresolved ids for exactly that reason. Second, a
+ *      soft-deleted row is RECOVERABLE: a lake teardown soft-deletes its members and
+ *      `restoreDeletedDataLake` revives them (`undeleteByDataLakeTag`), so a prompt sent while the
+ *      lake is down would otherwise strip those files from every notebook fleet-wide and leave
+ *      nothing pointing at them once they came back. Nothing is lost by waiting for the row to go
+ *      for real - the owner-driven delete path (`deleteFabFile`) unlinks sessions itself.
  *
  * `pullKnowledgeIds` ($pull), never a read-modify-write: a turn runs concurrently with whatever else
  * the owner is doing, and rewriting the whole array would clobber a file attached in that window.
  *
  * That primitive is FLEET-WIDE - it pulls the id from every session holding it, not just this one -
- * and that is deliberate. Gate 2 established the row does not exist for anyone, so no notebook can
- * hold a valid reference to it, and the same primitive is what the purge paths already use for
- * exactly this reason (purgeDataLakeConnectionFiles). A session-scoped variant would leave every
+ * and that is deliberate. Gate 2 established the row does not exist for anyone and cannot be brought
+ * back, so no notebook can hold a reference worth keeping, and the same primitive is what the purge
+ * paths already use for this reason (purgeDataLakeConnectionFiles). A session-scoped variant would leave every
  * OTHER notebook pointing at the same dead id, to be repaired only if and when its owner happens to
  * send a prompt. The cost is bounded: the write only matches sessions that hold a confirmed-dead id.
  *
@@ -62,8 +67,8 @@ export const scrubMissingKnowledgeIds = async (
     ).filter(id => pinned.has(id));
     if (candidates.length === 0) return [];
 
-    // Gate 2: confirm the row is really gone before detaching anything.
-    const existing = new Set(await adapters.db.fabFiles.findExistingIdsByIds(candidates));
+    // Gate 2: a row that is gone outright, never a soft delete some restore door can still undo.
+    const existing = new Set(await adapters.db.fabFiles.findExistingIdsIncludingDeletedByIds(candidates));
     const missing = candidates.filter(id => !existing.has(id));
     if (missing.length === 0) {
       logger.info('sessionService.scrubMissingKnowledgeIds: every unresolved id still has a row; keeping all', {

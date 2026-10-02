@@ -17,9 +17,14 @@ const notice = (over: Partial<FabFileNotice> = {}): FabFileNotice => ({
   ...over,
 });
 
-/** `existing` is the set of ids whose row still resolves; everything else reads as deleted. */
+/**
+ * `existing` is the set of ids that still have a row AT ALL - soft-deleted included, matching the
+ * soft-delete-blind probe gate 2 uses. Everything else reads as hard-gone.
+ */
 const makeAdapters = (existing: string[] = []) => {
-  const fabFiles = { findExistingIdsByIds: vi.fn(async (ids: string[]) => ids.filter(id => existing.includes(id))) };
+  const fabFiles = {
+    findExistingIdsIncludingDeletedByIds: vi.fn(async (ids: string[]) => ids.filter(id => existing.includes(id))),
+  };
   const sessions = { pullKnowledgeIds: vi.fn(async () => 1) };
   return { db: { fabFiles, sessions }, logger, fabFiles, sessions };
 };
@@ -31,6 +36,18 @@ describe('scrubMissingKnowledgeIds', () => {
 
     expect(removed).toEqual([GONE]);
     expect(a.sessions.pullKnowledgeIds).toHaveBeenCalledWith([GONE]);
+  });
+
+  it('keeps an unresolved id whose row is only soft-deleted - a lake teardown is reversible', async () => {
+    // A deleted lake soft-deletes its members and restoreDeletedDataLake revives them. A prompt sent
+    // in that window must not pull the id out of every notebook fleet-wide, or the restore brings the
+    // files back with nothing pointing at them. The filtered probe would report this row absent.
+    const a = makeAdapters([GONE]);
+    const removed = await scrubMissingKnowledgeIds([GONE], [notice()], a);
+
+    expect(removed).toEqual([]);
+    expect(a.sessions.pullKnowledgeIds).not.toHaveBeenCalled();
+    expect(a.fabFiles.findExistingIdsIncludingDeletedByIds).toHaveBeenCalledWith([GONE]);
   });
 
   it('keeps an unresolved id whose row still exists - access loss is not deletion', async () => {
@@ -65,7 +82,7 @@ describe('scrubMissingKnowledgeIds', () => {
     expect(removed).toEqual([]);
     expect(a.sessions.pullKnowledgeIds).not.toHaveBeenCalled();
     // Gate 1 rejects it outright, so the existence probe is never even reached.
-    expect(a.fabFiles.findExistingIdsByIds).not.toHaveBeenCalled();
+    expect(a.fabFiles.findExistingIdsIncludingDeletedByIds).not.toHaveBeenCalled();
   });
 
   it('ignores an unresolved id the session does not pin', async () => {
@@ -74,7 +91,7 @@ describe('scrubMissingKnowledgeIds', () => {
     const removed = await scrubMissingKnowledgeIds([LIVE], [notice({ fabFileId: OTHER })], a);
 
     expect(removed).toEqual([]);
-    expect(a.fabFiles.findExistingIdsByIds).not.toHaveBeenCalled();
+    expect(a.fabFiles.findExistingIdsIncludingDeletedByIds).not.toHaveBeenCalled();
   });
 
   it('separates the gone from the merely inaccessible in one pass', async () => {
@@ -93,25 +110,25 @@ describe('scrubMissingKnowledgeIds', () => {
     const a = makeAdapters([]);
     await scrubMissingKnowledgeIds([GONE], [notice(), notice()], a);
 
-    expect(a.fabFiles.findExistingIdsByIds).toHaveBeenCalledWith([GONE]);
+    expect(a.fabFiles.findExistingIdsIncludingDeletedByIds).toHaveBeenCalledWith([GONE]);
     expect(a.sessions.pullKnowledgeIds).toHaveBeenCalledWith([GONE]);
   });
 
   it('does nothing when the session pins no knowledge', async () => {
     const a = makeAdapters([]);
     expect(await scrubMissingKnowledgeIds([], [notice()], a)).toEqual([]);
-    expect(a.fabFiles.findExistingIdsByIds).not.toHaveBeenCalled();
+    expect(a.fabFiles.findExistingIdsIncludingDeletedByIds).not.toHaveBeenCalled();
   });
 
   it('does nothing when the turn produced no notices', async () => {
     const a = makeAdapters([]);
     expect(await scrubMissingKnowledgeIds([GONE], [], a)).toEqual([]);
-    expect(a.fabFiles.findExistingIdsByIds).not.toHaveBeenCalled();
+    expect(a.fabFiles.findExistingIdsIncludingDeletedByIds).not.toHaveBeenCalled();
   });
 
   it('swallows a lookup failure rather than taking the turn down with it', async () => {
     const a = makeAdapters([]);
-    a.fabFiles.findExistingIdsByIds.mockRejectedValueOnce(new Error('mongo down'));
+    a.fabFiles.findExistingIdsIncludingDeletedByIds.mockRejectedValueOnce(new Error('mongo down'));
 
     expect(await scrubMissingKnowledgeIds([GONE], [notice()], a)).toEqual([]);
     expect(a.sessions.pullKnowledgeIds).not.toHaveBeenCalled();

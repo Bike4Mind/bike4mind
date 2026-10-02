@@ -1092,6 +1092,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Existence including soft-deleted rows - see IFabFileRepository.findExistingIdsIncludingDeletedByIds
+   * for which of the two probes a caller wants. `includeDeleted` is what makes the difference: the
+   * plugin's pre('find') hook otherwise scopes this to `deletedAt: null`.
+   */
+  async findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsIncludingDeletedByIds') } })
+      .select('_id')
+      .setOptions({ includeDeleted: true })
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
   /** The citability projection only - see IFabFileRepository.findCitableFieldsByIds. */
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
