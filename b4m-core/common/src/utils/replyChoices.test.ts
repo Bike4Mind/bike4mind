@@ -38,9 +38,45 @@ describe('extractChoicesBlock', () => {
     expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
   });
 
-  it('leaves a block that is followed by more content alone', () => {
+  it('strips a valid block even when the model adds trailing content after it', () => {
+    // The guidance says the block must be the very last thing in the reply; when a model adds a
+    // sign-off after it anyway, the block (and the stray trailing text with it) is still stripped
+    // rather than leaving the raw fence and JSON visible to the user.
     const reply = `${prose}\n\n${block(JSON.stringify(two))}\n\nOne more thought.`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: prose, choices: two, found: true });
+  });
+
+  it('strips a case-drifted fence language tag', () => {
+    const reply = `${prose}\n\n\`\`\`Choices\n${JSON.stringify(two)}\n\`\`\``;
+    expect(extractChoicesBlock(reply)).toEqual({ text: prose, choices: two, found: true });
+  });
+
+  it('does not recognize a tilde fence (only backtick, matching the guidance)', () => {
+    const reply = `${prose}\n\n~~~choices\n${JSON.stringify(two)}\n~~~`;
     expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
+  it('strips a block closed with a longer backtick fence without corrupting the options', () => {
+    const reply = `${prose}\n\n\`\`\`choices\n${JSON.stringify(two)}\n\`\`\`\``;
+    expect(extractChoicesBlock(reply)).toEqual({ text: prose, choices: two, found: true });
+  });
+
+  it('rejects options with duplicate labels, so no two buttons show the same text', () => {
+    const duplicated = [two[0], { label: two[0].label, description: 'A different second option.' }];
+    expect(extractChoicesBlock(block(JSON.stringify(duplicated))).choices).toBeNull();
+  });
+
+  it('rejects an explicit empty options array', () => {
+    expect(extractChoicesBlock(block(JSON.stringify({ options: [] }))).choices).toBeNull();
+  });
+
+  it('rejects a block whose options field is not an array', () => {
+    expect(extractChoicesBlock(block(JSON.stringify({ options: 'nope' }))).choices).toBeNull();
+  });
+
+  it('strips a fence indented inside a list item', () => {
+    const reply = `${prose}\n\n  ${block(JSON.stringify(two))}`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: prose, choices: two, found: true });
   });
 
   it('uses only the last block when there are two', () => {

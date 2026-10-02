@@ -39,4 +39,31 @@ describe('Quest.suggestedChoices', () => {
     });
     expect((await Quest.findById(created._id))!.toJSON().suggestedChoices).toBeUndefined();
   });
+
+  it('defaults a suggestedChoices write with no options to an empty array, not undefined', async () => {
+    // The `options` array has no `required: true` on the schema - this pins the actual Mongoose
+    // behavior that makes that safe: a missing array always casts to [], never undefined, so
+    // client code that reads `suggestedChoices?.options.length` can never see `options` as undefined.
+    const created = await Quest.create({
+      sessionId: 'sess-choices',
+      timestamp: new Date(),
+      type: 'message',
+      prompt: 'p',
+      suggestedChoices: { selectedIndex: 0 },
+    });
+    const stored = (await Quest.findById(created._id))!.toJSON();
+    expect(stored.suggestedChoices).toEqual({ options: [], selectedIndex: 0 });
+  });
+
+  it('rejects an option missing its required label', async () => {
+    await expect(
+      Quest.create({
+        sessionId: 'sess-choices',
+        timestamp: new Date(),
+        type: 'message',
+        prompt: 'p',
+        suggestedChoices: { options: [{ description: 'No label here.' }] },
+      })
+    ).rejects.toThrow(/label/);
+  });
 });

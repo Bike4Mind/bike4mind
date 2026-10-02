@@ -33,16 +33,22 @@ export interface ExtractedChoices {
   found: boolean;
 }
 
-const OPEN_FENCE = /(^|\n)[ \t]*```choices[ \t]*(?=\r?\n|$)/g;
-const BODY_THEN_CLOSE = /^\r?\n([\s\S]*?)(?:\r?\n)?[ \t]*```\s*$/;
+const OPEN_FENCE = /(^|\n)[ \t]*```choices[ \t]*(?=\r?\n|$)/gi;
+// A standalone closing fence line: 3+ backticks, optionally padded with spaces, nothing else on
+// the line. Matched as the first one found after the open fence rather than anchored to the
+// reply's end, so a model that pads the fence or adds a sign-off after it doesn't leave the raw
+// block in the text - see extractChoicesBlock below.
+const CLOSE_FENCE = /\r?\n[ \t]*`{3,}[ \t]*(?=\r?\n|$)/;
 
 /**
  * Strips a trailing ```choices block from a reply and validates its options.
  *
- * Only the last block counts, and only when nothing but whitespace follows it; a block mid-reply
- * is ordinary content. A block that is unterminated (a truncated reply) or invalid is still
- * stripped so the reader never sees raw JSON. Any invalid option rejects the whole block, because
- * dropping one would shift the numbering away from the prose.
+ * Only the last block counts; a block mid-reply is ordinary content. Once an open fence is found,
+ * everything from there to its closing fence - and anything after that fence - is treated as the
+ * block, so the reader never sees raw JSON even when the model doesn't follow the exact format:
+ * a truncated reply, a closing fence padded with extra backticks, a different letter case on
+ * `choices`, or trailing prose appended after the block all get stripped the same way. Any invalid
+ * option rejects the whole block, because dropping one would shift the numbering away from the prose.
  */
 export function extractChoicesBlock(reply: string): ExtractedChoices {
   let lastOpen: RegExpExecArray | null = null;
@@ -51,13 +57,12 @@ export function extractChoicesBlock(reply: string): ExtractedChoices {
 
   const fenceStart = lastOpen.index + lastOpen[1].length;
   const rest = reply.slice(lastOpen.index + lastOpen[0].length);
-  const closed = rest.match(BODY_THEN_CLOSE);
-  // Unclosed means truncated mid-block - but only if no other content could be hiding in it.
-  const unterminated = !closed && !rest.includes('```');
-  if (!closed && !unterminated) return { text: reply, choices: null, found: false };
-
+  const close = rest.match(CLOSE_FENCE);
   const text = reply.slice(0, fenceStart).trimEnd();
-  const choices = closed ? parseChoiceOptions(closed[1]) : null;
+  // No standalone closing fence anywhere after the open fence: a truncated mid-stream block.
+  if (!close || close.index === undefined) return { text, choices: null, found: true };
+
+  const choices = parseChoiceOptions(rest.slice(0, close.index));
   return { text, choices, found: true };
 }
 
@@ -85,7 +90,7 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
 function parseChoiceOptions(body: string): ChoiceOption[] | null {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(body);
+    parsed = JSON.parse(body.trim());
   } catch {
     return null;
   }
@@ -97,6 +102,7 @@ function parseChoiceOptions(body: string): ChoiceOption[] | null {
   if (!raw) return null;
 
   const options: ChoiceOption[] = [];
+  const seenLabels = new Set<string>();
   for (const item of raw.slice(0, MAX_REPLY_CHOICES)) {
     if (!item || typeof item !== 'object') return null;
     const { label, description } = item as { label?: unknown; description?: unknown };
@@ -105,6 +111,9 @@ function parseChoiceOptions(body: string): ChoiceOption[] | null {
     const cleanDescription = description.trim();
     if (!cleanLabel || cleanLabel.length > MAX_CHOICE_LABEL_LENGTH) return null;
     if (!cleanDescription || cleanDescription.length > MAX_CHOICE_DESCRIPTION_LENGTH) return null;
+    // A duplicate label would render two buttons with identical visible text.
+    if (seenLabels.has(cleanLabel)) return null;
+    seenLabels.add(cleanLabel);
     options.push({ label: cleanLabel, description: cleanDescription });
   }
   return options.length >= MIN_REPLY_CHOICES ? options : null;
