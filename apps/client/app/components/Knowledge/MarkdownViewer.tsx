@@ -142,6 +142,7 @@ function trimDanglingLatexDelimiters(text: string): string {
 const MarkdownViewer: React.FC<Props> = ({
   content,
   citedPassage,
+  // Aliased because the prop name would otherwise shadow the imported `stripFrontmatter` function.
   stripFrontmatter: shouldStripFrontmatter = false,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
