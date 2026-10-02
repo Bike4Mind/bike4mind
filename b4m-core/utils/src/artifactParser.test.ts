@@ -1408,6 +1408,21 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
       const out = convertCodeBlocksToArtifacts(`${art(BODY)}\n\n${fence}\n`);
       expect(parseArtifacts(out).artifacts).toHaveLength(2);
     });
+
+    // Accepted tradeoff: diagrams differing only by ignored lines count as the same diagram.
+    it.each([
+      ['only their titles', withLine('    title One'), withLine('    title Two')],
+      [
+        'only an init directive',
+        ['%%{init: {"theme": "dark"}}%%', ...BODY],
+        ['%%{init: {"theme": "forest"}}%%', ...BODY],
+      ],
+    ])('does not promote a different diagram that differs by %s', (_name, artifactLines, fenceLines) => {
+      const fence = fenceOf(fenceLines);
+      const out = convertCodeBlocksToArtifacts(`${art(artifactLines)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+      expect(out).toContain(fence);
+    });
   });
 
   describe('sequence diagrams and stray openers', () => {
