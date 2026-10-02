@@ -177,6 +177,36 @@ describe('resolveWorkspace', () => {
   });
 });
 
+/**
+ * With core.bare=false in the shared config git lists the bare repo like a checkout, branch
+ * line included, and it comes first - the shape that rooted sessions in <container>/.bare.
+ */
+describe('resolveWorkspace when git lists the bare repo as a checkout', () => {
+  let container: string;
+  let main: string;
+
+  beforeEach(async () => {
+    ({ container, main } = await bareLayoutRepository());
+    await git(join(container, '.bare'), ['config', 'core.bare', 'false']);
+  });
+
+  it('never lists the bare repo as a worktree', async () => {
+    const paths = (await listWorktrees(main)).map(entry => entry.path);
+
+    expect(paths).toEqual([main]);
+  });
+
+  it('reuses the worktree already holding the chosen branch', async () => {
+    expect(await resolveWorkspace(main, 'main')).toEqual({ workingDirectory: main, outcome: 'reused' });
+  });
+
+  it('creates a new branch inside the container, not in .bare', async () => {
+    const resolved = await resolveWorkspace(main, 'fix/new-thing');
+
+    expect(resolved).toEqual({ workingDirectory: join(container, 'fix+new-thing'), outcome: 'created' });
+  });
+});
+
 describe('resolveWorkspace in an ordinary clone', () => {
   it('puts the worktree beside the checkout, which is where the shell helper puts it too', async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));

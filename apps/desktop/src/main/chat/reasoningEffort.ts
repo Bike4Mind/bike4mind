@@ -1,14 +1,20 @@
 import { REASONING_SUPPORTED_MODELS, type ReasoningEffort } from '@bike4mind/common';
-
-/** `default` sends nothing, leaving the provider at its own effort. */
-export type ReasoningEffortSetting = 'default' | Extract<ReasoningEffort, 'minimal' | 'low' | 'medium' | 'high'>;
-
-const SETTINGS: readonly ReasoningEffortSetting[] = ['default', 'minimal', 'low', 'medium', 'high'];
+import { REASONING_EFFORT_SETTINGS, type ReasoningEffortSetting } from '@shared/chat';
 
 /** An unset or unrecognised value is `default`: a typo must not silently change how a model reasons. */
 export function parseReasoningEffortSetting(raw: string | undefined): ReasoningEffortSetting {
   const value = raw?.trim().toLowerCase();
-  return SETTINGS.find(setting => setting === value) ?? 'default';
+  return REASONING_EFFORT_SETTINGS.find(setting => setting === value) ?? 'default';
+}
+
+/** The setting a stored session really has, or null when the file carries none - see SessionStore.parse. */
+export function storedReasoningEffortSetting(value: unknown): ReasoningEffortSetting | null {
+  return REASONING_EFFORT_SETTINGS.find(setting => setting === value) ?? null;
+}
+
+/** Whether a reasoning effort may be sent with `model` at all. The picker is disabled when it may not. */
+export function supportsReasoningEffort(model: string): boolean {
+  return REASONING_SUPPORTED_MODELS.has(model);
 }
 
 /**
@@ -23,5 +29,5 @@ export function reasoningEffortFor(
   model: string
 ): ReasoningEffort | undefined {
   if (!setting || setting === 'default') return undefined;
-  return REASONING_SUPPORTED_MODELS.has(model) ? setting : undefined;
+  return supportsReasoningEffort(model) ? setting : undefined;
 }

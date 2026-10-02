@@ -1,5 +1,6 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatModelCatalog, ChatModelOption } from '@shared/chat';
+import { supportsReasoningEffort } from './reasoningEffort';
 
 /**
  * The model list is per-DEPLOYMENT and per-ACCOUNT, never a constant in this client.
@@ -164,6 +165,9 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
       // Carried through only when the server stated it. Absent is "not said", which the
       // attachment gate treats differently from an explicit false - see ChatService.
       ...(typeof model.supportsVision === 'boolean' ? { supportsVision: model.supportsVision } : {}),
+      // Decided here rather than read off the wire: the catalog does not report it, and the
+      // renderer has to disable the effort picker on a model that would ignore the field.
+      supportsReasoningEffort: supportsReasoningEffort(model.id as string),
     }));
 }
 

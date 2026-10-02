@@ -390,7 +390,7 @@ export function SessionChips({ project, binding }: { project: ChatProject | null
       {binding.error && (
         <Alert
           size="sm"
-          color={binding.error.info ? 'neutral' : binding.error.busy ? 'warning' : 'danger'}
+          color={binding.error.busy ? 'warning' : 'danger'}
           variant="soft"
           sx={{ mb: 1, cursor: 'pointer' }}
           onClick={dismiss}

@@ -9,7 +9,9 @@ import type {
   ChatSessionMode,
   ChatSessionOrigin,
   ChatSessionSummary,
+  ReasoningEffortSetting,
 } from '@shared/chat';
+import { storedReasoningEffortSetting } from './reasoningEffort';
 import { assertScopeKey, migrateLegacySessions, sessionScopeKey, type SessionScope } from './sessionScope';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -179,7 +181,13 @@ export class SessionStore {
      */
     private readonly scope?: SessionScopeProvider,
     /** Absent means no preference is kept and every new conversation starts at 'auto'. */
-    private readonly approvalModes?: ApprovalModeMemory
+    private readonly approvalModes?: ApprovalModeMemory,
+    /**
+     * The effort a session gets when it has chosen none, which is both a new conversation and
+     * every conversation written before the setting existed. Read once per launch from the
+     * environment, so a benchmark can move every untouched session without a rebuild.
+     */
+    private readonly defaultReasoningEffort: ReasoningEffortSetting = 'default'
   ) {}
 
   /**
@@ -272,6 +280,7 @@ export class SessionStore {
       updatedAt: now,
       mode,
       approvalMode,
+      reasoningEffort: this.defaultReasoningEffort,
       ...(project && mode === 'code' ? { project } : {}),
       ...(origin ? { origin } : {}),
       messages: [],
@@ -360,6 +369,23 @@ export class SessionStore {
     return this.mutate(id, session => {
       if (session.model === model) return false;
       session.model = model;
+      session.updatedAt = new Date().toISOString();
+      return true;
+    });
+  }
+
+  /**
+   * How hard this conversation's model should think, stored beside the model for the same
+   * reason: the two are chosen together, and a thread reopened later resumes the pair it was
+   * held on rather than whatever the last conversation was set to.
+   *
+   * Stored even for a model that cannot take one, so switching back to a model that can
+   * restores the choice instead of quietly dropping it.
+   */
+  async setReasoningEffort(id: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
+    return this.mutate(id, session => {
+      if (session.reasoningEffort === effort) return false;
+      session.reasoningEffort = effort;
       session.updatedAt = new Date().toISOString();
       return true;
     });
@@ -599,6 +625,9 @@ export class SessionStore {
         (parsed as StoredSession).approvalModeLaunch,
         this.launchId
       ),
+      // A file with no stored effort keeps behaving the way it did before the picker existed:
+      // it takes the launch default, which is the environment variable or nothing at all.
+      reasoningEffort: storedReasoningEffortSetting(parsed.reasoningEffort) ?? this.defaultReasoningEffort,
       ...(parsed.mode === 'code' && project ? { project } : {}),
       ...(parsed.titleLocked ? { titleLocked: true } : {}),
       ...(parsed.pinned ? { pinned: true } : {}),

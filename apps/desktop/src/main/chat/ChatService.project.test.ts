@@ -34,6 +34,54 @@ async function repository(name: string): Promise<{ container: string; main: stri
   return { container, main };
 }
 
+describe('ChatService tool scope for a session saved on the bare repo', () => {
+  async function serviceWith(store: SessionStore): Promise<ChatService> {
+    return new ChatService({
+      store,
+      access: { list: async () => [] } as unknown as AccessStore,
+      logger: { debug: vi.fn(), warn: vi.fn() },
+      getApiClient: () => null,
+      getEnvironmentUrl: () => 'http://localhost:3000',
+      emit: vi.fn(),
+    });
+  }
+
+  async function savedOnBare(workspace: boolean, branch: string) {
+    const { container, main } = await repository('theta');
+    await git(join(container, '.bare'), ['config', 'core.bare', 'false']);
+    const store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-chip-sessions-')), 'test-model');
+    const service = await serviceWith(store);
+    const created = await service.createCodeSession({ directory: main, branch, workspace: false });
+    if (!created.ok) throw new Error(created.error);
+    await store.setProject(created.session.id, {
+      directory: main,
+      name: 'theta',
+      branch,
+      workspace,
+      workingDirectory: join(container, '.bare'),
+      contextDirectories: [],
+    });
+    const scope = await (
+      service as unknown as { resolveToolScope(s: unknown): Promise<{ roots: string[] }> }
+    ).resolveToolScope(await store.get(created.session.id));
+    return { container, main, store, id: created.session.id, scope };
+  }
+
+  it('moves a worktree session onto the worktree holding its branch and saves it', async () => {
+    const { main, store, id, scope } = await savedOnBare(true, 'main');
+
+    expect(scope.roots[0]).toBe(main);
+    expect((await store.get(id))?.project?.workingDirectory).toBe(main);
+  });
+
+  it('falls back to the picked directory when no worktree is involved', async () => {
+    const { main, store, id, scope } = await savedOnBare(false, 'main');
+
+    expect(scope.roots[0]).toBe(main);
+    expect((await store.get(id))?.project?.workingDirectory).toBe(main);
+  });
+});
+
 describe('ChatService.updateProject', () => {
   let store: SessionStore;
   let service: ChatService;

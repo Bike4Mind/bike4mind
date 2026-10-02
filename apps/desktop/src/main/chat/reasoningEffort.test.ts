@@ -1,6 +1,11 @@
 import { ChatModels } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { parseReasoningEffortSetting, reasoningEffortFor } from './reasoningEffort';
+import {
+  parseReasoningEffortSetting,
+  reasoningEffortFor,
+  storedReasoningEffortSetting,
+  supportsReasoningEffort,
+} from './reasoningEffort';
 
 describe('parseReasoningEffortSetting', () => {
   it('accepts each documented value, ignoring case and padding', () => {
@@ -29,5 +34,26 @@ describe('reasoningEffortFor', () => {
 
   it('never sends it to a Claude model', () => {
     expect(reasoningEffortFor('low', ChatModels.CLAUDE_5_OPUS)).toBeUndefined();
+  });
+});
+
+describe('storedReasoningEffortSetting', () => {
+  it('answers null for a file that carries no setting, so the caller can use its own default', () => {
+    expect(storedReasoningEffortSetting(undefined)).toBeNull();
+    expect(storedReasoningEffortSetting('turbo')).toBeNull();
+    expect(storedReasoningEffortSetting(7)).toBeNull();
+  });
+
+  it('keeps an explicit default apart from an absent one', () => {
+    expect(storedReasoningEffortSetting('default')).toBe('default');
+    expect(storedReasoningEffortSetting('high')).toBe('high');
+  });
+});
+
+describe('supportsReasoningEffort', () => {
+  it('is true for the reasoning models and false for everything else', () => {
+    expect(supportsReasoningEffort(ChatModels.GPT5)).toBe(true);
+    expect(supportsReasoningEffort(ChatModels.CLAUDE_5_OPUS)).toBe(false);
+    expect(supportsReasoningEffort('something-this-server-invented')).toBe(false);
   });
 });

@@ -27,6 +27,7 @@ import type {
   CreateCodeSessionRequest,
   CreateCodeSessionResult,
   ContextBoundaryResult,
+  ReasoningEffortSetting,
   SendMessageResult,
   UpdateProjectRequest,
   UpdateProjectResult,
@@ -40,7 +41,7 @@ import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
-import { branchExists, listWorktrees, projectDisplayName } from './project/git';
+import { branchExists, isGitDirectory, listWorktrees, projectDisplayName } from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
@@ -57,7 +58,7 @@ import {
   withCacheBreakpoints,
   type CompletionMessage,
 } from './completions';
-import { reasoningEffortFor, type ReasoningEffortSetting } from './reasoningEffort';
+import { reasoningEffortFor } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
 import { stalePlanReminder, unfinishedPlanReminder } from './planReminder';
@@ -260,8 +261,6 @@ export interface ChatServiceDeps {
    * leaves every session on whatever model it was created with.
    */
   models?: ModelCatalog;
-  /** Reasoning effort for models that accept one. Absent or `default` sends none. */
-  reasoningEffort?: ReasoningEffortSetting;
   /** This build's preferred model, used until the server's catalog says what it really offers. */
   preferredModel?: string;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
@@ -639,7 +638,7 @@ export class ChatService {
   private async resolveToolScope(
     session: ChatSession
   ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
-    const project = session.project;
+    const project = await this.repairBareWorkingDirectory(session);
     if (!project) return { roots: session.mode === 'code' ? [] : await this.deps.access.list() };
 
     const granted = await this.deps.access.list();
@@ -648,9 +647,40 @@ export class ChatService {
     return { roots, workingDirectory: project.workingDirectory };
   }
 
+  /**
+   * Sessions saved before worktree resolution skipped the bare repo can have the shared git dir
+   * (<container>/.bare) as their working directory, which no tool can read or run in. Re-resolve
+   * to the branch's worktree, or to the picked directory when that is not possible, and persist
+   * it so the conversation keeps working without being recreated.
+   */
+  private async repairBareWorkingDirectory(session: ChatSession): Promise<ChatProject | undefined> {
+    const project = session.project;
+    if (!project || !(await isGitDirectory(project.workingDirectory))) return project;
+
+    let workingDirectory = project.directory;
+    if (project.workspace && project.branch) {
+      try {
+        workingDirectory = (await resolveWorkspace(project.directory, project.branch)).workingDirectory;
+      } catch (err) {
+        this.deps.logger.warn(
+          `Could not repair the bare working directory: ${err instanceof Error ? err.message : 'unknown'}`
+        );
+      }
+    }
+    const repaired = { ...project, workingDirectory };
+    await this.deps.store.setProject(session.id, repaired);
+    session.project = repaired;
+    return repaired;
+  }
+
   /** Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`. */
   setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
     return this.deps.store.setModel(sessionId, model);
+  }
+
+  /** How hard this conversation's model should think. Inert on a model outside the reasoning set. */
+  setSessionReasoningEffort(sessionId: string, effort: ReasoningEffortSetting): Promise<ChatSessionSummary | null> {
+    return this.deps.store.setReasoningEffort(sessionId, effort);
   }
 
   setSessionPinned(sessionId: string, pinned: boolean): Promise<ChatSessionSummary | null> {
@@ -1325,7 +1355,7 @@ export class ChatService {
       const catalog = await this.deps.models?.list();
       const cacheable = supportsPromptCache(catalog?.models ?? [], session.model);
       const maxTokens = catalog?.models.find(option => option.id === session.model)?.maxOutputTokens;
-      const effort = reasoningEffortFor(this.deps.reasoningEffort, session.model);
+      const effort = reasoningEffortFor(session.reasoningEffort, session.model);
       const effortField = effort ? { reasoningEffort: effort } : {};
       // Silence is not "no": see ChatModelOption.supportsVision.
       const vision = catalog?.models.find(option => option.id === session.model)?.supportsVision !== false;

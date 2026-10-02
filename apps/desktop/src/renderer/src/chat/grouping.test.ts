@@ -21,6 +21,7 @@ function session(overrides: Partial<ChatSessionSummary> & Pick<ChatSessionSummar
     updatedAt: '2026-09-01T00:00:00.000Z',
     mode: 'chat',
     approvalMode: 'ask',
+    reasoningEffort: 'default',
     messageCount: 0,
     ...overrides,
   };
