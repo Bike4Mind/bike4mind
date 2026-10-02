@@ -119,7 +119,7 @@ describe('AnswerDiagnosisPanel', () => {
 
     const check = screen.getByTestId('answer-diagnosis-check-tools');
     expect(check.getAttribute('data-status')).toBe('fail');
-    expect(check.textContent).toContain('timed out (web_search): Web search timed out: SerpAPI did not respond');
+    expect(check.textContent).toContain('failed (web_search): Web search timed out: SerpAPI did not respond');
     expect(screen.getByTestId('answer-diagnosis-remedy-tools').textContent).toContain('did not respond in time');
   });
 });

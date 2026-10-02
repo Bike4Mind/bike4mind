@@ -95,6 +95,6 @@ describe('toolsUsedToFunctionCalls', () => {
     ]);
     const tools = diagnoseAnswer({ functionCalls }).checks.find(c => c.id === 'tools')!;
     expect(tools.status).toBe('fail');
-    expect(tools.detail).toContain('timed out (web_search): Web search timed out: SerpAPI did not respond');
+    expect(tools.detail).toContain('failed (web_search): Web search timed out: SerpAPI did not respond');
   });
 });

@@ -459,24 +459,24 @@ describe('tools check', () => {
     it('names the timeout and its message when the only call timed out', () => {
       const meta: PromptMeta = { functionCalls: [timedOut()] };
       expect(statusOf(meta, 'tools')).toBe('fail');
-      expect(detailOf(meta, 'tools')).toBe(`The only tool call timed out (web_search): ${SERP_TIMEOUT}.`);
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
       expect(remedyOf(meta)).toContain('did not respond in time');
     });
 
     it('reads the timeout from error when the call recorded one', () => {
       const meta: PromptMeta = { functionCalls: [{ name: 'web_search', error: 'Request timed out after 30s' }] };
-      expect(detailOf(meta, 'tools')).toContain('timed out (web_search): Request timed out after 30s.');
+      expect(detailOf(meta, 'tools')).toContain('failed (web_search): Request timed out after 30s.');
     });
 
     it('dedupes identical messages across several timed-out calls', () => {
       const meta: PromptMeta = { functionCalls: [timedOut(), timedOut()] };
-      expect(detailOf(meta, 'tools')).toBe(`All 2 tool calls timed out (web_search, web_search): ${SERP_TIMEOUT}.`);
+      expect(detailOf(meta, 'tools')).toBe(`All 2 tool calls failed (web_search, web_search): ${SERP_TIMEOUT}.`);
     });
 
     it('keeps partial-success wording when other calls succeeded', () => {
       const meta: PromptMeta = { functionCalls: [timedOut(), { name: 'search_knowledge_base', success: true }] };
       expect(statusOf(meta, 'tools')).toBe('warn');
-      expect(detailOf(meta, 'tools')).toContain(`1 of 2 tool calls timed out (web_search): ${SERP_TIMEOUT}.`);
+      expect(detailOf(meta, 'tools')).toContain(`1 of 2 tool calls failed (web_search): ${SERP_TIMEOUT}.`);
       expect(detailOf(meta, 'tools')).toContain('1 succeeded and the model replied with what it got');
     });
 
@@ -490,7 +490,7 @@ describe('tools check', () => {
           },
         ],
       };
-      expect(detailOf(meta, 'tools')).toContain('timed out (web_search): SearXNG fallback timed out.');
+      expect(detailOf(meta, 'tools')).toContain('failed (web_search): SearXNG fallback timed out.');
     });
 
     it('keeps the generic copy when a timeout is mixed with another failure', () => {
@@ -523,8 +523,41 @@ describe('tools check', () => {
       const detail = detailOf(meta, 'tools');
       expect(detail).toMatch(/^[\x20-\x7e]+$/);
       expect(detail).toContain('Search timed out x');
-      expect(detail).toContain('....');
+      expect(detail).toMatch(/[^.]\.\.\.$/);
       expect(detail.length).toBeLessThan(220);
+    });
+
+    it('says timed out once, in the provider message only', () => {
+      const detail = detailOf({ functionCalls: [timedOut()] }, 'tools');
+      expect(detail.match(/timed out/g)).toHaveLength(1);
+    });
+
+    it('caps the joined list when several calls carry distinct timeout messages', () => {
+      const calls = Array.from({ length: 6 }, (_, i) => ({
+        name: 'web_search',
+        success: false,
+        returnValue: `Error processing web_search tool: Web search timed out: attempt ${i} ${'y'.repeat(100)}`,
+      }));
+      const detail = detailOf({ functionCalls: calls }, 'tools');
+      expect(detail).toContain('attempt 0');
+      expect(detail).not.toContain('attempt 5');
+      expect(detail.length).toBeLessThan(260);
+    });
+
+    it('unwraps the JSON error shape the Gemini backend records', () => {
+      const meta: PromptMeta = {
+        functionCalls: [{ name: 'web_search', success: false, returnValue: JSON.stringify({ error: SERP_TIMEOUT }) }],
+      };
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
+    });
+
+    it('keeps the generic copy for a JSON error that is not a timeout', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          { name: 'web_search', success: false, returnValue: JSON.stringify({ error: 'quota exceeded' }) },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toBe('The only tool call failed (web_search).');
     });
   });
 });
