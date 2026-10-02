@@ -325,9 +325,14 @@ export class WorkflowStepHandler {
       const { defineAbilitiesFor } = getSlackDb();
       const { sessionManager } = getSlackDeps();
       const ability = defineAbilitiesFor(user);
-      const newSession = await (sessionManager as any).createSession(user.id, { name: notebookName }, ability, {
-        setLastNotebook: true,
-      });
+      const newSession = await (sessionManager as any).createSession(
+        user.id,
+        { name: notebookName, origin: { channel: 'slack' } },
+        ability,
+        {
+          setLastNotebook: true,
+        }
+      );
 
       const appUrl = process.env.APP_URL;
       const notebookUrl = `${appUrl}/notebooks/${newSession.id}`;
@@ -420,7 +425,7 @@ export class WorkflowStepHandler {
         const abilityForCreate = defineAbilities(user);
         const newSession = await (sm as any).createSession(
           user.id,
-          { name: this.generateNotebookName() },
+          { name: this.generateNotebookName(), origin: { channel: 'slack' } },
           abilityForCreate,
           {
             setLastNotebook: true,
@@ -557,7 +562,7 @@ export class WorkflowStepHandler {
         const abilityQ = defineAbilitiesQ(user);
         const newSession = await (smQ as any).createSession(
           user.id,
-          { name: `Query - ${new Date().toLocaleDateString()}` },
+          { name: `Query - ${new Date().toLocaleDateString()}`, origin: { channel: 'slack' } },
           abilityQ,
           { setLastNotebook: true }
         );

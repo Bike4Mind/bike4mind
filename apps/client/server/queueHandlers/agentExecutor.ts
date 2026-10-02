@@ -1628,6 +1628,11 @@ async function processExecution(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
+        // no-ops for every agent-mode run: context.db.sessions was undefined here, so an agent
+        // session's imageCount never moved even though the tools ran and the images landed on
+        // the Quest via persistRunAsQuest.
+        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -3442,6 +3447,9 @@ async function processSubagentDispatch(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
+        // no-ops for every image a delegated subagent generates (same gap as the top-level path).
+        sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
       },
       sessionRepository,
       storage: getFilesStorage(),
