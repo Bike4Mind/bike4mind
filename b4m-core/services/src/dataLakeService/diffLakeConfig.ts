@@ -246,7 +246,6 @@ export function researchRunChange(
 }
 
 /**
-/**
  * How an upload batch was settled. `finished` is the normal finalize; `cancelled` is the uploader's
  * cancel; `stopped` is the stuck-batch reconciler forcing an abandoned batch terminal.
  */
