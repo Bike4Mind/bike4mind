@@ -202,24 +202,6 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const credits = useAccountCredits(conversation.settledTurns);
 
   /**
-   * What the composer's idle indicator reports: how full the window is, and what is left.
-   *
-   * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
-   * because a percentage of a made-up window is a number the user cannot tell is wrong.
-   */
-  const composerUsage: ComposerUsage = useMemo(() => {
-    const reply = latestReply(conversation.messages);
-    return {
-      contextTokens: contextTokens(reply),
-      contextWindow: modelOption?.contextWindow ?? null,
-      credits: credits.balance,
-      ...(credits.error ? { creditsError: credits.error } : {}),
-      lastTurn: reply?.usage ?? null,
-    };
-  }, [conversation.messages, modelOption?.contextWindow, credits.balance, credits.error]);
-
-  /**
    * Whether this conversation has a turn open, for the composer's controls.
    *
    * `conversation.streaming` is what THIS window knows of, from the stream or from main's live
@@ -230,6 +212,28 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   const sessionStatus = activeId ? statuses.get(activeId) : undefined;
   const turnOpen = conversation.streaming || sessionStatus === 'processing' || sessionStatus === 'needs-action';
   const plan = useMemo(() => activeTodos(conversation.messages, turnOpen), [conversation.messages, turnOpen]);
+
+  /**
+   * What the composer's usage indicator reports: how full the window is, and what is left.
+   *
+   * The context figure comes from the last reply's LAST request, never from the turn's summed
+   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
+   * because a percentage of a made-up window is a number the user cannot tell is wrong.
+   *
+   * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
+   * streamed has measured nothing yet, and without it the indicator would read as unknown from
+   * the moment the user pressed send until the reply landed. See latestReply.
+   */
+  const composerUsage: ComposerUsage = useMemo(() => {
+    const reply = latestReply(conversation.messages, turnOpen);
+    return {
+      contextTokens: contextTokens(reply),
+      contextWindow: modelOption?.contextWindow ?? null,
+      credits: credits.balance,
+      ...(credits.error ? { creditsError: credits.error } : {}),
+      lastTurn: reply?.usage ?? null,
+    };
+  }, [conversation.messages, turnOpen, modelOption?.contextWindow, credits.balance, credits.error]);
 
   // What the turn in flight is doing, read off the reply being streamed into the thread. Only
   // the last message can be that reply, so nothing earlier is consulted.

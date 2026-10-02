@@ -26,8 +26,8 @@ const draft: AttachmentDraft = {
 
 const usage: ComposerUsage = { contextTokens: 44_000, contextWindow: 200_000, credits: 31_667 };
 
-function indicator(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
-  const html = renderToStaticMarkup(
+function statusMarkup(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
+  return renderToStaticMarkup(
     <CssVarsProvider>
       <Composer
         sessionId="s1"
@@ -41,8 +41,16 @@ function indicator(props: Partial<Parameters<typeof Composer>[0]> = {}): string 
       />
     </CssVarsProvider>
   );
-  const text = html.match(/data-testid="composer-status-text"[^>]*>([^<]*)</);
+}
+
+function indicator(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
+  const text = statusMarkup(props).match(/data-testid="composer-status-text"[^>]*>([^<]*)</);
   return text?.[1] ?? '';
+}
+
+/** Whether the occupancy ring was drawn at all - its absence is how "unknown" is said. */
+function hasRing(props: Partial<Parameters<typeof Composer>[0]> = {}): boolean {
+  return statusMarkup(props).includes('data-testid="composer-status-ring"');
 }
 
 describe('the composer indicator', () => {
@@ -50,11 +58,24 @@ describe('the composer indicator', () => {
     expect(indicator()).toBe('Context 22%');
   });
 
+  /**
+   * The behaviour this used to assert the opposite of. A turn in flight is the moment the
+   * figure matters most, and the dot beside it is what says a reply is running - so the usage
+   * stays put rather than being replaced by a word the dot already carries.
+   */
+  it('keeps the figure up through a turn in flight', () => {
+    expect(indicator({ streaming: true })).toBe('Context 22%');
+    expect(hasRing({ streaming: true })).toBe(true);
+  });
+
+  // Only where there is genuinely nothing measured to hold on to: a brand new conversation
+  // whose first reply is still streaming.
+  it('falls back to the working word only when nothing was ever measured', () => {
+    expect(indicator({ streaming: true, usage: null })).toBe('Working');
+  });
+
   // The three states that say something the user may need to act on. They outrank the usage
   // line, which is the one state that used to carry no information at all.
-  it('still speaks for a turn in flight', () => {
-    expect(indicator({ streaming: true })).toBe('Working');
-  });
 
   it('still says when there is no session', () => {
     expect(indicator({ disabled: true })).toBe('No session');
@@ -67,6 +88,21 @@ describe('the composer indicator', () => {
   it('falls back to the old word when it has no figure to show', () => {
     expect(indicator({ usage: { contextTokens: null, contextWindow: null, credits: null } })).toBe('Ready');
     expect(indicator({ usage: null })).toBe('Ready');
+  });
+
+  /**
+   * A determinate ring draws 0% and "no idea" identically, so an unstated window gets no ring
+   * at all. Drawing one empty would read as a conversation with nothing in it, which is the
+   * opposite of what is true.
+   */
+  it('draws no ring for a window the catalog does not state', () => {
+    expect(hasRing({ usage: { contextTokens: 44_000, contextWindow: null, credits: 31_667 } })).toBe(false);
+    expect(indicator({ usage: { contextTokens: 44_000, contextWindow: null, credits: 31_667 } })).toBe('Context --');
+  });
+
+  it('draws no ring where there is no conversation to measure', () => {
+    expect(hasRing({ disabled: true })).toBe(false);
+    expect(hasRing({ notReady: 'No folder' })).toBe(false);
   });
 });
 
