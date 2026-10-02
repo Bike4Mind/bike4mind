@@ -24,6 +24,10 @@ export type LakeGitHubConnection = {
   syncStale: boolean;
   /** Files this connection has ingested into the lake - disconnecting deletes all of them. */
   fileCount: number;
+  /** A disconnect was accepted and its file purge is running in the background. */
+  disconnecting: boolean;
+  /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
+  disconnectStalled: boolean;
 };
 
 export type GitHubLakeConnectUrls = { installUrl: string; authorizeUrl: string };
@@ -34,9 +38,8 @@ export const GITHUB_CONNECTION_IDLE_POLL_MS = 20_000;
 
 export function gitHubConnectionPollInterval(connection: LakeGitHubConnection | null | undefined): number | false {
   if (!connection) return false;
-  return connection.status === 'syncing' && !connection.syncStale
-    ? GITHUB_CONNECTION_ACTIVE_POLL_MS
-    : GITHUB_CONNECTION_IDLE_POLL_MS;
+  const active = connection.disconnecting || (connection.status === 'syncing' && !connection.syncStale);
+  return active ? GITHUB_CONNECTION_ACTIVE_POLL_MS : GITHUB_CONNECTION_IDLE_POLL_MS;
 }
 
 /**
@@ -108,8 +111,8 @@ export function useResyncLakeGitHub() {
 }
 
 /**
- * Disconnect a lake's repository. The route purges every file the connection ingested before it
- * answers, so the lake's file/count queries go stale along with the connection itself.
+ * Disconnect a lake's repository. The route only queues the purge, so the connection reads back as
+ * `disconnecting` until the purge releases it (useLakeGitHubConnection keeps the file lists fresh).
  */
 export function useDisconnectLakeGitHub() {
   const queryClient = useQueryClient();
