@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
+import { pairDataLakeTools } from '@bike4mind/common';
 import { ReActAgent } from '../../ReActAgent';
 import { ReplSession } from '../../rlm/ReplSession';
 import { makeCodeExecuteTool } from '../../rlm/codeExecuteTool';
@@ -74,15 +75,17 @@ export interface LinkedAgentContext {
 }
 
 /**
- * Intersect a mission profile's tool names with the linked agent's policy:
- * profile ∩ allowedTools (when the whitelist is non-empty) - deniedTools.
+ * Intersect a mission profile's tool names with the linked agent's policy: profile intersected with
+ * allowedTools (when the whitelist is non-empty), minus deniedTools, then the save tool's lake
+ * companions (`pairDataLakeTools`) with deniedTools subtracted again so a denied companion stays denied.
  * Pure - the deterministic seam between agent configuration and mission tools.
  */
 export function applyAgentToolPolicy(profileToolNames: string[], linked?: LinkedAgentContext | null): string[] {
-  if (!linked) return profileToolNames;
+  if (!linked) return pairDataLakeTools(profileToolNames);
   const allowed = linked.allowedTools?.length ? new Set(linked.allowedTools) : null;
   const denied = new Set(linked.deniedTools ?? []);
-  return profileToolNames.filter(name => (!allowed || allowed.has(name)) && !denied.has(name));
+  const permitted = profileToolNames.filter(name => (!allowed || allowed.has(name)) && !denied.has(name));
+  return pairDataLakeTools(permitted).filter(name => !denied.has(name));
 }
 
 export interface ReActRunActConfig {

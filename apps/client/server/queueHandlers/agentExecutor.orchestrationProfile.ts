@@ -21,7 +21,7 @@
  * `agentExecutor.firstIterationQuery.ts`.
  */
 
-import { buildAgentPersonaPrompt, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
+import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
 import { buildDefaultOrchestrationProfile } from '@client/app/utils/agentOrchestration';
 
 /**
@@ -193,6 +193,8 @@ export function pickEffectiveMaxIterations(
  *
  * The profile's `deniedTools` ALWAYS wins as a final subtraction, so an admin denylist can't be
  * bypassed by shipping `enabledTools` in the payload - ambient or pinned. (For the two
+ * The save tool's lake companions (`pairDataLakeTools`) are paired in only when save survives
+ * the denylist, and the subtraction runs again after, so a denied list/create stays denied. (For the two
  * delegation tools that subtraction is advisory only - they are injected as objects, never
  * registered by name; their effective enforcement is the dependency gate in agentExecutor via
  * `delegationOffer`.)
@@ -213,9 +215,9 @@ export function pickEffectiveEnabledTools(
   payloadIsAmbient?: boolean
 ): string[] {
   const chosen = chooseToolbelt(payloadEnabledTools, profile, payloadIsAmbient);
-  if (profile.deniedTools.length === 0) return chosen;
+  if (profile.deniedTools.length === 0) return pairDataLakeTools(chosen);
   const denied = new Set(profile.deniedTools);
-  return chosen.filter(t => !denied.has(t));
+  return pairDataLakeTools(chosen.filter(t => !denied.has(t))).filter(t => !denied.has(t));
 }
 
 function chooseToolbelt(

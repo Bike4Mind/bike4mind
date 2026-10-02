@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 import type { AgentResult } from '../../types';
 import type { Charter, DriveVector } from '../schemas';
-import { agentResultToActResult, createReActRunAct } from './reactAct';
+import { agentResultToActResult, applyAgentToolPolicy, createReActRunAct } from './reactAct';
 import type { ActContext } from './types';
 import { resolveToolbeltProfile, DEFAULT_TOOLBELT_ROLE } from './toolbelts';
 
@@ -280,5 +280,25 @@ describe('createReActRunAct sandbox wiring', () => {
     await runAct();
 
     expect(mockSessionDispose).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAgentToolPolicy - data lake pairing', () => {
+  const SAVE = 'save_content_to_data_lake';
+
+  it('pairs list and create with save, with or without a linked agent', () => {
+    const expected = ['web_search', SAVE, 'list_my_data_lakes', 'create_data_lake'];
+    expect(applyAgentToolPolicy(['web_search', SAVE])).toEqual(expected);
+    expect(applyAgentToolPolicy(['web_search', SAVE], { allowedTools: ['web_search', SAVE] })).toEqual(expected);
+  });
+
+  it('keeps a denied companion denied and pairs nothing when save is denied or not allowed', () => {
+    expect(applyAgentToolPolicy([SAVE], { deniedTools: ['create_data_lake'] })).toEqual([SAVE, 'list_my_data_lakes']);
+    expect(applyAgentToolPolicy(['web_search', SAVE], { deniedTools: [SAVE] })).toEqual(['web_search']);
+    expect(applyAgentToolPolicy(['web_search', SAVE], { allowedTools: ['web_search'] })).toEqual(['web_search']);
+  });
+
+  it('leaves a profile without save unchanged', () => {
+    expect(applyAgentToolPolicy(['web_search', 'web_fetch'], {})).toEqual(['web_search', 'web_fetch']);
   });
 });

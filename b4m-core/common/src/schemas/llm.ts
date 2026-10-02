@@ -84,6 +84,22 @@ export const DATA_LAKE_TOOL_NAMES = [
   ...DATA_LAKE_WRITE_TOOL_NAMES,
 ] as const satisfies readonly B4MLLMTools[];
 
+/**
+ * Pair the save tool with its companions: it cannot name a target lake without the list, or make
+ * one without the create. Returns a new array and never adds a companion twice. Callers subtract
+ * their denylist before AND after this, so a denied save pairs nothing in and a denied companion
+ * stays denied. Shared by chat (resolveEnabledTools in services) and the agent paths
+ * (pickEffectiveEnabledTools in apps/client, applyAgentToolPolicy in agents).
+ */
+export function pairDataLakeTools<T extends string>(tools: readonly T[]): T[] {
+  const out = [...tools];
+  if (!out.includes('save_content_to_data_lake' as T)) return out;
+  for (const name of DATA_LAKE_TOOL_NAMES) {
+    if (!out.includes(name as T)) out.push(name as T);
+  }
+  return out;
+}
+
 export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
 
 /** Keep only recognized tool ids, dropping unknowns. Used by handlers to sanitize

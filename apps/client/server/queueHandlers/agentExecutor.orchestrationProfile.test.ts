@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import type { IAgent, OrchestrationDefaults } from '@bike4mind/common';
+import { OrchestrationDefaultsSchema, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -11,6 +11,7 @@ import {
 // would make the test stay green while the bug returns. Pulled from the pure
 // schema module so we don't drag the executor's Mongo/AWS deps into the test.
 import { StartExecutionSchema } from './agentExecutor.schemas';
+import { classifyToolPermission } from './agentExecutorUtils/toolPermissions';
 
 const ADMIN_DEFAULTS: OrchestrationDefaults = {
   allowedTools: ['web_search', 'file_read', 'coordinate_task'],
@@ -499,5 +500,79 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
       deniedTools: SMART_TOOLS,
     };
     expect(pickEffectiveEnabledTools(SMART_TOOLS, emptiedAndDenied, true)).toEqual([]);
+  });
+});
+
+describe('pickEffectiveEnabledTools - data lake pairing', () => {
+  const base: ResolvedOrchestrationProfile = {
+    id: 'agent-1',
+    name: 'Lake agent',
+    allowedTools: ['web_search', 'save_content_to_data_lake'],
+    deniedTools: ['bash_execute'],
+    maxIterations: { quick: 3, medium: 10, very_thorough: 20 },
+    defaultThoroughness: 'medium',
+    isSynthetic: false,
+  };
+
+  it('pairs list and create with save', () => {
+    expect(pickEffectiveEnabledTools(undefined, base)).toEqual([
+      'web_search',
+      'save_content_to_data_lake',
+      'list_my_data_lakes',
+      'create_data_lake',
+    ]);
+  });
+
+  it('pairs with an empty denylist too, without duplicating a companion already present', () => {
+    const profile = { ...base, deniedTools: [], allowedTools: ['create_data_lake', 'save_content_to_data_lake'] };
+    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual([
+      'create_data_lake',
+      'save_content_to_data_lake',
+      'list_my_data_lakes',
+    ]);
+  });
+
+  it('leaves a belt without save unchanged', () => {
+    const profile = { ...base, allowedTools: ['web_search'] };
+    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual(['web_search']);
+  });
+
+  it('keeps an explicitly denied companion denied', () => {
+    const profile = { ...base, deniedTools: ['create_data_lake'] };
+    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual([
+      'web_search',
+      'save_content_to_data_lake',
+      'list_my_data_lakes',
+    ]);
+    const listDenied = { ...base, deniedTools: ['list_my_data_lakes', 'create_data_lake'] };
+    expect(pickEffectiveEnabledTools(['save_content_to_data_lake'], listDenied)).toEqual(['save_content_to_data_lake']);
+  });
+
+  it('pairs nothing in when save itself is denied', () => {
+    const profile = { ...base, deniedTools: ['save_content_to_data_lake'] };
+    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual(['web_search']);
+  });
+
+  it('pairs nothing in under the admin default denylist', () => {
+    const defaults = OrchestrationDefaultsSchema.parse({});
+    const profile = {
+      ...base,
+      allowedTools: [...defaults.allowedTools, 'save_content_to_data_lake'],
+      deniedTools: defaults.deniedTools,
+    };
+    const result = pickEffectiveEnabledTools(undefined, profile);
+    for (const tool of ['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake']) {
+      expect(result).not.toContain(tool);
+    }
+  });
+
+  it('does not widen approval: a paired create still needs its own permission', () => {
+    // Approvals come from the raw payload in startAgentExecution, never from the paired belt.
+    const approvedTools = ['save_content_to_data_lake'];
+    const belt = pickEffectiveEnabledTools(approvedTools, { ...base, deniedTools: [] });
+    expect(belt).toContain('create_data_lake');
+    expect(classifyToolPermission('save_content_to_data_lake', approvedTools, [])).toBe('allowed');
+    expect(classifyToolPermission('create_data_lake', approvedTools, [])).toBe('needs_approval');
+    expect(approvedTools).toEqual(['save_content_to_data_lake']);
   });
 });
