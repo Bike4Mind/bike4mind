@@ -12,6 +12,7 @@
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.1080.0",
     "@aws-sdk/client-lambda": "^3.1080.0",
+    "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/client-sqs": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
@@ -27,6 +28,8 @@
     "@bike4mind/utils": "workspace:*",
     "axios": "1.20.0",
     "dayjs": "^1.11.23",
+    "mailparser": "^3.9.26",
+    "mongodb": "^6.20.0",
     "mongoose": "^8.24.1",
     "sst": "4.17.1",
     "uuid": "^14.0.2",
@@ -35,6 +38,7 @@
   "devDependencies": {
     "@bike4mind/typescript-config": "workspace:*",
     "@types/aws-lambda": "^8.10.162",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^24.0.0",
     "mongodb-memory-server": "^11.2.0",
     "tsx": "^4.23.0",
