@@ -193,11 +193,15 @@ export function pickEffectiveMaxIterations(
  *
  * The profile's `deniedTools` ALWAYS wins as a final subtraction, so an admin denylist can't be
  * bypassed by shipping `enabledTools` in the payload - ambient or pinned. (For the two
- * The save tool's lake companions (`pairDataLakeTools`) are paired in only when save survives
- * the denylist, and the subtraction runs again after, so a denied list/create stays denied. (For the two
  * delegation tools that subtraction is advisory only - they are injected as objects, never
  * registered by name; their effective enforcement is the dependency gate in agentExecutor via
  * `delegationOffer`.)
+ *
+ * The save tool's lake companions (`pairDataLakeTools`) are paired in only when save survives
+ * the denylist, and the subtraction runs again after, so a denied list/create stays denied.
+ * Pairing never widens an explicit selection - an exclusive or curated agent belt, or a pinned
+ * payload - and create is paired only when `hasApprover`: a headless run has nobody to approve
+ * it, so an unrequested create would end the run on `no_approver`.
  *
  * NOTE: widening the toolbelt is not widening permissions. A side-effecting tool the union adds
  * still faces the permission gate, whose approval list (`AgentExecution.approvedTools`) is built
@@ -212,12 +216,25 @@ export function pickEffectiveMaxIterations(
 export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
   profile: ResolvedOrchestrationProfile,
-  payloadIsAmbient?: boolean
+  payloadIsAmbient?: boolean,
+  hasApprover = false
 ): string[] {
   const chosen = chooseToolbelt(payloadEnabledTools, profile, payloadIsAmbient);
-  if (profile.deniedTools.length === 0) return pairDataLakeTools(chosen);
   const denied = new Set(profile.deniedTools);
-  return pairDataLakeTools(chosen.filter(t => !denied.has(t))).filter(t => !denied.has(t));
+  const permitted = chosen.filter(t => !denied.has(t));
+  if (!lakeToolsPairable(payloadEnabledTools, profile, payloadIsAmbient)) return permitted;
+  return pairDataLakeTools(permitted, { withCreate: hasApprover }).filter(t => !denied.has(t));
+}
+
+/** True when the belt is the admin default (optionally unioned with ambient picks), not an explicit selection. */
+function lakeToolsPairable(
+  payloadEnabledTools: string[] | undefined,
+  profile: ResolvedOrchestrationProfile,
+  payloadIsAmbient: boolean | undefined
+): boolean {
+  if (profile.toolsetIsExclusive) return false;
+  if (!profile.isSynthetic && !profile.allowedToolsFromDefaults) return false;
+  return !payloadEnabledTools?.length || payloadIsAmbient === true;
 }
 
 function chooseToolbelt(

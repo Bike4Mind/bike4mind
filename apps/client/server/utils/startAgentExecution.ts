@@ -101,6 +101,8 @@ export type StartAgentExecutionInput = {
    * never does.
    */
   enabledToolsAreAmbient?: boolean;
+  /** Server-derived from the caller's credential scopes; agentExecutor subtracts these from the run's resolved toolbelt. */
+  scopeDeniedTools?: string[];
   maxIterations?: number;
   messageFileIds?: string[];
   sessionFabFileIds?: string[];
@@ -288,6 +290,7 @@ export async function startAgentExecution(
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
     deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
+    ...(input.scopeDeniedTools?.length ? { scopeDeniedTools: input.scopeDeniedTools } : {}),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,

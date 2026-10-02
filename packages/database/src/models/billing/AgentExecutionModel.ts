@@ -346,6 +346,12 @@ export interface IAgentExecution {
    * which is the per-execution user-approval denial list.
    */
   profileDeniedTools?: string[];
+  /**
+   * Tools the caller's credentials may not be offered on this run (an API key without the
+   * datalake scopes - see `dataLakeToolsDeniedFor`). Set once at creation and re-read on every
+   * invocation, since the tool list is rebuilt per Lambda.
+   */
+  scopeDeniedTools?: string[];
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -731,6 +737,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
+    scopeDeniedTools: { type: [String], default: undefined },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed

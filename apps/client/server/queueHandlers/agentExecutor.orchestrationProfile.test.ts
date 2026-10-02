@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OrchestrationDefaultsSchema, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
+import {
+  DATA_LAKE_TOOL_NAMES,
+  OrchestrationDefaultsSchema,
+  type IAgent,
+  type OrchestrationDefaults,
+} from '@bike4mind/common';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
@@ -12,6 +17,7 @@ import {
 // schema module so we don't drag the executor's Mongo/AWS deps into the test.
 import { StartExecutionSchema } from './agentExecutor.schemas';
 import { classifyToolPermission } from './agentExecutorUtils/toolPermissions';
+import { applySessionToolPolicy } from './agentExecutor.sessionToolPolicy';
 
 const ADMIN_DEFAULTS: OrchestrationDefaults = {
   allowedTools: ['web_search', 'file_read', 'coordinate_task'],
@@ -504,75 +510,111 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
 });
 
 describe('pickEffectiveEnabledTools - data lake pairing', () => {
+  const SAVE = 'save_content_to_data_lake';
+  // The admin-default belt: the one belt pairing may widen.
   const base: ResolvedOrchestrationProfile = {
-    id: 'agent-1',
-    name: 'Lake agent',
-    allowedTools: ['web_search', 'save_content_to_data_lake'],
+    id: 'synthetic',
+    name: 'Defaults',
+    allowedTools: ['web_search', SAVE],
     deniedTools: ['bash_execute'],
     maxIterations: { quick: 3, medium: 10, very_thorough: 20 },
     defaultThoroughness: 'medium',
-    isSynthetic: false,
+    isSynthetic: true,
   };
+  const curated: ResolvedOrchestrationProfile = { ...base, id: 'agent-1', name: 'Lake agent', isSynthetic: false };
 
-  it('pairs list and create with save', () => {
-    expect(pickEffectiveEnabledTools(undefined, base)).toEqual([
+  it('pairs list and create with save on an interactive run over the default belt', () => {
+    expect(pickEffectiveEnabledTools(undefined, base, undefined, true)).toEqual([
       'web_search',
-      'save_content_to_data_lake',
+      SAVE,
+      'list_my_data_lakes',
+      'create_data_lake',
+    ]);
+    const fromDefaults = { ...curated, allowedToolsFromDefaults: true };
+    expect(pickEffectiveEnabledTools(['web_fetch'], fromDefaults, true, true)).toEqual([
+      'web_fetch',
+      'web_search',
+      SAVE,
       'list_my_data_lakes',
       'create_data_lake',
     ]);
   });
 
-  it('pairs with an empty denylist too, without duplicating a companion already present', () => {
-    const profile = { ...base, deniedTools: [], allowedTools: ['create_data_lake', 'save_content_to_data_lake'] };
-    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual([
+  it('never pairs create without an approver, so a headless run is not ended on no_approver', () => {
+    expect(pickEffectiveEnabledTools(undefined, base, undefined, false)).toEqual([
+      'web_search',
+      SAVE,
+      'list_my_data_lakes',
+    ]);
+  });
+
+  it('never widens an explicit selection: curated belt, exclusive belt, or pinned payload', () => {
+    expect(pickEffectiveEnabledTools(undefined, curated, undefined, true)).toEqual(['web_search', SAVE]);
+    expect(pickEffectiveEnabledTools(['web_fetch'], { ...base, toolsetIsExclusive: true }, true, true)).toEqual([
+      'web_search',
+      SAVE,
+    ]);
+    expect(pickEffectiveEnabledTools([SAVE], base, false, true)).toEqual([SAVE]);
+    const named = { ...curated, allowedTools: [SAVE, 'list_my_data_lakes', 'create_data_lake'] };
+    expect(pickEffectiveEnabledTools(undefined, named, undefined, true)).toEqual(named.allowedTools);
+  });
+
+  it('pairs without duplicating a companion already present', () => {
+    const profile = { ...base, deniedTools: [], allowedTools: ['create_data_lake', SAVE] };
+    expect(pickEffectiveEnabledTools(undefined, profile, undefined, true)).toEqual([
       'create_data_lake',
-      'save_content_to_data_lake',
+      SAVE,
       'list_my_data_lakes',
     ]);
   });
 
   it('leaves a belt without save unchanged', () => {
-    const profile = { ...base, allowedTools: ['web_search'] };
-    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual(['web_search']);
+    expect(pickEffectiveEnabledTools(undefined, { ...base, allowedTools: ['web_search'] }, undefined, true)).toEqual([
+      'web_search',
+    ]);
   });
 
   it('keeps an explicitly denied companion denied', () => {
     const profile = { ...base, deniedTools: ['create_data_lake'] };
-    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual([
+    expect(pickEffectiveEnabledTools(undefined, profile, undefined, true)).toEqual([
       'web_search',
-      'save_content_to_data_lake',
+      SAVE,
       'list_my_data_lakes',
     ]);
-    const listDenied = { ...base, deniedTools: ['list_my_data_lakes', 'create_data_lake'] };
-    expect(pickEffectiveEnabledTools(['save_content_to_data_lake'], listDenied)).toEqual(['save_content_to_data_lake']);
   });
 
   it('pairs nothing in when save itself is denied', () => {
-    const profile = { ...base, deniedTools: ['save_content_to_data_lake'] };
-    expect(pickEffectiveEnabledTools(undefined, profile)).toEqual(['web_search']);
+    const profile = { ...base, deniedTools: [SAVE] };
+    expect(pickEffectiveEnabledTools(undefined, profile, undefined, true)).toEqual(['web_search']);
   });
 
   it('pairs nothing in under the admin default denylist', () => {
     const defaults = OrchestrationDefaultsSchema.parse({});
-    const profile = {
-      ...base,
-      allowedTools: [...defaults.allowedTools, 'save_content_to_data_lake'],
-      deniedTools: defaults.deniedTools,
-    };
-    const result = pickEffectiveEnabledTools(undefined, profile);
-    for (const tool of ['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake']) {
+    const profile = { ...base, allowedTools: [...defaults.allowedTools, SAVE], deniedTools: defaults.deniedTools };
+    const result = pickEffectiveEnabledTools(undefined, profile, undefined, true);
+    for (const tool of [SAVE, 'list_my_data_lakes', 'create_data_lake']) {
       expect(result).not.toContain(tool);
     }
   });
 
   it('does not widen approval: a paired create still needs its own permission', () => {
     // Approvals come from the raw payload in startAgentExecution, never from the paired belt.
-    const approvedTools = ['save_content_to_data_lake'];
-    const belt = pickEffectiveEnabledTools(approvedTools, { ...base, deniedTools: [] });
+    const approvedTools = [SAVE];
+    const belt = pickEffectiveEnabledTools(undefined, { ...base, deniedTools: [] }, undefined, true);
     expect(belt).toContain('create_data_lake');
-    expect(classifyToolPermission('save_content_to_data_lake', approvedTools, [])).toBe('allowed');
+    expect(classifyToolPermission(SAVE, approvedTools, [])).toBe('allowed');
     expect(classifyToolPermission('create_data_lake', approvedTools, [])).toBe('needs_approval');
-    expect(approvedTools).toEqual(['save_content_to_data_lake']);
+  });
+
+  it('lets the scope denials strip every lake tool after pairing', () => {
+    const belt = pickEffectiveEnabledTools(undefined, base, undefined, true);
+    const result = applySessionToolPolicy({
+      toolNames: belt,
+      session: {},
+      profileDeniedTools: base.deniedTools,
+      hasAttachments: false,
+      scopeDeniedTools: DATA_LAKE_TOOL_NAMES,
+    });
+    expect(result).toEqual(['web_search']);
   });
 });

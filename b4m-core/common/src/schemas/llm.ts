@@ -90,12 +90,21 @@ export const DATA_LAKE_TOOL_NAMES = [
  * their denylist before AND after this, so a denied save pairs nothing in and a denied companion
  * stays denied. Shared by chat (resolveEnabledTools in services) and the agent paths
  * (pickEffectiveEnabledTools in apps/client, applyAgentToolPolicy in agents).
+ *
+ * `allowlist`: an explicit whitelist the companions may not exceed. `withCreate: false` for a host
+ * with no approval gate, where an unrequested create would run unapproved (or kill a headless run).
  */
-export function pairDataLakeTools<T extends string>(tools: readonly T[]): T[] {
+export function pairDataLakeTools<T extends string>(
+  tools: readonly T[],
+  options: { allowlist?: readonly string[]; withCreate?: boolean } = {}
+): T[] {
   const out = [...tools];
   if (!out.includes('save_content_to_data_lake' as T)) return out;
   for (const name of DATA_LAKE_TOOL_NAMES) {
-    if (!out.includes(name as T)) out.push(name as T);
+    if (out.includes(name as T)) continue;
+    if (options.allowlist && !options.allowlist.includes(name)) continue;
+    if (options.withCreate === false && name === 'create_data_lake') continue;
+    out.push(name as T);
   }
   return out;
 }

@@ -297,6 +297,17 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: ['web_search'] }));
   });
 
+  it('persists the scope denials on the doc so every invocation re-applies them', async () => {
+    await startAgentExecution(
+      input({ userId: 'scoped-key', scopeDeniedTools: ['list_my_data_lakes', 'create_data_lake'] }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'unscoped', scopeDeniedTools: [] }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual(['list_my_data_lakes', 'create_data_lake']);
+    expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
+  });
+
   it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {
     await startAgentExecution(
       input({ userId: 'interactive-run', connectionId: 'real-ws-conn', enabledTools: ['web_search'] }),

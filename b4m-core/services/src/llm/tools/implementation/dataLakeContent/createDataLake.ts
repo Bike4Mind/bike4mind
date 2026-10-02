@@ -95,7 +95,7 @@ export const createDataLakeTool: ToolDefinition = {
           const ctx = await buildToolAccessContext(context);
           if (!canCreateInOrg(ctx, organizationId)) {
             return (
-              'The lake could not be created in the active organization from chat, so nothing was created. ' +
+              'The lake could not be created in the active organization, so nothing was created. ' +
               'The user can create it in that organization from the Data Lakes manager, or switch to their ' +
               'personal account and ask again.'
             );

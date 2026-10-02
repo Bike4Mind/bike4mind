@@ -49,6 +49,10 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*organizationId: execution\.organizationId,/);
     expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*organizationId: child\.organizationId,/);
   });
+
+  it('subtracts the persisted scope denials in the final tool policy pass', () => {
+    expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
+  });
 });
 
 let replSet: MongoMemoryReplSet;

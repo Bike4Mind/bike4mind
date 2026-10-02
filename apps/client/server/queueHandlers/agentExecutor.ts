@@ -1786,7 +1786,8 @@ async function processExecution(
       ? pickEffectiveEnabledTools(
           startPayload?.enabledTools,
           orchestrationProfile,
-          startPayload?.enabledToolsAreAmbient
+          startPayload?.enabledToolsAreAmbient,
+          !!execution.connectionId && !isHeadlessConnection(execution.connectionId)
         )
       : (startPayload?.enabledTools ?? []);
 
@@ -1866,6 +1867,7 @@ async function processExecution(
       session,
       profileDeniedTools: orchestrationProfile?.deniedTools,
       hasAttachments: runHasAttachments(execution, session.knowledgeIds),
+      scopeDeniedTools: execution.scopeDeniedTools,
       logger,
     });
 
