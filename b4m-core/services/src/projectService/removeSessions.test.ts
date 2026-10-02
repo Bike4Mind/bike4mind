@@ -1,6 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { removeSessions } from './removeSessions';
+
+type Grant = { userId: string; permissions: Permission[]; projectId?: string };
 
 describe('projectService - removeSessions (narrowed writes)', () => {
   const OWNER_ID = 'owner-1';
@@ -9,9 +11,13 @@ describe('projectService - removeSessions (narrowed writes)', () => {
   const SESSION_B = '67dbe18a7f9cf1fa5d968602';
   const SESSION_KEPT = '67dbe18a7f9cf1fa5d968603';
 
-  let db: any;
-  let project: any;
-  let sessions: any[];
+  let db: {
+    users: { findById: Mock };
+    projects: { shareable: { findAccessibleById: Mock }; update: Mock };
+    sessions: { shareable: { findAllAccessibleByIds: Mock }; update: Mock };
+  };
+  let project: { id: string; userId: string; sessionIds: string[] };
+  let sessions: { id: string; userId: string; users: Grant[] }[];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -52,7 +58,12 @@ describe('projectService - removeSessions (narrowed writes)', () => {
   });
 
   it('writes narrowed per-session and project partials', async () => {
-    await removeSessions(OWNER_ID, { projectId: PROJECT_ID, sessionIds: [SESSION_A, SESSION_B] }, { db });
+    await removeSessions(
+      OWNER_ID,
+      { projectId: PROJECT_ID, sessionIds: [SESSION_A, SESSION_B] },
+      // The stub db implements only the repository methods this service calls.
+      { db } as unknown as Parameters<typeof removeSessions>[2]
+    );
 
     expect(db.sessions.update).toHaveBeenCalledTimes(2);
     expect(db.sessions.update.mock.calls[0][0]).toStrictEqual({

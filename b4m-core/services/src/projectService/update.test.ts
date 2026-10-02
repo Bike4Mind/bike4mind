@@ -1,11 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { update } from './update';
 
 describe('projectService - update (narrowed writes)', () => {
   const USER_ID = 'user-1';
   const PROJECT_ID = 'project-1';
 
-  let db: any;
+  let db: { projects: { findByIdAndUserId: Mock; update: Mock } };
+  // The stub db implements only the repository methods this service calls.
+  const adapters = () => ({ db }) as unknown as Parameters<typeof update>[2];
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -29,7 +31,7 @@ describe('projectService - update (narrowed writes)', () => {
   });
 
   it('writes name and description with updatedAt', async () => {
-    await update(USER_ID, { id: PROJECT_ID, name: 'new name', description: 'new description' }, { db });
+    await update(USER_ID, { id: PROJECT_ID, name: 'new name', description: 'new description' }, adapters());
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
@@ -41,7 +43,7 @@ describe('projectService - update (narrowed writes)', () => {
   });
 
   it('omits description when only name is given', async () => {
-    await update(USER_ID, { id: PROJECT_ID, name: 'new name' }, { db });
+    await update(USER_ID, { id: PROJECT_ID, name: 'new name' }, adapters());
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
@@ -52,7 +54,11 @@ describe('projectService - update (narrowed writes)', () => {
   });
 
   it('strips unknown keys such as userId before writing', async () => {
-    await update(USER_ID, { id: PROJECT_ID, name: 'new name', userId: 'attacker' } as any, { db });
+    await update(
+      USER_ID,
+      { id: PROJECT_ID, name: 'new name', userId: 'attacker' } as Parameters<typeof update>[1],
+      adapters()
+    );
 
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({

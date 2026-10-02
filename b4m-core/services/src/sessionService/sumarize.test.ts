@@ -1,16 +1,19 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
+import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { summarizeSession } from './sumarize';
 
 describe('summarizeSession', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  let db: {
+    sessions: { findByIdAndUserId: Mock; update: Mock };
+    chatHistories: { findAllBySessionIdAndCreatedAtGreaterThanDate: Mock };
+  };
+  let llm: { complete: Mock };
 
-  it('writes only { id, summary, summaryAt }', async () => {
+  beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
 
-    const db = {
+    db = {
       sessions: {
         findByIdAndUserId: vi.fn().mockResolvedValue({
           id: 'session-1',
@@ -23,8 +26,14 @@ describe('summarizeSession', () => {
         findAllBySessionIdAndCreatedAtGreaterThanDate: vi.fn().mockResolvedValue([{ prompt: 'q', reply: 'a' }]),
       },
     };
-    const llm = { complete: vi.fn().mockResolvedValue('a fresh summary') };
+    llm = { complete: vi.fn().mockResolvedValue('a fresh summary') };
+  });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('writes only { id, summary, summaryAt }', async () => {
     await summarizeSession('user-1', { id: 'session-1' }, { db, llm });
 
     expect(db.sessions.update).toHaveBeenCalledTimes(1);
@@ -33,5 +42,24 @@ describe('summarizeSession', () => {
       summary: 'a fresh summary',
       summaryAt: new Date('2026-01-01T00:00:00Z'),
     });
+  });
+
+  it('does not write when the session is missing', async () => {
+    db.sessions.findByIdAndUserId.mockResolvedValue(null);
+
+    await expect(summarizeSession('user-1', { id: 'session-1' }, { db, llm })).rejects.toThrow(NotFoundError);
+
+    expect(db.sessions.update).not.toHaveBeenCalled();
+  });
+
+  it('does not write when there is no new chat history', async () => {
+    db.chatHistories.findAllBySessionIdAndCreatedAtGreaterThanDate.mockResolvedValue([]);
+
+    await expect(summarizeSession('user-1', { id: 'session-1' }, { db, llm })).rejects.toThrow(
+      UnprocessableEntityError
+    );
+
+    expect(llm.complete).not.toHaveBeenCalled();
+    expect(db.sessions.update).not.toHaveBeenCalled();
   });
 });

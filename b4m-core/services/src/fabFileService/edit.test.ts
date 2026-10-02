@@ -39,11 +39,15 @@ describe('editFabFile (narrowed write on apply)', () => {
   });
 
   it('writes only the content-rewrite fields when applyImmediately is true', async () => {
-    const result = await editFabFile(user, { id: 'file-1', instruction: 'x', applyImmediately: true }, {
-      db,
-      llm,
-      storage,
-    } as any);
+    const result = await editFabFile(
+      user,
+      { id: 'file-1', instruction: 'x', preserveFormatting: true, applyImmediately: true },
+      {
+        db,
+        llm,
+        storage,
+      } as unknown as Parameters<typeof editFabFile>[2]
+    );
 
     expect(result.applied).toBe(true);
     expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
@@ -60,11 +64,15 @@ describe('editFabFile (narrowed write on apply)', () => {
   });
 
   it('does not write when applyImmediately is false', async () => {
-    const result = await editFabFile(user, { id: 'file-1', instruction: 'x', applyImmediately: false }, {
-      db,
-      llm,
-      storage,
-    } as any);
+    const result = await editFabFile(
+      user,
+      { id: 'file-1', instruction: 'x', preserveFormatting: true, applyImmediately: false },
+      {
+        db,
+        llm,
+        storage,
+      } as unknown as Parameters<typeof editFabFile>[2]
+    );
 
     expect(result.applied).toBe(false);
     expect(storage.upload).not.toHaveBeenCalled();

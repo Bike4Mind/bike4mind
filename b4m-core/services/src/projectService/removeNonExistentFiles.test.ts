@@ -1,14 +1,26 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { removeNonExistentFiles } from './removeNonExistentFiles';
+
+type Grant = { userId: string; permissions: Permission[]; projectId?: string };
 
 describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
   const OWNER_ID = 'owner-1';
   const PROJECT_ID = 'project-1';
 
-  let db: any;
-  let project: any;
-  let files: any[];
+  let db: {
+    users: { findById: Mock };
+    projects: { shareable: { findAccessibleById: Mock }; update: Mock };
+    fabFiles: { findAllByIds: Mock; update: Mock };
+  };
+  let project: { id: string; userId: string; fileIds: string[] };
+  let files: { id: string; users: Grant[] }[];
+
+  // The stub db implements only the repository methods this service calls.
+  const run = () =>
+    removeNonExistentFiles(OWNER_ID, { projectId: PROJECT_ID }, { db } as unknown as Parameters<
+      typeof removeNonExistentFiles
+    >[2]);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -44,8 +56,8 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
     vi.useRealTimers();
   });
 
-  it('writes only the changed file and a narrowed project partial', async () => {
-    await removeNonExistentFiles(OWNER_ID, { projectId: PROJECT_ID }, { db });
+  it('writes only the file with a project grant and a narrowed project partial', async () => {
+    await run();
 
     expect(db.fabFiles.update).toHaveBeenCalledTimes(1);
     expect(db.fabFiles.update.mock.calls[0][0]).toStrictEqual({
@@ -64,10 +76,22 @@ describe('projectService - removeNonExistentFiles (narrowed writes)', () => {
     });
   });
 
-  it('does not write a file that has no grant from this project', async () => {
-    await removeNonExistentFiles(OWNER_ID, { projectId: PROJECT_ID }, { db });
+  it('writes nothing when the project has no files', async () => {
+    project.fileIds = [];
 
-    const writtenIds = db.fabFiles.update.mock.calls.map((c: any[]) => c[0].id);
-    expect(writtenIds).not.toContain('f-live-nogrant');
+    await run();
+
+    expect(db.fabFiles.findAllByIds).not.toHaveBeenCalled();
+    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.projects.update).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing when every file still exists', async () => {
+    project.fileIds = ['f-live-granted', 'f-live-nogrant'];
+
+    await run();
+
+    expect(db.fabFiles.update).not.toHaveBeenCalled();
+    expect(db.projects.update).not.toHaveBeenCalled();
   });
 });

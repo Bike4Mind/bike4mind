@@ -349,7 +349,7 @@ describe('updateFabFile (narrowed write pins)', () => {
       };
       dataLakes: { findByDatalakeTag: Mock; find: Mock; setStats: Mock; activateIfDraft: Mock };
     };
-    storage: { upload: Mock; generateSignedUrl: Mock };
+    storage: { upload: Mock; generateSignedUrl: Mock; getMetadata?: Mock };
   };
 
   const textFile = (overrides: Partial<IFabFileDocument> = {}): IFabFileDocument =>
@@ -484,6 +484,28 @@ describe('updateFabFile (narrowed write pins)', () => {
     expect(dbUpdate.mock.calls[0]).toStrictEqual([
       {
         id: 'file-1',
+        fileUrl: 'https://s3.example.com/new-signed-url',
+        fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
+        ...FAB_FILE_CONTENT_REWRITE_PATCH,
+        systemPriority: undefined,
+        updatedAt: NOW,
+      },
+      undefined,
+    ]);
+  });
+
+  it('writes the stored size alongside the rewrite patch when storage reports metadata', async () => {
+    mockAdapters.storage.getMetadata = vi.fn().mockResolvedValue({ size: 8 });
+    findUpdateAccessById.mockResolvedValue(textFile());
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await updateFabFile(mockUser, { id: 'file-1', fileContent: 'new body' }, mockAdapters as any);
+
+    expect(dbUpdate).toHaveBeenCalledTimes(1);
+    expect(dbUpdate.mock.calls[0]).toStrictEqual([
+      {
+        id: 'file-1',
+        fileSize: 8,
         fileUrl: 'https://s3.example.com/new-signed-url',
         fileUrlExpireAt: new Date('2026-01-01T01:00:00Z'),
         ...FAB_FILE_CONTENT_REWRITE_PATCH,
