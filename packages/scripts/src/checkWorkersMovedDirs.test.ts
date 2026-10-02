@@ -15,6 +15,8 @@ const MOVED = [
   { from: 'apps/client/server/events', to: 'apps/workers/src/events' },
   { from: 'apps/client/server/worker', to: 'apps/workers/src/selfhost' },
   { from: 'apps/client/server/cron', to: 'apps/workers/src/cron' },
+  { from: 'apps/client/server/jobs', to: 'apps/workers/src/jobs' },
+  { from: 'apps/client/server/emailIngestion', to: 'apps/workers/src/emailIngestion' },
 ] as const;
 
 const OS_LITTER = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
