@@ -6,16 +6,17 @@ import DriveConnectAction from './DriveConnectAction';
 import GitHubConnectAction from './GitHubConnectAction';
 
 /**
- * The connect/status control for every external source an EXISTING org lake can take. A lake is fed
+ * The connect/status control for every external source an EXISTING lake can take. A lake is fed
  * by one connector (resolveConnectableLake 409s a second), so once either source is connected only
  * that one is shown; until then every enabled source offers its connect button.
  *
- * Callers gate on canConnectLakeDrive (org + manage). GitHub additionally sits behind
- * EnableDataLakeGitHub, without which its routes 403 - so its query does not even fire.
+ * Callers gate on canConnectLakeDrive, which also admits a personal lake's owner. GitHub stays
+ * org-only, and additionally sits behind EnableDataLakeGitHub, without which its routes 403 - so its
+ * query does not even fire.
  */
-export default function LakeSourceConnectActions({ lake }: { lake: { id: string } }) {
+export default function LakeSourceConnectActions({ lake }: { lake: { id: string; organizationId?: string | null } }) {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
-  const gitHubEnabled = isAdminFeatureEnabled('EnableDataLakeGitHub');
+  const gitHubEnabled = !!lake.organizationId && isAdminFeatureEnabled('EnableDataLakeGitHub');
 
   // Shared query keys with the actions below, so these reads are deduped rather than doubled.
   const { data: driveConnection } = useLakeDriveConnection(lake.id);
