@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
+import { ADMIN_GATE } from './scopeCoverageHelpers';
 
 /**
  * `requiredScopes` is opt-in and defaults open (baseApi with no gate calls
@@ -19,13 +20,6 @@ import path from 'path';
 // Scanned from outside pages/: an fs-walking test under pages/ is traced as a route and
 // pulls the project into the server Lambda (eslint no-restricted-syntax guards it).
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'admin');
-
-// The gate every admin route should carry. Matches the declaration wherever it sits in the
-// baseApi options (routes mix in `auth: true`, `rateLimit`, etc.), but pins the array to exactly
-// `[ApiKeyScope.ADMIN]` so a route that swaps in a weaker/other scope is not accepted as "gated".
-// A trailing comma is allowed so a wrapped single-element array still reads as gated.
-// Keep in sync with secretRotationsApiKeyScopeCoverage.test.ts.
-const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,?\s*\]/;
 
 /**
  * `auth: false` means baseApi never installs the API-key chain (it installs

@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
+import { ADMIN_GATE } from './scopeCoverageHelpers';
 
 /**
  * The secret-rotations routes gate on the ADMIN API-key scope (admin:* is broad by design and
@@ -11,8 +12,6 @@ import path from 'path';
  * fs-walking test under pages/ is traced as a route into the server Lambda).
  */
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'secret-rotations');
-// Same pattern as the admin sweep (optional trailing comma); keep in sync with adminApiKeyScopeCoverage.test.ts.
-const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,?\s*\]/;
 
 function routeFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
