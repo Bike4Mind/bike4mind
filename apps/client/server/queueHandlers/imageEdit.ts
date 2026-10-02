@@ -34,7 +34,11 @@ export const getImageEdit = (): ImageEditService => {
     const filesStorage = getFilesStorage();
     _imageEdit = new ImageEditService({
       db: {
-        sessions: Session,
+        // findById stays on the model (unchanged reads); the counter lives on the repository.
+        sessions: {
+          findById: Session.findById.bind(Session),
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+        },
         quests: questRepository,
         connections: Connection,
         adminSettings: adminSettingsRepository,

@@ -163,7 +163,9 @@ import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalS
 import { isObjectIdShaped } from './tools/base/objectId';
 
 interface DatabaseAdapters {
-  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'>;
+  // incrementImageCount is optional: only the image tools use it, via ToolContext (recordGeneratedImages).
+  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'> &
+    Partial<Pick<ISessionRepository, 'incrementImageCount'>>;
   users: Pick<
     IUserRepository,
     'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus'

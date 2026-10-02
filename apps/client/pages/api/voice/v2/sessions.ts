@@ -14,6 +14,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { signVoiceSessionToken } from '@server/voice/voiceSessionToken';
 import { MAX_SESSION_SECONDS, shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import { z } from 'zod';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -127,7 +128,8 @@ const handler = baseApi().post(async (req, res) => {
         // derivation runs here too, not only on the two session routes that have a `req`.
         resolveLakeAccess: async () =>
           (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
-      }
+      },
+      { origin: resolveSessionOrigin(req) }
     );
   }
 

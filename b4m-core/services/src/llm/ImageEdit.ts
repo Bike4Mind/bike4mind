@@ -72,6 +72,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
+import { recordGeneratedImages } from './recordGeneratedImages';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -108,6 +109,8 @@ interface IImageEditServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -787,6 +790,8 @@ export class ImageEditService {
         status: quest.status,
         creditsUsed: quest.creditsUsed,
       });
+
+      await recordGeneratedImages(this.db.sessions, sessionId, 1, logger);
 
       // Remove prompt loading message on the client
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
