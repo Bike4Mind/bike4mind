@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
-import { render } from 'ink-testing-library';
+import { cleanup, render } from 'ink-testing-library';
 import jwt from 'jsonwebtoken';
 import open from 'open';
 import { isBrowserOpenableUrl, isOnApiOrigin, LoginFlow } from './LoginFlow';
@@ -77,6 +77,8 @@ describe('LoginFlow', () => {
     interval: 5,
   });
   const configStore = { setAuthTokens: vi.fn().mockResolvedValue(undefined) } as unknown as ConfigStore;
+
+  afterEach(cleanup);
 
   beforeEach(() => {
     vi.mocked(open).mockClear();
@@ -177,6 +179,19 @@ describe('LoginFlow', () => {
     expect(lastFrame()).not.toContain('\u001b]0;pwned');
     expect(lastFrame()).not.toContain('\u001b[2J');
     expect(lastFrame()).toContain(']0;pwned');
+  });
+
+  it('strips terminal control characters from a server error message', async () => {
+    oauth.initiateDeviceFlow.mockResolvedValue(deviceFlowFor('https://app.example.com'));
+    oauth.waitForAuthorization.mockRejectedValue(new Error('\u001b]0;pwned\u0007boom'));
+    const onError = vi.fn();
+    const { lastFrame } = render(
+      <LoginFlow apiUrl="https://app.example.com" configStore={configStore} onSuccess={vi.fn()} onError={onError} />
+    );
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('boom'));
+    expect(lastFrame()).not.toContain('\u001b]0;pwned');
+    expect(onError.mock.calls[0][0].message).toBe(']0;pwnedboom');
   });
 
   it('opens a localhost dev URL on the matching origin', async () => {

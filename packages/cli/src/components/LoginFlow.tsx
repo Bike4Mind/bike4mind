@@ -172,7 +172,7 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
           .catch(() => {});
       } catch (err) {
         setStatus('error');
-        const errorMessage = extractErrorMessage(err);
+        const errorMessage = stripControlChars(extractErrorMessage(err));
         setError(errorMessage);
         onError(new Error(errorMessage));
       }
