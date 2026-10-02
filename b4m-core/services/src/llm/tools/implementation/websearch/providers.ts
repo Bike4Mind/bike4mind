@@ -42,11 +42,11 @@ export interface WebSearchOptions {
   locationInQuery?: boolean;
   /**
    * Throw on a timeout, network error or non-OK response instead of resolving to no hits. SerpAPI
-   * always throws; SearXNG fails soft unless this is set. The chat tool sets it so its failover can
-   * tell a dead provider from an empty result; deep research and lake research rely on fail-soft.
+   * always throws; SearXNG fails soft unless this is set. The chat tool sets it when hedging, so it
+   * can tell a dead provider from an empty result; deep research and lake research rely on fail-soft.
    */
   throwOnError?: boolean;
-  /** Caps SerpAPI's organic attempts (default SERPAPI_MAX_ATTEMPTS). Used to bound failover. */
+  /** Caps SerpAPI's organic attempts (default SERPAPI_MAX_ATTEMPTS). Used to bound a hedged backup. */
   maxAttempts?: number;
 }
 
@@ -170,21 +170,28 @@ const SERPAPI_ATTEMPT_TIMEOUT_MS = 10_000;
 const SERPAPI_MAX_ATTEMPTS = 2;
 // Fixed delay before the retry.
 const SERPAPI_RETRY_DELAY_MS = 500;
-// SerpAPI runs a single attempt when it is the fallback, so failover stays inside the
-// SerpAPI-only budget instead of stacking a full retry cycle on top of the SearXNG timeout.
-export const SERPAPI_FALLBACK_ATTEMPTS = 1;
-const SERPAPI_ONLY_ORGANIC_MS = SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS;
-// Failover runs only under 'auto', which always puts SearXNG first (resolveWebSearchProviders).
-const FAILOVER_ORGANIC_MS = SEARCH_TIMEOUT_MS + SERPAPI_FALLBACK_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS;
 /**
- * The longest one web_search call can hold a turn: the slower organic path (SerpAPI with its retry,
- * or SearXNG timing out then the single-attempt SerpAPI fallback), then the image/places calls,
- * which run in parallel AFTER it. An inline chat turn runs inside the 60s server Lambda
- * (infra/web.ts) and has already spent part of that on retrieval and the first model call before
- * the tool starts. If this is anywhere near 60s, a stalled provider never errors back to the model:
- * the Lambda is hard-killed mid-call and the turn dies with a partial answer.
+ * How long the lead provider gets before the backup is started alongside it (sooner if the lead
+ * fails first). Just past SerpAPI's normal response time in production: answers come back in about
+ * 1s typically and 3s at the 90th percentile, while a stalled request usually never answers.
  */
-export const WEB_SEARCH_WORST_CASE_MS = Math.max(SERPAPI_ONLY_ORGANIC_MS, FAILOVER_ORGANIC_MS) + SEARCH_TIMEOUT_MS;
+export const WEB_SEARCH_HEDGE_DELAY_MS = 3_000;
+// A SerpAPI backup gets one attempt, so a hedge never stacks a full retry cycle onto the budget.
+export const SERPAPI_BACKUP_ATTEMPTS = 1;
+const SERPAPI_ORGANIC_MS = SERPAPI_MAX_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS + SERPAPI_RETRY_DELAY_MS;
+const SERPAPI_BACKUP_MS = SERPAPI_BACKUP_ATTEMPTS * SERPAPI_ATTEMPT_TIMEOUT_MS;
+// The backup starts by WEB_SEARCH_HEDGE_DELAY_MS at the latest, so when both providers fail the
+// organic search ends when the slower of the lead and the backup does.
+const HEDGED_BACKUP_MS = WEB_SEARCH_HEDGE_DELAY_MS + Math.max(SEARCH_TIMEOUT_MS, SERPAPI_BACKUP_MS);
+/**
+ * The longest one web_search call can hold a turn: the slowest organic path (a SerpAPI lead with its
+ * retry, or a hedged backup started at the hedge delay), then the image/places calls, which run in
+ * parallel AFTER it. An inline chat turn runs inside the 60s server Lambda (infra/web.ts) and has
+ * already spent part of that on retrieval and the first model call before the tool starts. If this
+ * is anywhere near 60s, a stalled provider never errors back to the model: the Lambda is hard-killed
+ * mid-call and the turn dies with a partial answer.
+ */
+export const WEB_SEARCH_WORST_CASE_MS = Math.max(SERPAPI_ORGANIC_MS, HEDGED_BACKUP_MS) + SEARCH_TIMEOUT_MS;
 // Citables are persisted with the quest, so keep the per-hit image list bounded.
 const MAX_IMAGES_PER_RESULT = 4;
 // Enough to build a card row from without flooding the model's context with URLs.
@@ -855,19 +862,21 @@ function pickPrimaryProvider(
 }
 
 /**
- * Returns [primary, fallback]. The primary is exactly what resolveWebSearchProvider picks. A
- * fallback exists only under 'auto' with both providers configured, and is always SerpAPI behind
- * SearXNG: an explicit admin choice means that provider alone, so it never gets a fallback.
- * WEB_SEARCH_WORST_CASE_MS relies on failover only ever running SearXNG -> SerpAPI.
+ * Returns [lead, backup] for the chat tool's hedged search. The lead is exactly what
+ * resolveWebSearchProvider picks: the admin's WebSearchProvider choice, or under 'auto' SearXNG
+ * when configured, else SerpAPI. The backup is the other provider when it is configured too. An
+ * unconfigured explicit choice yields no lead at all; it is never quietly replaced by the other.
  */
 export async function resolveWebSearchProviders(
   adapters: GetEffectiveApiKeyAdapters
 ): Promise<[WebSearchProvider | null, WebSearchProvider | null]> {
   const settings = await readProviderSettings(adapters);
-  const primary = pickPrimaryProvider(adapters, settings);
-  const fallback =
-    settings.choice === 'auto' && settings.searxngUrl && settings.serperKey ? createSerpApiProvider(adapters) : null;
-  return [primary, fallback];
+  const lead = pickPrimaryProvider(adapters, settings);
+  if (!lead) return [null, null];
+  if (lead.name === 'serpapi') {
+    return [lead, settings.searxngUrl ? createSearxngProvider(settings.searxngUrl) : null];
+  }
+  return [lead, settings.serperKey ? createSerpApiProvider(adapters) : null];
 }
 
 function searchCacheClear(): void {

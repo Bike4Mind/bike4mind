@@ -14,7 +14,8 @@ import {
   resolveWebSearchProviders,
   searchCacheGet,
   searchCacheSet,
-  SERPAPI_FALLBACK_ATTEMPTS,
+  SERPAPI_BACKUP_ATTEMPTS,
+  WEB_SEARCH_HEDGE_DELAY_MS,
   type WebSearchOptions,
   type WebSearchImageResult,
   type WebSearchProvider,
@@ -226,34 +227,61 @@ export function createWebSearchBudget(maxSearches: number) {
   };
 }
 
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 /**
- * Organic search on the primary, retried once on the fallback when the primary fails. With no
- * fallback the primary keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
- * provider that answered so the image/place calls go to a live provider, not the one that just
- * failed. A final failure throws, so the backend records the call as failed.
+ * Organic search as a hedged request: the lead starts at once, and the backup starts alongside it
+ * once the lead has been silent for WEB_SEARCH_HEDGE_DELAY_MS, or as soon as the lead fails. The
+ * first success wins; the loser runs on to its own timeout and is ignored. With no backup the lead
+ * keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the provider that
+ * answered so the image/place calls go to a live provider. When both fail it throws, so the
+ * backend records the call as failed.
  */
-async function searchWithFailover(
-  primary: WebSearchProvider,
-  fallback: WebSearchProvider | null,
+async function searchWithHedge(
+  lead: WebSearchProvider,
+  backup: WebSearchProvider | null,
   query: string,
   numResults: number,
   searchOptions?: WebSearchOptions
 ): Promise<{ results: WebSearchProviderResult[]; servedBy: WebSearchProvider }> {
-  if (!fallback) return { results: await primary.search(query, numResults, searchOptions), servedBy: primary };
-  try {
-    const results = await primary.search(query, numResults, { ...searchOptions, throwOnError: true });
-    return { results, servedBy: primary };
-  } catch (primaryError) {
-    Logger.globalInstance.log('WebSearch Tool: primary provider failed, trying fallback', {
-      primary: primary.name,
-      fallback: fallback.name,
-      error: primaryError instanceof Error ? primaryError.message : String(primaryError),
+  if (!backup) return { results: await lead.search(query, numResults, searchOptions), servedBy: lead };
+
+  const fromLead = lead.search(query, numResults, { ...searchOptions, throwOnError: true });
+  const backupStart = new Promise<'slow' | 'failed'>(start => {
+    const timer = setTimeout(() => start('slow'), WEB_SEARCH_HEDGE_DELAY_MS);
+    fromLead.then(
+      () => clearTimeout(timer),
+      () => {
+        clearTimeout(timer);
+        start('failed');
+      }
+    );
+  });
+  const fromBackup = backupStart.then(reason => {
+    Logger.globalInstance.log('WebSearch Tool: starting backup provider', {
+      lead: lead.name,
+      backup: backup.name,
+      reason,
     });
-    const results = await fallback.search(query, numResults, {
+    // maxAttempts only bounds SerpAPI; SearXNG makes a single attempt regardless.
+    return backup.search(query, numResults, {
       ...searchOptions,
-      maxAttempts: SERPAPI_FALLBACK_ATTEMPTS,
+      throwOnError: true,
+      maxAttempts: SERPAPI_BACKUP_ATTEMPTS,
     });
-    return { results, servedBy: fallback };
+  });
+
+  try {
+    return await Promise.any([
+      fromLead.then(results => ({ results, servedBy: lead })),
+      fromBackup.then(results => ({ results, servedBy: backup })),
+    ]);
+  } catch (error) {
+    const [leadError, backupError] = error instanceof AggregateError ? error.errors : [error, error];
+    throw new Error(
+      `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
+        `${backup.name}: ${errorMessage(backupError)}`
+    );
   }
 }
 
@@ -262,7 +290,7 @@ export async function performWebSearch(
   params: WebSearchParams,
   imageUrlSigningSecret = '',
   resolvedProvider?: Promise<WebSearchProvider | null>,
-  resolvedFallback?: Promise<WebSearchProvider | null>
+  resolvedBackup?: Promise<WebSearchProvider | null>
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
@@ -287,8 +315,8 @@ export async function performWebSearch(
       Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      const fallback = (await resolvedFallback) ?? null;
-      ({ results, servedBy } = await searchWithFailover(provider, fallback, params.query, numResults, searchOptions));
+      const backup = (await resolvedBackup) ?? null;
+      ({ results, servedBy } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }
     Logger.globalInstance.log(
@@ -406,15 +434,15 @@ export const webSearchTool: ToolDefinition = {
           throw error;
         });
         const startedAt = Date.now();
-        const [primary, fallback] = await providersPromise;
+        const [lead, backup] = await providersPromise;
         // A failure throws on purpose: the backend hands the error text to the model as the tool
         // result AND records the call as failed, which is what the answer diagnosis reads.
         const { formattedResults, citables } = await performWebSearch(
           { db: context.db },
           params,
           config?.imageUrlSigningSecret,
-          Promise.resolve(primary),
-          Promise.resolve(fallback)
+          Promise.resolve(lead),
+          Promise.resolve(backup)
         );
         context.logger.log('🔍 WebSearch Tool: search timing', {
           callNumber,

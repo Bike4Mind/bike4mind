@@ -3228,7 +3228,7 @@ export const settingsMap = {
     name: 'Web Search Provider',
     defaultValue: 'auto',
     description:
-      'Which backend the web_search tool uses. "auto" prefers a configured local SearXNG instance, then falls back to the Serp Search API. "serpapi" or "searxng" force that provider.',
+      'Which backend leads the web_search tool. "auto" leads with a configured SearXNG instance, else the Serp Search API; "serpapi" or "searxng" lead with that provider. When both are configured, the other one is started as a backup if the lead has not answered within a few seconds, and the first answer wins. To use one provider only, leave the other unconfigured.',
     options: ['auto', 'serpapi', 'searxng'],
     category: 'Tools',
     group: API_SERVICE_GROUPS.SEARCH.id,
