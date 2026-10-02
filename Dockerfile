@@ -64,6 +64,11 @@ RUN set -eu; \
 # Then assert what actually ships: anything beyond the five entries a healthy standalone build
 # emits means file tracing swept the app source tree in behind us.
 RUN node apps/client/scripts/check-standalone-tree.mjs apps/client/.next/standalone/apps/client
+# Then require each built API route, so a module the bundler left external fails here (naming
+# package and route) instead of 500ing at module load. Runs after the prune; the template env and
+# the standalone copy that keeps the builder's node_modules out of resolution are in the header.
+COPY .env.selfhost.example ./
+RUN NODE_ENV=production node --env-file=.env.selfhost.example apps/client/scripts/check-api-routes-cjs-require.mjs apps/client/.next/standalone apps/client/.next
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
