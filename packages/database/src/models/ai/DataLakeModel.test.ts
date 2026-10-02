@@ -482,6 +482,44 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
       ).toBe(2);
     });
 
+    it('counts a named org lake for a non-member who administers that org, and still not for a stranger', async () => {
+      const orgLake = await dataLakeRepository.create(
+        baseLake({ slug: 'org-x-private', organizationId: 'orgX', createdByUserId: 'alice', requiredUserTag: 'tag' })
+      );
+      const restrictToTags = [orgLake.datalakeTag];
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: ['orgX'],
+        })
+      ).toBe(1);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: ['orgY'],
+        })
+      ).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: [],
+        })
+      ).toBe(0);
+    });
+
+    it('does not let an administered org widen reach: a gateless org lake still counts for a non-member admin', async () => {
+      const gateless = await dataLakeRepository.create(
+        baseLake({ slug: 'org-x-gateless', organizationId: 'orgX', createdByUserId: 'alice' })
+      );
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags: [gateless.datalakeTag],
+          administeredOrgIds: ['orgX'],
+        })
+      ).toBe(1);
+    });
+
     it('never counts a named lake the caller could not already see exist (guessed tag), unless they may see all', async () => {
       const hidden = await dataLakeRepository.create(
         baseLake({ slug: 'hidden-private', organizationId: 'orgB', createdByUserId: 'alice', requiredUserTag: 'tag' })

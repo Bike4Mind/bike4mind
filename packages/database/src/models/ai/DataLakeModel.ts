@@ -554,6 +554,7 @@ export const buildAccessibleQuery = (
  */
 const callerVisibilityArms = (params: {
   organizationIds: string[] | undefined;
+  administeredOrgIds?: string[];
   userId?: string;
   publicArm?: Record<string, unknown>;
 }): Record<string, unknown>[] => {
@@ -561,6 +562,11 @@ const callerVisibilityArms = (params: {
   if (params.publicArm) arms.push(params.publicArm);
   if (params.organizationIds && params.organizationIds.length > 0) {
     arms.push({ organizationId: { $in: params.organizationIds } });
+  }
+  // Browse lists a non-member org admin's org lakes (the org-admin arm), so the count must treat
+  // them as already visible. Visibility only: retrieval's reach arms deliberately omit this.
+  if (params.administeredOrgIds && params.administeredOrgIds.length > 0) {
+    arms.push({ organizationId: { $in: params.administeredOrgIds } });
   }
   if (params.userId) arms.push({ createdByUserId: params.userId });
   return arms;
@@ -832,7 +838,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds: string[] | undefined,
     userId: string | undefined,
-    opts?: ReachArmsOpts & { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
+    opts?: ReachArmsOpts & {
+      restrictToTags?: string[];
+      callerMaySeeAllLakes?: boolean;
+      administeredOrgIds?: string[];
+    }
   ): Promise<number> {
     if (opts?.restrictToTags && opts.restrictToTags.length > 0) {
       const reachArms = this.buildReachArms(
@@ -846,7 +856,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       // The count is shown to the caller, so a lake they could not already know exists must not
       // move it: restrictToTags is client-influenced, and a nonzero count for a guessed tag would
       // confirm that lake exists. Only a caller who may see every lake skips the prerequisite.
-      const visibleToCaller = opts.callerMaySeeAllLakes ? undefined : callerVisibilityArms({ organizationIds, userId });
+      const visibleToCaller = opts.callerMaySeeAllLakes
+        ? undefined
+        : callerVisibilityArms({ organizationIds, administeredOrgIds: opts.administeredOrgIds, userId });
       if (visibleToCaller?.length === 0) return 0;
       return this.dataLakeModel.countDocuments({
         status: 'active',
