@@ -18,7 +18,7 @@ vi.mock('@server/middlewares/checkBlockedIP', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_req: any, _res: any, next: any) => next?.() }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn(() => Promise.resolve()) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/subscribeEvents', () => ({
+vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn(() => Promise.resolve()) }));

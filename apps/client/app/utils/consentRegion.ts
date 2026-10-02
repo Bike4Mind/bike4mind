@@ -1,12 +1,8 @@
-// Consent signals the marketing site pins to the parent domain, read here so one journey
-// across two hosts doesn't ask twice. Producer: lib/consent.ts + middleware.ts in the
-// marketing-site repo; same shared-cookie mechanism as attributionCookies.ts, so renaming
-// either cookie is a cross-repo change. This app resolves no region of its own - proxy.ts
-// runs on every route but gets no viewer-country header, and a second lookup there would
-// only produce an answer that can disagree with the one the visitor already got.
+import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
 
-export const REGION_COOKIE = 'b4m-region';
-export const DECISION_COOKIE = 'b4m-consent-decision';
+// This app resolves no region of its own - proxy.ts runs on every route but gets no
+// viewer-country header, and a second lookup there would only produce an answer that can
+// disagree with the one the visitor already got. The cookie names live in lib/consentCookies.ts.
 
 /** 'eu' means opt-in required before anything non-essential loads. */
 export type ConsentRegion = 'eu' | 'row';
@@ -35,17 +31,6 @@ export function readSharedConsent(): 'granted' | 'denied' | null {
 /** 'unset' means the visitor is in the opt-in region and has not answered yet, here or on
  * the marketing site: nothing non-essential may run until they do. */
 export type ConsentState = 'granted' | 'denied' | 'unset';
-
-/**
- * Where this origin publishes the decision it resolved, so a request handler can see it.
- *
- * The underscore name marks it app-owned, like b4m_utm and b4m_app_first_touch; the shared
- * marketing cookies above use hyphens, and the two must never be confused. It exists because
- * the server cannot read localStorage: without it an in-app Accept is invisible to every
- * request handler, and server/analytics/serverConsent.ts would suppress a visitor who plainly
- * consented here. See publishResolvedConsent for what it records and why.
- */
-export const APP_DECISION_COOKIE = 'b4m_consent';
 
 /** 90 days: outlives b4m_app_first_touch, the longest-lived thing this gate guards. */
 const APP_DECISION_TTL_SECONDS = 90 * 24 * 60 * 60;

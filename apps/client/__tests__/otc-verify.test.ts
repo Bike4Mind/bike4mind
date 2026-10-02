@@ -109,7 +109,7 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/subscribeEvents', () => ({
+vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
 }));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));

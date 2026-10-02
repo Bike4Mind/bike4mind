@@ -8,86 +8,12 @@ vi.mock('./emitActiveEvent', () => ({
   ingestKeyFor: mockKeyFor,
 }));
 
-import { emitSignupForSourceProducts, emitSubscribeForSourceProducts, stableEventId } from './subscribeEvents';
+import { emitSignupForSourceProducts, stableEventId } from './signupEvents';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockEmit.mockResolvedValue(undefined);
   mockKeyFor.mockImplementation((p: string) => (p === 'widgets' || p === 'gadgets' ? 'key' : undefined));
-});
-
-describe('emitSubscribeForSourceProducts', () => {
-  it('sends one subscribe per source product that has a key, marked with its touch', async () => {
-    const sent = await emitSubscribeForSourceProducts({
-      userId: 'u1',
-      subscriptionId: 'sub_1',
-      priceId: 'price_pro',
-      touches: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'gadgets' } },
-    });
-    expect(sent).toEqual(['widgets', 'gadgets']);
-    expect(mockEmit).toHaveBeenCalledWith({
-      productId: 'widgets',
-      event: 'subscribe',
-      eventId: stableEventId('subscribe', 'widgets', 'sub_1'),
-      userId: 'u1',
-      utm: { source: 'widgets', medium: 'teaser' },
-      metadata: { touch: 'first', attribution: 'self-reported', priceId: 'price_pro' },
-    });
-    expect(mockEmit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        productId: 'gadgets',
-        metadata: { touch: 'last', attribution: 'self-reported', priceId: 'price_pro' },
-      })
-    );
-  });
-
-  it('sends once, as both, when first and last touch are the same product', async () => {
-    await emitSubscribeForSourceProducts({
-      userId: 'u1',
-      subscriptionId: 'sub_1',
-      touches: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'widgets', medium: 'landing' } },
-    });
-    expect(mockEmit).toHaveBeenCalledTimes(1);
-    expect(mockEmit.mock.calls[0][0].metadata).toEqual({ touch: 'both', attribution: 'self-reported' });
-  });
-
-  it('marks every event self-reported, whichever product it credits', async () => {
-    // The productId is read from a cookie the browser set, so a consumer has to be able to see
-    // that the credit is a visitor's claim rather than anything this server observed. Assert it
-    // on every call rather than one, so a later branch cannot quietly send an unmarked event.
-    await emitSubscribeForSourceProducts({
-      userId: 'u1',
-      subscriptionId: 'sub_1',
-      touches: { firstTouch: { source: 'widgets' }, lastTouch: { source: 'gadgets' } },
-    });
-    expect(mockEmit).toHaveBeenCalledTimes(2);
-    for (const [call] of mockEmit.mock.calls) {
-      expect(call.metadata).toMatchObject({ attribution: 'self-reported' });
-    }
-  });
-
-  it('sends nothing for the host product, a keyless source, or no touches, and never throws', async () => {
-    mockEmit.mockRejectedValue(new Error('down'));
-    await expect(
-      emitSubscribeForSourceProducts({
-        userId: 'u1',
-        subscriptionId: 'sub_1',
-        touches: { firstTouch: { source: 'bike4mind' }, lastTouch: { source: 'newsletter' } },
-      })
-    ).resolves.toEqual([]);
-    await expect(
-      emitSubscribeForSourceProducts({ userId: 'u1', subscriptionId: 's', touches: undefined })
-    ).resolves.toEqual([]);
-    expect(mockEmit).not.toHaveBeenCalled();
-
-    await expect(
-      emitSubscribeForSourceProducts({
-        userId: 'u1',
-        subscriptionId: 's',
-        touches: { lastTouch: { source: 'widgets' } },
-      })
-    ).resolves.toEqual(['widgets']);
-  });
 });
 
 describe('emitSignupForSourceProducts', () => {
@@ -107,6 +33,26 @@ describe('emitSignupForSourceProducts', () => {
       utm: { source: 'widgets', medium: 'teaser' },
       metadata: { touch: 'both', attribution: 'self-reported', method: 'otc' },
     });
+  });
+
+  it('sends to each of two distinct source products, marked with its own touch', async () => {
+    await emitSignupForSourceProducts({
+      userId: 'u1',
+      method: 'otc',
+      touches: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'gadgets' } },
+    });
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({ productId: 'widgets', utm: { source: 'widgets', medium: 'teaser' } })
+    );
+    expect(mockEmit.mock.calls.map(([call]) => [call.productId, call.metadata.touch])).toEqual([
+      ['widgets', 'first'],
+      ['gadgets', 'last'],
+    ]);
+  });
+
+  it('sends nothing when there are no touches', async () => {
+    await expect(emitSignupForSourceProducts({ userId: 'u1', method: 'otc', touches: undefined })).resolves.toEqual([]);
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 
   it('marks every signup self-reported and never credits the host or a keyless source', async () => {
@@ -179,9 +125,9 @@ describe('emitSignupForSourceProducts', () => {
 
 describe('stableEventId', () => {
   it('is a UUID-shaped id, the same for the same parts and different otherwise', () => {
-    const a = stableEventId('subscribe', 'widgets', 'sub_1');
+    const a = stableEventId('signup', 'widgets', 'u1');
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
-    expect(stableEventId('subscribe', 'widgets', 'sub_1')).toBe(a);
-    expect(stableEventId('subscribe', 'widgets', 'sub_2')).not.toBe(a);
+    expect(stableEventId('signup', 'widgets', 'u1')).toBe(a);
+    expect(stableEventId('signup', 'widgets', 'u2')).not.toBe(a);
   });
 });

@@ -34,7 +34,7 @@ import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
-import { emitSignupForSourceProducts } from '@server/analytics/subscribeEvents';
+import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import jwt from 'jsonwebtoken';

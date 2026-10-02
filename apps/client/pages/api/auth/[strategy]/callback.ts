@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
-import { emitSignupForSourceProducts } from '@server/analytics/subscribeEvents';
+import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -114,22 +114,6 @@ const handler = baseApi({ auth: false })
           return res.redirect('/login?error=account_suspended');
         }
 
-        const { accessToken } = await issueBrowserSession(req, res, user.id, {
-          createdVia: 'oauth',
-          tokenVersion: user.tokenVersion ?? 0,
-        });
-        const tokens = { accessToken };
-
-        try {
-          await logEvent({
-            userId: user.id,
-            type: AuthEvents.LOGIN,
-            metadata: { strategy, ip, userAgent },
-          });
-        } catch (logError) {
-          console.error('Failed to log OAuth login:', logError);
-        }
-
         // A brand-new account (flagged by verifyCallback's User.create branch)
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
@@ -145,7 +129,9 @@ const handler = baseApi({ auth: false })
             console.error('Failed to log OAuth registration:', logError);
           }
           // Credit the signup to the product the visitor came through, if any, and only with
-          // consent - see readConsentedAcquisitionTouches.
+          // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
+          // OTC: a mint failure after the account exists would otherwise lose the signup for
+          // good, since the retry sees isNewUser false.
           //
           // The IdP returns the browser here by a top-level CROSS-SITE GET, so the app's own
           // campaign cookies only arrive because utmCapture.ts writes them SameSite=Lax; under
@@ -165,6 +151,22 @@ const handler = baseApi({ auth: false })
             touches: readConsentedAcquisitionTouches(req),
             method: strategy,
           });
+        }
+
+        const { accessToken } = await issueBrowserSession(req, res, user.id, {
+          createdVia: 'oauth',
+          tokenVersion: user.tokenVersion ?? 0,
+        });
+        const tokens = { accessToken };
+
+        try {
+          await logEvent({
+            userId: user.id,
+            type: AuthEvents.LOGIN,
+            metadata: { strategy, ip, userAgent },
+          });
+        } catch (logError) {
+          console.error('Failed to log OAuth login:', logError);
         }
 
         // Every OAuth callback is a successful authentication; only a genuine

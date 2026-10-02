@@ -1,17 +1,20 @@
 import type { Request } from 'express';
-import { APP_DECISION_COOKIE, DECISION_COOKIE } from '@client/app/utils/consentRegion';
+import { APP_DECISION_COOKIE, DECISION_COOKIE } from '@client/lib/consentCookies';
 import { parseCookies } from './cookies';
 
 /**
  * Whether this request may have campaign attribution read off it, decided server-side.
  *
- * Precedence is the browser's, from resolveConsent: this origin's own decision first, then the
- * one the visitor made on the marketing site. The app cookie is published by the consent banner
- * on every load (publishResolvedConsent) and already folds in the region default, so reading it
- * first is what makes an in-app Accept visible here at all - the decision itself lives in
- * localStorage, which a request handler cannot see. Reading it first is equally what stops an
- * in-app decline being overridden by a stale shared grant: signup then suppresses exactly where
- * checkout would.
+ * Reads this origin's published decision (APP_DECISION_COOKIE) first, then the marketing site's
+ * shared one. The app cookie is what makes an in-app Accept visible here at all - the decision
+ * itself lives in localStorage, which a request handler cannot see - and reading it first is what
+ * stops an in-app decline being overridden by a shared grant.
+ *
+ * This approximates resolveConsent rather than re-running it. The app cookie is a snapshot of the
+ * browser's resolution (stored decision, shared decision, region) as of the last app page load,
+ * and it wins unconditionally: a shared `denied` made on the marketing site after that load does
+ * not shadow an app `granted` until the app loads again and republishes. The region is never
+ * read here; it reaches the server only through that snapshot.
  *
  * Fail closed. Only an explicit `granted` permits; denied, absent, empty, malformed and
  * unrecognised all suppress, at both levels. A value we do not recognise is not a decision, so

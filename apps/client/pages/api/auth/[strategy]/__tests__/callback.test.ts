@@ -34,7 +34,7 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedVal
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn().mockResolvedValue(undefined) }));
 
 const mockEmitSignup = vi.fn().mockResolvedValue([]);
-vi.mock('@server/analytics/subscribeEvents', () => ({
+vi.mock('@server/analytics/signupEvents', () => ({
   emitSignupForSourceProducts: (...a: any[]) => mockEmitSignup(...a),
 }));
 
@@ -201,6 +201,17 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
+  // The account exists once verifyCallback returns, and a retry sees isNewUser false, so a
+  // signup not sent before the session mint is never sent at all.
+  it('still sends the signup when minting the session fails', async () => {
+    mockIssueBrowserSession.mockRejectedValueOnce(new Error('session store down'));
+
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-new', method: 'github' }));
   });
 
   // The case the whole SameSite=Lax change exists to serve, and the one the first version of
