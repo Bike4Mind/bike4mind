@@ -137,6 +137,12 @@ describe('getImageModelCapabilities', () => {
       expect(supports.seed).toBe(false);
     });
 
+    it('advertises one image for input-image models and ten otherwise', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_KONTEXT_PRO).supports.maxImages).toBe(1);
+      expect(getImageModelCapabilities(ImageModels.FLUX_PRO_FILL).supports.maxImages).toBe(1);
+      expect(getImageModelCapabilities(ImageModels.GROK_IMAGINE_IMAGE_QUALITY).supports.maxImages).toBe(10);
+    });
+
     it('Grok takes none of the optional params', () => {
       const { supports } = getImageModelCapabilities(ImageModels.GROK_IMAGINE_IMAGE_QUALITY);
       expect(supports).toMatchObject({

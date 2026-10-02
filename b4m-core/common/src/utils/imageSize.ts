@@ -54,6 +54,8 @@ export function resolveImageDimensions(
       ? preset
       : undefined;
   const snap = (value?: number) =>
-    value === undefined || !bounds?.step ? value : Math.round(value / bounds.step) * bounds.step;
+    value === undefined || !bounds?.step
+      ? value
+      : Math.min(bounds.max, Math.max(bounds.min, Math.round(value / bounds.step) * bounds.step));
   return { width: snap(width ?? usablePreset?.width), height: snap(height ?? usablePreset?.height) };
 }

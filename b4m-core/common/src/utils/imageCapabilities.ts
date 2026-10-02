@@ -6,6 +6,7 @@ import {
   type OpenAIImageQuality,
 } from '../schemas/openai';
 import {
+  IMAGES_PER_EDIT_REQUEST,
   MAX_REFERENCE_IMAGES,
   isBflImageModel,
   isBflUltraImageModel,
@@ -125,7 +126,7 @@ export function getImageModelCapabilities(model: ImageModels): ImageModelCapabil
       // OpenAIImageService forwards a seed, but OpenAI's image API documents none to honour it.
       seed: isBflImageModel(model),
       qualities: resolveQualities(model),
-      maxImages: MAX_IMAGES_PER_REQUEST,
+      maxImages: requiresImageInput(model) ? IMAGES_PER_EDIT_REQUEST : MAX_IMAGES_PER_REQUEST,
       maxReferenceImages: isGPTImageModel(model) ? MAX_REFERENCE_IMAGES : 0,
       edit: supportsImageEdit(model),
       requiresInputImage: requiresImageInput(model),

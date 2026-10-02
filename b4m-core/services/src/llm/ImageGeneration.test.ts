@@ -1019,6 +1019,42 @@ describe('ImageGenerationService.process (size normalization)', () => {
     };
   };
 
+  it('holds credits for one image when a Kontext request asks for several', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      {
+        id: ImageModels.FLUX_KONTEXT_PRO,
+        type: 'image',
+        name: ImageModels.FLUX_KONTEXT_PRO,
+        backend: ModelBackend.Gemini,
+        contextWindow: 10000,
+        max_tokens: 10000,
+        supportsImageVariation: false,
+        pricing: { 1: { input: 0, output: 0 } },
+      } as unknown as ModelInfo,
+    ]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]);
+    const service = makeProcessService();
+    const validateUserCredits = vi
+      .spyOn(service as any, 'validateUserCredits')
+      .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: ImageModels.FLUX_KONTEXT_PRO,
+        n: 3,
+      } as any,
+      logger: silentLogger,
+    });
+
+    expect(validateUserCredits.mock.calls[0]?.[2]).toBe(1);
+  });
+
   it.each([
     [ImageModels.GPT_IMAGE_1_5, '1440x810', '1024x1024'],
     [ImageModels.GPT_IMAGE_1_5, '2048x2048', '1024x1024'],

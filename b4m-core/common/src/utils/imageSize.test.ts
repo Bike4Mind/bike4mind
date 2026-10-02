@@ -27,6 +27,11 @@ describe('parseImageSize', () => {
 });
 
 describe('resolveImageDimensions', () => {
+  it('clamps explicit dimensions into bounds after snapping', () => {
+    expect(resolveImageDimensions({ width: 10 }, BFL_DIMENSION_BOUNDS).width).toBe(256);
+    expect(resolveImageDimensions({ width: 1460 }, BFL_DIMENSION_BOUNDS).width).toBe(1440);
+  });
+
   it('prefers explicit dimensions over the preset', () => {
     expect(resolveImageDimensions({ width: 800, height: 600, size: '1440x810' })).toEqual({ width: 800, height: 600 });
   });
