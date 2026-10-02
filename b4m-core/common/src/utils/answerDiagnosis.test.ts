@@ -463,6 +463,15 @@ describe('tools check', () => {
       expect(remedyOf(meta)).toContain('did not respond in time');
     });
 
+    it('strips the Ollama error prefix', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          { name: 'web_search', success: false, returnValue: `Error running web_search: ${SERP_TIMEOUT}` },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
+    });
+
     it('reads the timeout from error when the call recorded one', () => {
       const meta: PromptMeta = { functionCalls: [{ name: 'web_search', error: 'Request timed out after 30s' }] };
       expect(detailOf(meta, 'tools')).toContain('failed (web_search): Request timed out after 30s.');

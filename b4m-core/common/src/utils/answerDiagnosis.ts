@@ -449,9 +449,9 @@ function diagnoseContext(promptMeta: PromptMeta): DiagnosisCheck {
 type FunctionCall = NonNullable<PromptMeta['functionCalls']>[number];
 
 // The llm-adapters backend tool loops store a thrown tool error as the call's returnValue, either
-// prefixed `Error processing <name> tool: ` (Bedrock, Anthropic, OpenAI, DeepSeek, Kimi, xAI) or as
-// JSON `{"error": "<msg>"}` (geminiBackend.ts).
-const TOOL_ERROR_PREFIX = /^Error processing \S+ tool: /;
+// prefixed `Error processing <name> tool: ` (Bedrock, Anthropic, OpenAI, DeepSeek, Kimi, xAI) or
+// `Error running <name>: ` (ollamaBackend.ts), or as JSON `{"error": "<msg>"}` (geminiBackend.ts).
+const TOOL_ERROR_PREFIX = /^Error (?:processing \S+ tool|running \S+): /;
 const TIMED_OUT = /\btimed out\b/i;
 const MAX_TIMEOUT_MESSAGE_CHARS = 160;
 
