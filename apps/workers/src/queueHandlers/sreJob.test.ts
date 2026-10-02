@@ -6,10 +6,10 @@ import { ZodError } from 'zod';
 const mockRunSreAnalysis = vi.fn();
 const mockRunSreRevision = vi.fn();
 
-vi.mock('@server/queueHandlers/sreAnalysis', () => ({
+vi.mock('./sreAnalysis', () => ({
   runSreAnalysis: (...args: unknown[]) => mockRunSreAnalysis(...args),
 }));
-vi.mock('@server/queueHandlers/sreRevision', () => ({
+vi.mock('./sreRevision', () => ({
   runSreRevision: (...args: unknown[]) => mockRunSreRevision(...args),
 }));
 
