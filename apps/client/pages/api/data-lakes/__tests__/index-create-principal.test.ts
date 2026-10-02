@@ -29,6 +29,7 @@ vi.mock('@server/middlewares/featureFlag', () => ({
 }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ DATA_LAKE_READ_SCOPES: [], assertDataLakeWriteScope: vi.fn() }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: vi.fn() }));
+vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: vi.fn() }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
 vi.mock('@bike4mind/database', () => ({ dataLakeRepository: {}, dataLakeAccessGrantRepository: {} }));
