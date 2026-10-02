@@ -21,6 +21,11 @@ import NotebookHeader from './Header';
 import { gray } from '@client/app/utils/themes/colors';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 import type { NotebookContentFilter, NotebookOriginFilter } from './Sidenav/sidenavFilters';
+import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
+
+// Empty in the open-core build, where premiumRoutes is empty.
+const EDGE_TO_EDGE_PATHS = edgeToEdgePaths(premiumRoutes);
 
 export interface NotebookLayoutProps {
   children: ReactNode;
@@ -90,11 +95,11 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   const isOptiRoute = pathname.startsWith('/opti');
   const dataLakeModeOn = useDataLakeMode(s => s.enabled);
 
-  // Opti hub / in-chat Data Lake mode own their edge-to-edge layout; the notebook gutter
-  // would double up as a visible frame around the docked chat + splitter. The 36px left is
+  // Opti hub / in-chat Data Lake mode / edgeToEdge premium routes own their edge-to-edge layout;
+  // the notebook gutter would double up as a visible frame around them. The 36px left is
   // clearance for the collapsed sidenav's floating expand control, not a gutter.
   const getContentPadding = (): string => {
-    if (isMobile || isOptiRoute || dataLakeModeOn) return '0px';
+    if (isMobile || isOptiRoute || isEdgeToEdgePath(pathname, EDGE_TO_EDGE_PATHS) || dataLakeModeOn) return '0px';
     return openSideNav ? '8px' : '8px 8px 8px 36px';
   };
 
