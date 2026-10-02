@@ -13,8 +13,13 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
-// Enrichment remains best-effort; explicit submissions can require broker acceptance.
-// Queued events are consumed by apps/workers/src/selfhost/eventDispatch.ts.
+// Self-host has no EventBridge. email.send goes straight to the mailer (it already throws
+// on failure); everything else is queued to SELF_HOST_EVENT_QUEUE for the background worker
+// (apps/workers/src/selfhost/eventDispatch.ts).
+// Default is warn-and-drop: these events feed async enrichment (naming, summaries, tags,
+// memento embedding), so a delivery failure must degrade the feature, not 500 the caller.
+// A user-facing submission endpoint opts in per call with `requireAcceptance` so the caller
+// learns the broker did not accept the event. Background publishers must not opt in.
 async function publishSelfHost(eventName: string, detail: unknown, requiredAcceptance = false): Promise<void> {
   const logger = new Logger({ metadata: { service: 'eventBus' } });
 
@@ -65,15 +70,12 @@ function createEventBuilder({
   source?: string;
   region?: string;
 }) {
-  return function event<EventName extends string, Schema extends z.ZodType>(
-    eventName: EventName,
-    schema: Schema,
-    options: { requireSelfHostAcceptance?: boolean } = {}
-  ) {
+  return function event<EventName extends string, Schema extends z.ZodType>(eventName: EventName, schema: Schema) {
     return {
-      publish: (detail: z.infer<typeof schema>) => {
+      // requireAcceptance only affects self-host; the hosted path always surfaces send errors.
+      publish: (detail: z.infer<typeof schema>, publishOptions: { requireAcceptance?: boolean } = {}) => {
         if (process.env.B4M_SELF_HOST === 'true') {
-          return publishSelfHost(eventName, detail, options.requireSelfHostAcceptance);
+          return publishSelfHost(eventName, detail, publishOptions.requireAcceptance);
         }
         // Create client on each publish to ensure fresh AWS credentials
         // Lambda containers can stay warm for extended periods, causing module-level
@@ -377,8 +379,7 @@ export const NotebookCurationEvents = {
         .optional(),
       exportFormat: z.enum(['markdown', 'txt', 'html']).optional(),
       customNotebookName: z.string().optional(),
-    }),
-    { requireSelfHostAcceptance: true }
+    })
   ),
   Progress: event(
     'notebook.curation.progress',
