@@ -30,6 +30,9 @@ async function repository(name: string): Promise<{ container: string; main: stri
   const bare = join(container, '.bare');
   const main = join(container, 'main');
   await git(bare, ['worktree', 'add', '--quiet', main, 'main']);
+  // The gitlink the user's `worktree` helper writes, which is what makes git answer from the
+  // container at all - and so what makes the container look pickable.
+  await writeFile(join(container, '.git'), 'gitdir: ./.bare\n', 'utf8');
 
   return { container, main };
 }
@@ -189,6 +192,31 @@ describe('ChatService.updateProject', () => {
     const { id } = await service.createSession();
 
     expect(await service.updateProject({ sessionId: id })).toMatchObject({ ok: false });
+  });
+
+  /**
+   * The container is not somewhere a session can run: no branch is checked out in it, so its
+   * tools would sit beside every worktree rather than in one, and git answers there for the
+   * bare repo - which is where the chip's confident wrong branch name came from.
+   */
+  it('refuses the worktree container as a project and points at the checkouts inside', async () => {
+    const { container, main } = await repository('gamma');
+    const id = await codeSession(main);
+
+    const result = await service.updateProject({ sessionId: id, directory: container });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok === false && result.error).toMatch(/not a checkout/i);
+    expect((await service.getSession(id))?.project).toMatchObject({ directory: main });
+  });
+
+  it('refuses to start a session in the container in the first place', async () => {
+    const { container } = await repository('delta');
+
+    const created = await service.createCodeSession({ directory: container, branch: '', workspace: false });
+
+    expect(created).toMatchObject({ ok: false });
+    expect(created.ok === false && created.error).toMatch(/not a checkout/i);
   });
 });
 

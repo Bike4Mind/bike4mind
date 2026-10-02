@@ -1057,6 +1057,12 @@ export interface ProjectInspection {
   currentBranch: string | null;
   /** Set when git could be asked but answered with a failure; the dialog shows it verbatim. */
   error?: string;
+  /**
+   * Set when the folder cannot ground a session at all, with the reason and what to pick
+   * instead. Binding is refused in main as well; this is so the picker can say why without
+   * first attempting a move it knows will fail. See git.unusableProjectReason.
+   */
+  refusal?: string;
 }
 
 /**
