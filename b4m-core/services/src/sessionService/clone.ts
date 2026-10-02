@@ -60,6 +60,8 @@ export const cloneSession = async (
     summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
     taggedAt: session.taggedAt,
     clonedSourceId: session.id,
+    // The session's home: without it a copy made inside a product surface lands in the main list.
+    surface: session.surface ?? undefined,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
     // and re-deriving here would go through the OWNERSHIP arm alone (no resolveLakeAccess is threaded
     // to this path), which cannot see a teammate-authored organization-lake file. That derives an
