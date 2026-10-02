@@ -1,17 +1,20 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
 vi.mock('next/server', () => {
   class MockNextResponse {
     public status: number;
     public headers: Headers;
+    public forwardedRequestHeaders?: Headers;
 
     constructor(_body?: string, init?: { status?: number }) {
       this.status = init?.status ?? 200;
       this.headers = new Headers();
     }
 
-    static next() {
-      return new MockNextResponse();
+    static next(init?: { request?: { headers?: Headers } }) {
+      const response = new MockNextResponse();
+      response.forwardedRequestHeaders = init?.request?.headers;
+      return response;
     }
   }
   return { NextResponse: MockNextResponse };
@@ -287,5 +290,54 @@ describe('proxy CSP - optional PYODIDE_BASE_URL mirror', () => {
     vi.stubEnv('PYODIDE_BASE_URL', 'not a url');
     expect(proxy(makeRequest(url)).headers.get('Content-Security-Policy')).toBe(baseline);
     warn.mockRestore();
+  });
+});
+
+describe('proxy origin verification', () => {
+  const SECRET = 'a'.repeat(48);
+  type Forwarded = { status: number; forwardedRequestHeaders?: Headers };
+
+  beforeEach(() => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', SECRET);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('passes a request carrying the secret and strips the header before handlers see it', () => {
+    const response = proxy(
+      makeRequest('https://app.bike4mind.com/api/health', { 'x-b4m-origin-verify': SECRET, 'x-other': '1' })
+    ) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders?.has('x-b4m-origin-verify')).toBe(false);
+    expect(response.forwardedRequestHeaders?.get('x-other')).toBe('1');
+  });
+
+  it.each(['/api/health', '/api/v1/chat', '/dashboard'])('403s %s when the header is missing', path => {
+    expect(proxy(makeRequest(`https://abc.lambda-url.us-east-2.on.aws${path}`)).status).toBe(403);
+  });
+
+  it.each([
+    ['wrong', 'b'.repeat(48)],
+    ['short', 'a'.repeat(47)],
+    ['long', 'a'.repeat(49)],
+  ])('403s a %s header value', (_label, value) => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/api/health', { 'x-b4m-origin-verify': value }));
+    expect(response.status).toBe(403);
+  });
+
+  it('never logs the header value', () => {
+    proxy(makeRequest('https://app.bike4mind.com/api/health', { 'x-b4m-origin-verify': 'leaked-value' }));
+    expect(String(vi.mocked(console.warn).mock.calls)).not.toContain('leaked-value');
+  });
+
+  it('does not gate or rewrite request headers when the secret is unset', () => {
+    vi.stubEnv('ORIGIN_VERIFY_SECRET', '');
+    const response = proxy(makeRequest('https://app.bike4mind.com/api/health')) as unknown as Forwarded;
+    expect(response.status).toBe(200);
+    expect(response.forwardedRequestHeaders).toBeUndefined();
   });
 });

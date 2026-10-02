@@ -1072,7 +1072,17 @@ describe('ImageGenerationService.invoke (retry quest bound to its session)', () 
         quests: {
           update,
           getMostRecentChatHistory: vi.fn(async () => []),
-          findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId }) as any),
+          findById: vi.fn(
+            async () =>
+              ({
+                id: 'quest1',
+                sessionId: questSessionId,
+                // The prior run failed; the retry must not inherit its error state.
+                status: 'done',
+                type: 'error',
+                errorCode: 'insufficient_credits',
+              }) as any
+          ),
         },
       },
       startImageGenerationProcess,
@@ -1101,7 +1111,21 @@ describe('ImageGenerationService.invoke (retry quest bound to its session)', () 
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenCalled();
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1', type: 'message' }), {
+      unset: ['status', 'errorCode'],
+    });
+  });
+
+  it('settles the quest as a done error when the process fails to start', async () => {
+    const { invoke, update, startImageGenerationProcess } = makeInvokeService('session1');
+    startImageGenerationProcess.mockRejectedValueOnce(new Error('queue unavailable'));
+    await invoke();
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'quest1',
+      type: 'error',
+      status: 'done',
+      reply: 'queue unavailable',
+    });
   });
 });
 
@@ -1227,7 +1251,7 @@ describe('ImageGenerationService quest partial writes', () => {
       logger: silentLogger,
     });
 
-  it('invoke retry writes exactly images, replies, promptMeta and an undefined promptEnhancement when none is given', async () => {
+  it('invoke retry writes exactly images, replies, type, promptMeta and an undefined promptEnhancement when none is given', async () => {
     const { service, update } = makeService();
     await invoke(service);
 
@@ -1236,9 +1260,11 @@ describe('ImageGenerationService quest partial writes', () => {
       id: 'quest1',
       images: [],
       replies: [],
+      type: 'message',
       promptMeta: invokePromptMeta,
       promptEnhancement: undefined,
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
   it('invoke retry also persists the promptEnhancement when one is given', async () => {
@@ -1251,12 +1277,14 @@ describe('ImageGenerationService quest partial writes', () => {
       id: 'quest1',
       images: [],
       replies: [],
+      type: 'message',
       promptMeta: invokePromptMeta,
       promptEnhancement,
     });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
-  it('invoke catch writes exactly type and reply', async () => {
+  it('invoke catch writes exactly type, status and reply', async () => {
     const startImageGenerationProcess = vi.fn(async () => {
       throw new Error('queue down');
     });
@@ -1266,6 +1294,7 @@ describe('ImageGenerationService quest partial writes', () => {
     expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
       id: 'quest1',
       type: 'error',
+      status: 'done',
       reply: 'queue down',
     });
   });

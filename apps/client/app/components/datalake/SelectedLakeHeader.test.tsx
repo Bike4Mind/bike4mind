@@ -21,9 +21,9 @@ vi.mock('@client/app/stores/useDataLakeWizardStore', async importOriginal => ({
     selector({ openWizardForLake, openManager }),
 }));
 
-// DriveConnectAction fetches Drive status; this suite owns the strip's own wiring, not that chain.
-vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
-  default: () => <div data-testid="drive-connect-action" />,
+// LakeSourceConnectActions fetches connection status; this suite owns the strip's own wiring, not that chain.
+vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
+  default: () => <div data-testid="lake-source-connect-actions" />,
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

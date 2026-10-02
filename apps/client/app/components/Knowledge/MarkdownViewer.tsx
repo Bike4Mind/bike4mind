@@ -1,7 +1,7 @@
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars, UNESCAPED } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
@@ -106,6 +106,33 @@ export const UnmarkedCitedPassage = ({ passage, title }: { passage: string; titl
   </Box>
 );
 
+// A passage clipped mid-span keeps a dangling delimiter that the promoted document no longer has.
+function trimDanglingLatexDelimiters(text: string): string {
+  const delimiters = (s: string) =>
+    [...s.matchAll(new RegExp(String.raw`${UNESCAPED}\\([()[\]])`, 'g'))].map(m => ({
+      kind: m[1] === '(' || m[1] === ')' ? 'paren' : 'bracket',
+      opens: m[1] === '(' || m[1] === '[',
+      start: m.index,
+      end: m.index + m[0].length,
+    }));
+  let cutEnd = 0;
+  const depth = { paren: 0, bracket: 0 };
+  for (const d of delimiters(text)) {
+    if (d.opens) depth[d.kind as keyof typeof depth]++;
+    else if (depth[d.kind as keyof typeof depth] > 0) depth[d.kind as keyof typeof depth]--;
+    else cutEnd = d.end;
+  }
+  const rest = text.slice(cutEnd);
+  const open = { paren: [] as number[], bracket: [] as number[] };
+  for (const d of delimiters(rest)) {
+    const stack = open[d.kind as keyof typeof open];
+    if (d.opens) stack.push(d.start);
+    else stack.pop();
+  }
+  const cutStart = Math.min(rest.length, ...open.paren, ...open.bracket);
+  return rest.slice(0, cutStart).trim();
+}
+
 const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -118,9 +145,12 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
   const citedRange = useMemo(() => {
     if (!citedPassage) return null;
     // Preserve literal matches inside code; otherwise apply the document's math transform.
+    const promotedPassage = promoteInlineLatexDollars(citedPassage);
+    const trimmed = trimDanglingLatexDelimiters(promotedPassage);
     return (
       locateCitedPassage(promotedContent, citedPassage) ??
-      locateCitedPassage(promotedContent, promoteInlineLatexDollars(citedPassage))
+      locateCitedPassage(promotedContent, promotedPassage) ??
+      (trimmed.replace(/\s/g, '').length >= 3 ? locateCitedPassage(promotedContent, trimmed) : null)
     );
   }, [promotedContent, citedPassage]);
 

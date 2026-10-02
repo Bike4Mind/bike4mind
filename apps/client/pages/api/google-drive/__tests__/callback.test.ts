@@ -51,6 +51,7 @@ import errorHandler from '@server/middlewares/errorHandler';
 import { getTokens } from '@server/integrations/google/drive/common';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { createStateToken } from '@server/auth/jwtStateStore';
+import { Config } from '@server/utils/config';
 import { GOOGLE_DRIVE_STATE_OPTIONS } from '@server/integrations/google/drive/common';
 
 /** Mint a genuine state token bound to a fresh nonce, returning both the state and the browser's cookie. */
@@ -192,5 +193,70 @@ describe('google-drive callback browser-binding', () => {
 
     await handler(req as any, res as any);
     expectRejectedConnect(res, 'GOOGLE_DRIVE_CONNECT_FAILED');
+  });
+
+  it('burns the drive nonce on the success response itself', async () => {
+    const { state, nonceCookie } = mintStateWithCookie();
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'user-1' };
+
+    await handler(req as any, res as any);
+    const cookies = [res.getHeader('Set-Cookie')].flat().map(String);
+    expect(cookies.some(c => c.startsWith('b4m_oauth_nonce_google-drive=;') && c.includes('Max-Age=0'))).toBe(true);
+  });
+
+  const burned = (res: { getHeader: (n: string) => unknown }) =>
+    [res.getHeader('Set-Cookie')].flat().some(c => String(c).startsWith('b4m_oauth_nonce_google-drive=;'));
+
+  it('burns the drive nonce when the state is invalid', async () => {
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state: 'garbage' },
+      headers: { cookie: 'b4m_oauth_nonce_google-drive=x' },
+    });
+    (req as any).user = { id: 'user-1' };
+
+    await handler(req as any, res as any);
+    expect(res._getStatusCode()).toBe(400);
+    expect(burned(res)).toBe(true);
+  });
+
+  it('keeps the burn on the response when the DB write throws', async () => {
+    mockFindByIdAndUpdate.mockRejectedValueOnce(new Error('db down'));
+    const { state, nonceCookie } = mintStateWithCookie();
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'user-1' };
+
+    await handler(req as any, res as any);
+    expect(res._getStatusCode()).toBe(500);
+    expect(burned(res)).toBe(true);
+  });
+
+  it('burns the drive nonce even when state verification throws synchronously', async () => {
+    const { state, nonceCookie } = mintStateWithCookie();
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { code: 'auth-code', state },
+      headers: { cookie: nonceCookie },
+    });
+    (req as any).user = { id: 'user-1' };
+    const jwtSecret = Config.JWT_SECRET;
+    (Config as { JWT_SECRET?: string }).JWT_SECRET = '';
+
+    try {
+      await handler(req as any, res as any);
+      expect(res._getStatusCode()).toBe(500);
+    } finally {
+      (Config as { JWT_SECRET?: string }).JWT_SECRET = jwtSecret;
+    }
+    expect(burned(res)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useCallback, type ReactNode } from 'react';
 import {
   Box,
   Button,
@@ -25,6 +25,7 @@ import type { TagNode } from '@client/app/components/Files/Browser/TagView/parse
 import FileIndexingAlert from './FileIndexingAlert';
 import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
 import TreeRowLabel from './TreeRowLabel';
+import LakeDraftChip from './LakeDraftChip';
 import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
 import { inkFor } from '@client/app/components/datalake/deckChrome';
 import {
@@ -61,6 +62,12 @@ interface DataLakeChatTreeProps {
    */
   uncategorized?: { files: IFabFileDocument[]; count: number };
   selectedFileIds: ReadonlySet<string>;
+  /**
+   * Tag paths (`acme:legal`, no trailing colon) of the draft lakes in view. A folder whose FULL path
+   * is one of these is that lake's root and gets the draft marker; matching on the path rather than
+   * the segment keeps a nested prefix's parent folder unmarked.
+   */
+  draftLakePaths?: ReadonlySet<string>;
   /** Menu action: attach the file to the chat session. */
   onAttachFile: (file: IFabFileDocument) => void;
   /** Open the file. Runs from the row's own click as well as the menu's View item. */
@@ -90,6 +97,14 @@ interface DataLakeChatTreeProps {
    * at rest - the one thing the retired page's header row carried that has no other home.
    */
   dropHint?: string;
+  /** Resolves a node's full path to the lake whose tag prefix it is, so the row shows the lake's
+   *  own name. Must return undefined for a prefix more than one lake holds. */
+  lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
+  /** Distinct members per `datalakeTag`; a lake-root row shows this instead of the tag-occurrence
+   *  sum in `node.fileCount`, which counts a file once per prefix tag it carries. It can differ
+   *  from the children's chips: those still count tag occurrences, and meta-tag-only members
+   *  sit under Uncategorized. */
+  lakeFileCounts?: Record<string, number>;
 }
 
 /**
@@ -105,6 +120,7 @@ export default function DataLakeChatTree({
   source,
   uncategorized,
   selectedFileIds,
+  draftLakePaths,
   onAttachFile,
   onViewFile,
   canDeleteFile,
@@ -118,6 +134,8 @@ export default function DataLakeChatTree({
   subHeader,
   emptySlot,
   dropHint,
+  lakeForPath,
+  lakeFileCounts,
 }: DataLakeChatTreeProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
@@ -253,6 +271,16 @@ export default function DataLakeChatTree({
     </Box>
   );
 
+  // A lake-root row shows the lake's name and distinct member count; TreeView reads the same
+  // values for search and sort.
+  const lakeRootDisplay = useCallback(
+    (node: TagNode, depth: number) => {
+      const lake = lakeForPath?.([...breadcrumb.slice(0, depth), node.segment]);
+      return lake && { label: lake.name, count: lakeFileCounts?.[lake.datalakeTag] ?? node.fileCount };
+    },
+    [lakeForPath, lakeFileCounts, breadcrumb]
+  );
+
   const chrome: DataLakeTreeChrome = {
     containerSx: {
       width: 260,
@@ -308,6 +336,7 @@ export default function DataLakeChatTree({
     fileListSx: TREE_LIST_SX,
     renderNodeRow: (node, depth, onOpen) => {
       const branchInk = inkFor(hueForBranch(node.segment, breadcrumb), isDark);
+      const shown = lakeRootDisplay(node, depth);
       return (
         <ListItem>
           <ListItemButton
@@ -317,10 +346,19 @@ export default function DataLakeChatTree({
           >
             <FolderOutlinedIcon sx={{ fontSize: 16, color: branchInk, flexShrink: 0 }} />
             <ListItemContent>
-              <TreeRowLabel label={humanizeSegment(node.segment, depth)} />
+              <TreeRowLabel label={shown?.label ?? humanizeSegment(node.segment, depth)} />
             </ListItemContent>
-            <Chip size="sm" variant="soft" color="neutral" sx={COUNT_CHIP_SX}>
-              {node.fileCount}
+            {draftLakePaths?.has([...breadcrumb, node.segment].join(':')) && (
+              <LakeDraftChip testId={`datalake-node-draft-chip-${node.segment}`} />
+            )}
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={COUNT_CHIP_SX}
+              data-testid={`datalake-nodecount-${node.segment}`}
+            >
+              {shown?.count ?? node.fileCount}
             </Chip>
           </ListItemButton>
         </ListItem>
@@ -413,7 +451,8 @@ export default function DataLakeChatTree({
         </ListItemButton>
       </ListItem>
     ),
-    humanize: humanizeSegment,
+    humanize: (segment, depth) =>
+      lakeForPath?.([...breadcrumb.slice(0, depth), segment])?.name ?? humanizeSegment(segment, depth),
     allCategoriesLabel: 'All Categories',
     emptyFilesLabel: 'No articles found',
     errorLabel: 'Failed to load articles',
@@ -464,6 +503,7 @@ export default function DataLakeChatTree({
       isLoading={isLoading}
       isError={isError}
       chrome={chrome}
+      nodeDisplay={lakeRootDisplay}
       header={header}
       footer={footer}
       emptySlot={emptySlot}

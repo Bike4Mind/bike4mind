@@ -18,6 +18,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import imageLogger from '@client/app/utils/imageLogger';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
@@ -96,8 +97,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     requestId: context.awsRequestId,
   });
 
-  await getImageGeneration().process({
-    body: JSON.parse(event.Records[0].body),
-    logger,
-  });
+  const body = JSON.parse(event.Records[0].body);
+  try {
+    await getImageGeneration().process({ body, logger });
+  } finally {
+    // Also on a throw: process() may have written the terminal status before failing.
+    await dispatchQuestCallback(body.questId, logger);
+  }
 });

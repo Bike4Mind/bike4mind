@@ -68,6 +68,14 @@ export const dataLakeKeys = {
   filesOf: (dataLakeId: string) => ['dataLakeFiles', dataLakeId] as const,
   /** Invalidation prefix covering all lakes' file lists. */
   filesRoot: ['dataLakeFiles'] as const,
+  /** The Drive folder feeding one lake (GET /api/data-lakes/:id/drive-connection). */
+  driveConnection: (dataLakeId?: string) => ['lake-drive-connection', dataLakeId] as const,
+  /** Prefix of every lake's Drive connection read. */
+  driveConnectionRoot: ['lake-drive-connection'] as const,
+  /** The repository feeding one lake (GET /api/data-lakes/:id/github-connection). */
+  gitHubConnection: (dataLakeId?: string) => ['lake-github-connection', dataLakeId] as const,
+  /** Prefix of every lake's GitHub connection read. */
+  gitHubConnectionRoot: ['lake-github-connection'] as const,
   /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
   health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
   /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which

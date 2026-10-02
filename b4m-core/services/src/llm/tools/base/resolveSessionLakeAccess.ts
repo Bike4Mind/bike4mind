@@ -1,6 +1,6 @@
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
 import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
-import { noSessionLakes, resolveSessionLakeAdmission } from '../../../dataLakeService/sessionLakeAdmission';
+import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
 import type { ToolContext } from './types';
 
 /**
@@ -13,24 +13,29 @@ import type { ToolContext } from './types';
  * differently reopens the leak on every turn the others are scoped - which is exactly what happened
  * when only one tool honoured the session.
  */
-export async function resolveSessionLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
+export async function resolveSessionLakeAccess(
+  context: ToolContext,
+  ownerAccess: () => Promise<ResolvedLakeAccessSet> = () => resolveOwnerLakeAccess(context)
+): Promise<ResolvedLakeAccessSet> {
   // Two different reasons for the same answer, and the narrowing below can express neither: it
   // reads an empty scope as "no opinion" and hands back the caller's full owner-wide access.
   if (context.suppressLakeArms) return noSessionLakes();
   if (sessionGroundsOnNoLake(context.sessionRetrievalTags, context.sessionLakeScopeExplicit)) return noSessionLakes();
+  return searchedSessionLakes(await ownerAccess(), {
+    retrievalTags: context.sessionRetrievalTags,
+    lakeScopeExplicit: context.sessionLakeScopeExplicit,
+  });
+}
+
+/**
+ * The caller's owner-wide lake access plus the session's pre-authorized lakes, with no session
+ * narrowing: the set resolveSessionLakeAccess narrows from. A caller that needs both (retrieve
+ * attributes its chips owner-wide) memoizes this once and passes it in as `ownerAccess`.
+ */
+export async function resolveOwnerLakeAccess(context: ToolContext): Promise<ResolvedLakeAccessSet> {
   const resolved = await getDynamicDataLakeAccess(context);
   // `context.userId` is the session OWNER on any turn that carries preauthorizedLakeIds:
   // vetPreauthorizedLakeIds blanks the field unless the session's own userId equals the acting
   // user, and the identity-substituting worker paths never reach that call at all.
-  const { searched } = await resolveSessionLakeAdmission(
-    resolved,
-    {
-      retrievalTags: context.sessionRetrievalTags,
-      lakeScopeExplicit: context.sessionLakeScopeExplicit,
-      preauthorizedLakeIds: context.sessionPreauthorizedLakeIds,
-    },
-    context.userId,
-    context.db
-  );
-  return searched;
+  return admitSessionLakes(resolved, context.sessionPreauthorizedLakeIds, context.userId, context.db);
 }

@@ -41,9 +41,26 @@ export async function resolveSessionLakeAdmission(
   actorUserId: string,
   db: { dataLakes?: Pick<IDataLakeRepository, 'findById'> } & ManageRecheckAdapter
 ): Promise<SessionLakeAdmission> {
-  const admitted = await unionPreauthorizedLakeAccess(access, session.preauthorizedLakeIds, actorUserId, db);
-  const searched = sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
+  const admitted = await admitSessionLakes(access, session.preauthorizedLakeIds, actorUserId, db);
+  return { admitted, searched: searchedSessionLakes(admitted, session) };
+}
+
+/** The `admitted` half of resolveSessionLakeAdmission, for a caller that memoizes it separately. */
+export function admitSessionLakes(
+  access: ResolvedLakeAccessSet,
+  preauthorizedLakeIds: string[] | undefined,
+  actorUserId: string,
+  db: { dataLakes?: Pick<IDataLakeRepository, 'findById'> } & ManageRecheckAdapter
+): Promise<ResolvedLakeAccessSet> {
+  return unionPreauthorizedLakeAccess(access, preauthorizedLakeIds, actorUserId, db);
+}
+
+/** The `searched` half of resolveSessionLakeAdmission: an admitted set narrowed to the session's scope. */
+export function searchedSessionLakes(
+  admitted: ResolvedLakeAccessSet,
+  session: Pick<SessionLakeAdmissionInput, 'retrievalTags' | 'lakeScopeExplicit'>
+): ResolvedLakeAccessSet {
+  return sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
     ? noSessionLakes()
     : narrowLakeAccessToSession(admitted, session.retrievalTags);
-  return { admitted, searched };
 }

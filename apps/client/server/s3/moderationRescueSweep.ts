@@ -67,9 +67,9 @@ export interface ModerationRescueSweepArgs {
  *
  * Re-scans in place with the same claim/persist wiring as the import path. Two callers, two very
  * different cadences: the hosted daily reconcile cron, and the self-host worker's 60s tick
- * (worker/main.ts). MODERATION_RETRY_BACKOFF_MS only bites on the latter - on the daily cadence the
- * last attempt is always at least a day old, so the fairness sort is the only mechanism doing work
- * there. Recovery latency is coarse but the held file is fail-closed (unservable) until it
+ * (apps/workers/src/selfhost/main.ts). MODERATION_RETRY_BACKOFF_MS only bites on the latter - on
+ * the daily cadence the last attempt is always at least a day old, so the fairness sort is the only
+ * mechanism doing work there. Recovery latency is coarse but the held file is fail-closed (unservable) until it
  * completes, so lag is safe either way.
  */
 export async function runModerationRescueSweep({

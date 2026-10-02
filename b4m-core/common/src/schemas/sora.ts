@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { VIDEO_SIZE_CONSTRAINTS, VideoModels } from '../models';
+import { GenerationCallbackUrlSchema } from './generationCallback';
 
 /**
  * OpenAI Sora Video Generation Schemas
@@ -111,6 +112,7 @@ export const GenerateVideoRequestBodySchema = z.object({
   questId: z.string().optional(),
   projectId: z.string().optional(),
   organizationId: z.string().nullable().optional(),
+  callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 
 export type GenerateVideoRequestBody = z.infer<typeof GenerateVideoRequestBodySchema>;

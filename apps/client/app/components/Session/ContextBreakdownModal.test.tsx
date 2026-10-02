@@ -141,6 +141,36 @@ describe('ContextBreakdownModal', () => {
     expect(screen.queryByTestId('context-breakdown-excluded-lakes-chip')).toBeNull();
   });
 
+  it('shows the not-serving-lakes chip when the turn recorded a draft lake', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        retrieval: { ...breakdown.retrieval, notServingLakes: { count: 1, reason: 'draft' } },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-not-serving-lakes-chip').textContent).toContain(
+      'not serving: 1 (draft)'
+    );
+  });
+
+  it('omits the not-serving-lakes chip on a recorded zero', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        retrieval: { ...breakdown.retrieval, notServingLakes: { count: 0, reason: 'draft' } },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-not-serving-lakes-chip')).toBeNull();
+  });
+
   it('labels injected volume clearly as all-surfaces total', () => {
     mockUseQuestContextBreakdown.mockReturnValue({
       data: {

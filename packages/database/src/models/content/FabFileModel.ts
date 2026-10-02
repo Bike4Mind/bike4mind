@@ -1249,6 +1249,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
     }
   ): Promise<{ tag: string; count: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -1305,6 +1307,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -1886,6 +1890,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]> {
     return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
+  }
+
+  async countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number> {
+    // Same includeDeleted set the disconnect purge reaches, as countByDriveConnectionIdInDataLake.
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ githubConnectionId }, datalakeTag));
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {

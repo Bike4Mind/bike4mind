@@ -191,6 +191,155 @@ describe('retrieval check', () => {
   });
 });
 
+// A session naming a draft lake narrows to an empty scope, so the forced arm abstains with
+// 'no_lakes'. search_knowledge_base still searches the caller's own and shared files (a draft's
+// files are its owner's own), finds nothing and writes 'ok' with zero chunks. The merge keeps 'ok',
+// so the stored turn is exactly this shape.
+describe("scope abstain (the chat's lake was never searched)", () => {
+  const draftAbstain: PromptMeta = {
+    retrieval: {
+      attempted: true,
+      outcome: 'ok',
+      mode: 'forced',
+      surfaces: ['forced-retrieval', 'knowledgeBaseSearch'],
+      dataLakeTags: [],
+      injected: { chunks: 0, chars: 0 },
+      lakeScope: [],
+      notServingLakes: { count: 1, reason: 'draft' },
+      excludedLakes: { count: 0, reason: 'access' },
+    },
+  };
+  const withRetrieval = (over: Partial<NonNullable<PromptMeta['retrieval']>>): PromptMeta => ({
+    retrieval: { ...draftAbstain.retrieval!, ...over },
+  });
+  const retrievalCheck = (meta: PromptMeta) => diagnoseAnswer(meta).checks.find(c => c.id === 'retrieval')!;
+
+  const draftWarn = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'warn',
+    detail:
+      "This chat's data lake is a draft, so it was not searched as a data lake. Your own and shared files were searched, and nothing matched.",
+    remedy:
+      'Publish the lake so retrieval searches it as a data lake. If nothing comes back after that, its files may not cover this question.',
+  };
+  const draftNothingSearchedWarn = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'warn',
+    detail: "This chat's data lake is a draft, so it was not searched - drafts do not ground answers.",
+    remedy: 'Publish the lake to ground answers in it.',
+  };
+  const accessWarn = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'warn',
+    detail:
+      "This chat's data lake is not one you can currently reach, so it was not searched. Your own and shared files were searched, and nothing matched.",
+    remedy: 'Check that you still have access to it, or pick a different lake for this chat.',
+  };
+  const accessNothingSearchedWarn = {
+    ...accessWarn,
+    detail: "This chat's data lake is not one you can currently reach, so it was not searched.",
+  };
+  const volumeFail = {
+    id: 'retrieval',
+    label: 'Retrieval',
+    status: 'fail',
+    detail:
+      'Your knowledge base was searched and nothing was retrieved - the answer is not grounded in your documents.',
+    remedy: 'Rephrase with the wording your documents use, or widen the knowledge base in scope.',
+  };
+
+  it('names the draft as the cause instead of reporting a broken pipeline', () => {
+    const diagnosis = diagnoseAnswer(draftAbstain);
+    expect(retrievalCheck(draftAbstain)).toEqual(draftWarn);
+    expect(diagnosis.verdict.status).toBe('warn');
+    expect(diagnosis.verdict.headline).toBe('The model may not have had what it needed');
+    expect(diagnosis.verdict.body).toBe(
+      'Retrieval below explains it. Fix that before treating this as a model-quality problem.'
+    );
+  });
+
+  it("does not call the lake that was never searched 'searchable'", () => {
+    expect(statusOf(draftAbstain, 'corpus')).toBe('unknown');
+    expect(detailOf(draftAbstain, 'corpus')).toBe(
+      "This chat's data lake was not searched as a data lake, so nothing is known about whether it is indexed."
+    );
+  });
+
+  it('says the lake was not searched at all only when no surface searched anything', () => {
+    const nothingSearched = withRetrieval({ outcome: 'no_lakes', injected: undefined });
+    expect(retrievalCheck(nothingSearched)).toEqual(draftNothingSearchedWarn);
+    expect(detailOf(nothingSearched, 'corpus')).toBe(
+      "This chat's data lake was not searched, so nothing is known about whether it is indexed."
+    );
+  });
+
+  it('leaves the unrecorded-volume reading alone when retrieve_knowledge_content ran', () => {
+    const retrieved: PromptMeta = {
+      ...draftAbstain,
+      functionCalls: [{ name: 'retrieve_knowledge_content', success: true }],
+    };
+    expect(retrievalCheck(retrieved).status).toBe('unknown');
+    expect(retrievalCheck(retrieved).detail).not.toContain('draft');
+  });
+
+  it('names an access exclusion when the session named a lake and no draft explains the empty scope', () => {
+    const named = {
+      notServingLakes: { count: 0, reason: 'draft' as const },
+      excludedLakes: { count: 1, reason: 'access' as const },
+    };
+    expect(retrievalCheck(withRetrieval(named))).toEqual(accessWarn);
+    expect(retrievalCheck(withRetrieval({ ...named, outcome: 'no_lakes', injected: undefined }))).toEqual(
+      accessNothingSearchedWarn
+    );
+  });
+
+  // No named lake: lakeScope and excludedLakes are account-wide, so they say nothing about "this
+  // chat's lake" and the turn keeps the verdict it had before the abstain arm existed.
+  it('does not blame an unreachable lake when the session named no lake', () => {
+    const unnamed = { notServingLakes: undefined, excludedLakes: { count: 2, reason: 'access' as const } };
+    expect(retrievalCheck(withRetrieval(unnamed))).toEqual(volumeFail);
+    expect(retrievalCheck(withRetrieval({ ...unnamed, outcome: 'no_lakes', injected: undefined }))).toEqual({
+      id: 'retrieval',
+      label: 'Retrieval',
+      status: 'warn',
+      detail: 'Retrieval ran but no knowledge base was in scope for it to search.',
+      remedy: 'Select a data lake for this session, or check that you still have access to one.',
+    });
+  });
+
+  it('does not claim nothing was searched when something reached the model', () => {
+    const injected = withRetrieval({ injected: { chunks: 3, chars: 600 } });
+    expect(retrievalCheck(injected).status).toBe('ok');
+    expect(statusOf(injected, 'corpus')).toBe('ok');
+
+    const ownFiles: PromptMeta = {
+      ...withRetrieval({ injected: undefined }),
+      citables: [{ id: 'a', type: 'document', title: 'A' }],
+    };
+    expect(retrievalCheck(ownFiles).detail).not.toBe(draftWarn.detail);
+    expect(statusOf(ownFiles, 'corpus')).toBe('ok');
+  });
+
+  it('keeps a real failure on whatever did run as the headline', () => {
+    expect(retrievalCheck(withRetrieval({ outcome: 'failed' })).status).toBe('fail');
+    expect(retrievalCheck(withRetrieval({ outcome: 'not_indexed' })).status).toBe('fail');
+  });
+
+  it('still fails a genuine zero over a lake that was in scope', () => {
+    const meta = withRetrieval({ lakeScope: ['datalake:handbook'] });
+    expect(retrievalCheck(meta).status).toBe('fail');
+    expect(retrievalCheck(meta).detail).toContain('nothing was retrieved');
+  });
+
+  it('still fails an empty scope with no recorded cause, rather than guessing one', () => {
+    const meta = withRetrieval({ notServingLakes: undefined, excludedLakes: undefined });
+    expect(retrievalCheck(meta).status).toBe('fail');
+  });
+});
+
 describe('corpus check', () => {
   it('is driven off not_indexed directly', () => {
     const meta: PromptMeta = { retrieval: { attempted: true, outcome: 'not_indexed', surfaces: [], dataLakeTags: [] } };
@@ -202,6 +351,12 @@ describe('corpus check', () => {
     expect(statusOf({}, 'corpus')).toBe('unknown');
     expect(statusOf({ retrieval: { attempted: false, surfaces: [], dataLakeTags: [] } }, 'corpus')).toBe('unknown');
     expect(statusOf(healthy, 'corpus')).toBe('ok');
+  });
+
+  it('is unknown, not searchable, when no knowledge base was in scope', () => {
+    const meta: PromptMeta = { retrieval: { attempted: true, outcome: 'no_lakes', surfaces: [], dataLakeTags: [] } };
+    expect(statusOf(meta, 'corpus')).toBe('unknown');
+    expect(detailOf(meta, 'corpus')).not.toContain('searchable');
   });
 });
 
@@ -244,15 +399,48 @@ describe('tools check', () => {
     expect(statusOf({}, 'tools')).toBe('unknown');
   });
 
-  it('counts a recorded error as a failure and names the tool', () => {
+  it('warns on a partial failure, names the tool, and notes the model replied with what it got', () => {
     const meta: PromptMeta = {
       functionCalls: [
         { name: 'web_search', error: 'timeout' },
         { name: 'math_evaluate', success: true },
       ],
     };
-    expect(statusOf(meta, 'tools')).toBe('fail');
+    expect(statusOf(meta, 'tools')).toBe('warn');
     expect(detailOf(meta, 'tools')).toContain('web_search');
+    expect(detailOf(meta, 'tools')).toContain('1 succeeded');
+    expect(detailOf(meta, 'tools')).toContain('the model replied with what it got');
+  });
+
+  it('distinguishes succeeded calls from no-verdict calls in the detail', () => {
+    const meta: PromptMeta = {
+      functionCalls: [
+        { name: 'web_search', error: 'timeout' },
+        { name: 'math_evaluate', success: true },
+        { name: 'code_exec' },
+      ],
+    };
+    expect(detailOf(meta, 'tools')).toContain('1 succeeded');
+    expect(detailOf(meta, 'tools')).toContain('1 had no recorded verdict');
+  });
+
+  it('fails when every tool call failed', () => {
+    const meta: PromptMeta = {
+      functionCalls: [
+        { name: 'web_search', success: false },
+        { name: 'web_search', error: 'timeout' },
+      ],
+    };
+    expect(statusOf(meta, 'tools')).toBe('fail');
+    expect(detailOf(meta, 'tools')).toContain('All 2 tool calls failed');
+  });
+
+  it('uses singular phrasing when the only tool call failed', () => {
+    const meta: PromptMeta = {
+      functionCalls: [{ name: 'web_search', success: false }],
+    };
+    expect(statusOf(meta, 'tools')).toBe('fail');
+    expect(detailOf(meta, 'tools')).toContain('The only tool call failed');
   });
 
   it('does not count a call with no recorded verdict as failed', () => {

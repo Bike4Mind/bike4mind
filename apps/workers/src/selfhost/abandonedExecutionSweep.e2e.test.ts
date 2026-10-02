@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { Quest, agentExecutionRepository, questRepository } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
-import * as sweepModule from '@server/cron/agentExecutionAbandonedSweep';
+import * as sweepModule from '@workers/cron/agentExecutionAbandonedSweep';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 

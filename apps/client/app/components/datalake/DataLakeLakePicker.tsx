@@ -27,11 +27,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
-import {
-  isDraftLake,
-  lakeVisibilityLabelShort,
-  DRAFT_LAKE_TOOLTIP,
-} from '@client/app/components/datalake/lakeVisibility';
+import { isDraftLake, lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
+import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
 import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
@@ -424,17 +421,7 @@ export default function DataLakeLakePicker({
                               {lakeVisibilityLabelShort(lake)}
                             </Typography>
                             {isDraftLake(lake) && (
-                              <Tooltip size="sm" title={DRAFT_LAKE_TOOLTIP}>
-                                <Chip
-                                  size="sm"
-                                  variant="soft"
-                                  color="warning"
-                                  sx={{ fontSize: '11px', flexShrink: 0 }}
-                                  data-testid={`datalake-lake-picker-draft-chip-${lake.id}`}
-                                >
-                                  Draft
-                                </Chip>
-                              </Tooltip>
+                              <LakeDraftChip testId={`datalake-lake-picker-draft-chip-${lake.id}`} />
                             )}
                           </Box>
                         </ListItemContent>

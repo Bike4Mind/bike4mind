@@ -109,9 +109,9 @@ export const DEFAULT_MANIFEST = {
   // connect path reads it after the binding row is written, the same hazard as driveLakeIngestQueue above.
   githubLakeIngestQueue: { kind: 'queue' },
   // Read by the App's webhook (webhooks/github/lake.ts) only after it verifies the signature and
-  // resolves affected connections - no row is written first. Registered so the webhook resolves the
-  // key instead of throwing; the self-host worker runner (apps/workers/src/selfhost) has no consumer
-  // for this queue (nor githubLakeIngestQueue), so on a self-host the queued revokes still wait for one.
+  // resolves affected connections - no row is written first - and by a connection release that hands
+  // off a failed uninstall. Both GitHub lake queues are drained by the self-host worker
+  // (apps/workers/src/selfhost/main.ts).
   githubLakeRevokeQueue: { kind: 'queue' },
   emailAnalysisQueue: { kind: 'queue', optional: true },
   emailBatchQueue: { kind: 'queue' },
@@ -119,6 +119,9 @@ export const DEFAULT_MANIFEST = {
   emailJobQueue: { kind: 'queue' },
   fabFileChunkQueue: { kind: 'queue' },
   fabFileVectorizeQueue: { kind: 'queue' },
+  // Optional like the image queues below: delivers completion callbacks for their jobs, so an
+  // install without it just skips callback delivery instead of losing image/video generation.
+  generationCallbackQueue: { kind: 'queue', optional: true },
   // Optional so an install that upgraded without adding the new env vars still boots the
   // worker (it warns and skips the consumer) instead of taking every other queue down with it.
   imageEditQueue: { kind: 'queue', optional: true },

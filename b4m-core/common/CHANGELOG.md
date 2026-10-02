@@ -1,5 +1,43 @@
 # @bike4mind/common
 
+## 12.1.0
+
+### Minor Changes
+
+- [#3410](https://github.com/Bike4Mind/bike4mind/pull/3410) [`ede9899`](https://github.com/Bike4Mind/bike4mind/commit/ede9899b6ec98aeb9f7936eaa6bd99624ce1b6d6) Thanks [@onoya](https://github.com/onoya)! - add metadata-only documentDate backfill script
+
+- [#3488](https://github.com/Bike4Mind/bike4mind/pull/3488) [`9d369fd`](https://github.com/Bike4Mind/bike4mind/commit/9d369fd0083bbddfd4a87ae05c7ace87c945f1a5) Thanks [@chadyuson2](https://github.com/chadyuson2)! - list, add and revoke-by-id on the share-token route
+
+- [#3491](https://github.com/Bike4Mind/bike4mind/pull/3491) [`fd7ef89`](https://github.com/Bike4Mind/bike4mind/commit/fd7ef89592e6228fd7df9a5bbdd7e750d2249e6b) Thanks [@vinchi777](https://github.com/vinchi777)! - let add-on packages publish contracts for the routes they mount
+
+- [#3503](https://github.com/Bike4Mind/bike4mind/pull/3503) [`a92d5d3`](https://github.com/Bike4Mind/bike4mind/commit/a92d5d31c493960010cdf1abe03333450c7dd6b0) Thanks [@aflordelis](https://github.com/aflordelis)! - show the judge model on an in-flight research run card
+
+- [#3509](https://github.com/Bike4Mind/bike4mind/pull/3509) [`60845e1`](https://github.com/Bike4Mind/bike4mind/commit/60845e1ee2b6605fe8a2e05fa4b8431360c07dd0) Thanks [@onoya](https://github.com/onoya)! - publish the data lake API in the public contract
+
+- [#3489](https://github.com/Bike4Mind/bike4mind/pull/3489) [`0a36217`](https://github.com/Bike4Mind/bike4mind/commit/0a362178b0ad60b07877666862ac98815ed5af54) Thanks [@julsanchez](https://github.com/julsanchez)! - Add required `removeMember` to `IOrganizationRepository` and `recordReferrals` to `IUserRepository`, a typed `RepositoryUpdateOptions<T>` for `IBaseRepository.update` and `updateMany`, and the exported `RepositoryPatch<T>` / `RepositoryUpdate<T>` types so `update` accepts dotted leaf paths (`'visual.portraitUrl'`). `updateMany` now honours the reserved `unset` option.
+
+### Patch Changes
+
+- [#3385](https://github.com/Bike4Mind/bike4mind/pull/3385) [`0aa75f9`](https://github.com/Bike4Mind/bike4mind/commit/0aa75f9b925474b221817fb70fd7f4222f69c4e8) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - purge ingested files on Google Drive disconnect
+
+- [#3387](https://github.com/Bike4Mind/bike4mind/pull/3387) [`5f21257`](https://github.com/Bike4Mind/bike4mind/commit/5f21257e89df2bdb9ed84b37ec157a98220dc678) Thanks [@dea0030](https://github.com/dea0030)! - give the attachment door its own draft-inclusive lake scope
+
+- [#3391](https://github.com/Bike4Mind/bike4mind/pull/3391) [`420acfd`](https://github.com/Bike4Mind/bike4mind/commit/420acfd544dd1c4825ccf3e6730906609e8d5f56) Thanks [@dea0030](https://github.com/dea0030)! - define generate-image and edit-image with API contracts
+
+- [#3394](https://github.com/Bike4Mind/bike4mind/pull/3394) [`fb13127`](https://github.com/Bike4Mind/bike4mind/commit/fb13127fa17159715f2465edc13aa79ba9fbb371) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - scan artifact tags, titles and tool-output results in linear time
+
+- [#3482](https://github.com/Bike4Mind/bike4mind/pull/3482) [`35e91bf`](https://github.com/Bike4Mind/bike4mind/commit/35e91bf9d09751fea6d066d20273a23bf2c596e4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - move lattice intent scanners into @bike4mind/common
+
+- [#3486](https://github.com/Bike4Mind/bike4mind/pull/3486) [`870a2e5`](https://github.com/Bike4Mind/bike4mind/commit/870a2e53453e8c62afe271d4cccd147eb70a6ca9) Thanks [@julsanchez](https://github.com/julsanchez)! - stop API-key writers from reverting a revoke or spend increment
+
+- [#3492](https://github.com/Bike4Mind/bike4mind/pull/3492) [`ada05e5`](https://github.com/Bike4Mind/bike4mind/commit/ada05e5375c6ece452390fd894b7ba5ee8ca7eca) Thanks [@vinchi777](https://github.com/vinchi777)! - mark a killed turn's recovered quest unfinished and bound web_search in the Lambda
+
+- [#3493](https://github.com/Bike4Mind/bike4mind/pull/3493) [`9358808`](https://github.com/Bike4Mind/bike4mind/commit/9358808b851943c909443297d9cbd820c6b5abdf) Thanks [@onoya](https://github.com/onoya)! - pick forced-retrieval candidates by relevance, not file name
+
+- [#3502](https://github.com/Bike4Mind/bike4mind/pull/3502) [`5d94e2b`](https://github.com/Bike4Mind/bike4mind/commit/5d94e2b2eea151c86fe4c697bd7e39feda74dfec) Thanks [@julsanchez](https://github.com/julsanchez)! - re-check sharee write access at write time for projects, quest plans, artifacts and sessions
+
+- [#3512](https://github.com/Bike4Mind/bike4mind/pull/3512) [`cd64e03`](https://github.com/Bike4Mind/bike4mind/commit/cd64e03790355e26c51079385cd09797514d066e) Thanks [@onoya](https://github.com/onoya)! - let a lake's system prompt reach readers on sessions scoped to it
+
 ## 12.0.0
 
 ### Major Changes

@@ -25,6 +25,7 @@ export * from './schemas';
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
 // NOT exported here - it runs extendZodWithOpenApi and is generate-time only.
 export * from './api-contract';
+export type { GeneratedFile } from './schemas/quest';
 export * from './constants/user';
 export * from './constants/organization';
 export * from './constants/dataLakes';

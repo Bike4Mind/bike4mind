@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
-vi.mock('@server/cron/telemetryCleanup', () => ({ runTelemetryCleanup: run }));
+vi.mock('@workers/cron/telemetryCleanup', () => ({ runTelemetryCleanup: run }));
 import { SelfHostWorker } from './selfHostWorker';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;

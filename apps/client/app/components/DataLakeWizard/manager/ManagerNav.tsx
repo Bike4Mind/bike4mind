@@ -33,6 +33,8 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
+import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
+import { isDraftLake } from '@client/app/components/datalake/lakeVisibility';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import {
   COUNT_CHIP_SX,
@@ -431,6 +433,7 @@ export default function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {isDraftLake(lake) && <LakeDraftChip testId={`datalake-manager-draft-chip-${lake.id}`} />}
                               {/* Owner marker in the LIST itself, not just the detail pane: the
                                   row otherwise shows only a name, so an admin (who sees every
                                   tenant's lakes, even private) can't tell whose is whose without
@@ -519,7 +522,7 @@ export default function ManagerNav({
                                     sx={COUNT_CHIP_SX}
                                     data-testid={`datalake-manager-pending-proposals-${lake.id}`}
                                   >
-                                    {`${lake.pendingProposalCount} to review`}
+                                    {`${lake.pendingProposalCount} ${lake.pendingProposalCount === 1 ? 'source' : 'sources'} to review`}
                                   </Chip>
                                 </Tooltip>
                               )}

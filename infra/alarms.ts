@@ -1033,7 +1033,7 @@ if (isMonitoredStage) {
    * problem, not a one-off.
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
-   * server/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
+   * apps/workers/src/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
    * Namespace: Lumina5/DataLakeBatch / StuckBatches
    */
   new aws.cloudwatch.MetricAlarm('dataLakeStuckBatchesHigh', {
@@ -1235,7 +1235,7 @@ if (isMonitoredStage) {
    * counter - alarming on the counter's absence would page every quiet day.
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
-   * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
+   * apps/workers/src/cron/dataLakeBatchReconcile.ts's rescue sweep.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
    * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
    * distinct stream in CloudWatch); this alarm reads the scoped one so a dev-stage sweep failure
@@ -1280,7 +1280,7 @@ if (isMonitoredStage) {
    * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
-   * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
+   * outcome supplied by apps/workers/src/cron/dataLakeBatchReconcile.ts's catch.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
    * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
    * `outcome` alongside `Stage` - a `{ Stage }`-only Runs stream counts every run, healthy ones

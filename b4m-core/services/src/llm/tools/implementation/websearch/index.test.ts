@@ -1,15 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 import {
   safeHostname,
   serpApiSearch,
   performWebSearch,
+  webSearchTool,
+  createWebSearchBudget,
+  MAX_WEB_SEARCHES_PER_TURN,
+  WEB_SEARCH_NOT_CONFIGURED_MSG,
   shouldIncludeImages,
   formatImageResults,
-  webSearchTool,
-  WEB_SEARCH_NOT_CONFIGURED_MSG,
+  searchCacheClear,
 } from './index';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 const TEST_SECRET = 'websearch-index-test-secret';
 
@@ -25,6 +29,8 @@ const mockGetSerperKey = vi.mocked(getSerperKey);
 const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
 const mockGetProvider = vi.mocked(getWebSearchProviderSetting);
 const mockAdapters = {} as Parameters<typeof serpApiSearch>[0];
+
+afterEach(() => searchCacheClear());
 
 describe('serpApiSearch — missing key', () => {
   it('returns an object with empty organic_results when no API key is configured', async () => {
@@ -57,6 +63,95 @@ describe('safeHostname', () => {
   it('returns the raw input when the URL is invalid (e.g. SerpAPI redirect path)', () => {
     const relative = '/goto?url=https%3A%2F%2Fexample.com%2F';
     expect(safeHostname(relative)).toBe(relative);
+  });
+});
+
+describe('webSearchTool - search budget', () => {
+  const buildTool = () => {
+    const context = {
+      db: {},
+      logger: { log: vi.fn() },
+      statusUpdate: vi.fn(),
+      onStart: vi.fn(),
+    } as unknown as ToolContext;
+    return webSearchTool.implementation(context) as ICompletionOptionTools;
+  };
+  const capped = (tool: ICompletionOptionTools, budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN)) =>
+    budget.apply([tool])[0].toolFn;
+
+  beforeEach(() => {
+    mockGetProvider.mockReset().mockResolvedValue('searxng');
+    mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
+    mockGetSerperKey.mockReset().mockResolvedValue(null);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ results: [{ url: 'https://example.com', title: 'Example', content: 'snippet' }] }),
+      }))
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('runs up to the budget, then tells the model to answer without searching', async () => {
+    const toolFn = capped(buildTool());
+
+    const results = await Promise.all(
+      Array.from({ length: MAX_WEB_SEARCHES_PER_TURN + 2 }, (_, i) => toolFn({ query: `q${i}` }))
+    );
+
+    expect(fetch).toHaveBeenCalledTimes(MAX_WEB_SEARCHES_PER_TURN);
+    expect(results.slice(0, MAX_WEB_SEARCHES_PER_TURN).every(r => String(r).includes('example.com'))).toBe(true);
+    expect(results.slice(MAX_WEB_SEARCHES_PER_TURN).every(r => String(r).startsWith('Search limit reached'))).toBe(
+      true
+    );
+  });
+
+  it('leaves the unwrapped tool uncapped, as subagents and agent runs use it', async () => {
+    const tool = buildTool();
+    const toolFn = capped(tool);
+    for (let i = 0; i < MAX_WEB_SEARCHES_PER_TURN; i++) await toolFn({ query: `q${i}` });
+
+    for (let i = 0; i < MAX_WEB_SEARCHES_PER_TURN + 3; i++) {
+      await expect(tool.toolFn({ query: `sub${i}` })).resolves.toContain('example.com');
+    }
+  });
+
+  it('restores the full budget on reset, so a retried conversation can search again', async () => {
+    const budget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+    const toolFn = capped(buildTool(), budget);
+    for (let i = 0; i < MAX_WEB_SEARCHES_PER_TURN; i++) await toolFn({ query: `q${i}` });
+    await expect(toolFn({ query: 'over' })).resolves.toMatch(/^Search limit reached/);
+
+    budget.reset();
+
+    await expect(toolFn({ query: 'retry' })).resolves.toContain('example.com');
+  });
+
+  it('leaves other tools untouched', () => {
+    const other = { ...buildTool(), toolSchema: { ...buildTool().toolSchema, name: 'web_fetch' } };
+    expect(createWebSearchBudget(1).apply([other])[0]).toBe(other);
+  });
+
+  it('resolves the provider once per tool build rather than once per search', async () => {
+    const toolFn = buildTool().toolFn;
+
+    await toolFn({ query: 'a' });
+    await toolFn({ query: 'b' });
+    await toolFn({ query: 'c' });
+
+    expect(mockGetProvider).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-resolves the provider after a failed resolution instead of caching the rejection', async () => {
+    mockGetProvider.mockRejectedValueOnce(new Error('db down'));
+    const toolFn = buildTool().toolFn;
+
+    await expect(toolFn({ query: 'a' })).rejects.toThrow('db down');
+    await expect(toolFn({ query: 'b' })).resolves.toContain('example.com');
   });
 });
 
@@ -311,7 +406,13 @@ describe('webSearchTool.implementation(...).toolFn - signature threading through
     return {
       userId: 'u1',
       user: {} as ToolContext['user'],
-      logger: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as unknown as ToolContext['logger'],
+      logger: {
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+        info: vi.fn(),
+        log: vi.fn(),
+      } as unknown as ToolContext['logger'],
       db: {} as ToolContext['db'],
       onStart: vi.fn().mockResolvedValue(undefined),
       statusUpdate: vi.fn().mockResolvedValue(undefined),
@@ -496,5 +597,129 @@ describe('performWebSearch - place handling', () => {
     expect(result.formattedResults).not.toContain('b4m_map');
     expect(result.citables.every(c => !c.metadata?.place)).toBe(true);
     vi.unstubAllGlobals();
+  });
+});
+
+describe('webSearchTool - failover and cache', () => {
+  type Reply = { status: number; body?: unknown };
+  const json = (r: Reply) =>
+    ({
+      ok: r.status >= 200 && r.status < 300,
+      status: r.status,
+      statusText: String(r.status),
+      json: async () => r.body ?? {},
+      text: async () => '',
+    }) as Response;
+
+  // Routes each request by host and engine, recording every call so a test can count them.
+  const stubProviders = (replies: { searxng?: Reply; serpOrganic?: Reply[]; serpImages?: Reply }) => {
+    const serpOrganic = [...(replies.serpOrganic ?? [])];
+    const fetchStub = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      if (url.hostname === 'searxng.local') return json(replies.searxng ?? { status: 200, body: { results: [] } });
+      if (url.searchParams.get('engine') === 'google_images') {
+        return json(replies.serpImages ?? { status: 200, body: { images_results: [] } });
+      }
+      if (url.searchParams.get('engine') === 'google_maps') return json({ status: 200, body: { local_results: [] } });
+      return json(serpOrganic.shift() ?? { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchStub);
+    return fetchStub;
+  };
+  const calls = (fetchStub: ReturnType<typeof stubProviders>, pick: (url: URL) => boolean) =>
+    fetchStub.mock.calls.map(([input]) => new URL(input as string)).filter(pick).length;
+  const isSearxng = (url: URL) => url.hostname === 'searxng.local';
+  const isSerpOrganic = (url: URL) => url.hostname === 'serpapi.com' && url.searchParams.get('engine') === 'google';
+
+  const serpHit = {
+    status: 200,
+    body: { organic_results: [{ title: 'Serp', link: 'https://serp.example', snippet: 's' }] },
+  };
+
+  const buildTool = () =>
+    webSearchTool.implementation(
+      { db: {}, logger: { log: vi.fn() }, statusUpdate: vi.fn(), onStart: vi.fn() } as unknown as ToolContext,
+      { imageUrlSigningSecret: TEST_SECRET }
+    ) as ICompletionOptionTools;
+
+  const configure = (choice: 'auto' | 'serpapi' | 'searxng') => {
+    mockGetProvider.mockReset().mockResolvedValue(choice);
+    mockGetSearxngUrl.mockReset().mockResolvedValue('http://searxng.local');
+    mockGetSerperKey.mockReset().mockResolvedValue('serp-key');
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('falls back from SearXNG to SerpAPI under auto when SearXNG errors', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
+  it('sends the image search to the provider that answered, not the one that failed', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
+
+    await buildTool().toolFn({ query: 'q', include_images: true });
+
+    expect(calls(fetchStub, url => url.searchParams.get('engine') === 'google_images')).toBe(1);
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
+  it('gives the fallback one attempt and throws when both providers fail, so the call records as failed', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [{ status: 503 }, { status: 503 }] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('SERP API error');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  it('never falls back under an explicit provider choice', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow('SERP API error');
+    expect(calls(fetchStub, isSearxng)).toBe(0);
+  });
+
+  it('keeps SearXNG fail-soft when there is no fallback to try', async () => {
+    configure('searxng');
+    stubProviders({ searxng: { status: 502 } });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+  });
+
+  it('serves a repeat query from the cache without calling the provider again', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
+    const toolFn = buildTool().toolFn;
+
+    await toolFn({ query: 'Same Query' });
+    await expect(toolFn({ query: '  same query ' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
+  it('never serves a place search from an ordinary search for the same text', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [serpHit, serpHit] });
+
+    await performWebSearch(mockAdapters, { query: 'coffee near Shibuya Crossing' });
+    await performWebSearch(mockAdapters, { query: 'coffee near Shibuya Crossing', include_places: true });
+
+    expect(calls(fetchStub, isSerpOrganic)).toBe(2);
+  });
+
+  it('does not cache a failure, so a retry reaches the provider again', async () => {
+    configure('serpapi');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }, serpHit] });
+    const toolFn = buildTool().toolFn;
+
+    await expect(toolFn({ query: 'q' })).rejects.toThrow();
+    await expect(toolFn({ query: 'q' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(2);
   });
 });

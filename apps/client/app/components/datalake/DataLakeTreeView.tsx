@@ -162,6 +162,12 @@ export interface DataLakeTreeViewProps {
   alwaysShowBackRow?: boolean;
   /** Renamed test ids for hosts embedding more than one TreeView instance. */
   testIds?: { container?: string; error?: string };
+  /**
+   * The label and count a host's `renderNodeRow` shows INSTEAD of the segment and `fileCount`,
+   * when it shows something else (the chat tree's lake roots). Search and sort read it too, so
+   * rows filter and order by what the user sees. Return undefined to keep segment/fileCount.
+   */
+  nodeDisplay?: (node: TagNode, depth: number) => { label: string; count: number } | undefined;
 }
 
 export default function DataLakeTreeView({
@@ -187,6 +193,7 @@ export default function DataLakeTreeView({
   leafMinDepth = 0,
   alwaysShowBackRow,
   testIds,
+  nodeDisplay,
 }: DataLakeTreeViewProps) {
   const [internalSearch, setInternalSearch] = useState('');
   const [internalSort, setInternalSort] = useState<TreeSortMode>('count');
@@ -222,15 +229,22 @@ export default function DataLakeTreeView({
   const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
 
   const filteredNodes = useMemo(() => {
-    let nodes = currentNodes;
+    const depth = breadcrumb.length;
+    const rows = currentNodes.map(node => {
+      const shown = nodeDisplay?.(node, depth);
+      return { node, label: shown?.label ?? node.segment, count: shown?.count ?? node.fileCount };
+    });
+    let matched = rows;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
-      nodes = nodes.filter(node => node.segment.toLowerCase().includes(q));
+      matched = rows.filter(
+        ({ node, label }) => node.segment.toLowerCase().includes(q) || label.toLowerCase().includes(q)
+      );
     }
-    return [...nodes].sort((a, b) =>
-      sortBy === 'count' ? b.fileCount - a.fileCount : a.segment.localeCompare(b.segment)
-    );
-  }, [currentNodes, searchQuery, sortBy]);
+    return matched
+      .sort((a, b) => (sortBy === 'count' ? b.count - a.count : a.label.localeCompare(b.label)))
+      .map(({ node }) => node);
+  }, [currentNodes, searchQuery, sortBy, nodeDisplay, breadcrumb.length]);
 
   // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag. It
   // lives one level below the seeded root, and the depth bound is a ceiling rather than an

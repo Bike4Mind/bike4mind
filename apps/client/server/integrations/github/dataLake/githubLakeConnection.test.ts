@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Response } from 'express';
 import { createStateToken } from '@server/auth/jwtStateStore';
 import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
+import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
   exchangeInstallerCode: vi.fn(),
@@ -78,7 +79,9 @@ import {
   revokeGitHubLakeConnection,
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
+  toGitHubLakeConnectionResponse,
   GITHUB_LAKE_STATE_OPTIONS,
+  REVOKE_PURGE_SLICE_SIZE,
 } from './githubLakeConnection';
 import type { GitHubLakeAppConfig, GitHubLakeInstallation, GitHubLakeRepository } from './lakeAppClient';
 import type { IOrgGitHubLakeConnectionDocument } from '@bike4mind/common';
@@ -109,6 +112,88 @@ const CONNECTION = {
   organizationId: 'orgA',
   installationId: 42,
 } as unknown as IOrgGitHubLakeConnectionDocument;
+
+describe('toGitHubLakeConnectionResponse', () => {
+  const connectedAt = new Date('2026-01-01');
+  const base = {
+    id: 'conn1',
+    accountLogin: 'acme',
+    repositoryId: 100,
+    repositoryFullName: 'acme/one',
+    connectedBy: 'user-1',
+    connectedAt,
+  };
+
+  it('exposes sync state and the file count, never credentials or claim fields', () => {
+    const lastSyncedAt = new Date('2026-02-01');
+    const conn = {
+      ...base,
+      installationId: 42,
+      enabled: false,
+      status: 'error',
+      lastError: 'Repository access was removed',
+      defaultBranch: 'main',
+      lastSyncedAt,
+      lastSyncedCommitSha: 'sha-1',
+      syncClaimedAt: new Date(),
+      ingestClaimToken: 'token-1',
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+
+    expect(toGitHubLakeConnectionResponse(conn, 5)).toEqual({
+      ...base,
+      enabled: false,
+      status: 'error',
+      lastError: 'Repository access was removed',
+      defaultBranch: 'main',
+      lastSyncedAt,
+      syncStale: false,
+      fileCount: 5,
+    });
+  });
+
+  it('fills the model defaults for a row that predates them', () => {
+    const conn = base as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({
+      enabled: true,
+      status: 'connected',
+      lastError: null,
+      defaultBranch: null,
+      lastSyncedAt: null,
+      syncStale: false,
+    });
+  });
+
+  // @bike4mind/database is mocked above with importOriginal and only overrides specific repository
+  // methods, so isGitHubLakeSyncClaimLive itself is the real implementation here.
+  it('marks a syncing row syncStale once its claim is older than the 20-minute window', () => {
+    const conn = {
+      ...base,
+      status: 'syncing',
+      syncClaimedAt: new Date(Date.now() - 21 * 60 * 1000),
+      activeIngestBatchId: null,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: true });
+  });
+
+  it('does not mark a syncing row syncStale while its claim is fresh', () => {
+    const conn = {
+      ...base,
+      status: 'syncing',
+      syncClaimedAt: new Date(Date.now() - 60 * 1000),
+      activeIngestBatchId: null,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+  });
+
+  it('never reads a connected row as syncStale, regardless of an old syncClaimedAt', () => {
+    const conn = {
+      ...base,
+      status: 'connected',
+      syncClaimedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ syncStale: false });
+  });
+});
 
 describe('resolveConnectableLake', () => {
   beforeEach(() => {
@@ -208,6 +293,22 @@ describe('completeGitHubLakeConnection', () => {
   it('revokes the installer token after a successful connect', async () => {
     await completeGitHubLakeConnection(params());
     expect(h.revokeInstallerToken).toHaveBeenCalledWith(CONFIG, 'user-token');
+  });
+
+  it('logs a failed code exchange without the request body that carries the client secret', async () => {
+    const warn = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+    const httpError = Object.assign(new Error('The client_id and/or client_secret passed are incorrect.'), {
+      name: 'HttpError',
+      status: 400,
+      request: { body: { client_id: 'cid', client_secret: 'super-secret', code: 'the-code' } },
+    });
+    h.exchangeInstallerCode.mockRejectedValue(httpError);
+    await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/expired or was already used/i);
+    const logged = JSON.stringify(warn.mock.calls);
+    expect(logged).toContain('client_secret passed are incorrect');
+    expect(logged).not.toContain('super-secret');
+    expect(logged).not.toContain('the-code');
+    warn.mockRestore();
   });
 
   it('fails the code exchange and never lists repositories or creates a connection', async () => {
@@ -428,11 +529,12 @@ describe('releaseGitHubLakeConnection', () => {
     expect(h.ghConnRelease).not.toHaveBeenCalled();
   });
 
-  it('recovers via a revoke retry when a concurrent release s own row is already gone but its uninstall failed', async () => {
+  it('queues a revoke retry when a concurrent release s own row is already gone but its uninstall failed, and resolves not-retained', async () => {
     // Two bindings (A, B) share an installation. B's release wins the recount race and sees no
     // sibling left, but its uninstall call fails (a non-404 GitHub error), so B's row is already
-    // deleted while the App is still installed. The revoke queue retries by installation id, and
-    // that retry must finish the uninstall since revokeGitHubLakeConnection can no longer find B.
+    // deleted while the App is still installed. The failed uninstall is handed to the revoke
+    // queue instead of rejecting, and that retry must finish the uninstall since
+    // revokeGitHubLakeConnection can no longer find B.
     const A = {
       id: 'connA',
       organizationId: 'orgA',
@@ -446,8 +548,13 @@ describe('releaseGitHubLakeConnection', () => {
 
     h.ghConnFindByInstallationId.mockResolvedValueOnce([A, B]).mockResolvedValueOnce([]);
     h.deleteInstallation.mockRejectedValueOnce(Object.assign(new Error('GitHub API is unavailable'), { status: 502 }));
-    await expect(releaseGitHubLakeConnection(B, CONFIG)).rejects.toThrow('GitHub API is unavailable');
+    h.sendToQueue.mockResolvedValue(undefined);
+    await expect(releaseGitHubLakeConnection(B, CONFIG)).resolves.toEqual({ installationRetained: false });
     expect(h.ghConnRelease).toHaveBeenCalledWith(B.id, B.organizationId);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: B.id,
+      installationId: B.installationId,
+    });
 
     h.ghConnFindById.mockResolvedValue(null);
     h.ghConnFindByInstallationId.mockResolvedValue([]);
@@ -457,6 +564,21 @@ describe('releaseGitHubLakeConnection', () => {
       revokeGitHubLakeConnection({ connectionId: B.id, installationId: B.installationId }, logger)
     ).resolves.toBeUndefined();
     expect(h.deleteInstallation).toHaveBeenLastCalledWith(CONFIG, B.installationId);
+  });
+
+  it('rethrows the original uninstall error when the revoke-queue hand-off also fails', async () => {
+    const B = {
+      id: 'connB',
+      organizationId: 'orgA',
+      installationId: 42,
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+
+    h.ghConnFindByInstallationId.mockResolvedValueOnce([CONNECTION, B]).mockResolvedValueOnce([]);
+    const uninstallError = Object.assign(new Error('GitHub API is unavailable'), { status: 502 });
+    h.deleteInstallation.mockRejectedValueOnce(uninstallError);
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    await expect(releaseGitHubLakeConnection(B, CONFIG)).rejects.toBe(uninstallError);
+    expect(h.ghConnRelease).toHaveBeenCalledWith(B.id, B.organizationId);
   });
 
   it('throws when the App is unconfigured and this is the last binding, without releasing', async () => {
@@ -479,10 +601,13 @@ describe('disconnectGitHubLakeConnection', () => {
     h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
     h.fabFilesFindByGitHubConnectionIdInDataLake.mockResolvedValue(FILES);
     h.ghConnDisableIfNoLiveSyncClaim.mockImplementation(async () => (calls.push('disable'), { wasEnabled: true }));
-    h.purgeConnectionIngestedFiles.mockImplementation(async (_lake, findFiles: () => Promise<unknown>) => {
-      calls.push('purge');
-      await findFiles();
-    });
+    h.purgeConnectionIngestedFiles.mockImplementation(
+      async (_lake, findFiles: (limit?: number) => Promise<unknown>) => {
+        calls.push('purge');
+        await findFiles();
+        return { remaining: false };
+      }
+    );
     h.deleteInstallation.mockImplementation(async () => void calls.push('uninstall'));
     h.ghConnRelease.mockImplementation(async () => (calls.push('release'), true));
     h.ghConnSetEnabledForLake.mockImplementation(async () => (calls.push('enable'), true));
@@ -527,6 +652,16 @@ describe('disconnectGitHubLakeConnection', () => {
     await disconnectGitHubLakeConnection(LAKE, CONNECTION, logger);
     expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
   });
+
+  it('forwards the limit the purge finder is called with to the fab file finder', async () => {
+    await disconnectGitHubLakeConnection(LAKE, CONNECTION, logger);
+    const findFiles = h.purgeConnectionIngestedFiles.mock.calls[0][1] as (limit?: number) => Promise<unknown>;
+    await findFiles(5);
+    expect(h.fabFilesFindByGitHubConnectionIdInDataLake).toHaveBeenLastCalledWith('conn1', 'datalake:lake1', {
+      includeDeleted: true,
+      limit: 5,
+    });
+  });
 });
 
 describe('revokeGitHubLakeConnection', () => {
@@ -540,9 +675,10 @@ describe('revokeGitHubLakeConnection', () => {
     h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
     h.fabFilesFindByGitHubConnectionIdInDataLake.mockResolvedValue([]);
     h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue({ wasEnabled: true });
-    h.purgeConnectionIngestedFiles.mockResolvedValue(undefined);
+    h.purgeConnectionIngestedFiles.mockResolvedValue({ remaining: false });
     h.deleteInstallation.mockResolvedValue(undefined);
     h.ghConnRelease.mockResolvedValue(true);
+    h.sendToQueue.mockResolvedValue(undefined);
   });
 
   it('is a no-op when the connection is already gone (idempotent for a duplicate webhook delivery)', async () => {
@@ -588,9 +724,20 @@ describe('revokeGitHubLakeConnection', () => {
     expect(h.purgeConnectionIngestedFiles).toHaveBeenCalledWith(
       LAKE,
       expect.any(Function),
-      expect.objectContaining({ connectionId: 'conn1', logger })
+      expect.objectContaining({ connectionId: 'conn1', logger, sliceSize: REVOKE_PURGE_SLICE_SIZE })
     );
     expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
+  });
+
+  it('re-enqueues itself and skips release when the purge reports files remaining', async () => {
+    h.purgeConnectionIngestedFiles.mockResolvedValue({ remaining: true });
+    await revokeGitHubLakeConnection({ connectionId: 'conn1', installationId: 42 }, logger);
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: 42,
+    });
+    expect(h.ghConnRelease).not.toHaveBeenCalled();
+    expect(h.deleteInstallation).not.toHaveBeenCalled();
   });
 
   it('does not re-enable the connection when the purge fails, since the App has lost access', async () => {

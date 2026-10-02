@@ -182,14 +182,25 @@ export class VideoGenerationService {
       quest.videos = [];
       quest.replies = [];
       quest.status = undefined;
+      // A failed run leaves `type: 'error'`, and the success path never resets it, so a successful
+      // retry would still tell pollers and the callback to discard the render.
+      quest.type = 'message';
+      quest.errorCode = undefined;
       quest.promptMeta = promptMeta;
 
-      await this.db.quests.update({
-        id: quest.id,
-        videos: quest.videos,
-        replies: quest.replies,
-        promptMeta: quest.promptMeta,
-      });
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once, and a stale errorCode
+      // would outlive a successful retry. Unset both explicitly (mirrors ChatCompletionInvoke).
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          videos: quest.videos,
+          replies: quest.replies,
+          type: quest.type,
+          promptMeta: quest.promptMeta,
+        },
+        { unset: ['status', 'errorCode'] }
+      );
     } else {
       // Create the associated quest record
       quest = await this.db.quests.create({
@@ -245,10 +256,13 @@ export class VideoGenerationService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     return quest;

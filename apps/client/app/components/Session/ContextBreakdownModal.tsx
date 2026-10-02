@@ -152,6 +152,11 @@ const RetrievalSummary: FC<{ retrieval: NonNullable<ContextBreakdown['retrieval'
         excluded: {retrieval.excludedLakes.count} ({retrieval.excludedLakes.reason})
       </Chip>
     )}
+    {retrieval.notServingLakes && retrieval.notServingLakes.count > 0 && (
+      <Chip size="sm" color="warning" data-testid="context-breakdown-not-serving-lakes-chip">
+        not serving: {retrieval.notServingLakes.count} ({retrieval.notServingLakes.reason})
+      </Chip>
+    )}
   </Stack>
 );
 

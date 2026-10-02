@@ -481,6 +481,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   isOwn: boolean;
   /**
+   * Whether the caller is the lake's `createdByUserId` - the identity lake membership (and so the
+   * file count and reachability) is anchored to; see services/src/dataLakeService/lakeMembershipScope.ts.
+   * Differs from `isOwn` after an ownership transfer. Built-in fallback lakes have no creator: `false`.
+   */
+  isCreator: boolean;
+  /**
    * Whether the caller may name this lake in `preauthorizedLakeIds` at session create - i.e. the
    * manage-but-not-member admission that lets a maintainer ground a scoped session on a lake the
    * ordinary tag/entitlement gate would not give them.

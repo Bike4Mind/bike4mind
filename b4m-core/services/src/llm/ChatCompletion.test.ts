@@ -4084,6 +4084,9 @@ describe('ChatCompletionProcess', () => {
       admittedPreauthorizedTags?: string[];
       // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
       userIsAdmin?: boolean;
+      // Wires mockDb.dataLakes.findByDatalakeTags, which the seed's not-serving (draft) count reads
+      // for the session-named lakes that did not make lakeScope.
+      lakesByTag?: Array<{ datalakeTag: string; status: string; createdByUserId: string }>;
       // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
       // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
       attachmentLakes?: unknown[];
@@ -4095,8 +4098,19 @@ describe('ChatCompletionProcess', () => {
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
       (service as any).user.isAdmin = opts.userIsAdmin;
-      if (opts.countGateExcludedLakesImpl) {
-        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      if (opts.countGateExcludedLakesImpl || opts.lakesByTag) {
+        mockDb.dataLakes = {
+          ...(opts.countGateExcludedLakesImpl
+            ? { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) }
+            : {}),
+          ...(opts.lakesByTag
+            ? {
+                findByDatalakeTags: vi.fn(async (tags: string[]) =>
+                  opts.lakesByTag!.filter(lake => tags.includes(lake.datalakeTag))
+                ),
+              }
+            : {}),
+        };
       }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
@@ -4646,6 +4660,50 @@ describe('ChatCompletionProcess', () => {
             countGateExcludedLakesImpl: countExcludingEverythingNamed,
           });
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+
+        // A draft lake is not in any retrieval arm (active-only), so a session naming one narrows to
+        // an empty scope. notServingLakes is what lets the answer diagnosis say why.
+        describe('notServingLakes', () => {
+          const draftWorld = [
+            { datalakeTag: 'datalake:my-draft', status: 'draft', createdByUserId: 'user1' },
+            { datalakeTag: 'datalake:their-draft', status: 'draft', createdByUserId: 'someone-else' },
+          ];
+
+          it("records the caller's own draft that the session named", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:my-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 1, reason: 'draft' } });
+          });
+
+          it("does not count another user's draft", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:their-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('does not count an active lake that is missing for another reason (that is excludedLakes)', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:gated'],
+              lakesByTag: [{ datalakeTag: 'datalake:gated', status: 'active', createdByUserId: 'user1' }],
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('stays absent when the session names no lake', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval && 'notServingLakes' in retrieval).toBe(false);
+          });
         });
       });
 
