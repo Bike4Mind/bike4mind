@@ -33,6 +33,11 @@ describe('escapeTerminalControlChars', () => {
     expect(escapeTerminalControlChars('a\u2066b')).toContain('\\u2066'); // isolate boundary
   });
 
+  it('escapes C1 controls such as the 8-bit CSI', () => {
+    const escaped = escapeTerminalControlChars('a\u009b2Kb\u0085c');
+    expect(escaped).toBe('a\\x9b2Kb\\x85c');
+  });
+
   it('leaves ordinary text, tabs and newlines intact', () => {
     const text = 'line one\n\tindented\nline two';
     expect(escapeTerminalControlChars(text)).toBe(text);
