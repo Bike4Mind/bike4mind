@@ -32,9 +32,21 @@ describe('resolveAddress', () => {
   it('searches for anything that does not', () => {
     expect(resolveAddress('joy slot props')).toEqual({
       ok: true,
-      url: 'https://duckduckgo.com/?q=joy%20slot%20props',
+      url: 'https://www.google.com/search?q=joy%20slot%20props',
     });
-    expect(resolveAddress('vitest')).toEqual({ ok: true, url: 'https://duckduckgo.com/?q=vitest' });
+    expect(resolveAddress('slack')).toEqual({ ok: true, url: 'https://www.google.com/search?q=slack' });
+  });
+
+  // The ambiguous middle, written down so the rule stays the one people were told: a space
+  // searches, a dot goes there, and no list of real TLDs sits behind the dot.
+  it('treats any dot as an address, and a space as a search', () => {
+    expect(resolveAddress('slack.com')).toEqual({ ok: true, url: 'https://slack.com/' });
+    expect(resolveAddress('foo.bar')).toEqual({ ok: true, url: 'https://foo.bar/' });
+    expect(resolveAddress('localhost:3000')).toEqual({ ok: true, url: 'http://localhost:3000/' });
+    expect(resolveAddress('what is foo.bar')).toEqual({
+      ok: true,
+      url: 'https://www.google.com/search?q=what%20is%20foo.bar',
+    });
   });
 
   // A refused scheme has to come back as a refusal the user can read. Quietly searching the web

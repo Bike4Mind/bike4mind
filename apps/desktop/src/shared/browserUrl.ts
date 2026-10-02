@@ -57,13 +57,8 @@ function appScheme(text: string): string | undefined {
   return scheme && APP_SCHEMES.includes(scheme) ? scheme : undefined;
 }
 
-/**
- * Where free text goes when it is not an address.
- *
- * DuckDuckGo rather than a search engine that profiles the query: this partition is the agent's,
- * and what the user types into it should not become an advertising profile anywhere.
- */
-const SEARCH_URL = 'https://duckduckgo.com/?q=';
+/** Where free text goes when it is not an address. Google, which is what the user asked for. */
+const SEARCH_URL = 'https://www.google.com/search?q=';
 
 /**
  * A url the browser may load, from a bare host or a full one.
@@ -94,6 +89,12 @@ export function normalizeUrl(raw: string): string {
  * passwd` has to come back as a refusal the user can read, not quietly become a web search for
  * it. Everything else needs to look like a host - a dot, `localhost`, or a bracketed IPv6 - or
  * it is a search, because that is what `vitest watch mode` is.
+ *
+ * ANY dot makes it an address, with no list of real TLDs behind it, so `foo.bar` is opened
+ * rather than searched for. The rule people can hold in their head is "a dot means go there",
+ * and a TLD list is both large and wrong the week a new TLD ships - whereas guessing wrong
+ * costs one visible `ERR_NAME_NOT_RESOLVED` in the bar, which the pane now says out loud, and
+ * the text is still sitting there to be searched instead.
  */
 function looksLikeAddress(text: string): boolean {
   if (/\s/.test(text)) return false;
