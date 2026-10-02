@@ -717,6 +717,12 @@ export function useConversation(
     const directory = await window.b4m.chat.pickProjectDirectory();
     if (!directory) return;
     const inspected = await window.b4m.chat.inspectProject(directory);
+    // A folder nothing could run in is reported instead of being bound. Main refuses it too,
+    // so this only spares the user a move that would come back as the same sentence.
+    if (inspected.refusal) {
+      setProjectError({ message: inspected.refusal, busy: false });
+      return;
+    }
     // The workspace choice does not travel: it named a worktree of the repository being left,
     // and carrying it across would create one in a repository the user has only just pointed at.
     const moved = await changeProject({ directory, branch: inspected.currentBranch ?? '', workspace: false });

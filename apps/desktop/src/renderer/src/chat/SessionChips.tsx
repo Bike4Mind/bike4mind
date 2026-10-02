@@ -317,6 +317,13 @@ interface BranchReading {
   checkedOut: string | null | undefined;
 }
 
+/** A reading plus the folders it describes, so one taken before a move can be told apart. */
+interface KeyedReading extends BranchReading {
+  of: string | null;
+}
+
+const PENDING: BranchReading = { branches: [], isRepository: true, checkedOut: undefined };
+
 /**
  * The branches of the directory this session is currently on, and the branch it is actually on.
  *
@@ -325,21 +332,33 @@ interface BranchReading {
  * must be the new repository's. A null directory is an unbound session: there is no repository
  * to ask, so nothing is asked.
  *
+ * A reading is returned only to the folders it was taken in. Between a move and the answer for
+ * where the session has moved TO, the previous repository's branch is not a stale detail - it
+ * is this chip's whole claim, so those few frames are spent saying nothing instead.
+ *
  * The list comes from the project root while HEAD comes from the working directory, which are
  * the same folder unless the session runs in a worktree. Asking the root for both would report
  * the branch of a checkout this session never touches; asking the worktree for both would leave
  * the user no branch menu to escape with on a worktree that has since been deleted.
  */
 function useBranches(directory: string | null, workingDirectory: string | null): BranchReading {
-  const [state, setState] = useState<BranchReading>({
-    branches: [],
-    isRepository: true,
-    checkedOut: undefined,
-  });
+  const [state, setState] = useState<KeyedReading>({ ...PENDING, of: null });
+  const [reread, setReread] = useState(0);
+
+  // HEAD moves without this app's help - a `git checkout` in a terminal, another session
+  // taking the worktree - and a reading taken once at mount would keep naming the branch that
+  // has gone. Focus is when the user has come back to look at the chip, so it is when to ask.
+  useEffect(() => {
+    const refresh = (): void => setReread(count => count + 1);
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
+
+  const key = keyOf(directory, workingDirectory);
 
   useEffect(() => {
     if (!directory) {
-      setState({ branches: [], isRepository: false, checkedOut: undefined });
+      setState({ branches: [], isRepository: false, checkedOut: undefined, of: key });
       return;
     }
     let current = true;
@@ -355,14 +374,19 @@ function useBranches(directory: string | null, workingDirectory: string | null):
         branches: inspected.branches,
         isRepository: inspected.isRepository,
         checkedOut: (inWorkspace ?? inspected).currentBranch,
+        of: key,
       });
     });
     return () => {
       current = false;
     };
-  }, [directory, workingDirectory]);
+  }, [directory, workingDirectory, key, reread]);
 
-  return state;
+  return state.of === key ? state : PENDING;
+}
+
+function keyOf(directory: string | null, workingDirectory: string | null): string | null {
+  return directory && `${directory}\n${workingDirectory ?? directory}`;
 }
 
 /**

@@ -26,7 +26,10 @@ export interface ChipRowState {
   branch: ChipDescription;
   worktree: ChipDescription;
   addContext: ChipDescription;
-  /** Line inside the branch menu when there is nothing to list; null when branches are listed. */
+  /**
+   * Line inside the branch menu: what the list cannot offer, or - when branches ARE listed -
+   * what picking one of them will and will not do. Null only when there is nothing to add.
+   */
   branchNotice: string | null;
 }
 
@@ -43,12 +46,19 @@ export interface BranchLookup {
   checkedOut?: string | null;
 }
 
+/** Shown while git is still being asked, so no name is put up before one has been read. */
+const READING_BRANCH = '...';
+
 /**
- * The chip row reads the branch from `checkedOut` rather than `project.branch`, because the two
- * diverge the moment anything switches the worktree afterwards - another session, or a
- * `git checkout` in a terminal - and the recorded name then labels a checkout that is gone.
- * Only the LABEL is reconciled: `project.branch` stays the user's choice, since it is also what
- * a spawned child inherits and what the session's system prompt names.
+ * The chip row reads the branch from `checkedOut` and from nowhere else.
+ *
+ * `project.branch` is the branch this session RECORDED, which is a different thing: with the
+ * worktree toggle off nothing ever checks it out, so it names where the session runs only by
+ * coincidence, and it goes on naming a checkout that is gone the moment anything switches the
+ * working directory - another session, or a `git checkout` in a terminal. It used to be the
+ * label whenever git had not answered, which is how the chip came to state a branch the
+ * session was not on. It is still the user's choice and still what a spawned child inherits;
+ * it is just not evidence of anything, so it labels nothing.
  */
 export function describeChipRow(project: ChatProject | null, branches: BranchLookup): ChipRowState {
   if (!project) {
@@ -73,15 +83,13 @@ export function describeChipRow(project: ChatProject | null, branches: BranchLoo
   }
 
   const relocated = project.workingDirectory !== project.directory;
-  // undefined is "not looked up yet", which falls back rather than blanking the chip mid-render.
-  const live = branches.checkedOut ?? null;
 
   return {
     unset: false,
     folder: { label: project.name, tooltip: project.directory, enabled: true },
     branch: {
-      label: live ?? (project.branch || 'no branch'),
-      tooltip: branchTooltip(project, live),
+      label: branchLabel(branches),
+      tooltip: branchTooltip(project, branches),
       enabled: true,
     },
     worktree: {
@@ -96,25 +104,47 @@ export function describeChipRow(project: ChatProject | null, branches: BranchLoo
       tooltip: 'Add a folder this session may read',
       enabled: true,
     },
-    branchNotice: branchNotice(branches),
+    branchNotice: branchNotice(project, branches),
   };
 }
 
+/** The branch the session is on, or an admission that there is not one to show. */
+function branchLabel({ checkedOut }: BranchLookup): string {
+  if (checkedOut === undefined) return READING_BRANCH;
+  return checkedOut ?? 'no branch';
+}
+
 /**
- * The label and the recorded branch disagree in two ways that do not read alike.
+ * Where the name on the chip came from, and what it is not.
  *
  * A session that picked a branch and has since been moved off it needs both names. A session
  * that picked NONE has no second name to give - the sentence used to trail off into "started
  * on ." - and that is the normal state of every session started from the group header's "+",
  * which carries the folder and leaves the branch to the user. See newSessionInProject.
  */
-function branchTooltip(project: ChatProject, live: string | null): string {
-  if (!live || live === project.branch) return project.directory;
-  if (!project.branch) return `${project.workingDirectory} is on ${live}. This session has not picked a branch.`;
-  return `${project.workingDirectory} is on ${live}; this session was started on ${project.branch}.`;
+function branchTooltip(project: ChatProject, { checkedOut, isRepository }: BranchLookup): string {
+  if (checkedOut === undefined) return `Reading the branch in ${project.workingDirectory}...`;
+  if (checkedOut === null) {
+    if (!isRepository) return `${project.directory} is not a git repository, so it has no branch.`;
+    return `${project.workingDirectory} is not on any branch - a detached HEAD, or git could not be read.`;
+  }
+  if (checkedOut === project.branch) return project.directory;
+  if (!project.branch) return `${project.workingDirectory} is on ${checkedOut}. This session has not picked a branch.`;
+  return `${project.workingDirectory} is on ${checkedOut}; this session recorded ${project.branch}.`;
 }
 
-function branchNotice({ isRepository, count }: BranchLookup): string | null {
-  if (count > 0) return null;
-  return isRepository ? 'This repository has no branches yet.' : 'Not a git repository.';
+/**
+ * With the toggle off, picking a branch writes `project.branch` and NOTHING else: no checkout
+ * happens, in this directory or anywhere, so the chip goes on naming the branch that was
+ * already there. Saying so in the menu is the honest half of that - the alternative readings
+ * of a click that changes nothing are that the app is broken or that the user misclicked.
+ */
+function branchNotice(project: ChatProject, { isRepository, count, checkedOut }: BranchLookup): string | null {
+  if (count === 0) return isRepository ? 'This repository has no branches yet.' : 'Not a git repository.';
+  if (project.workspace) return null;
+  const stays = checkedOut ? ` ${project.workingDirectory} stays on ${checkedOut}.` : '';
+  return (
+    `Picking a branch records it for this session; nothing is checked out.${stays} ` +
+    'Turn on worktree to run on the branch you pick.'
+  );
 }

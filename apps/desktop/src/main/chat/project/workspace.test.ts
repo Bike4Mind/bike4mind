@@ -2,7 +2,16 @@ import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { containerDirectory, git, listBranches, listWorktrees, projectDisplayName } from './git';
+import {
+  containerDirectory,
+  currentBranch,
+  git,
+  isGitRepository,
+  listBranches,
+  listWorktrees,
+  projectDisplayName,
+  unusableProjectReason,
+} from './git';
 import { resolveWorkspace, worktreeFolderName } from './workspace';
 
 /**
@@ -35,6 +44,10 @@ async function bareLayoutRepository(): Promise<{ container: string; main: string
   await git(bare, ['worktree', 'add', '--quiet', main, 'main']);
   await git(main, ['config', 'user.email', 'test@example.com']);
   await git(main, ['config', 'user.name', 'Test']);
+  // The container's own gitlink, written by the user's `worktree` helper. Without it git walks
+  // out of the container looking for a repository, and the tests below would be asking about a
+  // plain folder rather than about the layout that confuses them.
+  await writeFile(join(container, '.git'), 'gitdir: ./.bare\n', 'utf8');
 
   return { container, main };
 }
@@ -77,6 +90,57 @@ describe('project inspection', () => {
     await git(repo, ['init', '--initial-branch=main', '--quiet']);
 
     expect(await projectDisplayName(repo)).toBe('myrepo');
+  });
+});
+
+/**
+ * The container answers `rev-parse --abbrev-ref HEAD` for the BARE repo, so for the whole of
+ * this layout there is a branch name available that no session is ever on. The chip used to
+ * print it. These pin the two functions that decide what a repository is to the same answer.
+ */
+describe('a worktree container is not a checkout', () => {
+  it('reads the branch of a checkout, and nothing from the container', async () => {
+    const { container, main } = await bareLayoutRepository();
+
+    expect(await currentBranch(main)).toBe('main');
+    expect(await currentBranch(container)).toBeNull();
+  });
+
+  it('agrees with isGitRepository about which of the two is a repository', async () => {
+    const { container, main } = await bareLayoutRepository();
+
+    expect(await isGitRepository(main)).toBe(true);
+    expect(await isGitRepository(container)).toBe(false);
+    expect(await currentBranch(container)).toBeNull();
+  });
+
+  it('answers null on a detached HEAD rather than the literal string', async () => {
+    const { main } = await bareLayoutRepository();
+    await git(main, ['checkout', '--quiet', '--detach', 'HEAD']);
+
+    expect(await currentBranch(main)).toBeNull();
+  });
+
+  it('refuses the container as a project and names the checkouts inside it', async () => {
+    const { container, main } = await bareLayoutRepository();
+    await resolveWorkspace(main, 'feat/one');
+
+    const reason = await unusableProjectReason(container);
+    expect(reason).toMatch(/not a checkout/i);
+    expect(reason).toContain('main');
+    expect(reason).toContain('feat+one');
+  });
+
+  it('lets a checkout, an ordinary clone and a plain folder through', async () => {
+    const { main } = await bareLayoutRepository();
+    const plain = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));
+    const clone = join(plain, 'myrepo');
+    await mkdir(clone, { recursive: true });
+    await git(clone, ['init', '--initial-branch=main', '--quiet']);
+
+    expect(await unusableProjectReason(main)).toBeNull();
+    expect(await unusableProjectReason(clone)).toBeNull();
+    expect(await unusableProjectReason(plain)).toBeNull();
   });
 });
 

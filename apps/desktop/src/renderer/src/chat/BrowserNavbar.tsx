@@ -162,7 +162,9 @@ export function BrowserNavbar({
         >
           <WarningIcon />
           <Typography level="body-xs" textColor="inherit" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
-            Signed in as you on {cookies.sites.map(site => site.host).join(', ')}
+            {/* A count, not the names. With a whole profile imported the names are a list of
+                hundreds, and the pane would become the site list the chooser deliberately folds away. */}
+            Signed in as you on {cookies.sites.length} site{cookies.sites.length === 1 ? '' : 's'} from Chrome
           </Typography>
           <Link
             level="body-xs"
