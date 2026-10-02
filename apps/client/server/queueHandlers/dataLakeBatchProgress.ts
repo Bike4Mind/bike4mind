@@ -94,9 +94,15 @@ export async function finalizeBatchIfComplete(
     const lake = await dataLakeRepository.findById(batch.dataLakeId);
     if (lake) {
       // Before the recompute so a recompute failure cannot drop the History row. `finalized`, not
-      // `batch`: it is the terminal document, so its counters are the final ones. Never throws.
+      // `batch`: it is the terminal document, so its counters are the final ones. A batch reopened
+      // by revertStrandBatchAccounting finalizes here again; the service's one-shot claim keeps it
+      // to the first row. Never throws.
       await dataLakeService.recordLakeUploadBatch(lake, finalized, {
-        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository, ...lakeConfigAuditDb },
+        db: {
+          batches: dataLakeBatchRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          ...lakeConfigAuditDb,
+        },
         logger,
       });
       await dataLakeService.recomputeLakeStats(lake, {

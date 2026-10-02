@@ -19,6 +19,7 @@ export {
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
+  resolveLakeManageRung,
   type LakeGrant,
 } from './manageRule';
 export * from './authorizeLakeManage';
