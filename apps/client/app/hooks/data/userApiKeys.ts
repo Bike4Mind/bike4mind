@@ -88,6 +88,15 @@ export interface RotateUserApiKeyResponse {
   name: string;
   keyPrefix: string;
   key: string; // Only returned once during rotation
+  /** Only on a rotation that re-owned the key (the previous owner knew the old secret). */
+  callbackSigningSecret?: string;
+}
+
+export interface RotateCallbackSigningSecretResponse {
+  id: string;
+  name: string;
+  callbackSigningSecret: string; // Only returned once
+  callbackSigningSecretCreatedAt: Date;
 }
 
 /**
@@ -143,6 +152,27 @@ export function useRotateUserApiKey({ onSuccess }: { onSuccess?: (result: Rotate
   return useMutation<RotateUserApiKeyResponse, Error, string>({
     mutationFn: async keyId => {
       const response = await api.post(`/api/user-api-keys/${keyId}/rotate`);
+      return response.data;
+    },
+    onSuccess: result => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess(result);
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+/** Mints or replaces the key's generation-callback signing secret; same route both ways. */
+export function useRotateCallbackSigningSecret({
+  onSuccess,
+}: { onSuccess?: (result: RotateCallbackSigningSecretResponse) => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<RotateCallbackSigningSecretResponse, Error, string>({
+    mutationFn: async keyId => {
+      const response = await api.post(`/api/user-api-keys/${keyId}/callback-secret`);
       return response.data;
     },
     onSuccess: result => {

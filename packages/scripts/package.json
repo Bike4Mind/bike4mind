@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.81",
+  "version": "0.1.82",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -97,6 +97,6 @@
     "mailparser": "^3.9.26",
     "ora": "^9.4.1",
     "tsx": "^4.23.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

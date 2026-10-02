@@ -110,6 +110,7 @@ import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
 import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
@@ -123,6 +124,7 @@ import {
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -179,7 +181,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
-import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
   unionPreauthorizedLakeAccess,
@@ -3088,6 +3090,14 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
+      // Research Mode runs its configurations in parallel over one tool list, so a shared budget
+      // would let one configuration's searches cap another's.
+      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+      if (allTools && !isResearchMode) {
+        allTools = webSearchBudget.apply(allTools);
+      }
+
       // Local (Ollama) models are small and easily confused by tools they weren't
       // asked to use - they pick the wrong one or loop. Restrict them to the tools
       // the user explicitly enabled, dropping the auto/admin-added extras
@@ -3199,10 +3209,26 @@ export class ChatCompletionProcess {
         const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
           tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
         );
-        const excludedByAccessCount =
-          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
-            : narrowedAccess?.excludedByAccessCount;
+        // Both ways a named lake drops out of scope, measured only where the session named one:
+        // gate-excluded (above), and draft - retrieval is active-only, so a draft narrows to
+        // nothing; counted over the identity-named tags that did not survive into lakeScope.
+        // Independent reads, so they run together.
+        const namesALake = accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags);
+        const [excludedByAccessCount, notServingCount] = namesALake
+          ? await Promise.all([
+              this.getDataLakeAccessContext().then(accessContext =>
+                measureIdentityNamedExclusion(accessContext, identityTagsToMeasure, {
+                  callerMaySeeAllLakes: this.user?.isAdmin === true,
+                })
+              ),
+              countNotServingNamedLakes(
+                this.db.dataLakes,
+                this.user.id,
+                datalakeTagsFrom(session.retrievalTags ?? []).filter(tag => !lakeScope.includes(tag)),
+                this.logger
+              ),
+            ])
+          : [narrowedAccess?.excludedByAccessCount, undefined];
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
         // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
@@ -3210,6 +3236,8 @@ export class ChatCompletionProcess {
         // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
           excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
+        const notServingLakes =
+          notServingCount !== undefined ? { count: notServingCount, reason: 'draft' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3217,6 +3245,7 @@ export class ChatCompletionProcess {
           dataLakeTags: [],
           lakeScope,
           ...(excludedLakes ? { excludedLakes } : {}),
+          ...(notServingLakes ? { notServingLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
@@ -4223,6 +4252,7 @@ export class ChatCompletionProcess {
         chunkCount = 0;
         quest.promptMeta!.performance!.firstChunkTime = undefined;
         quest.promptMeta!.performance!.firstTokenTime = undefined;
+        webSearchBudget.reset();
       };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
@@ -4334,7 +4364,7 @@ export class ChatCompletionProcess {
       startCancellationWatcher();
 
       // Check if Research Mode is enabled and handle parallel processing
-      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
+      if (isResearchMode) {
         logger.info(
           `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
         );

@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   rule: vi.fn(),
   rulePending: { value: false },
   access: vi.fn(),
+  applyCorpus: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -24,6 +25,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   },
   useRuleOnDataLakeFinding: () => ({ mutate: h.rule, isPending: h.rulePending.value }),
   useLakeAccessView: (lakeId: string | null, enabled?: boolean) => h.access(lakeId, enabled),
+  // The detail view's corpus controls (#3612) reach these; stubbed so this file tests the dialog's
+  // wiring, not the mutation or the retag seed (FindingCorpusActions.test.tsx covers those).
+  useApplyCorpusAction: () => ({ mutate: h.applyCorpus, isPending: false }),
+  useLakeFileTags: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 // The assignee control reads the signed-in user to offer "Assign to me"; the real store is a
@@ -163,16 +168,16 @@ describe('LakeFindingsDialog', () => {
     expect(screen.getByTestId('lake-finding-advisory')).toHaveTextContent(/not proven/i);
   });
 
-  // #3046 owns corpus changes; the detail view may now rule on a finding, but a control that
-  // mutated the corpus would be a write nobody argued for.
-  it('offers no way to change the corpus', () => {
+  // This issue's controls are the corpus actions (#3612); the ruling controls (#3045) are their
+  // own and sit alongside them. Both act only on an open finding.
+  it('mounts the corpus controls on an open finding in the detail action area', () => {
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
 
-    const labels = screen.getAllByRole('button').map(b => b.textContent ?? '');
-    for (const forbidden of [/merge/i, /supersede/i, /retag/i, /delete/i]) {
-      expect(labels.some(label => forbidden.test(label))).toBe(false);
-    }
+    expect(screen.getByTestId('lake-finding-action-area')).toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-merge-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-supersede-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-retag-btn')).toBeInTheDocument();
   });
 
   it('rules an open finding resolved with the note the curator typed', () => {
@@ -678,7 +683,14 @@ describe('LakeFindingsChip', () => {
     h.health.mockReturnValue(scanned());
     renderChip();
 
-    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1 to review');
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1 conflict to review');
+  });
+
+  it('pluralises the conflict count past one', () => {
+    h.findings.mockReturnValue(listing([finding(), finding({ id: 'finding-2' })]));
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('2 conflicts to review');
   });
 
   // Terminal-only history (e.g. one dismissed finding, zero open) must not take the entry point
@@ -728,7 +740,7 @@ describe('LakeFindingsChip', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ to review');
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ conflicts to review');
   });
 
   it('counts open findings and opens the review surface', () => {
@@ -739,7 +751,7 @@ describe('LakeFindingsChip', () => {
     );
 
     const chip = screen.getByTestId('datalake-findings-chip-lake-1');
-    expect(chip).toHaveTextContent('1 to review');
+    expect(chip).toHaveTextContent('1 conflict to review');
 
     // Joy renders the clickable chip as a button inside the chip root, which is what a curator
     // actually presses.

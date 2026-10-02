@@ -35,6 +35,7 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import { useUser } from '@client/app/contexts/UserContext';
 import FindingSourcePane from './FindingSourcePane';
+import FindingCorpusActions from './FindingCorpusActions';
 import {
   FINDING_DETECTOR_LABEL,
   FINDING_KIND_HINT,
@@ -49,10 +50,11 @@ import {
  * conflicting passages of one finding side by side in the documents they came from.
  *
  * The list is read-only, but the DETAIL view is where a curator rules on a finding (#3045): resolve
- * or dismiss it with an optional note, and set or clear its assignee. Changing the corpus is still
- * out of scope and has no control here (#3046). The one other write is "Scan now", which runs
- * detection on demand so a curator who just uploaded a conflicting document need not wait for the
- * nightly sweep to see it here.
+ * or dismiss it with an optional note, and set or clear its assignee. It is also where the corpus
+ * controls (merge, supersede, retag) live (#3046), because that is where the conflicting passages
+ * are read and the file names can be shown before anything moves. The one other write is "Scan
+ * now", which runs detection on demand so a curator who just uploaded a conflicting document need
+ * not wait for the nightly sweep to see it here.
  */
 
 /**
@@ -356,6 +358,13 @@ function FindingDetail({
       <FindingRuling finding={finding} dataLakeId={dataLakeId} />
       <FindingAssignee finding={finding} dataLakeId={dataLakeId} canManage={canManage} />
 
+      {/* The action area: a curator acts here, on the evidence just read. Corpus actions move
+          customer documents, so they sit in their own row apart from anything that only records a
+          decision. */}
+      <Box data-testid="lake-finding-action-area" sx={{ borderTop: '1px solid', borderColor: 'divider', pt: 1.5 }}>
+        <FindingCorpusActions dataLakeId={dataLakeId} finding={finding} />
+      </Box>
+
       {/* Two up, which is the shape of a cross-document conflict; a finding reaching more documents
           wraps into further rows rather than being cut down to the first pair. */}
       <Box
@@ -567,7 +576,7 @@ export function findingsChipDisplay({
   if (openCount > 0) {
     return {
       // A full page is a lower bound, so it reads `50+` rather than claiming an exact count.
-      label: `${openCount}${hasMore ? '+' : ''} to review`,
+      label: `${openCount}${hasMore ? '+' : ''} ${openCount === 1 && !hasMore ? 'conflict' : 'conflicts'} to review`,
       tooltip: 'Documents in this lake appear to contradict each other. Review the passages.',
       color: 'warning',
     };

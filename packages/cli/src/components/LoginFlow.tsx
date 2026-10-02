@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import open from 'open';
 import axios from 'axios';
 import { OAuthClient, type DeviceFlowResponse } from '../auth/OAuthClient';
+import { ApiClient } from '../auth/ApiClient';
 import type { ConfigStore } from '../storage/ConfigStore';
 
 interface JwtPayload {
@@ -34,6 +35,37 @@ export function isBrowserOpenableUrl(raw: string): boolean {
   }
   if (url.protocol === 'https:') return true;
   return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+}
+
+/**
+ * The device-flow response is server-controlled, so a compromised server could point the
+ * verification page at a phishing origin. Only auto-open URLs on the configured API origin.
+ * Strict compare: no subdomain aliasing and no localhost/127.0.0.1 equivalence.
+ */
+export function isOnApiOrigin(raw: string, apiUrl: string): boolean {
+  try {
+    return new URL(raw).origin === new URL(apiUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+function originOf(raw: string): string {
+  try {
+    const { origin } = new URL(raw);
+    // Non-web schemes (file:, javascript:, data:) have an opaque "null" origin.
+    return origin === 'null' ? raw : origin;
+  } catch {
+    return raw;
+  }
+}
+
+function hostOf(raw: string): string {
+  try {
+    return new URL(raw).host;
+  } catch {
+    return raw;
+  }
 }
 
 function extractErrorMessage(err: unknown): string {
@@ -71,6 +103,7 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   const [deviceFlow, setDeviceFlow] = useState<DeviceFlowResponse | null>(null);
   const [statusMessage, setStatusMessage] = useState('Initiating device authorization...');
   const [error, setError] = useState<string | null>(null);
+  const [account, setAccount] = useState<{ userId: string; email?: string; username?: string } | null>(null);
 
   useEffect(() => {
     const runLoginFlow = async () => {
@@ -106,11 +139,19 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
           userId,
         });
 
+        setAccount({ userId });
         setStatus('success');
         setStatusMessage('Successfully authenticated!');
 
         // Wait a moment before calling success callback
         setTimeout(() => onSuccess(), 1500);
+
+        // Best-effort and not awaited, so a slow or failed identify never delays onSuccess;
+        // the success screen falls back to the user ID until (unless) this resolves.
+        new ApiClient(apiUrl, configStore)
+          .get<{ user?: { email?: string; username?: string } }>('/api/identify')
+          .then(res => setAccount({ userId, email: res?.user?.email, username: res?.user?.username }))
+          .catch(() => {});
       } catch (err) {
         setStatus('error');
         const errorMessage = extractErrorMessage(err);
@@ -122,21 +163,24 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
     runLoginFlow();
   }, [apiUrl, configStore, onSuccess, onError]);
 
+  // Both URIs are checked: the CLI opens _complete, but the screen tells the user to visit verification_uri.
+  // `every`, not `find() === undefined`: a server that omits a URI would otherwise read as trusted.
+  const uris = deviceFlow ? [deviceFlow.verification_uri, deviceFlow.verification_uri_complete] : [];
+  const isTrustedUri = (u: string) => isBrowserOpenableUrl(u) && isOnApiOrigin(u, apiUrl);
+  const untrustedUri = uris.find(u => !isTrustedUri(u));
+  const trusted = uris.length > 0 && uris.every(isTrustedUri);
+
   // Auto-open browser when device flow is initiated
   useEffect(() => {
-    if (deviceFlow && status === 'waiting') {
-      // Use verification_uri_complete which includes the user code pre-filled.
-      // Validate the scheme first - never hand a non-web URL to the OS opener.
-      if (isBrowserOpenableUrl(deviceFlow.verification_uri_complete)) {
-        open(deviceFlow.verification_uri_complete).catch(err => {
-          // Silent fail - user can still manually visit the URL
-          console.error('Failed to auto-open browser:', err);
-        });
-      } else {
-        console.error('Refusing to auto-open untrusted verification URL:', deviceFlow.verification_uri_complete);
-      }
+    // Use verification_uri_complete which includes the user code pre-filled.
+    // An untrusted URL is never handed to the OS opener; the waiting screen shows the warning.
+    if (deviceFlow && status === 'waiting' && trusted) {
+      open(deviceFlow.verification_uri_complete).catch(err => {
+        // Silent fail - user can still manually visit the URL
+        console.error('Failed to auto-open browser:', err);
+      });
     }
-  }, [deviceFlow, status]);
+  }, [deviceFlow, status, trusted]);
 
   if (status === 'initiating') {
     return (
@@ -174,7 +218,9 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
           </Text>
         </Box>
         <Box>
-          <Text dimColor>You can now use B4M CLI with your account.</Text>
+          <Text>
+            Logged in as {account?.email || account?.username || `user ${account?.userId}`} on {hostOf(apiUrl)}
+          </Text>
         </Box>
       </Box>
     );
@@ -189,9 +235,24 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
         </Text>
       </Box>
 
-      <Box marginBottom={1}>
-        <Text>Opening browser automatically... If it doesn't open, please visit:</Text>
-      </Box>
+      {trusted ? (
+        <Box marginBottom={1}>
+          <Text>Opening browser automatically... If it doesn't open, please visit:</Text>
+        </Box>
+      ) : (
+        <>
+          <Box marginBottom={1}>
+            <Text color="red" bold>
+              {untrustedUri && isOnApiOrigin(untrustedUri, apiUrl)
+                ? `Not opening browser: verification URL ${originOf(untrustedUri)} is not https (plain http is only auto-opened on localhost). Only continue if you trust it.`
+                : `Not opening browser: verification URL origin ${originOf(untrustedUri ?? '')} does not match the configured server ${originOf(apiUrl)}. Only continue if you trust it.`}
+            </Text>
+          </Box>
+          <Box marginBottom={1}>
+            <Text>Please visit:</Text>
+          </Box>
+        </>
+      )}
 
       <Box marginBottom={1} paddingLeft={2}>
         <Text color="blue" bold>

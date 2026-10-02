@@ -1,7 +1,9 @@
 import React from 'react';
 import { Alert, Box, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy';
+import { LAKE_CONFIG_EVENT_VALUE_FIELDS } from '@bike4mind/common';
 import type {
+  DataLakeStatus,
   LakeConfigChangeAction,
   LakeConfigChangeField,
   LakeConfigHistoryEntry,
@@ -42,6 +44,7 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   proposalReview: 'Proposal review',
   researchConfig: 'Research configuration',
   researchRun: 'Research run',
+  upload: 'Upload',
 };
 
 /** Total, for the same reason as FIELD_LABEL. */
@@ -74,6 +77,25 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   'delete-research-config': 'Research configuration deleted',
   'start-research-run': 'Research run started',
   'complete-research-run': 'Research run finished',
+  create: 'Data lake created',
+  'upload-files': 'Files uploaded',
+};
+
+/**
+ * Total over DataLakeStatus. Matches the wording the rest of the lake UI uses - an `active` lake is
+ * "Published" there (the promote action, the draft notices), so the raw enum would read as a
+ * different state.
+ */
+const STATUS_LABEL: Record<DataLakeStatus, string> = {
+  draft: 'Draft',
+  active: 'Published',
+  archiving: 'Archiving',
+  archived: 'Archived',
+  unarchiving: 'Unarchiving',
+  restoring: 'Restoring',
+  deleting: 'Deleting',
+  deleted: 'Deleted',
+  purging: 'Purging',
 };
 
 /**
@@ -91,8 +113,17 @@ const RUNG_LABEL: Record<LakeManageRung, { label: string; color: ColorPalettePro
   system: { label: 'System', color: 'neutral' },
 };
 
+// The zone is printed because other lake surfaces (Spend) group by UTC day, so an unlabelled local
+// time invites a reader to line the two up wrongly.
 const fmtDateTime = (d: Date | string): string =>
-  new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  new Date(d).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
 
 const fmtDate = (d: Date | string): string => new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' });
 
@@ -137,12 +168,27 @@ export function describeLakeConfigFingerprint(change: LakeConfigHistoryFingerpri
   return `replaced (${before.length} -> ${after.length} chars)`;
 }
 
-/** The right-hand cell for one changed field, per arm of the discriminated union. */
 /** The fields whose values are user ids - the only ones a name lookup may be applied to. Must stay
  *  in sync with IDENTITY_VALUE_FIELDS in assembleLakeConfigHistory, which decides what gets
  *  resolved server-side; a field listed here but not there simply renders its raw id. */
 const IDENTITY_VALUE_FIELDS = new Set<LakeConfigChangeField>(['effectiveOwnerUserId', 'createdByUserId']);
 
+const EVENT_VALUE_FIELDS = new Set<LakeConfigChangeField>(LAKE_CONFIG_EVENT_VALUE_FIELDS);
+
+const isUnset = (value: LakeConfigLiteralValue | undefined): boolean =>
+  value === undefined || value === null || value === '';
+
+/** A stored value, with `status` mapped to its UI label. Unknown statuses degrade to the raw value. */
+const describeFieldValue = (
+  field: LakeConfigChangeField,
+  value: LakeConfigLiteralValue | undefined,
+  names?: Record<string, string>
+): string =>
+  field === 'status' && typeof value === 'string'
+    ? (STATUS_LABEL[value as DataLakeStatus] ?? value)
+    : describeLakeConfigValue(value, names);
+
+/** The right-hand cell for one changed field, per arm of the discriminated union. */
 export function describeLakeConfigChange(
   change: LakeConfigHistoryFieldChange,
   userNames?: Record<string, string>
@@ -152,7 +198,12 @@ export function describeLakeConfigChange(
   }
   const names = IDENTITY_VALUE_FIELDS.has(change.field) ? userNames : undefined;
   const clipped = change.truncated ? ' (clipped)' : '';
-  return `${describeLakeConfigValue(change.before, names)} -> ${describeLakeConfigValue(change.after, names)}${clipped}`;
+  const before = describeFieldValue(change.field, change.before, names);
+  const after = describeFieldValue(change.field, change.after, names);
+  if (EVENT_VALUE_FIELDS.has(change.field)) return `${after}${clipped}`;
+  if (isUnset(change.before) && !isUnset(change.after)) return `set to ${after}${clipped}`;
+  if (!isUnset(change.before) && isUnset(change.after)) return `cleared (was ${before})${clipped}`;
+  return `${before} -> ${after}${clipped}`;
 }
 
 /**

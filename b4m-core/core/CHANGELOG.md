@@ -1,5 +1,14 @@
 # @bike4mind/core
 
+## 0.4.25
+
+### Patch Changes
+
+- [#3706](https://github.com/Bike4Mind/bike4mind/pull/3706) [`edfe671`](https://github.com/Bike4Mind/bike4mind/commit/edfe6718c78309af24d2057d0d428e5dea7f208d) Thanks [@erikbethke](https://github.com/erikbethke)! - bump vulnerable dependencies (HIGH)
+
+- Updated dependencies [[`ede9899`](https://github.com/Bike4Mind/bike4mind/commit/ede9899b6ec98aeb9f7936eaa6bd99624ce1b6d6), [`0aa75f9`](https://github.com/Bike4Mind/bike4mind/commit/0aa75f9b925474b221817fb70fd7f4222f69c4e8), [`5f21257`](https://github.com/Bike4Mind/bike4mind/commit/5f21257e89df2bdb9ed84b37ec157a98220dc678), [`420acfd`](https://github.com/Bike4Mind/bike4mind/commit/420acfd544dd1c4825ccf3e6730906609e8d5f56), [`fb13127`](https://github.com/Bike4Mind/bike4mind/commit/fb13127fa17159715f2465edc13aa79ba9fbb371), [`35e91bf`](https://github.com/Bike4Mind/bike4mind/commit/35e91bf9d09751fea6d066d20273a23bf2c596e4), [`870a2e5`](https://github.com/Bike4Mind/bike4mind/commit/870a2e53453e8c62afe271d4cccd147eb70a6ca9), [`9d369fd`](https://github.com/Bike4Mind/bike4mind/commit/9d369fd0083bbddfd4a87ae05c7ace87c945f1a5), [`fd7ef89`](https://github.com/Bike4Mind/bike4mind/commit/fd7ef89592e6228fd7df9a5bbdd7e750d2249e6b), [`ada05e5`](https://github.com/Bike4Mind/bike4mind/commit/ada05e5375c6ece452390fd894b7ba5ee8ca7eca), [`9358808`](https://github.com/Bike4Mind/bike4mind/commit/9358808b851943c909443297d9cbd820c6b5abdf), [`5d94e2b`](https://github.com/Bike4Mind/bike4mind/commit/5d94e2b2eea151c86fe4c697bd7e39feda74dfec), [`a92d5d3`](https://github.com/Bike4Mind/bike4mind/commit/a92d5d31c493960010cdf1abe03333450c7dd6b0), [`60845e1`](https://github.com/Bike4Mind/bike4mind/commit/60845e1ee2b6605fe8a2e05fa4b8431360c07dd0), [`cd64e03`](https://github.com/Bike4Mind/bike4mind/commit/cd64e03790355e26c51079385cd09797514d066e), [`0a36217`](https://github.com/Bike4Mind/bike4mind/commit/0a362178b0ad60b07877666862ac98815ed5af54)]:
+  - @bike4mind/common@12.1.0
+
 ## 0.4.24
 
 ### Patch Changes

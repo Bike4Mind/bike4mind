@@ -188,8 +188,18 @@ export const generateSessionTags = async (sessionId: string) => {
   return response.data;
 };
 
-export const cloneSession = async (sessionId: string) => {
-  const response = await api.post<ISessionDocument>(`/api/sessions/${sessionId}/clone`);
+/** `targetSurface` omitted = the clone stays in the source's workspace; null = the main notebook list. */
+export const cloneSession = async (sessionId: string, targetSurface?: string | null) => {
+  const response = await api.post<ISessionDocument>(
+    `/api/sessions/${sessionId}/clone`,
+    targetSurface === undefined ? undefined : { targetSurface }
+  );
+  return response.data;
+};
+
+/** Moves a session the caller owns into another workspace (null = the main notebook list). */
+export const moveSessionToSurface = async (sessionId: string, targetSurface: string | null) => {
+  const response = await api.patch<ISessionDocument>(`/api/sessions/${sessionId}/surface`, { targetSurface });
   return response.data;
 };
 

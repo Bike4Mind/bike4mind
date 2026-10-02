@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -16,6 +17,11 @@ import UploadStep from './UploadStep';
 // The WebSocket listener is exercised elsewhere; here we drive the store directly.
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useBatchProgressListener: () => {},
+}));
+
+const promoteMutate = vi.fn();
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  usePromoteDataLake: () => ({ mutate: promoteMutate, isPending: false }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -257,6 +263,33 @@ describe('UploadStep - non-serving lake disclosure (#3222)', () => {
       'This Data Lake is not serving retrieval yet (archived), so it does not ground answers.'
     );
     expect(notice).not.toHaveTextContent('Publish');
+  });
+
+  it('publishes a draft in place when the lake id is known, and retires the notice on success', async () => {
+    promoteMutate.mockImplementationOnce((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+    const user = userEvent.setup();
+    renderComplete({
+      totalFiles: 1,
+      uploadedFiles: 1,
+      chunkedFiles: 1,
+      vectorizedFiles: 1,
+      lakeStatus: 'draft',
+      lakeId: 'lake1',
+    });
+    // The copy no longer sends the user to another surface when the action is right here.
+    expect(screen.getByTestId('wizard-lake-not-serving')).not.toHaveTextContent('from the Data Lakes list');
+
+    await user.click(screen.getByTestId('wizard-lake-publish-btn'));
+    expect(promoteMutate).toHaveBeenCalledWith('lake1', expect.anything());
+    expect(screen.queryByTestId('wizard-lake-not-serving')).toBeNull();
+  });
+
+  it('offers no Publish button without a lake id, or for a non-draft status', () => {
+    const { unmount } = renderComplete({ totalFiles: 1, uploadedFiles: 1, lakeStatus: 'draft' });
+    expect(screen.queryByTestId('wizard-lake-publish-btn')).toBeNull();
+    unmount();
+    renderComplete({ totalFiles: 1, uploadedFiles: 1, lakeStatus: 'archived', lakeId: 'lake1' });
+    expect(screen.queryByTestId('wizard-lake-publish-btn')).toBeNull();
   });
 });
 

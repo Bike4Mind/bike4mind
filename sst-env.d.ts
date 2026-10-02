@@ -468,6 +468,7 @@ declare module "sst" {
       "email-job": string
       "fab-file-chunk": string
       "fab-file-vectorize": string
+      "generation-callback": string
       "github-lake-revoke": string
       "github-webhook": string
       "image-edit": string
@@ -552,6 +553,14 @@ declare module "sst" {
     "generatedImagesBucket": {
       "name": string
       "type": "sst.aws.Bucket"
+    }
+    "generationCallbackQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
+    "generationCallbackQueueDLQ": {
+      "type": "sst.aws.Queue"
+      "url": string
     }
     "githubWebhookQueue": {
       "type": "sst.aws.Queue"
@@ -687,6 +696,7 @@ declare module "sst" {
       "emailJobQueue": string
       "fabFileChunkQueue": string
       "fabFileVectorizeQueue": string
+      "generationCallbackQueue": string
       "githubLakeRevokeQueue": string
       "githubWebhookQueue": string
       "imageEditQueue": string

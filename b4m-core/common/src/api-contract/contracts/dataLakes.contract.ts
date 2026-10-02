@@ -16,7 +16,7 @@ import {
   ProviderNotConfiguredErrorSchema,
 } from '../../schemas/dataLakePublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema } from '../../schemas/chat';
+import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the data-lake API. Each route is a `/api/v1` twin of an SPA route
@@ -55,7 +55,7 @@ export const listDataLakesContract = defineEndpoint({
     200: { description: 'One page of lakes, ordered by `id`.', schema: ListDataLakesResponseSchema },
     403: {
       description: `The API key holds none of \`datalake:read\`, \`datalake:write\` or \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,
-      schema: ApiErrorSchema,
+      schema: ScopeForbiddenErrorSchema,
     },
     422: {
       description:
@@ -86,7 +86,7 @@ export const getDataLakeContract = defineEndpoint({
     200: { description: 'The lake.', schema: DataLakeResourceSchema },
     403: {
       description: `The API key holds none of \`datalake:read\`, \`datalake:write\` or \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,
-      schema: ApiErrorSchema,
+      schema: ScopeForbiddenErrorSchema,
     },
     404: { description: NOT_VISIBLE_LAKE, schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
@@ -122,7 +122,7 @@ export const getDataLakeFileContract = defineEndpoint({
     200: { description: 'The member file and its ingestion state.', schema: DataLakeFileResponseSchema },
     403: {
       description: `The API key holds none of \`datalake:read\`, \`datalake:write\` or \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,
-      schema: ApiErrorSchema,
+      schema: ScopeForbiddenErrorSchema,
     },
     404: { description: FILE_NOT_FOUND, schema: ApiErrorSchema },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
@@ -152,7 +152,7 @@ export const addDataLakeFileContract = defineEndpoint({
       description: "The file is a member; the lake's updated totals.",
       schema: DataLakeFileMembershipResponseSchema,
     },
-    403: { description: WRITE_FORBIDDEN, schema: ApiErrorSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description:
         'The lake is not visible to the caller, or the file does not exist, was deleted, or is not one the ' +
@@ -189,7 +189,7 @@ export const removeDataLakeFileContract = defineEndpoint({
       description: "The file is no longer a member; the lake's updated totals.",
       schema: DataLakeFileMembershipResponseSchema,
     },
-    403: { description: WRITE_FORBIDDEN, schema: ApiErrorSchema },
+    403: { description: WRITE_FORBIDDEN, schema: ScopeForbiddenErrorSchema },
     404: {
       description: 'The lake is not visible to the caller, or the file is not a current member of it.',
       schema: ApiErrorSchema,
@@ -226,7 +226,7 @@ export const searchDataLakeContract = defineEndpoint({
     },
     403: {
       description: `The API key lacks \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,
-      schema: ApiErrorSchema,
+      schema: ScopeForbiddenErrorSchema,
     },
     404: {
       description:

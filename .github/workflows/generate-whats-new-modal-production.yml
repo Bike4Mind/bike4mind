@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   call-generate-modal:
-    # DISABLED: Replaced by server-side cron (apps/client/server/cron/whatsNewGeneration.ts)
+    # DISABLED: Replaced by server-side cron (apps/workers/src/cron/whatsNewGeneration.ts)
     # Re-enable by changing `if: false` back to `if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')`
     if: false
     uses: ./.github/workflows/generate-whats-new-modal-reusable.yml

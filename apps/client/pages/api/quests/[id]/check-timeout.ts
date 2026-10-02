@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import type { Request } from 'express';
 
 const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {
@@ -40,10 +41,15 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
 
   // Conditional, so a real answer that landed after the read above is returned rather than
   // overwritten; the re-read returns whichever state won.
-  await questRepository.settleIfUnfinished(quest.id, recovery);
+  const applied = await questRepository.settleIfUnfinished(quest.id, recovery);
   const updatedQuest = await questRepository.findById(quest.id);
   if (!updatedQuest) {
     throw new NotFoundError('Quest not found');
+  }
+  // An applied recovery settles the quest; same settle-site dispatch as the poll route's recovery.
+  // A lost race means another settle site won and dispatches for itself.
+  if (applied) {
+    await dispatchQuestCallback(quest.id, req.logger);
   }
   return res.json(updatedQuest);
 });

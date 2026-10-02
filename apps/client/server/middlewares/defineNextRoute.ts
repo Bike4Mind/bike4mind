@@ -57,6 +57,8 @@ export function nextRouteForContract<C extends EndpointContract>(
   const { rateLimit, ...baseOptions } = options;
 
   const router = baseApi<ValidatedReq, Response>({
+    // First, so the contract-derived options below always win over a stray runtime field.
+    ...baseOptions,
     // 'jwtOnly' is enforced in baseApi by not installing the api-key chain at all,
     // so a key is never validated/metered/billed before being rejected.
     auth: contract.auth === 'public' ? false : contract.auth === 'jwtOnly' ? 'jwtOnly' : true,
@@ -64,7 +66,9 @@ export function nextRouteForContract<C extends EndpointContract>(
     // empty `requiredScopes.some(...)` in apiKeyAuth is always false and would 403
     // every key. Collapse it to undefined.
     requiredScopes: contract.scopes?.length ? [...contract.scopes] : undefined,
-    ...baseOptions,
+    // A contract serves exactly one method (the verb guard below enforces it), so any
+    // other method 405s before the scope gate can misreport it as a 403.
+    allowedMethods: [contract.method],
   });
 
   const prelude: Handler[] = [];
@@ -161,9 +165,9 @@ export function nextRouteForContract<C extends EndpointContract>(
   //     runs ahead of validation. (The `rateLimit` option instead lives at the FRONT
   //     of the prelude, so it beats validation without a caller having to remember the
   //     ordering.)
-  //  2. next-connect only falls through to its 404 when no non-`USE` handler matches
-  //     the method. A `use`-mounted validator matches every method, so GET on a
-  //     POST-only contract would 422 instead of 404.
+  //  2. A `use`-mounted validator matches every method. baseApi's `allowedMethods`
+  //     guard already 405s an undeclared method ahead of everything, but a validator
+  //     mounted with `use` would still sit on every verb's path for no reason.
   for (const method of METHODS) {
     const registrar = (router as unknown as Record<string, ((...a: unknown[]) => unknown) | undefined>)[method];
     // Some registrars may be absent depending on the next-connect version; skip those.

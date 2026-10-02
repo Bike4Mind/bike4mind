@@ -69,3 +69,21 @@ describe('ManagerNav origin chip', () => {
     expect(screen.queryByTestId('datalake-manager-origin-lake-1')).toBeNull();
   });
 });
+
+describe('ManagerNav draft chip', () => {
+  it('marks a draft lake in the list and leaves a published one unmarked', () => {
+    render(
+      <TestWrapper>
+        <ManagerNav
+          {...baseProps}
+          lakes={[
+            makeLake({ id: 'lake-1', name: 'Draft Lake', status: 'draft', canManage: true }),
+            makeLake({ id: 'lake-2', name: 'Live Lake', fileTagPrefix: 'live', status: 'active', canManage: true }),
+          ]}
+        />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('datalake-manager-draft-chip-lake-1')).toHaveTextContent('Draft');
+    expect(screen.queryByTestId('datalake-manager-draft-chip-lake-2')).toBeNull();
+  });
+});

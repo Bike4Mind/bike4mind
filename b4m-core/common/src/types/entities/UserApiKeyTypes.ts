@@ -245,6 +245,14 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /**
+   * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
+   * `select: false`, so it is absent from every read except findCallbackSigningSecret. The
+   * plaintext is returned once, when it is minted.
+   */
+  callbackSigningSecret?: string;
+  /** When the current signing secret was minted; absent = the key has none yet. */
+  callbackSigningSecretCreatedAt?: Date;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;
@@ -341,4 +349,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Stores (encrypted) a freshly minted signing secret, replacing any previous one. */
+  setCallbackSigningSecret: (id: string, secret: string, createdAt: Date) => Promise<void>;
+  /** The decrypted signing secret plus the fields a delivery must re-check; null if the key is gone or has none. */
+  findCallbackSigningSecret: (
+    id: string
+  ) => Promise<{ secret: string; userId: string; status: ApiKeyStatus; expiresAt?: Date } | null>;
 }

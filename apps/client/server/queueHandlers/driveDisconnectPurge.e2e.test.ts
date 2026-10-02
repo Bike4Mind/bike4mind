@@ -45,7 +45,7 @@ import {
   orgGoogleDriveConnectionRepository,
   userRepository,
 } from '@bike4mind/database';
-import { KnowledgeType } from '@bike4mind/common';
+import { KnowledgeType, Permission } from '@bike4mind/common';
 import { runDriveDisconnectPurge, type DriveDisconnectPurgePayload } from './driveDisconnectPurge';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -72,6 +72,7 @@ afterEach(async () => {
 
 const OWNER = '5f9d88b8c1d2a30017a1c333';
 const ORG = '5f9d88b8c1d2a30017a1b111';
+const ORG_OWNER = { kind: 'organization', organizationId: ORG } as const;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 const seed = async (driveFileCount: number) => {
@@ -127,7 +128,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
   it('works through a connection larger than one invocation slice by slice, then releases it', async () => {
     const { lake, conn, manual } = await seed(5);
     // The route's half: mark first, then the message.
-    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     expect(marked?.created).toBe(true);
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
@@ -147,7 +148,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('re-stamps the pending disconnect on every run, so a progressing purge never reads as stalled', async () => {
     const { lake, conn } = await seed(3);
-    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    const marked = await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     await new Promise(resolve => setTimeout(resolve, 5));
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
@@ -158,7 +159,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('converges under a redelivered message without refunding any owner twice', async () => {
     const { lake, conn } = await seed(4);
-    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     const refunds: number[] = [];
     vi.spyOn(userRepository, 'incrementCurrentStorage').mockImplementation(async (_userId, delta) => {
       refunds.push(delta);
@@ -181,7 +182,7 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
   it('leaves the row, still marked disconnecting, when a slice fails, so a retry resumes it', async () => {
     const { lake, conn } = await seed(3);
-    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG);
+    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
     h.storageDelete.mockRejectedValueOnce(new Error('storage.delete blip'));
     const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
 
@@ -194,5 +195,50 @@ describe('Drive disconnect purge via the queue (real repos + Mongo)', () => {
 
     expect(await drain(payload, 10)).toEqual(['released']);
     expect(await FabFile.countDocuments({ driveConnectionId: conn.id })).toBe(0);
+  });
+
+  it('deletes a connection-unpicked orphan, its chunk and its object; keeps a shared orphan (issue #3647)', async () => {
+    // The reported state: a file removed from the connected folder was only UNPICKED, so it kept its
+    // driveConnectionId while losing the lake meta-tag. The member purge (meta-tag scoped) skipped it
+    // and it survived every disconnect. This pins the orphan sweep that closes it.
+    const { lake, conn } = await seed(1);
+    const seedOrphan = async (over: Record<string, unknown> = {}) => {
+      const doc = await FabFile.create({
+        userId: OWNER,
+        fileName: `orphan-${Math.random().toString(36).slice(2)}.txt`,
+        type: KnowledgeType.FILE,
+        status: 'complete',
+        fileSize: 100,
+        filePath: `files/${new mongoose.Types.ObjectId().toHexString()}`,
+        tags: [],
+        driveConnectionId: conn.id,
+        ...over,
+      });
+      await FabFileChunk.create({ fabFileId: doc.id, text: 'orphan body', tokenCount: 2 });
+      return doc;
+    };
+    const orphan = await seedOrphan();
+    const shared = await seedOrphan({
+      users: [{ userId: new mongoose.Types.ObjectId().toHexString(), permissions: [Permission.read] }],
+    });
+
+    // deleteFabFile refuses a missing actor; stand in for a live owner.
+    vi.spyOn(userRepository, 'findById').mockResolvedValue({ id: OWNER } as never);
+
+    await orgGoogleDriveConnectionRepository.markDisconnecting(conn.id, ORG_OWNER);
+    const payload = { connectionId: conn.id, dataLakeId: lake.id, organizationId: ORG };
+    await drain(payload, 10);
+
+    // The unshared orphan is soft-deleted with its chunk and stored object.
+    expect(await FabFile.findById(orphan.id)).toBeNull();
+    expect(await FabFile.countDocuments({ _id: orphan.id }, { includeDeleted: true } as Record<string, unknown>)).toBe(
+      1
+    );
+    expect(await FabFileChunk.countDocuments({ fabFileId: orphan.id })).toBe(0);
+    expect(h.storageDelete.mock.calls.map(([path]) => path)).toContain(orphan.filePath);
+
+    // The shared orphan survives, chunk and all.
+    expect(await FabFile.findById(shared.id)).toBeTruthy();
+    expect(await FabFileChunk.countDocuments({ fabFileId: shared.id })).toBe(1);
   });
 });

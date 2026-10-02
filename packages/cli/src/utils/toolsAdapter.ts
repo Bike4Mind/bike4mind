@@ -223,14 +223,21 @@ export function wrapToolWithPermission(
 
       const effectiveArgs = isSandboxed ? sandboxedArgs : args;
       // Args actually handed to execution. Defaults to effectiveArgs, minus any
-      // gateSnapshot present in the raw args - only the edit_local_file gate below
-      // (once it actually resolves) may set this field. Stripping it here
+      // gateSnapshot or confirmedFuzzyHash present in the raw args - only the
+      // edit_local_file gate below (once it actually resolves) may set these fields,
+      // plus executeWithFuzzyConfirmation for confirmedFuzzyHash. Stripping them here
       // unconditionally, rather than only when the gate resolves, closes the path
       // where an externally supplied gateSnapshot would otherwise survive untouched
       // whenever resolveEditLocalFile() throws (an ambiguous or no-match old_string,
       // not just an auth/IO error) and let editLocalFile() trust an unverified span.
-      const { gateSnapshot: _modelSuppliedGateSnapshot, ...effectiveArgsSansGateSnapshot } = effectiveArgs ?? {};
-      let execArgs: Record<string, unknown> = effectiveArgsSansGateSnapshot;
+      // confirmedFuzzyHash also survives an exact-match gate (no fuzzy prompt), so a
+      // model-supplied hash could pre-confirm a fuzzy edit the file drifted into.
+      const {
+        gateSnapshot: _modelSuppliedGateSnapshot,
+        confirmedFuzzyHash: _modelSuppliedFuzzyHash,
+        ...effectiveArgsSansGateFields
+      } = effectiveArgs ?? {};
+      let execArgs: Record<string, unknown> = effectiveArgsSansGateFields;
       // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
       // Cleaned once in the finally below: after the awaited command completes on
       // the success path, and on any early-return path (plan-mode block, permission

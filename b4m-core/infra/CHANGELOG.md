@@ -1,5 +1,17 @@
 # @bike4mind/infra
 
+## 1.2.0
+
+### Minor Changes
+
+- [#3480](https://github.com/Bike4Mind/bike4mind/pull/3480) [`5e2879d`](https://github.com/Bike4Mind/bike4mind/commit/5e2879d909efb7efdc319bb72cce36c034b04aed) Thanks [@onoya](https://github.com/onoya)! - scope and publish file upload and download for API keys
+
+### Patch Changes
+
+- [#3501](https://github.com/Bike4Mind/bike4mind/pull/3501) [`448494a`](https://github.com/Bike4Mind/bike4mind/commit/448494ac1735f7e8e5d4781df76810e768b95031) Thanks [@aflordelis](https://github.com/aflordelis)! - move event handlers and self-host runner into apps/workers
+
+- [#3706](https://github.com/Bike4Mind/bike4mind/pull/3706) [`edfe671`](https://github.com/Bike4Mind/bike4mind/commit/edfe6718c78309af24d2057d0d428e5dea7f208d) Thanks [@erikbethke](https://github.com/erikbethke)! - bump vulnerable dependencies (HIGH)
+
 ## 1.1.0
 
 ### Minor Changes

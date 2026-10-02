@@ -33,6 +33,8 @@ import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
+import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
+import { isDraftLake } from '@client/app/components/datalake/lakeVisibility';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import {
   COUNT_CHIP_SX,
@@ -431,6 +433,7 @@ export default function ManagerNav({
                                   {lake.name}
                                 </Typography>
                               </ListItemContent>
+                              {isDraftLake(lake) && <LakeDraftChip testId={`datalake-manager-draft-chip-${lake.id}`} />}
                               {/* Owner marker in the LIST itself, not just the detail pane: the
                                   row otherwise shows only a name, so an admin (who sees every
                                   tenant's lakes, even private) can't tell whose is whose without
@@ -519,7 +522,7 @@ export default function ManagerNav({
                                     sx={COUNT_CHIP_SX}
                                     data-testid={`datalake-manager-pending-proposals-${lake.id}`}
                                   >
-                                    {`${lake.pendingProposalCount} to review`}
+                                    {`${lake.pendingProposalCount} ${lake.pendingProposalCount === 1 ? 'source' : 'sources'} to review`}
                                   </Chip>
                                 </Tooltip>
                               )}
@@ -750,13 +753,13 @@ export default function ManagerNav({
  * contingent on the sweep completing rather than guaranteed by the purge click itself; a sweep that
  * exhausts into the DLQ leaves the lake (and its connection row) sitting in `purging` until retried.
  *
- * Renders nothing when the lake has no connection, including a personal lake (the route resolves
- * `connection: null` for those, never 404); a read that genuinely fails (lake gone, or a 404 for a
- * caller who lacks org owner/manager access) renders the unknown case.
+ * Renders nothing when the lake has no connection; a read that genuinely fails (lake gone, or a 404
+ * for a caller who may not see the connection - an org lake's non-manager, or anyone but a personal
+ * lake's owner) renders the unknown case.
  */
 function PurgeDriveWarning({ lakeId }: { lakeId: string }) {
-  // Deliberately NOT gated on org scope, unlike LakeDriveStatusChip. The chip renders on every lake
-  // the user opens, so skipping a personal lake's guaranteed null there is worth it. This warning
+  // Deliberately NOT gated on scope or ownership, unlike LakeDriveStatusChip. The chip renders on every
+  // lake the user opens, so skipping a read that can only 404 there is worth it. This warning
   // guards an IRREVERSIBLE action, and gating it on a field this projection is not proven to
   // populate would trade one wasted request for silently withholding the notice on a lake that
   // does have a connection. A rare failed read on a purge dialog is the cheaper tradeoff.
