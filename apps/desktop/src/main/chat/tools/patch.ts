@@ -313,6 +313,55 @@ function findHome(
   return homes.length === 1 ? homes[0].display : undefined;
 }
 
+const MISMATCH_CONTEXT = 3;
+
+function clip(line: string): string {
+  return line.length > MAX_QUOTED_CHARS ? `${line.slice(0, MAX_QUOTED_CHARS)}...` : line;
+}
+
+/** The start at or after `from` where the longest run of the hunk's leading lines agrees with the file. */
+function longestPrefixMatch(
+  lines: readonly string[],
+  expected: readonly string[],
+  from: number
+): { at: number; agrees: number } | undefined {
+  if (expected[0]?.trim() === '') return undefined;
+  const same = COMPARE.unicode;
+  let best: { at: number; agrees: number } | undefined;
+  for (let at = from; at < lines.length; at += 1) {
+    let agrees = 0;
+    while (agrees < expected.length && at + agrees < lines.length && same(lines[at + agrees], expected[agrees])) {
+      agrees += 1;
+    }
+    if (agrees > 0 && (!best || agrees > best.agrees)) best = { at, agrees };
+  }
+  return best;
+}
+
+function describeMismatch(
+  lines: readonly string[],
+  expected: readonly string[],
+  nearest: { at: number; agrees: number }
+): string {
+  const { at, agrees } = nearest;
+  const start = `The nearest match starts at line ${at + 1} and agrees for ${agrees} line${agrees === 1 ? '' : 's'}`;
+  const row = at + agrees;
+  if (row >= lines.length) {
+    return (
+      `${start}, then the file ends at line ${lines.length} before the hunk does:\n` +
+      `  patch expects: "${clip(expected[agrees])}"\n` +
+      `The file ends with:\n${excerpt(lines, Math.max(0, lines.length - MISMATCH_CONTEXT), MISMATCH_CONTEXT)}`
+    );
+  }
+  const from = Math.max(0, row - MISMATCH_CONTEXT);
+  return (
+    `${start}, then differs at line ${row + 1}:\n` +
+    `  patch expects: "${clip(expected[agrees])}"\n` +
+    `  file has:      "${clip(lines[row])}"\n` +
+    `The file around there:\n${excerpt(lines, from, row + MISMATCH_CONTEXT + 1 - from)}`
+  );
+}
+
 /** Where the lines a hunk expected sit nearest to, so one retry can correct the hunk. */
 function describeMiss(
   lines: readonly string[],
@@ -322,6 +371,13 @@ function describeMiss(
 ): string {
   const searched = from > 0 ? ` at or after line ${from + 1}` : '';
   const header = `could not find these lines${searched}:\n${quote(expected)}`;
+
+  const nearest = longestPrefixMatch(lines, expected, from);
+  if (nearest) {
+    const home = findHome(expected, others, true);
+    const homeHint = home ? `\nThese lines are in ${home}; did you mean to patch that file?` : '';
+    return `${header}\n${describeMismatch(lines, expected, nearest)}${homeHint}`;
+  }
 
   for (const [offset, line] of expected.entries()) {
     if (line.trim() === '') continue;

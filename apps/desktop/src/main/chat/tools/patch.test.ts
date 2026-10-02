@@ -215,8 +215,36 @@ describe('applyChunks', () => {
       expect(failures).toHaveLength(1);
       expect(failures[0].hunk).toBe(1);
       expect(failures[0].message).toContain('hunk 1 of 1: could not find these lines:\nbeta\ngamma changed');
-      expect(failures[0].message).toContain('its first line at line 2');
-      expect(failures[0].message).toContain('2\tbeta\n3\tgamma');
+      expect(failures[0].message).toContain('starts at line 2 and agrees for 1 line, then differs at line 3');
+      expect(failures[0].message).toContain('patch expects: "gamma changed"');
+      expect(failures[0].message).toContain('file has:      "gamma"');
+      expect(failures[0].message).toContain('3\tgamma');
+    });
+
+    it('reports the first differing line of a long hunk whose opening lines match', () => {
+      const file = ['top', 'call(', '  files,', '  ids,', '  one =>', '    a(one),', '    // note', '  )', 'end'];
+      const { failures } = run(file, ' call(', ' files,', ' ids,', ' one =>', ' a(one),', ' b(one),', ' )');
+      const message = failures[0].message;
+      expect(message).toContain('starts at line 2 and agrees for 5 lines, then differs at line 7:');
+      expect(message).toContain('patch expects: "b(one),"');
+      expect(message).toContain('file has:      "    // note"');
+      expect(message).toContain('4\t  ids,');
+      expect(message).toContain('7\t    // note');
+      expect(message).toContain('9\tend');
+    });
+
+    it('prefers the candidate with the longest agreeing prefix over the first line match', () => {
+      const file = ['call(', 'x', 'other', 'call(', 'x', 'y', 'z'];
+      const { failures } = run(file, ' call(', ' x', ' y', ' z!');
+      expect(failures[0].message).toContain('starts at line 4 and agrees for 3 lines, then differs at line 7');
+    });
+
+    it('says when the file ends before the hunk does', () => {
+      const file = ['a', 'b', 'c'];
+      const { failures } = run(file, ' b', ' c', ' d', ' e');
+      const message = failures[0].message;
+      expect(message).toContain('starts at line 2 and agrees for 2 lines, then the file ends at line 3');
+      expect(message).toContain('patch expects: "d"');
     });
 
     it('says when the text only occurs before the previous hunk', () => {

@@ -366,6 +366,10 @@ function splitAlternatives(include: string): string[] {
   return parts.filter(Boolean);
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function clipLine(line: string, expression: RegExp, keepIndent: boolean): string {
   const text = keepIndent ? line.trimEnd() : line.trim();
   if (text.length <= MAX_GREP_LINE_CHARS) return text;
@@ -496,6 +500,13 @@ export const grepSearch: ToolDefinition = {
             'A glob without a slash matches the file name at any depth.',
         },
         ignoreCase: { type: 'boolean', description: 'Case-insensitive match.' },
+        literal: {
+          type: 'boolean',
+          description:
+            'Search for the pattern as plain text instead of a regular expression. Use it for text with ' +
+            'unescaped ( [ { . * + ? | characters. A pattern that is not a valid regular expression is ' +
+            'searched this way automatically.',
+        },
         outputMode: {
           type: 'string',
           description: '"content" (default): matching lines. "files": matching files with counts.',
@@ -520,12 +531,27 @@ export const grepSearch: ToolDefinition = {
     const requested = typeof input.path === 'string' && input.path ? input.path : defaultBase(context);
     const base = await resolveWithinRoots(requested, context.roots, context.workingDirectory);
 
-    let expression: RegExp;
-    try {
-      expression = new RegExp(requireString(input, 'pattern'), input.ignoreCase === true ? 'i' : undefined);
-    } catch (err) {
-      throw new Error(`Invalid regular expression: ${err instanceof Error ? err.message : String(err)}`);
+    const requestedPattern = requireString(input, 'pattern');
+    const flags = input.ignoreCase === true ? 'i' : undefined;
+    let pattern = requestedPattern;
+    let note = '';
+    if (input.literal === true) {
+      pattern = escapeRegExp(requestedPattern);
+    } else {
+      try {
+        new RegExp(requestedPattern, flags);
+      } catch (err) {
+        const reason = (err instanceof Error ? err.message : String(err)).replace(
+          /^Invalid regular expression: (?:\/.*\/[a-z]*: )?/,
+          ''
+        );
+        pattern = escapeRegExp(requestedPattern);
+        note =
+          `Note: "${requestedPattern}" is not a valid regular expression (${reason}), so it was searched as literal text. ` +
+          'Escape ( ) [ ] { } . * + ? | ^ $ \\ to use them as regex.\n';
+      }
     }
+    const expression = new RegExp(pattern, flags);
 
     const include = typeof input.include === 'string' && input.include ? input.include : undefined;
     const filesOnly = input.outputMode === 'files';
@@ -544,7 +570,7 @@ export const grepSearch: ToolDefinition = {
     const viaRipgrep =
       !single &&
       (await ripgrepSearch({
-        pattern: requireString(input, 'pattern'),
+        pattern,
         cwd: directory,
         ignoreCase: input.ignoreCase === true,
         context: around,
@@ -605,7 +631,7 @@ export const grepSearch: ToolDefinition = {
     const timedOut = viaRipgrep === 'timed-out' ? ' The search timed out, so these results are partial.' : '';
     const partial =
       timedOut || (complete ? '' : ` Only the first ${MAX_WALKED_FILES} files under ${base} were searched.`);
-    if (matchingFiles === 0) return `No matches for ${expression} under ${base}${scope}.${partial}`;
+    if (matchingFiles === 0) return `${note}No matches for ${expression} under ${base}${scope}.${partial}`;
 
     let header: string;
     if (filesOnly) {
@@ -619,6 +645,6 @@ export const grepSearch: ToolDefinition = {
     } else {
       header = `${totalMatches} matching line(s) in ${matchingFiles} file(s) under ${base}${scope}:`;
     }
-    return capOutput([header + partial, ...body].join('\n'));
+    return capOutput(note + [header + partial, ...body].join('\n'));
   },
 };
