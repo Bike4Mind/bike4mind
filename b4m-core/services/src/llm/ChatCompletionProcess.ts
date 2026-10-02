@@ -22,6 +22,7 @@ import {
   isNavigableFeaturePath,
   applyReplyChoices,
   REPLY_CHOICES_GUIDANCE,
+  stripChoicesFromReplies,
   ReasoningEffort,
   ICacheStrategy,
   generateAnonymousSessionId,
@@ -6193,9 +6194,12 @@ export class ChatCompletionProcess {
         return;
       }
       const setErrorReply = (message: string) => {
-        const visiblePartial = (streamedRepliesBeforeError ?? [])
-          .map(r => visibleReplyText(r))
-          .filter(text => text.length > 0);
+        // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
+        // slot with no separator - otherwise extractChoicesBlock on the client either swallows the
+        // appended error as "part of the block" (closed-then-truncated case) or refuses to touch a
+        // closed block once real content follows it, leaking the raw JSON instead.
+        const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
+        const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
         quest.replies = combined;
         quest.reply = combined.join('');

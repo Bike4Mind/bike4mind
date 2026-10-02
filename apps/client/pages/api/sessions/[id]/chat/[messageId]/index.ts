@@ -99,6 +99,10 @@ const handler = baseApi()
 
       // Only the pick is writable, never the options, and only once: the options are what the server
       // parsed from the model's reply, and the first pick is the one the conversation followed.
+      // "Once" is checked against the read above, not atomically: two collaborators picking
+      // different options in the same instant can both pass this check before either write lands,
+      // so the later write wins. Cosmetic only - the picker's own reply text was already sent
+      // either way - so a transactional/atomic guard here isn't worth it.
       const { selectedChoiceIndex } = updates;
       const storedChoices = message.suggestedChoices;
       if (

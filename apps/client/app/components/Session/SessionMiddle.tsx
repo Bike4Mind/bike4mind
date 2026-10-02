@@ -228,6 +228,9 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
   useEffect(() => {
     if (sessionId) setNewestTurn(sessionId, newestTurn);
   }, [sessionId, newestTurn, setNewestTurn]);
+  // Safe only because SessionContainer renders at most one SessionMiddle per layout (main,
+  // floatingChat, dockRight/dockBottom are mutually exclusive) - a second concurrent instance for
+  // the same session would clear this on its own unmount and blank the other's buttons.
   useEffect(() => {
     if (!sessionId) return;
     return () => setNewestTurn(sessionId, undefined);

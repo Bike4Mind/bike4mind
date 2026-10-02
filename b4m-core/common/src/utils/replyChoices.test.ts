@@ -139,6 +139,31 @@ describe('stripChoicesFromReplies', () => {
   it('returns the slots untouched when none carries a block', () => {
     expect(stripChoicesFromReplies(['a', 'b'])).toEqual({ replies: ['a', 'b'], choices: null, found: false });
   });
+
+  /**
+   * Regression for the chat error path: a stream can fail right as the model is mid-choices-block
+   * (overload, timeout, dropped connection). The error handler appends its own message as a new
+   * slot and joins everything with no separator. If the choices block were left in place, running
+   * extractChoicesBlock on that JOINED text afterwards would either swallow the error message
+   * (an unterminated block "absorbs" whatever follows it as part of itself) or refuse to touch a
+   * CLOSED block once real content follows it, leaking the raw JSON. Stripping each slot with
+   * stripChoicesFromReplies before the error joins it - which is what the error path does - avoids
+   * both: there is no trailing block left for extractChoicesBlock to misread at render/export time.
+   */
+  it('strips a mid-stream block before an error message is appended, so neither is lost', () => {
+    const unterminated = `${prose}\n\n\`\`\`choices\n{"options":[{"label":"Refor`;
+    const closed = `${prose}\n\n${block(JSON.stringify(two))}`;
+    const error = 'Sorry, something went wrong while generating a response. Please try again.';
+
+    for (const streamedSlot of [unterminated, closed]) {
+      const { replies: stripped } = stripChoicesFromReplies([streamedSlot]);
+      const finalText = [...stripped, error].join('');
+      expect(finalText).toBe(`${prose}${error}`);
+      // The already-clean text must not get mangled by a second extractChoicesBlock pass
+      // (extractReplies on the client re-runs it while a reply is still streaming).
+      expect(extractChoicesBlock(finalText)).toEqual({ text: finalText, choices: null, found: false });
+    }
+  });
 });
 
 describe('REPLY_CHOICES_GUIDANCE', () => {
