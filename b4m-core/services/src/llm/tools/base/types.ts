@@ -217,6 +217,13 @@ export interface ToolContext {
    */
   organizationId?: string;
   /**
+   * The `b4m_live_` key that authenticated the turn, when one did (`/api/chat`, `/api/ai/llm`).
+   * Server-derived from `req.apiKeyInfo`, never from a request body. Attribution only: a lake
+   * write the tool drives is audited under the key (see buildToolAccessContext), while
+   * authorization still runs as `userId`. Absent = a session turn.
+   */
+  apiKeyId?: string;
+  /**
    * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
    * resolved from the session and threaded down via the tool-builder deps (mirrors
    * entitlementKeys). Keeps excluded/unvectorized lake files out of retrieval AND citations so
