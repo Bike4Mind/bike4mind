@@ -32,8 +32,8 @@ const LAKE = { id: 'lake1', datalakeTag: 'datalake:lake1', createdByUserId: 'u1'
 const FILES = [{ id: 'f1', userId: 'u1', fileSize: 10, filePath: 'p1', versions: [] }] as never;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 const ids = { connectionId: 'conn1', dataLakeId: 'lake1' };
-const purge = (restore?: () => Promise<unknown>) =>
-  purgeConnectionIngestedFiles(LAKE, async () => FILES, { connectionId: 'conn1', label: 'Test', logger, restore });
+const purge = () =>
+  purgeConnectionIngestedFiles(LAKE, async () => FILES, { connectionId: 'conn1', label: 'Test', logger });
 
 const file = (id: string) => ({ id, userId: 'u1', fileSize: 10, filePath: `p-${id}`, versions: [] });
 
@@ -42,12 +42,10 @@ beforeEach(() => {
 });
 
 describe('purgeConnectionIngestedFiles', () => {
-  it('sweeps the files and recomputes lake stats without restoring', async () => {
-    const restore = vi.fn();
-    await expect(purge(restore)).resolves.toEqual({ remaining: false });
+  it('sweeps the files and recomputes lake stats', async () => {
+    await expect(purge()).resolves.toEqual({ remaining: false });
     expect(h.purgeDataLakeConnectionFiles).toHaveBeenCalledWith(LAKE, FILES, expect.any(Object));
     expect(h.recomputeLakeStats).toHaveBeenCalled();
-    expect(restore).not.toHaveBeenCalled();
   });
 
   it('calls findFiles with no limit and reports nothing remaining when sliceSize is unset', async () => {
@@ -89,29 +87,22 @@ describe('purgeConnectionIngestedFiles', () => {
     expect(result).toEqual({ remaining: false });
   });
 
-  it('rethrows the purge error, not the restore error, and logs both', async () => {
+  it('logs and rethrows the purge error', async () => {
     const purgeError = new Error('storage blip');
-    const restoreError = new Error('mongo down');
     h.purgeDataLakeConnectionFiles.mockRejectedValue(purgeError);
-    const restore = vi.fn().mockRejectedValue(restoreError);
-    await expect(purge(restore)).rejects.toBe(purgeError);
-    expect(restore).toHaveBeenCalled();
+    await expect(purge()).rejects.toBe(purgeError);
     expect(logger.error).toHaveBeenCalledWith(expect.any(String), { ...ids, error: purgeError });
-    expect(logger.error).toHaveBeenCalledWith(expect.any(String), { ...ids, restoreError });
   });
 
-  it('restores on a finder failure too', async () => {
+  it('rethrows a finder failure without sweeping', async () => {
     const findError = new Error('find failed');
-    const restore = vi.fn();
     await expect(
       purgeConnectionIngestedFiles(LAKE, () => Promise.reject(findError), {
         connectionId: 'conn1',
         label: 'Test',
         logger,
-        restore,
       })
     ).rejects.toBe(findError);
-    expect(restore).toHaveBeenCalled();
     expect(h.purgeDataLakeConnectionFiles).not.toHaveBeenCalled();
   });
 });

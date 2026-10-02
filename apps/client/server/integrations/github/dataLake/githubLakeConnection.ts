@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/database';
 import {
   acceptsConnectorContent,
+  isGitHubDisconnectStalled,
   isLakeIngestable,
   type IDataLakeDocument,
   type IOrgGitHubLakeConnectionDocument,
@@ -50,7 +51,7 @@ import {
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;
 
-/** Files purged per revoke-queue receive, sized to finish well inside its 10-minute timeout (infra/queues.ts). */
+/** Files purged per revoke-queue receive (revoke and disconnect alike), sized to finish well inside its 10-minute timeout (infra/queues.ts). */
 export const REVOKE_PURGE_SLICE_SIZE = 1000;
 
 /** The githubLakeRevokeQueue message (queueHandlers/githubLakeRevoke.ts parses the same shape). */
@@ -88,6 +89,8 @@ export function toGitHubLakeConnectionResponse(
     lastSyncedAt: conn.lastSyncedAt ?? null,
     syncStale: conn.status === 'syncing' && !isGitHubLakeSyncClaimLive(conn),
     fileCount,
+    disconnecting: !!conn.disconnectRequestedAt,
+    disconnectStalled: !!conn.disconnectRequestedAt && isGitHubDisconnectStalled(conn.disconnectRequestedAt),
   };
 }
 
@@ -344,28 +347,61 @@ async function uninstallIfUnbound(installationId: number, config: GitHubLakeAppC
 }
 
 /**
- * The disconnect door (DELETE github-connection): disable, purge what the connection ingested, then
- * release. A reconnect mints a new connection id and a re-sync diffs only against its own id, so a
- * file left behind here would be orphaned in the lake for good. Purge runs before release so a
- * failed purge leaves the row for a retried DELETE, and the disable is healed on that failure so the
- * connection is not left present but unable to sync. Mirrors drive-connection.ts's DELETE.
+ * The disconnect door (DELETE github-connection): disables and stamps the connection, then hands the
+ * purge and release to githubLakeRevokeQueue, whose consumer (revokeGitHubLakeConnection) is the same
+ * teardown run in slices; purge time scales with the repository, so it cannot fit a web request. The
+ * row stays as the retry anchor until that consumer releases it. A reconnect mints a new connection
+ * id, so a file left behind here would be orphaned in the lake for good. Mirrors drive-connection.ts's
+ * DELETE; `queued: false` means a purge is already progressing.
  */
-export async function disconnectGitHubLakeConnection(
+export async function requestGitHubLakeDisconnect(
+  connection: IOrgGitHubLakeConnectionDocument,
+  logger: PurgeConnectionLogger
+): Promise<{ queued: boolean }> {
+  // A second message would only start a second self-re-enqueueing chain over the same files.
+  if (connection.disconnectRequestedAt && !isGitHubDisconnectStalled(connection.disconnectRequestedAt)) {
+    return { queued: false };
+  }
+  // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
+  const marked = await orgGitHubLakeConnectionRepository.markDisconnecting(connection.id, connection.organizationId);
+  if (!marked) {
+    // A concurrent DELETE stamped first; its message is the one purge chain.
+    const current = await orgGitHubLakeConnectionRepository.findById(connection.id);
+    if (current?.disconnectRequestedAt && !isGitHubDisconnectStalled(current.disconnectRequestedAt)) {
+      return { queued: false };
+    }
+    throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
+  }
+  try {
+    await enqueueGitHubLakeRevoke({ connectionId: connection.id, installationId: connection.installationId });
+  } catch (enqueueError) {
+    // No message behind the mark would leave the connection disabled with nothing to finish it. Only
+    // the mark's creator undoes it; a stalled retry's re-stamp keeps the pending disconnect.
+    if (marked.created) {
+      try {
+        await orgGitHubLakeConnectionRepository.cancelDisconnect(
+          connection.id,
+          connection.organizationId,
+          marked.stamp,
+          marked.previousEnabled
+        );
+      } catch (cancelError) {
+        logger.error('GitHub lake disconnect: could not roll back a disconnect whose purge was not queued', {
+          connectionId: connection.id,
+          cancelError,
+        });
+      }
+    }
+    throw enqueueError;
+  }
+  return { queued: true };
+}
+
+/** Disables (accepting an already-disabled row), then purges one slice; `remaining` asks for another. */
+async function disableAndPurgeSlice(
   lake: IDataLakeDocument,
   connection: IOrgGitHubLakeConnectionDocument,
   logger: PurgeConnectionLogger
-): Promise<{ installationRetained: boolean }> {
-  await disableAndPurge(lake, connection, logger, { reenableOnPurgeFailure: true });
-  // The App config is only needed to uninstall; a retained installation releases without it.
-  return releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
-}
-
-/** Unsliced unless `sliceSize` is set; `remaining` says whether files are left for another pass. */
-async function disableAndPurge(
-  lake: IDataLakeDocument,
-  connection: IOrgGitHubLakeConnectionDocument,
-  logger: PurgeConnectionLogger,
-  { reenableOnPurgeFailure, sliceSize }: { reenableOnPurgeFailure: boolean; sliceSize?: number }
 ): Promise<{ remaining: boolean }> {
   // Paired with claimForSync's `enabled` guard: a live sync would keep minting files past the purge.
   const disabled = await orgGitHubLakeConnectionRepository.disableIfNoLiveSyncClaim(
@@ -375,6 +411,8 @@ async function disableAndPurge(
   if (!disabled) {
     throw new ConflictError('A sync is in progress for this repository. Try disconnecting again once it finishes.');
   }
+  // Keeps a user-requested disconnect from reading as stalled while it progresses; no-op for a revoke.
+  await orgGitHubLakeConnectionRepository.touchDisconnect(connection.id);
   return purgeConnectionIngestedFiles(
     lake,
     limit =>
@@ -386,16 +424,15 @@ async function disableAndPurge(
       connectionId: connection.id,
       label: 'GitHub lake disconnect',
       logger,
-      // Restore, don't force: an archived lake's connection was already disabled and must stay so.
-      restore: reenableOnPurgeFailure && disabled.wasEnabled ? () => enableGitHubConnectionForLake(lake.id) : undefined,
-      sliceSize,
+      sliceSize: REVOKE_PURGE_SLICE_SIZE,
     }
   );
 }
 
 /**
- * The revoke door (githubLakeRevoke queue, fed by the App's webhook): the same teardown as a
- * disconnect, resolved globally because GitHub names an installation, never an org. Idempotent for
+ * The githubLakeRevoke queue consumer, fed by the App's webhook (the revoke door) and by
+ * requestGitHubLakeDisconnect (the disconnect door), resolved globally because GitHub names an
+ * installation, never an org. Idempotent for
  * redeliveries; a live sync's ConflictError is left to throw so SQS retries it. The purge runs in
  * REVOKE_PURGE_SLICE_SIZE slices, re-enqueueing the same message for the rest, so an oversized
  * connection makes progress per receive instead of dead-lettering on its all-or-nothing index removal.
@@ -419,13 +456,9 @@ export async function revokeGitHubLakeConnection(
     await releaseGitHubLakeConnection(connection, getGitHubLakeAppConfig());
     return;
   }
-  // No re-enable on a failed purge: the App has lost access, so a sync could only fail; the disabled
-  // row stays for the SQS retry or the next slice, and disableIfNoLiveSyncClaim accepts an
-  // already-disabled row.
-  const { remaining } = await disableAndPurge(lake, connection, logger, {
-    reenableOnPurgeFailure: false,
-    sliceSize: REVOKE_PURGE_SLICE_SIZE,
-  });
+  // No re-enable on a failed purge: the disabled row stays for the SQS retry or the next slice (a
+  // revoked App could only fail a sync anyway, and a disconnect was asked for).
+  const { remaining } = await disableAndPurgeSlice(lake, connection, logger);
   if (remaining) {
     await enqueueGitHubLakeRevoke({ connectionId, installationId });
     logger.info('GitHub lake revoke: purged a slice; continuing', { connectionId, installationId });
