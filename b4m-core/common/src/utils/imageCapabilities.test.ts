@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { IMAGE_SIZE_CONSTRAINTS, IMAGE_MODELS, ImageModels } from '../models';
 import { MAX_IMAGES_PER_REQUEST } from '../schemas/openai';
 import { getImageModelCapabilities, type ImageSizing } from './imageCapabilities';
+import { BFL_DIMENSION_BOUNDS, resolveImageDimensions } from './imageSize';
 import { isSupportedImageSize } from './imageSizes';
 import { MAX_REFERENCE_IMAGES } from './modelHelpers';
 
@@ -69,17 +70,19 @@ describe('getImageModelCapabilities', () => {
       expect(flux.presets).toBe(IMAGE_SIZE_CONSTRAINTS.BFL.sizes);
     });
 
-    // Bounds only: `step` is the custom-dimension granularity, and some presets (800x600, 1280x720)
-    // predate it and are not multiples of it.
-    it('every BFL preset sits inside the advertised dimension bounds', () => {
+    it('every BFL preset reaches BFL inside the advertised bounds and on its step', () => {
       const { sizing } = getImageModelCapabilities(ImageModels.FLUX_PRO_1_1);
       if (sizing.kind !== 'dimensions') throw new Error('expected dimension sizing');
+      expect(sizing.step).toBe(BFL_DIMENSION_BOUNDS.step);
       for (const size of sizing.presets) {
-        const [width, height] = size.split('x').map(Number);
+        const { width, height } = resolveImageDimensions({ size }, BFL_DIMENSION_BOUNDS);
+        if (width === undefined || height === undefined) throw new Error(`preset ${size} was dropped`);
         expect(width).toBeGreaterThanOrEqual(sizing.minWidth);
         expect(width).toBeLessThanOrEqual(sizing.maxWidth);
         expect(height).toBeGreaterThanOrEqual(sizing.minHeight);
         expect(height).toBeLessThanOrEqual(sizing.maxHeight);
+        expect(width % sizing.step).toBe(0);
+        expect(height % sizing.step).toBe(0);
       }
     });
   });

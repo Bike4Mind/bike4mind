@@ -1047,10 +1047,11 @@ describe('ImageGenerationService.process (size normalization)', () => {
   });
 
   // The OpenAI size rule must not be applied to other providers: BFL takes its own
-  // dimensions, which the legacy dall-e list would reject.
-  it('forwards a BFL size to BFL untouched', async () => {
+  // dimensions, which the legacy dall-e list would reject. Only BFL's 32px grid applies
+  // (810 -> 800); Flux pricing ignores size, so the billed size stays as requested.
+  it('forwards a BFL size to BFL on its own grid', async () => {
     const { rendered, billed } = await generateWith(ImageModels.FLUX_PRO_1_1, ModelBackend.BFL, '1440x810');
-    expect(rendered).toMatchObject({ width: 1440, height: 810 });
+    expect(rendered).toMatchObject({ width: 1440, height: 800 });
     expect(billed).toMatchObject({ size: '1440x810' });
   });
 });
