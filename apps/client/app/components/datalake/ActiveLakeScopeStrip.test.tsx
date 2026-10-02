@@ -83,6 +83,18 @@ describe('ActiveLakeScopeStrip', () => {
     expect(within(notSearched).getByTestId('datalake-active-scope-clear-btn')).toBeInTheDocument();
   });
 
+  it('lets the not-searched icon receive hover, which the chip start slot blocks by default', () => {
+    render(
+      <Wrapper>
+        <ActiveLakeScopeStrip lakes={[{ ...lake('c', 'Private'), retrievable: false }]} onClear={vi.fn()} />
+      </Wrapper>
+    );
+
+    const decorator = screen.getByTestId('datalake-active-scope-unsearchable-c').parentElement as HTMLElement;
+    expect(decorator).toHaveClass('MuiChip-startDecorator');
+    expect(getComputedStyle(decorator).pointerEvents).not.toBe('none');
+  });
+
   it('says chat can search none of them when every selected lake is unsearchable', () => {
     render(
       <Wrapper>
