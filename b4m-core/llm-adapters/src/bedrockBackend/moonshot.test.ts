@@ -686,6 +686,30 @@ describe('MoonshotBedrockBackend reasoning-only final turn', () => {
     expect(out).toBe('<think>hm\n\nIt is 180.</think>It is 180.');
   });
 
+  it('does not promote after a native tool marker that never parsed into a call', () => {
+    const streamed = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>so it is 180.\n\n<|tool_calls_section_begin|> <|tool_call_beg' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(streamed).not.toMatch(/<\/think>.+/);
+
+    const whole = render(
+      fresh(),
+      [
+        {
+          choices: [
+            {
+              message: { content: '<reasoning>so it is 180.\n\n<|tool_call_begin|> broken</reasoning>' },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      ],
+      false
+    );
+    expect(whole).not.toMatch(/<\/think>.+/);
+  });
+
   it('does not carry a promoted answer or flags into the next request', () => {
     const be = fresh();
     render(be, [{ choices: [{ delta: { content: '<reasoning>a</reasoning>' }, finish_reason: 'stop' }] }]);
