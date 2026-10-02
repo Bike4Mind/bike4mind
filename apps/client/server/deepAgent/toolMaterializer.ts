@@ -81,6 +81,8 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       ),
     ]);
 
+    // No organizationId: a charter carries only its owner, so lake tools here stay personal. Inferring an
+    // org from a linked agent would let a background mission write into an org the owner never chose.
     const toolDeps: ToolBuilderDeps = {
       userId: ownerUserId,
       user: owner,

@@ -1577,6 +1577,8 @@ async function processExecution(
       userId: execution.userId,
       user: user as IUserDocument,
       logger,
+      // The run's active account, already membership-checked at start; lake-creating tools scope to it.
+      organizationId: execution.organizationId,
       // Generic retrieval exclusion (opt-in per session) - thread it here so the agent's
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
@@ -3396,6 +3398,7 @@ async function processSubagentDispatch(
       userId: child.userId,
       user: user as IUserDocument,
       logger,
+      organizationId: child.organizationId,
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),
