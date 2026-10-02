@@ -159,9 +159,12 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'create',
   /**
-   * An upload batch finished processing (see `uploadBatchChange`). One row per BATCH, never per
-   * file: per-file moves live in LakeMembershipChangeEvent, whose volume this history is not built
-   * to carry. Recorded from the guarded batch finalize, attributed to the batch's uploader.
+   * An upload batch settled (see `uploadBatchChange`). One row per BATCH, never per file: per-file
+   * moves live in LakeMembershipChangeEvent, whose volume this history is not built to carry.
+   * Recorded from the guarded batch finalize, the cancel route and the stuck-batch reconciler, at
+   * most once per batch (`claimUploadHistory`), attributed to the batch's uploader. Not recorded:
+   * a batch the client marks `failed` (nothing landed) and batches cancelled by a lake archive or
+   * delete cascade (the archive/delete row covers those).
    */
   'upload-files',
 ] as const;

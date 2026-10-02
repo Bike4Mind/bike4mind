@@ -27,6 +27,7 @@ vi.mock('@bike4mind/database', () => ({
     markTerminalIfActive: h.markTerminalIfActive,
     setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
     touchIfActive: h.touchIfActive,
+    claimUploadHistory: vi.fn().mockResolvedValue(true),
   },
   dataLakeRepository: { findById: h.findById },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
@@ -100,10 +101,22 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
         db: expect.objectContaining({
           lakeConfigChangeEvents: expect.anything(),
           dataLakeAccessGrants: expect.anything(),
+          // The one-shot claim that keeps a reopened batch to a single row.
+          batches: expect.objectContaining({ claimUploadHistory: expect.any(Function) }),
         }),
         logger,
       })
     );
+  });
+
+  it('still records the upload row when the stats recompute throws', async () => {
+    h.recomputeLakeStats.mockRejectedValue(new Error('aggregation failed'));
+    await finalizeBatchIfComplete(batch(), logger as never);
+    expect(h.recordLakeUploadBatch).toHaveBeenCalledTimes(1);
+    expect(h.recordLakeUploadBatch.mock.invocationCallOrder[0]).toBeLessThan(
+      h.recomputeLakeStats.mock.invocationCallOrder[0]
+    );
+    expect(logger.error).toHaveBeenCalled();
   });
 
   it('records no upload row when another handler won the finalize', async () => {
