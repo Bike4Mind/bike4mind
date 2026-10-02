@@ -125,6 +125,7 @@ export default function DataLakeManagerPanel() {
           // the field renders as blank - and the state in which this lake never converges.
           requiredPassageTokenTarget: l.requiredPassageTokenTarget ?? null,
           canManage: !!l.canManage,
+          isOwn: !!l.isOwn,
           embeddingSpendMicroUsd: l.embeddingSpendMicroUsd,
         }
       : null;
