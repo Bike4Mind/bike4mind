@@ -16,6 +16,12 @@ describe('extractReplies', () => {
     expect(extractReplies({ replies: [streaming] })).toEqual(['Pick one:\n1. A\n2. B']);
   });
 
+  it('keeps the answer when a choices block was drafted in reasoning', () => {
+    const reasoning = '<think>Maybe offer options:\n```choices\n{"options":[]}\n```\nNo.</think>';
+    expect(extractReplies({ replies: [`${reasoning}Here is the full answer.`] })).toEqual(['Here is the full answer.']);
+    expect(extractReplies({ replies: [reasoning, 'Here is the full answer.'] })).toEqual(['Here is the full answer.']);
+  });
+
   it('renders a terminal-recovery reply written next to an empty replies array', () => {
     // Exactly the shape the settle pass leaves behind on a dispatch-time quest.
     expect(extractReplies({ reply: ABANDONED_REPLY, replies: [] })).toEqual([ABANDONED_REPLY]);

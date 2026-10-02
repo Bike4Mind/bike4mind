@@ -100,7 +100,7 @@ vi.mock('@bike4mind/common', async () => {
     THINK_OPEN_TAG: actual.THINK_OPEN_TAG,
     THINK_CLOSE_TAG: actual.THINK_CLOSE_TAG,
     visibleReplyText: actual.visibleReplyText,
-    extractChoicesBlock: actual.extractChoicesBlock,
+    stripChoicesFromReplies: actual.stripChoicesFromReplies,
     stripSearchResultCardFences: actual.stripSearchResultCardFences,
   };
 });

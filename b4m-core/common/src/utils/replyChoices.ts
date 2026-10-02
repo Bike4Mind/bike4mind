@@ -7,6 +7,8 @@
  * The option shape matches the CLI's ask_user_question options.
  */
 
+import { THINK_OPEN_TAG, visibleReplyText } from './streamVisibility';
+
 export interface ChoiceOption {
   label: string;
   description: string;
@@ -25,66 +27,125 @@ export const MAX_CHOICE_LABEL_LENGTH = 40;
 export const MAX_CHOICE_DESCRIPTION_LENGTH = 300;
 
 export interface ExtractedChoices {
-  /** The reply with the trailing block removed; the input unchanged when there was none. */
+  /** The reply with the block removed; the input unchanged when there was none. */
   text: string;
   /** Validated options, or null when there was no block or it failed validation. */
   choices: ChoiceOption[] | null;
-  /** True when a trailing block was found and stripped, valid or not. */
+  /** True when a block was found and stripped, valid or not. */
   found: boolean;
 }
 
-const OPEN_FENCE = /(^|\n)[ \t]*```choices[ \t]*(?=\r?\n|$)/gi;
-// A standalone closing fence line: 3+ backticks, optionally padded with spaces, nothing else on
-// the line. Matched as the first one found after the open fence rather than anchored to the
-// reply's end, so a model that pads the fence or adds a sign-off after it doesn't leave the raw
-// block in the text - see extractChoicesBlock below.
-const CLOSE_FENCE = /\r?\n[ \t]*`{3,}[ \t]*(?=\r?\n|$)/;
+interface FenceSpan {
+  /** Offset of the open fence line. */
+  start: number;
+  /** Offset just past the closing fence line, or null when the block is still open at the end. */
+  end: number | null;
+  body: string;
+}
+
+const FENCE_OPEN_LINE = /^[ \t]*(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE_LINE = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
 
 /**
- * Strips a trailing ```choices block from a reply and validates its options.
- *
- * Only the last block counts; a block mid-reply is ordinary content. Once an open fence is found,
- * everything from there to its closing fence - and anything after that fence - is treated as the
- * block, so the reader never sees raw JSON even when the model doesn't follow the exact format:
- * a truncated reply, a closing fence padded with extra backticks, a different letter case on
- * `choices`, or trailing prose appended after the block all get stripped the same way. Any invalid
- * option rejects the whole block, because dropping one would shift the numbering away from the prose.
+ * Offset where a slot's visible answer starts: just past its last top-level `</think>`, 0 when it
+ * has none, or null while a `<think>` is still open. Depth-tracked to match visibleReplyText in
+ * ./streamVisibility.ts, so a marker-shaped string inside reasoning cannot end it early.
  */
-export function extractChoicesBlock(reply: string): ExtractedChoices {
-  let lastOpen: RegExpExecArray | null = null;
-  for (const match of reply.matchAll(OPEN_FENCE)) lastOpen = match;
-  if (!lastOpen || lastOpen.index === undefined) return { text: reply, choices: null, found: false };
-
-  const fenceStart = lastOpen.index + lastOpen[1].length;
-  const rest = reply.slice(lastOpen.index + lastOpen[0].length);
-  const close = rest.match(CLOSE_FENCE);
-  const text = reply.slice(0, fenceStart).trimEnd();
-  // No standalone closing fence anywhere after the open fence: a truncated mid-stream block.
-  if (!close || close.index === undefined) return { text, choices: null, found: true };
-
-  const choices = parseChoiceOptions(rest.slice(0, close.index));
-  return { text, choices, found: true };
+function answerStart(reply: string): number | null {
+  let depth = 0;
+  let start = 0;
+  for (const marker of reply.matchAll(/<\/?think>/g)) {
+    if (marker[0] === THINK_OPEN_TAG) depth += 1;
+    else if (depth > 0) {
+      depth -= 1;
+      if (depth === 0) start = (marker.index ?? 0) + marker[0].length;
+    }
+  }
+  return depth === 0 ? start : null;
 }
 
 /**
- * {@link extractChoicesBlock} over every reply slot (one per completion when n > 1). Options come
- * from the first slot carrying a valid block; every slot is stripped either way.
+ * The last top-level ```choices fence in `text`, walking fences line by line (CommonMark rules: a
+ * fence closes on a bare line of the same character at least as long), so a choices sample nested
+ * inside a longer outer fence is content rather than a block.
+ */
+function findLastChoicesFence(text: string): FenceSpan | null {
+  let last: FenceSpan | null = null;
+  let open: { start: number; bodyStart: number; marker: string; isChoices: boolean } | null = null;
+  let lineStart = 0;
+  while (lineStart <= text.length) {
+    const newline = text.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? text.length : newline;
+    const line = text.slice(lineStart, lineEnd).replace(/\r$/, '');
+    if (!open) {
+      const match = line.match(FENCE_OPEN_LINE);
+      // Per CommonMark a backtick fence's info string cannot contain a backtick (that line is inline code).
+      if (match && !(match[1][0] === '`' && match[2].includes('`'))) {
+        open = {
+          start: lineStart,
+          bodyStart: newline === -1 ? text.length : newline + 1,
+          marker: match[1],
+          isChoices: match[1] === '```' && match[2].trim().toLowerCase() === CHOICES_FENCE_LANGUAGE,
+        };
+      }
+    } else {
+      const match = line.match(FENCE_CLOSE_LINE);
+      if (match && match[1][0] === open.marker[0] && match[1].length >= open.marker.length) {
+        if (open.isChoices) last = { start: open.start, end: lineEnd, body: text.slice(open.bodyStart, lineStart) };
+        open = null;
+      }
+    }
+    if (newline === -1) break;
+    lineStart = newline + 1;
+  }
+  // Still open at the end: a block cut off mid-stream, hidden so its raw JSON never shows.
+  if (open?.isChoices) last = { start: open.start, end: null, body: text.slice(open.bodyStart) };
+  return last;
+}
+
+/**
+ * Strips the last ```choices block from a reply's visible answer and validates its options.
+ *
+ * Only the text after the slot's last `</think>` is eligible, so a block the model drafted while
+ * reasoning is never read, and the reasoning prefix is returned byte-for-byte. Nothing visible is
+ * deleted: prose the model added after the block's closing fence is kept, with only the block
+ * removed. A block still open at the end (truncated, or streaming) is hidden through to the end.
+ * Any invalid option rejects the whole block, because dropping one would shift the numbering away
+ * from the prose.
+ */
+export function extractChoicesBlock(reply: string): ExtractedChoices {
+  const unchanged = { text: reply, choices: null, found: false };
+  const start = answerStart(reply);
+  if (start === null) return unchanged;
+  const answer = reply.slice(start);
+  const fence = findLastChoicesFence(answer);
+  if (!fence) return unchanged;
+
+  const before = answer.slice(0, fence.start).trimEnd();
+  const after = fence.end === null ? '' : answer.slice(fence.end).replace(/^(?:[ \t]*\r?\n)+/, '');
+  const kept = after.trim() ? (before ? `${before}\n\n${after}` : after) : before;
+  const choices = fence.end === null ? null : parseChoiceOptions(fence.body);
+  return { text: reply.slice(0, start) + kept, choices, found: true };
+}
+
+/**
+ * {@link extractChoicesBlock} over the reply slots. Only the last slot with visible text - the
+ * final answer - is read and stripped; earlier slots (reasoning, or a pre-tool-call answer) are
+ * returned untouched, so an abandoned draft block can never supply the options.
  */
 export function stripChoicesFromReplies(replies: readonly string[]): {
   replies: string[];
   choices: ChoiceOption[] | null;
   found: boolean;
 } {
-  let choices: ChoiceOption[] | null = null;
-  let found = false;
-  const stripped = replies.map(slot => {
-    const result = extractChoicesBlock(slot);
-    if (!result.found) return slot;
-    found = true;
-    choices ??= result.choices;
-    return result.text;
-  });
-  return { replies: stripped, choices, found };
+  const stripped = [...replies];
+  let answerIndex = stripped.length - 1;
+  while (answerIndex >= 0 && !visibleReplyText(stripped[answerIndex])) answerIndex -= 1;
+  if (answerIndex < 0) return { replies: stripped, choices: null, found: false };
+
+  const result = extractChoicesBlock(stripped[answerIndex]);
+  if (result.found) stripped[answerIndex] = result.text;
+  return { replies: stripped, choices: result.choices, found: result.found };
 }
 
 function parseChoiceOptions(body: string): ChoiceOption[] | null {

@@ -38,12 +38,11 @@ describe('extractChoicesBlock', () => {
     expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
   });
 
-  it('strips a valid block even when the model adds trailing content after it', () => {
-    // The guidance says the block must be the very last thing in the reply; when a model adds a
-    // sign-off after it anyway, the block (and the stray trailing text with it) is still stripped
-    // rather than leaving the raw fence and JSON visible to the user.
+  it('strips a valid block but keeps prose the model added after it', () => {
+    // The guidance says the block must be the very last thing in the reply; when a model adds text
+    // after it anyway, only the block goes, so the raw JSON never shows and no answer text is lost.
     const reply = `${prose}\n\n${block(JSON.stringify(two))}\n\nOne more thought.`;
-    expect(extractChoicesBlock(reply)).toEqual({ text: prose, choices: two, found: true });
+    expect(extractChoicesBlock(reply)).toEqual({ text: `${prose}\n\nOne more thought.`, choices: two, found: true });
   });
 
   it('strips a case-drifted fence language tag', () => {
@@ -136,6 +135,42 @@ describe('extractChoicesBlock', () => {
     expect(extractChoicesBlock(block(JSON.stringify(many))).choices).toEqual(many.slice(0, MAX_REPLY_CHOICES));
   });
 
+  it('treats a choices sample nested in a longer outer fence as content', () => {
+    const reply = `Here is the format:\n\n\`\`\`\`markdown\n${block(JSON.stringify(two))}\n\`\`\`\`\n\nThat is all.`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
+  it('treats a choices sample nested in a tilde fence as content', () => {
+    const reply = `Here is the format:\n\n~~~\n${block(JSON.stringify(two))}\n~~~`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
+  it('ignores a block drafted inside reasoning and keeps the answer after it', () => {
+    const reply = `<think>Maybe offer options:\n${block(JSON.stringify(two))}\nNo, one answer is enough.</think>Here is the full answer.`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
+  it('ignores a block inside reasoning that is still streaming', () => {
+    const reply = `<think>Maybe offer options:\n${block(JSON.stringify(two))}\nor not`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
+  it('ignores an answer block while reasoning has reopened after it', () => {
+    const reply = `<think>a</think>${prose}\n\n${block(JSON.stringify(two))}<think>more`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
+  it('strips a block after the reasoning and keeps the reasoning byte-for-byte', () => {
+    const reasoning = `<think>Draft:\n${block('{"options":[]}')}\n  trailing space  </think>`;
+    const result = extractChoicesBlock(`${reasoning}${prose}\n\n${block(JSON.stringify(two))}`);
+    expect(result).toEqual({ text: `${reasoning}${prose}`, choices: two, found: true });
+  });
+
+  it('does not let a marker-shaped string inside reasoning end it early', () => {
+    const reply = `<think>outer<think>inner</think>${block(JSON.stringify(two))}</think>The answer.`;
+    expect(extractChoicesBlock(reply)).toEqual({ text: reply, choices: null, found: false });
+  });
+
   it('handles CRLF line endings', () => {
     const reply = `${prose}\r\n\r\n\`\`\`choices\r\n${JSON.stringify(two)}\r\n\`\`\`\r\n`;
     expect(extractChoicesBlock(reply)).toEqual({ text: prose, choices: two, found: true });
@@ -159,17 +194,30 @@ describe('formatChoiceReply', () => {
 });
 
 describe('stripChoicesFromReplies', () => {
-  it('strips every slot and takes options from the first valid block', () => {
+  it('reads and strips only the last answer slot', () => {
     const other = [
       { label: 'A', description: 'a' },
       { label: 'B', description: 'b' },
     ];
-    const result = stripChoicesFromReplies([
-      `${prose}\n\n${block('{bad')}`,
-      `${prose}\n\n${block(JSON.stringify(two))}`,
-      `${prose}\n\n${block(JSON.stringify(other))}`,
-    ]);
-    expect(result).toEqual({ replies: [prose, prose, prose], choices: two, found: true });
+    const first = `${prose}\n\n${block(JSON.stringify(two))}`;
+    const result = stripChoicesFromReplies([first, `${prose}\n\n${block(JSON.stringify(other))}`, '  ']);
+    expect(result).toEqual({ replies: [first, prose, '  '], choices: other, found: true });
+  });
+
+  it('takes the answer slot block over a draft in a separate reasoning slot', () => {
+    const real = [
+      { label: 'X', description: 'x' },
+      { label: 'Y', description: 'y' },
+    ];
+    const reasoning = `<think>Draft:\n${block(JSON.stringify(two))}\n</think>`;
+    const result = stripChoicesFromReplies([reasoning, `${prose}\n\n${block(JSON.stringify(real))}`]);
+    expect(result).toEqual({ replies: [reasoning, prose], choices: real, found: true });
+  });
+
+  it('gives no options when the last answer slot has none, even if an earlier one does', () => {
+    const earlier = `${prose}\n\n${block(JSON.stringify(two))}`;
+    const result = stripChoicesFromReplies([earlier, 'Final answer.']);
+    expect(result).toEqual({ replies: [earlier, 'Final answer.'], choices: null, found: false });
   });
 
   it('returns the slots untouched when none carries a block', () => {
@@ -179,12 +227,11 @@ describe('stripChoicesFromReplies', () => {
   /**
    * Regression for the chat error path: a stream can fail right as the model is mid-choices-block
    * (overload, timeout, dropped connection). The error handler appends its own message as a new
-   * slot and joins everything with no separator. If the choices block were left in place, running
-   * extractChoicesBlock on that JOINED text afterwards would either swallow the error message
-   * (an unterminated block "absorbs" whatever follows it as part of itself) or refuse to touch a
-   * CLOSED block once real content follows it, leaking the raw JSON. Stripping each slot with
+   * slot and joins everything with no separator. If the choices block were left in place, an
+   * unterminated block would "absorb" the error message as part of itself, and once the error is
+   * the last slot the earlier slot's block is no longer read, leaking the raw JSON. Stripping with
    * stripChoicesFromReplies before the error joins it - which is what the error path does - avoids
-   * both: there is no trailing block left for extractChoicesBlock to misread at render/export time.
+   * both: there is no block left for extractChoicesBlock to misread at render/export time.
    */
   it('strips a mid-stream block before an error message is appended, so neither is lost', () => {
     const unterminated = `${prose}\n\n\`\`\`choices\n{"options":[{"label":"Refor`;
@@ -216,6 +263,14 @@ describe('applyReplyChoices', () => {
     const quest: Parameters<typeof applyReplyChoices>[0] = { reply: withBlock, replies: [withBlock] };
     applyReplyChoices(quest);
     expect(quest).toEqual({ reply: prose, replies: [prose], suggestedChoices: { options: two } });
+  });
+
+  it('never persists a draft from reasoning in place of the answer', () => {
+    const reasoning = `<think>Maybe offer options:\n${block(JSON.stringify(two))}\nNo, one answer is enough.</think>`;
+    const answer = 'Here is the full answer.';
+    const quest: Parameters<typeof applyReplyChoices>[0] = { reply: reasoning + answer, replies: [reasoning, answer] };
+    applyReplyChoices(quest);
+    expect(quest).toEqual({ reply: reasoning + answer, replies: [reasoning, answer], suggestedChoices: undefined });
   });
 
   it('clears choices left over from an earlier answer to the same turn', () => {

@@ -1,15 +1,18 @@
-import { THINK_CLOSE_TAG, THINK_OPEN_TAG, extractChoicesBlock, visibleReplyText } from '@bike4mind/common';
+import { THINK_CLOSE_TAG, THINK_OPEN_TAG, stripChoicesFromReplies, visibleReplyText } from '@bike4mind/common';
 
 type ReplyBearingMessage = { reply?: string | null; replies?: string[] | undefined };
 
 export function extractReplies(messageData: ReplyBearingMessage) {
   // Prefer the authoritative array when present, because the server streams into replies[0]
-  const sourceReplies =
+  const rawReplies =
     Array.isArray(messageData.replies) && messageData.replies.length > 0
       ? messageData.replies
       : messageData.reply
         ? [messageData.reply]
         : [];
+  // The server strips the choices block on finalize; this hides it while it streams. Same rule as
+  // the server (raw slots, answer slot only), so reasoning never decides what is cut.
+  const sourceReplies = stripChoicesFromReplies(rawReplies).replies;
 
   // Process and deduplicate short repeated segments that can occur during streaming
   const processedParts: string[] = [];
@@ -31,8 +34,7 @@ export function extractReplies(messageData: ReplyBearingMessage) {
     processedParts.push(cleaned);
   }
 
-  // The server strips a trailing choices block on finalize; this hides it while it streams.
-  const combined = extractChoicesBlock(processedParts.join('')).text;
+  const combined = processedParts.join('');
   return combined ? [combined] : [];
 }
 

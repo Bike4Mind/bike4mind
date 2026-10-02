@@ -6195,9 +6195,9 @@ export class ChatCompletionProcess {
       }
       const setErrorReply = (message: string) => {
         // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
-        // slot with no separator - otherwise extractChoicesBlock on the client either swallows the
-        // appended error as "part of the block" (closed-then-truncated case) or refuses to touch a
-        // closed block once real content follows it, leaking the raw JSON instead.
+        // slot with no separator - otherwise an unterminated block swallows the appended error as
+        // "part of the block", and once the error is the last slot the client no longer reads the
+        // earlier slot's block at all, leaking the raw JSON.
         const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
         const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
