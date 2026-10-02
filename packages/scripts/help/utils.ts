@@ -395,7 +395,8 @@ function splitAtH3(lines: string[], h2Heading: string): MarkdownSection[] {
 // Opening `---` must be the first line (after an optional BOM) and the closing `---` must sit on its own line, so a `---` rule or a dashed run inside the body never ends the block early.
 const FRONTMATTER_BLOCK = /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/;
 
-const KEY_VALUE = /(?:"[^"]*"|'[^']*'|[\w.-]+)[ \t]*:(?:[ \t].*)?/;
+// An unquoted key may carry a leading `@` (JSON-LD `@context`) and inner spaces (`Last Updated`).
+const KEY_VALUE = /(?:"[^"]*"|'[^']*'|@?[\w.-]+(?:[ \t]+[\w.-]+)*)[ \t]*:(?:[ \t].*)?/;
 const KEY_VALUE_LINE = new RegExp(`^${KEY_VALUE.source}$`);
 // A frontmatter line is blank, a comment, a list item, an indented continuation, or `key: value`.
 const YAML_LINE = new RegExp(`^(?:\\s*|\\s+\\S.*|#.*|-(?:\\s.*)?|${KEY_VALUE.source})$`);
