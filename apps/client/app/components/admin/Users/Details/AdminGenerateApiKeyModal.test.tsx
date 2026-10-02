@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
-import { ADMIN_ONLY_API_KEY_SCOPES, GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -146,10 +146,27 @@ describe('AdminGenerateApiKeyModal - ingest scopes', () => {
     return h.mutate.mock.calls[0][0].data.scopes;
   };
 
-  it('offers every admin-only ingest scope', () => {
+  it('offers QA ingest but not Overwatch ingest, which needs a productId this path never sends', () => {
     renderModal();
-    for (const scope of ADMIN_ONLY_API_KEY_SCOPES) expect(screen.getByText(scope.label)).toBeTruthy();
     expect(screen.getByText('QA: Ingest')).toBeTruthy();
+    expect(screen.queryByTestId(`admin-generate-key-scope-${ApiKeyScope.OVERWATCH_INGEST_WRITE}`)).toBeNull();
+  });
+
+  it('the generic counter ignores a selected ingest scope, and Select All replaces it', () => {
+    renderModal();
+    const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+
+    fireEvent.click(screen.getByText('Select All'));
+    expect(counter()).toContain(
+      `(${GENERIC_MODAL_API_KEY_SCOPES.length}/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`
+    );
+    expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+
+    fireEvent.click(screen.getByText('Clear All'));
+    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
   });
 
   it('an ingest scope replaces the selection, since it must be the only scope', () => {
