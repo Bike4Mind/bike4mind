@@ -114,3 +114,26 @@ describe('describeChipRow when the worktree has moved off its branch', () => {
     expect(describeChipRow(relocated, { isRepository: true, count: 2, checkedOut: null }).branch.label).toBe('agent/x');
   });
 });
+
+/**
+ * What the row says for a session that has a folder and no branch - the shape every session
+ * started from the group header's "+" begins in.
+ */
+describe('describeChipRow for a session that has not picked a branch', () => {
+  const unbound: ChatProject = { ...project, branch: '', workspace: false };
+
+  it('labels the chip with what the folder is actually on', () => {
+    const row = describeChipRow(unbound, { isRepository: true, count: 2, checkedOut: 'feat/achievements' });
+    expect(row.branch.label).toBe('feat/achievements');
+  });
+
+  it('says the branch is unpicked rather than naming one the session never chose', () => {
+    const row = describeChipRow(unbound, { isRepository: true, count: 2, checkedOut: 'feat/achievements' });
+    expect(row.branch.tooltip).toContain('has not picked a branch');
+    expect(row.branch.tooltip).not.toMatch(/started on \.$/);
+  });
+
+  it('falls back to "no branch" before git has answered', () => {
+    expect(describeChipRow(unbound, { isRepository: true, count: 2 }).branch.label).toBe('no branch');
+  });
+});

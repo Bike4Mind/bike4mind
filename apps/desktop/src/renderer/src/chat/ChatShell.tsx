@@ -28,6 +28,7 @@ import { TodoPanel } from './TodoPanel';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
+import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
@@ -340,24 +341,20 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   /**
    * Another session in the same project, from the group header's "+".
    *
-   * It reuses the existing binding rather than reopening the dialog: the project, branch and
-   * workspace choice are what define the group, so asking for them again to land in the same
-   * group would be a form to fill in with the only answer that works.
+   * The folder is what defines the group, so it carries across and the dialog stays shut.
+   * Nothing else does - see newSessionInProject for why the branch is left for the user to
+   * pick on the new session.
    */
   const onCreateInProject = useCallback(
     async (directory: string) => {
       const sibling = sessions.find(session => session.project?.directory === directory)?.project;
       if (!sibling) return;
       setScreen('conversation');
-      const created = await createCode({
-        directory: sibling.directory,
-        branch: sibling.branch,
-        workspace: sibling.workspace,
-        contextDirectories: sibling.contextDirectories,
-      });
+      clearCodeError();
+      const created = await createCode(newSessionInProject(sibling));
       if (created) setActiveId(created);
     },
-    [sessions, createCode]
+    [sessions, createCode, clearCodeError]
   );
 
   const onDelete = useCallback(
