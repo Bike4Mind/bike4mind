@@ -100,7 +100,7 @@ async function runStreamingToolCallAtIndex(index: number) {
   const backend = new TestBedrockBackend();
   const turns = [toolCallTurnAtIndex(index), textTurn('done')];
   let callIndex = 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double for the private _bedrockRuntime client
   (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
     send: async () => {
       const turn = turns[callIndex++];
