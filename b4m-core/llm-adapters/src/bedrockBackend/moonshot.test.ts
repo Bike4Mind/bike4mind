@@ -607,155 +607,90 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
   });
 });
 
-describe('MoonshotBedrockBackend tool-turn replay', () => {
+describe('MoonshotBedrockBackend reasoning-only final turn', () => {
   const MODEL = ChatModels.KIMI_K2_THINKING_BEDROCK;
-  const toolFrame = {
-    choices: [
-      {
-        delta: {
-          tool_calls: [{ index: 0, id: 't1', function: { name: 'math_evaluate', arguments: '{"e":"12*15"}' } }],
-        },
-      },
-    ],
+  const render = (be: MoonshotBedrockBackend, frames: Record<string, unknown>[], streaming = true) =>
+    frames
+      .map(f => (streaming ? be.translateStreamChunk(MODEL, f) : be.translateChunk(MODEL, f)))
+      .flatMap(({ chunk }) => chunk.choices.map(c => ('chunkText' in c ? c.chunkText : '')))
+      .join('');
+  const fresh = () => {
+    const be = new MoonshotBedrockBackend();
+    be.getPayload(MODEL, messages, {});
+    return be;
   };
-  const tool = { id: 't1', name: 'math_evaluate', parameters: '{"e":"12*15"}' };
 
-  const replayedAssistant = (history: IMessage[]) =>
-    history.find(m => m.role === 'assistant') as unknown as { content: string | null };
-
-  it('replays the streamed reasoning and intro prose on the tool-call turn instead of null', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: '<reasoning>need a tool</reasoning>' } }] });
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'Computing it now.' } }] });
-    fresh.translateStreamChunk(MODEL, toolFrame);
-
-    const history: IMessage[] = [];
-    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
-
-    expect(replayedAssistant(history).content).toBe('<reasoning>need a tool</reasoning>Computing it now.');
+  it('promotes the last reasoning paragraph to visible text when a stop turn has no prose', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>Let me check.\n\nThe product of 12 and 15 is 180.</reasoning>' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe(
+      '<think>Let me check.\n\nThe product of 12 and 15 is 180.</think>The product of 12 and 15 is 180.'
+    );
   });
 
-  it('replays reasoning_content-style reasoning and non-streaming message content', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateChunk(MODEL, {
-      choices: [
-        {
-          message: {
-            content: 'Let me compute.',
-            reasoning_content: 'plan',
-            tool_calls: [{ id: 't1', function: { name: 'math_evaluate', arguments: '{"e":"12*15"}' } }],
-          },
-          finish_reason: 'tool_calls',
-        },
-      ],
-    });
-
-    const history: IMessage[] = [];
-    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
-
-    expect(replayedAssistant(history).content).toBe('<reasoning>plan</reasoning>Let me compute.');
+  it('promotes when the stop reason rides the same frame as the reasoning', () => {
+    const out = render(fresh(), [
+      {
+        choices: [
+          { delta: { content: '<reasoning>12 multiplied by 15 equals 180.</reasoning>' }, finish_reason: 'stop' },
+        ],
+      },
+    ]);
+    expect(out).toBe('<think>12 multiplied by 15 equals 180.</think>12 multiplied by 15 equals 180.');
   });
 
-  it('replays streamed reasoning_content ahead of the prose', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { reasoning_content: 'plan ' } }] });
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { reasoning_content: 'it' } }] });
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'Starting.' } }] });
-    fresh.translateStreamChunk(MODEL, toolFrame);
-
-    const history: IMessage[] = [];
-    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
-
-    expect(replayedAssistant(history).content).toBe('<reasoning>plan it</reasoning>Starting.');
+  it('closes an open reasoning_content block before the promoted text', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { reasoning_content: 'first\n\nanswer is 180.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe('<think>first\n\nanswer is 180.</think>answer is 180.');
   });
 
-  it('replays the reasoning but never the native tool-call tokens, streaming', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateStreamChunk(MODEL, {
-      choices: [
-        {
-          delta: {
-            content:
-              '<reasoning> Computing it. <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|></reasoning>',
-          },
-        },
-      ],
-    });
-    fresh.translateStreamChunk(MODEL, {
-      choices: [
-        {
-          delta: { content: '<reasoning> {"e": "1"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>' },
-          finish_reason: 'stop',
-        },
-      ],
-    });
-
-    const history: IMessage[] = [];
-    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
-    const content = replayedAssistant(history).content ?? '';
-
-    expect(content).toContain('Computing it.');
-    expect(content).not.toContain('<|');
+  it('does not promote when prose was already written', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>thinking</reasoning>' } }] },
+      { choices: [{ delta: { content: 'It is 180.' }, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe('<think>thinking</think>It is 180.');
   });
 
-  it('replays the reasoning but never the native tool-call tokens, non-streaming', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateChunk(MODEL, {
-      choices: [
-        {
-          message: {
-            content:
-              '<reasoning>go <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|> {"e": "1"} <|tool_call_end|> <|tool_calls_section_end|></reasoning>',
-          },
-          finish_reason: 'stop',
-        },
-      ],
-    });
-
-    const history: IMessage[] = [];
-    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
-
-    expect(replayedAssistant(history).content).toBe('<reasoning>go</reasoning>');
+  it('does not promote when the turn called a tool', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>use the tool</reasoning>' } }] },
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, id: 't1', function: { name: 'math_evaluate', arguments: '{}' } }] } },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe('<think>use the tool</think>{}');
   });
 
-  it('attaches the round text to the first of several parallel tool calls only', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'Running both.' } }] });
-    fresh.translateStreamChunk(MODEL, toolFrame);
-
-    const history: IMessage[] = [];
-    const blocks = fresh['takeReasoningBlocks']();
-    fresh.pushToolMessages(history, tool, '180', blocks);
-    fresh.pushToolMessages(history, { ...tool, id: 't2' }, '181', blocks);
-
-    const assistants = history.filter(m => m.role === 'assistant') as unknown as Array<{ content: string | null }>;
-    expect(assistants.map(a => a.content)).toEqual(['Running both.', null]);
+  it('does not promote a turn cut off by the output budget', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>still thinking about 180</reasoning>' }, finish_reason: 'length' }] },
+    ]);
+    expect(out).toBe('<think>still thinking about 180</think>');
   });
 
-  it('keeps content null when the round had no text, and does not leak into the next round', () => {
-    const fresh = new MoonshotBedrockBackend();
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateStreamChunk(MODEL, { choices: [{ delta: { content: 'round one' } }] });
-    fresh.translateStreamChunk(MODEL, toolFrame);
-    fresh['takeReasoningBlocks']();
-
-    fresh.getPayload(MODEL, messages, {});
-    fresh.translateStreamChunk(MODEL, toolFrame);
-    const history: IMessage[] = [];
-    fresh.pushToolMessages(history, tool, '180', fresh['takeReasoningBlocks']());
-
-    expect(replayedAssistant(history).content).toBeNull();
+  it('promotes for a non-streaming reasoning-only message', () => {
+    const out = render(
+      fresh(),
+      [{ choices: [{ message: { content: '<reasoning>hm\n\nIt is 180.</reasoning>' }, finish_reason: 'stop' }] }],
+      false
+    );
+    expect(out).toBe('<think>hm\n\nIt is 180.</think>It is 180.');
   });
 
-  it('still defaults to null when called without blocks', () => {
-    const history: IMessage[] = [];
-    new MoonshotBedrockBackend().pushToolMessages(history, tool, '180');
-    expect(replayedAssistant(history).content).toBeNull();
+  it('does not carry a promoted answer or flags into the next request', () => {
+    const be = fresh();
+    render(be, [{ choices: [{ delta: { content: '<reasoning>a</reasoning>' }, finish_reason: 'stop' }] }]);
+    be.getPayload(MODEL, messages, {});
+    const out = render(be, [{ choices: [{ delta: { content: '<reasoning>b</reasoning>' }, finish_reason: 'stop' }] }]);
+    expect(out).toBe('<think>b</think>b');
   });
 });
