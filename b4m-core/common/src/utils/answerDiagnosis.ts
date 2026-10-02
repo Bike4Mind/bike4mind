@@ -446,6 +446,52 @@ function diagnoseContext(promptMeta: PromptMeta): DiagnosisCheck {
   return { id: 'context', label, status: 'unknown', detail: 'No context-assembly detail was recorded for this turn.' };
 }
 
+type FunctionCall = NonNullable<PromptMeta['functionCalls']>[number];
+
+// The llm-adapters backend tool loops store a thrown tool error as the call's returnValue, either
+// prefixed `Error processing <name> tool: ` (Bedrock, Anthropic, OpenAI, DeepSeek, Kimi, xAI) or
+// `Error running <name>: ` (ollamaBackend.ts), or as JSON `{"error": "<msg>"}` (geminiBackend.ts).
+const TOOL_ERROR_PREFIX = /^Error (?:processing \S+ tool|running \S+): /;
+const TIMED_OUT = /\btimed out\b/i;
+const MAX_TIMEOUT_MESSAGE_CHARS = 160;
+
+function unwrapJsonError(text: string): string {
+  if (!text.startsWith('{')) return text;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed && typeof parsed === 'object') {
+      // Any other JSON shape yields no message, so raw JSON never reaches the copy.
+      const { error } = parsed as { error?: unknown };
+      return typeof error === 'string' ? error : '';
+    }
+  } catch {
+    // Not JSON; use the text as-is.
+  }
+  return text;
+}
+
+function capMessage(text: string): string {
+  if (text.length <= MAX_TIMEOUT_MESSAGE_CHARS) return text;
+  // Drop a cut-off separator or period so the ellipsis never renders as `....` or `; ...`.
+  return `${text.slice(0, MAX_TIMEOUT_MESSAGE_CHARS - 3).replace(/[\s.;,:]+$/, '')}...`;
+}
+
+/**
+ * The failure text of a call that failed by timing out, else undefined. Only failed calls qualify,
+ * so a successful call whose content mentions a timeout never matches; a redacted call (no text)
+ * falls back to the generic copy.
+ */
+function timeoutMessage(call: FunctionCall): string | undefined {
+  if (call.success !== false && !call.error) return undefined;
+  const text = unwrapJsonError(call.error || call.returnValue || '')
+    .replace(TOOL_ERROR_PREFIX, '')
+    .replace(/[^\x20-\x7e]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.+$/, '');
+  return TIMED_OUT.test(text) ? text : undefined;
+}
+
 function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
   const label = 'Tools';
   const calls = promptMeta.functionCalls;
@@ -472,6 +518,23 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
       explicitlySucceeded > 0
         ? `${explicitlySucceeded} succeeded${otherCount > 0 ? ` and ${otherCount} had no recorded verdict` : ''}`
         : `${otherCount} had no recorded verdict`;
+    const timeouts = failed.map(timeoutMessage);
+    if (timeouts.every((m): m is string => !!m)) {
+      // Each message already says "timed out", so the lead-in says "failed" rather than repeat it.
+      const messages = capMessage([...new Set(timeouts)].join('; '));
+      const sentence = messages.endsWith('...') ? messages : `${messages}.`;
+      return {
+        id: 'tools',
+        label,
+        status: allFailed ? 'fail' : 'warn',
+        detail: allFailed
+          ? `${failed.length === 1 ? 'The only tool call' : `All ${failed.length} tool calls`} failed${named}: ${sentence}`
+          : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} failed${named}: ${sentence} ${successPhrase[0].toUpperCase()}${successPhrase.slice(1)} and the model replied with what it got.`,
+        remedy: allFailed
+          ? 'The service behind the tool did not respond in time; this is usually transient, so retry the question.'
+          : 'Retry if the answer seems incomplete; a timeout is usually transient.',
+      };
+    }
     return {
       id: 'tools',
       label,

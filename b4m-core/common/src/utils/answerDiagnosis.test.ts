@@ -446,4 +446,149 @@ describe('tools check', () => {
   it('does not count a call with no recorded verdict as failed', () => {
     expect(statusOf({ functionCalls: [{ name: 'web_search' }] }, 'tools')).toBe('ok');
   });
+
+  describe('timeout failures', () => {
+    const SERP_TIMEOUT = 'Web search timed out: SerpAPI did not respond within 10s (tried 2 times)';
+    const timedOut = (name = 'web_search') => ({
+      name,
+      success: false,
+      returnValue: `Error processing ${name} tool: ${SERP_TIMEOUT}`,
+    });
+    const remedyOf = (promptMeta: PromptMeta) => diagnoseAnswer(promptMeta).checks.find(c => c.id === 'tools')!.remedy;
+
+    it('names the timeout and its message when the only call timed out', () => {
+      const meta: PromptMeta = { functionCalls: [timedOut()] };
+      expect(statusOf(meta, 'tools')).toBe('fail');
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
+      expect(remedyOf(meta)).toContain('did not respond in time');
+    });
+
+    it('strips the Ollama error prefix', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          { name: 'web_search', success: false, returnValue: `Error running web_search: ${SERP_TIMEOUT}` },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
+    });
+
+    it('reads the timeout from error when the call recorded one', () => {
+      const meta: PromptMeta = { functionCalls: [{ name: 'web_search', error: 'Request timed out after 30s' }] };
+      expect(detailOf(meta, 'tools')).toContain('failed (web_search): Request timed out after 30s.');
+    });
+
+    it('dedupes identical messages across several timed-out calls', () => {
+      const meta: PromptMeta = { functionCalls: [timedOut(), timedOut()] };
+      expect(detailOf(meta, 'tools')).toBe(`All 2 tool calls failed (web_search, web_search): ${SERP_TIMEOUT}.`);
+    });
+
+    it('keeps partial-success wording when other calls succeeded', () => {
+      const meta: PromptMeta = { functionCalls: [timedOut(), { name: 'search_knowledge_base', success: true }] };
+      expect(statusOf(meta, 'tools')).toBe('warn');
+      expect(detailOf(meta, 'tools')).toContain(`1 of 2 tool calls failed (web_search): ${SERP_TIMEOUT}.`);
+      expect(detailOf(meta, 'tools')).toContain('1 succeeded and the model replied with what it got');
+    });
+
+    it('names the timeout even when a fallback provider reported it', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          {
+            name: 'web_search',
+            success: false,
+            returnValue: 'Error processing web_search tool: SearXNG fallback timed out',
+          },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toContain('failed (web_search): SearXNG fallback timed out.');
+    });
+
+    it('keeps the generic copy when a timeout is mixed with another failure', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          timedOut(),
+          { name: 'fetch_url', success: false, returnValue: 'Error processing fetch_url tool: 404' },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toBe('All 2 tool calls failed (web_search, fetch_url).');
+    });
+
+    it.each([
+      ['redacted (no returnValue)', { name: 'web_search', success: false }],
+      ['empty returnValue', { name: 'web_search', success: false, returnValue: '' }],
+    ])('keeps the generic copy when the failure text is %s', (_label, call) => {
+      expect(detailOf({ functionCalls: [call] }, 'tools')).toBe('The only tool call failed (web_search).');
+    });
+
+    it('never reads a successful call whose content mentions a timeout as a failure', () => {
+      const meta: PromptMeta = {
+        functionCalls: [{ name: 'web_search', success: true, returnValue: 'Article: the request timed out' }],
+      };
+      expect(statusOf(meta, 'tools')).toBe('ok');
+    });
+
+    it('caps a long message and strips non-ASCII', () => {
+      const long = `Search timed out \u2014 ${'x'.repeat(400)}`;
+      const meta: PromptMeta = { functionCalls: [{ name: 'web_search', success: false, returnValue: long }] };
+      const detail = detailOf(meta, 'tools');
+      expect(detail).toMatch(/^[\x20-\x7e]+$/);
+      expect(detail).toContain('Search timed out x');
+      expect(detail).toMatch(/[^.]\.\.\.$/);
+      expect(detail.length).toBeLessThan(220);
+    });
+
+    it('never renders a cut-off period or separator before the ellipsis', () => {
+      const head = `Web search timed out: ${'a'.repeat(134)}`;
+      const atPeriod = `${head}. ${'b'.repeat(50)}`;
+      const atSeparator = [`${head.slice(0, 155)}`, `Web search timed out: ${'c'.repeat(50)}`];
+      const single = detailOf(
+        { functionCalls: [{ name: 'web_search', success: false, returnValue: atPeriod }] },
+        'tools'
+      );
+      const joined = detailOf(
+        { functionCalls: atSeparator.map(returnValue => ({ name: 'web_search', success: false, returnValue })) },
+        'tools'
+      );
+      expect(single).toMatch(/a\.\.\.$/);
+      expect(joined).toMatch(/a\.\.\.$/);
+    });
+
+    it('says timed out once, in the provider message only', () => {
+      const detail = detailOf({ functionCalls: [timedOut()] }, 'tools');
+      expect(detail.match(/timed out/g)).toHaveLength(1);
+    });
+
+    it('caps the joined list when several calls carry distinct timeout messages', () => {
+      const calls = Array.from({ length: 6 }, (_, i) => ({
+        name: 'web_search',
+        success: false,
+        returnValue: `Error processing web_search tool: Web search timed out: attempt ${i} ${'y'.repeat(100)}`,
+      }));
+      const detail = detailOf({ functionCalls: calls }, 'tools');
+      expect(detail).toContain('attempt 0');
+      expect(detail).not.toContain('attempt 5');
+      expect(detail.length).toBeLessThan(260);
+    });
+
+    it('unwraps the JSON error shape the Gemini backend records', () => {
+      const meta: PromptMeta = {
+        functionCalls: [{ name: 'web_search', success: false, returnValue: JSON.stringify({ error: SERP_TIMEOUT }) }],
+      };
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
+    });
+
+    it('keeps the generic copy for a JSON shape with no string error', () => {
+      const returnValue = JSON.stringify({ error: { message: 'Request timed out' }, status: 'timed out' });
+      const meta: PromptMeta = { functionCalls: [{ name: 'web_search', success: false, returnValue }] };
+      expect(detailOf(meta, 'tools')).toBe('The only tool call failed (web_search).');
+    });
+
+    it('keeps the generic copy for a JSON error that is not a timeout', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          { name: 'web_search', success: false, returnValue: JSON.stringify({ error: 'quota exceeded' }) },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toBe('The only tool call failed (web_search).');
+    });
+  });
 });
