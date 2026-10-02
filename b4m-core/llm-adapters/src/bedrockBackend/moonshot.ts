@@ -386,7 +386,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
           const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
           this.roundReasoning += think;
-          if (nativeCalls.length > 0) this.roundCalledTool = true;
+          // A marker that never parsed into a call still means a tool was attempted.
+          if (nativeCalls.length > 0 || this.nativeToolStream.sawMarker) this.roundCalledTool = true;
           // Pushed ahead of the calls: they share index 0, and once base.ts has seen a tool
           // name at an index it appends every later non-TOOL_USE chunkText there to its args.
           choices.push({
@@ -448,7 +449,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
         this.roundReasoning += think;
-        if (nativeCalls.length > 0) this.roundCalledTool = true;
+        // The gate above saw a marker, so a tool was attempted even when none parsed.
+        this.roundCalledTool = true;
         let usageAttached = false;
         if (think) {
           choices.push({
@@ -489,6 +491,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // output budget on the monologue reached the user as a reasoning trace ending at
     // </think>, with nothing marking it as cut off.
     const stopReason = normalizeOpenAIFinishReason(response.choices?.[0]?.finish_reason);
+    // First choice only, like stopReason above: Bedrock returns a single choice for Kimi, and
+    // the round state tracked for promotion is not per choice.
     if (response.choices?.[0]?.finish_reason === 'stop') this.promoteReasoningTail(choices);
 
     return { done: true, chunk: { model, choices, ...(stopReason ? { stopReason } : {}) } };
