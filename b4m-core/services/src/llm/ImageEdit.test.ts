@@ -8,7 +8,7 @@ import {
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { aiImageService, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
@@ -52,14 +52,6 @@ vi.mock('../creditService', async importOriginal => {
 vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
 
 vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
-
-const silentLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  updateMetadata: vi.fn(),
-} as unknown as Logger;
 
 const makeModelInfo = (id: string): ModelInfo =>
   ({
@@ -990,21 +982,23 @@ describe('ImageEditService quest partial writes', () => {
     vi.mocked(getSettingsValue).mockImplementation(() => undefined);
   });
 
+  const retryResetWrite = {
+    id: 'quest1',
+    images: [],
+    replies: [],
+    type: 'message',
+    promptMeta: {
+      model: { name: 'gpt-image-1', parameters: {} },
+      session: { id: 'session1', userId: 'user1' },
+    },
+  };
+
   it('invoke retry writes exactly images, replies, type and promptMeta', async () => {
     const { service, update } = makeService();
     await invoke(service);
 
     expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0]).toStrictEqual({
-      id: 'quest1',
-      images: [],
-      replies: [],
-      type: 'message',
-      promptMeta: {
-        model: { name: 'gpt-image-1', parameters: {} },
-        session: { id: 'session1', userId: 'user1' },
-      },
-    });
+    expect(update.mock.calls[0][0]).toStrictEqual(retryResetWrite);
     expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
   });
 
@@ -1013,6 +1007,10 @@ describe('ImageEditService quest partial writes', () => {
     startImageEditProcess.mockRejectedValue(new Error('queue down'));
     await invoke(service);
 
+    // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][0]).toStrictEqual(retryResetWrite);
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
     const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
     expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });
   });
@@ -1023,6 +1021,7 @@ describe('ImageEditService quest partial writes', () => {
     const { service, update } = makeService();
     await process(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     const doneCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
     expect(doneCall).toStrictEqual({
       id: 'quest1',
@@ -1039,6 +1038,7 @@ describe('ImageEditService quest partial writes', () => {
     const { service, update } = makeService();
     await process(service);
 
+    expect(update).toHaveBeenCalledTimes(1);
     const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
     expect(errorCall).toStrictEqual({
       id: 'quest1',
@@ -1047,7 +1047,9 @@ describe('ImageEditService quest partial writes', () => {
       type: 'error',
       status: 'done',
       errorCode: undefined,
-      promptMeta,
+      // A literal, not the shared `promptMeta` the quest holds: a test comparing an object with
+      // itself would pass even if process() started mutating it before the write.
+      promptMeta: { marker: 'meta' },
     });
   });
 });
