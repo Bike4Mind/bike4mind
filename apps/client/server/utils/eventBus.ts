@@ -441,7 +441,7 @@ export const SreEvents = {
   // Diagnostician -> Surgeon handoff. Routed to sreFixQueue by an EventBridge rule
   // (infra/eventBus.ts) so additional consumers (audit, metrics) can attach without
   // touching the analysis handler. The strict payload schema lives with the consumer
-  // (queueHandlers/sreFix.ts); publish-side stays typed via SreFixRequest.
+  // (apps/workers/src/queueHandlers/sreFix.ts); publish-side stays typed via SreFixRequest.
   AnalysisCompleted: event(
     SRE_ANALYSIS_COMPLETED_EVENT,
     z.custom<SreFixRequest>((v: unknown) => typeof v === 'object' && v !== null)

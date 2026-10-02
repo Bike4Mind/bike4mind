@@ -561,7 +561,7 @@ const notebookCurationQueue = new sst.aws.Queue('notebookCurationQueue', {
 });
 const notebookCurationQueueSubscription = notebookCurationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/notebookCuration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/notebookCuration.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -593,7 +593,7 @@ const agentProactiveMessageQueue = new sst.aws.Queue('agentProactiveMessageQueue
 });
 const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/agentProactiveMessage.dispatch',
+    handler: 'apps/workers/src/queueHandlers/agentProactiveMessage.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -656,7 +656,7 @@ const githubWebhookQueue = new sst.aws.Queue('githubWebhookQueue', {
 });
 const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/githubWebhook.dispatch',
+    handler: 'apps/workers/src/queueHandlers/githubWebhook.dispatch',
     runtime: 'nodejs24.x',
     timeout: '1 minute', // Fast processing for webhooks
     vpc: lambdaVpc,
@@ -709,7 +709,7 @@ const webhookDeliveryQueue = new sst.aws.Queue('webhookDeliveryQueue', {
 });
 const webhookDeliveryQueueSubscription = webhookDeliveryQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/webhookDelivery.dispatch',
+    handler: 'apps/workers/src/queueHandlers/webhookDelivery.dispatch',
     runtime: 'nodejs24.x',
     timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
     vpc: lambdaVpc,
@@ -754,7 +754,7 @@ const slackExportQueue = new sst.aws.Queue('slackExportQueue', {
 });
 const slackExportQueueSubscription = slackExportQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/slackExport.dispatch',
+    handler: 'apps/workers/src/queueHandlers/slackExport.dispatch',
     runtime: 'nodejs24.x',
     timeout: '15 minutes', // Maximum Lambda timeout for large exports
     memory: '1024 MB', // More memory for processing large message sets
@@ -1323,7 +1323,7 @@ const sreFixQueue = new sst.aws.Queue('sreFixQueue', {
 });
 const sreFixQueueSubscription = sreFixQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
+    handler: 'apps/workers/src/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
     // 1024 MB, not 256: at 256 the handler died in INIT (module graph is the full
@@ -1379,7 +1379,7 @@ const sreJobQueue = new sst.aws.Queue('sreJobQueue', {
 });
 const sreJobQueueSubscription = sreJobQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/sreJob.dispatch',
+    handler: 'apps/workers/src/queueHandlers/sreJob.dispatch',
     runtime: 'nodejs24.x',
     timeout: '8 minutes',
     memory: '1024 MB',
