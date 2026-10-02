@@ -8,6 +8,7 @@ type DescribableGitHubConnection = {
   lastError: string | null;
   repositoryFullName: string;
   syncStale: boolean;
+  disconnecting: boolean;
 };
 
 /**
@@ -23,6 +24,14 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
   const repo = connection.repositoryFullName;
   const detail = connection.lastError ? ` - ${connection.lastError}` : '';
 
+  // Checked before `enabled`: a pending disconnect is also disabled, but is not an archive pause.
+  if (connection.disconnecting) {
+    return {
+      label: 'Disconnecting',
+      title: `Disconnecting the GitHub repository ${repo} and removing its files`,
+      color: 'warning',
+    };
+  }
   if (!connection.enabled) {
     return { label: 'Paused', title: `Syncing ${repo} is paused while the lake is archived`, color: 'neutral' };
   }

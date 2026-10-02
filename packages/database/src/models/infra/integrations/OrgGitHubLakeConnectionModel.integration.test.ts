@@ -286,6 +286,85 @@ describe('OrgGitHubLakeConnectionModel - setEnabledForLake', () => {
     expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: true });
     expect(await repo.setEnabledForLake('no-such-lake', false)).toBe(false);
   });
+
+  it('leaves a disconnecting row disabled: true is refused, false still disables', async () => {
+    const { id } = await repo.create(base);
+    await repo.markDisconnecting(id, 'org-1');
+    expect(await repo.setEnabledForLake('lake-1', true)).toBe(false);
+    expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: false });
+    expect(await repo.setEnabledForLake('lake-1', false)).toBe(true);
+    expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: false });
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
+  const ageDisconnect = (id: string, minutes: number) =>
+    OrgGitHubLakeConnection.updateOne(
+      { _id: id },
+      { $set: { disconnectRequestedAt: new Date(Date.now() - minutes * 60_000) } }
+    );
+
+  it('stamps disconnectRequestedAt and disables an idle connection, reporting it was created', async () => {
+    const { id } = await repo.create(base);
+    const marked = await repo.markDisconnecting(id, 'org-1');
+    expect(marked).toMatchObject({ created: true, previousEnabled: true });
+    expect(marked?.stamp).toBeInstanceOf(Date);
+    expect(await repo.findById(id)).toMatchObject({ enabled: false, disconnectRequestedAt: marked?.stamp });
+  });
+
+  it('reports created false and the already-disabled previousEnabled on a re-stamp', async () => {
+    const { id } = await repo.create(base);
+    const first = await repo.markDisconnecting(id, 'org-1');
+    const second = await repo.markDisconnecting(id, 'org-1');
+    expect(first?.created).toBe(true);
+    expect(second).toMatchObject({ created: false, previousEnabled: false });
+    expect(second?.stamp.getTime()).toBeGreaterThanOrEqual(first!.stamp.getTime());
+  });
+
+  it('refuses while a sync claim is live', async () => {
+    const { id } = await repo.create(base);
+    await repo.claimForSync(id);
+    expect(await repo.markDisconnecting(id, 'org-1')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ enabled: true });
+  });
+
+  it('is org-scoped', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.markDisconnecting(id, 'org-2')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ enabled: true });
+  });
+
+  it('cancelDisconnect restores enabled and clears the stamp when the stamp matches', async () => {
+    const { id } = await repo.create(base);
+    const marked = await repo.markDisconnecting(id, 'org-1');
+    expect(await repo.cancelDisconnect(id, 'org-1', marked!.stamp, marked!.previousEnabled)).toBe(true);
+    const after = await repo.findById(id);
+    expect(after).toMatchObject({ enabled: true });
+    expect(after?.disconnectRequestedAt).toBeUndefined();
+  });
+
+  it('cancelDisconnect is a no-op against a different stamp', async () => {
+    const { id } = await repo.create(base);
+    const marked = await repo.markDisconnecting(id, 'org-1');
+    const otherStamp = new Date(marked!.stamp.getTime() - 1000);
+    expect(await repo.cancelDisconnect(id, 'org-1', otherStamp, true)).toBe(false);
+    expect(await repo.findById(id)).toMatchObject({ enabled: false, disconnectRequestedAt: marked!.stamp });
+  });
+
+  it('touchDisconnect refreshes a pending disconnect s stamp', async () => {
+    const { id } = await repo.create(base);
+    await repo.markDisconnecting(id, 'org-1');
+    await ageDisconnect(id, 30);
+    const staleStamp = (await repo.findById(id))!.disconnectRequestedAt!;
+    expect(await repo.touchDisconnect(id)).toBe(true);
+    const after = await repo.findById(id);
+    expect(after?.disconnectRequestedAt?.getTime()).toBeGreaterThan(staleStamp.getTime());
+  });
+
+  it('touchDisconnect reports false when no disconnect is pending', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.touchDisconnect(id)).toBe(false);
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - recordLastError', () => {

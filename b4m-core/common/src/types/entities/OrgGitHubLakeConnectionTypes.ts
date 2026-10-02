@@ -42,6 +42,23 @@ export interface IOrgGitHubLakeConnection {
   syncClaimedAt?: Date;
   activeIngestBatchId?: string;
   ingestClaimToken?: string;
+  /**
+   * Set when the user disconnects (DELETE github-connection) and refreshed by every purge slice, so
+   * its age is how long the queued purge has gone without progress (see GITHUB_DISCONNECT_STALL_MS).
+   * While set the connection stays disabled; the row is hard-deleted once the purge finishes.
+   */
+  disconnectRequestedAt?: Date;
+}
+
+/**
+ * How long a pending disconnect may go without a purge slice before a retried DELETE may enqueue a
+ * fresh one. Above githubLakeRevokeQueue's 12-minute visibility timeout (infra/queues.ts), so a retry
+ * never races a delivery SQS is still going to redeliver. Same window as DRIVE_DISCONNECT_STALL_MS.
+ */
+export const GITHUB_DISCONNECT_STALL_MS = 15 * 60 * 1000;
+
+export function isGitHubDisconnectStalled(disconnectRequestedAt: Date, now: Date = new Date()): boolean {
+  return now.getTime() - new Date(disconnectRequestedAt).getTime() >= GITHUB_DISCONNECT_STALL_MS;
 }
 
 export interface IOrgGitHubLakeConnectionDocument extends IOrgGitHubLakeConnection, IMongoDocument {}
@@ -66,6 +83,10 @@ export interface IOrgGitHubLakeConnectionResponse {
   syncStale: boolean;
   /** Files this connection has ingested into the lake - what a disconnect permanently deletes. */
   fileCount: number;
+  /** A disconnect was accepted and its file purge is running in the background. */
+  disconnecting: boolean;
+  /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
+  disconnectStalled: boolean;
 }
 
 export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrgGitHubLakeConnectionDocument> {
@@ -111,7 +132,27 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
    * matches id + organizationId.
    */
   disableIfNoLiveSyncClaim(id: string, organizationId: string): Promise<{ wasEnabled: boolean } | null>;
-  /** Flips `enabled` on the lake's binding (lifecycle archive pause); false when the lake has none. */
+  /**
+   * The DELETE route's disable: disableIfNoLiveSyncClaim's compare-and-set that also (re)stamps
+   * `disconnectRequestedAt`. Null means a sync is in flight (409). `created` says no disconnect was
+   * pending before - only a creator may roll back via cancelDisconnect - and `previousEnabled` is what
+   * that rollback restores.
+   */
+  markDisconnecting(
+    id: string,
+    organizationId: string
+  ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null>;
+  /**
+   * Undoes markDisconnecting when the purge could not be enqueued, compare-and-set on the exact
+   * `stamp` so a concurrent DELETE that re-stamped since is left alone. Returns whether it matched.
+   */
+  cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean>;
+  /** Refreshes a pending disconnect's stamp (each purge slice); false when none is pending. */
+  touchDisconnect(id: string): Promise<boolean>;
+  /**
+   * Flips `enabled` on the lake's binding (lifecycle archive pause); false when the lake has none.
+   * Never re-enables a binding with a pending disconnect.
+   */
   setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean>;
   /** Best-effort visibility for a failure outside any sync claim (e.g. the connect-time enqueue). */
   recordLastError(id: string, lastError: string): Promise<boolean>;
