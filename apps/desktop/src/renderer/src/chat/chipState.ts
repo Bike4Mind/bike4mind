@@ -81,10 +81,7 @@ export function describeChipRow(project: ChatProject | null, branches: BranchLoo
     folder: { label: project.name, tooltip: project.directory, enabled: true },
     branch: {
       label: live ?? (project.branch || 'no branch'),
-      tooltip:
-        live && live !== project.branch
-          ? `${project.workingDirectory} is on ${live}; this session was started on ${project.branch}.`
-          : project.directory,
+      tooltip: branchTooltip(project, live),
       enabled: true,
     },
     worktree: {
@@ -101,6 +98,20 @@ export function describeChipRow(project: ChatProject | null, branches: BranchLoo
     },
     branchNotice: branchNotice(branches),
   };
+}
+
+/**
+ * The label and the recorded branch disagree in two ways that do not read alike.
+ *
+ * A session that picked a branch and has since been moved off it needs both names. A session
+ * that picked NONE has no second name to give - the sentence used to trail off into "started
+ * on ." - and that is the normal state of every session started from the group header's "+",
+ * which carries the folder and leaves the branch to the user. See newSessionInProject.
+ */
+function branchTooltip(project: ChatProject, live: string | null): string {
+  if (!live || live === project.branch) return project.directory;
+  if (!project.branch) return `${project.workingDirectory} is on ${live}. This session has not picked a branch.`;
+  return `${project.workingDirectory} is on ${live}; this session was started on ${project.branch}.`;
 }
 
 function branchNotice({ isRepository, count }: BranchLookup): string | null {
