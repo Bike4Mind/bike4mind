@@ -11,6 +11,7 @@ import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
+import type { SuggestedChoices } from '../../utils/replyChoices';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -399,6 +400,13 @@ export interface IChatHistoryItem {
     target: string;
     reason: string;
   }>;
+
+  /**
+   * Next-step options parsed from the reply's trailing choices block (see utils/replyChoices).
+   * Rendered with navigationIntents as one numbered button row; the block itself is stripped
+   * from the stored reply text.
+   */
+  suggestedChoices?: SuggestedChoices;
 
   /**
    * Attachment list for interactive download buttons (Slack and web UI)

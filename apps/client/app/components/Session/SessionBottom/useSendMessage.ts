@@ -57,7 +57,9 @@ import {
 } from '@client/app/hooks/useAgentMentions';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
 import { useAgentExecutionStore } from '@client/app/stores/useAgentExecutionStore';
-import { classifyQueryComplexity, isImageAttachment, routeQuery } from '@bike4mind/common';
+import { classifyQueryComplexity, expandChoiceKey, isImageAttachment, routeQuery } from '@bike4mind/common';
+import { useReplyChoices } from '@client/app/hooks/useReplyChoices';
+import { recordReplyChoice } from '@client/app/hooks/data/quests';
 import { pickOrchestrationAgent } from '@client/app/utils/agentOrchestration';
 import { evaluateShortCircuits, hasExplicitAgentLiteral } from '@client/app/utils/intentClassifierShortCircuits';
 import { useIntentClassifier } from '@client/app/hooks/useIntentClassifier';
@@ -87,14 +89,18 @@ interface UseSendMessageParams {
   onAgentsAttached?: () => void;
 }
 
+interface SendClickOptions {
+  forceEnableQuestMaster?: boolean;
+  toolsOverride?: B4MLLMTools[];
+  /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
+  onRefused?: () => void;
+}
+
 interface UseSendMessageResult {
   submitting: boolean;
   stoppingMessage: boolean;
   pendingAutoSubmitGoal: string | null;
-  handleSendClick: (
-    prompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
-  ) => Promise<IChatHistoryItemDocument | undefined>;
+  handleSendClick: (prompt?: string, options?: SendClickOptions) => Promise<IChatHistoryItemDocument | undefined>;
   handleStopMessage: () => Promise<void>;
 }
 
@@ -347,9 +353,12 @@ export function useSendMessage({
   // directly: the wrapper is what releases the submit mutex if this throws.
   const runSendClick = async (
     newPrompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+    options?: SendClickOptions
   ): Promise<IChatHistoryItemDocument | undefined> => {
-    if (submittingRef.current) return;
+    if (submittingRef.current) {
+      options?.onRefused?.();
+      return;
+    }
 
     // Lock out concurrent sends immediately so a second click/Enter during
     // validation or the host-create await cannot slip through the guard above.
@@ -362,7 +371,12 @@ export function useSendMessage({
     // literal-markdown senders are unaffected. Falls back to the plain chatInputValue
     // when the editor ref isn't mounted. Programmatic sends pass newPrompt explicitly
     // and bypass the editor (mirrors the getMentions() guard below).
-    const prompt = newPrompt ?? lexicalInputRef.current?.getSerializedValue() ?? chatInputValue;
+    const typedPrompt = newPrompt ?? lexicalInputRef.current?.getSerializedValue() ?? chatInputValue;
+    // A typed bare key ("2") picks that option of the newest reply's open choices, sending exactly
+    // what its button would. Editor sends only: a programmatic prompt is already what it means.
+    const newestTurn = currentSession ? useReplyChoices.getState().newestBySession[currentSession.id] : undefined;
+    const choiceKey = newPrompt === undefined ? expandChoiceKey(typedPrompt, newestTurn?.suggestedChoices) : null;
+    const prompt = choiceKey?.prompt ?? typedPrompt;
     // Validation (and the message the server stores) sees the serialized prompt,
     // so a formatted message counts its markdown syntax toward the input budget
     // (e.g. `**bold**` is 4 chars over `bold`). The overhead is markup-only and
@@ -382,7 +396,16 @@ export function useSendMessage({
       console.error(errorMessage);
       toast.error(errorMessage);
       setSubmitting(false);
+      options?.onRefused?.();
       return;
+    }
+    if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
+      void recordReplyChoice(queryClient, {
+        sessionId: currentSession.id,
+        questId: newestTurn.questId,
+        suggestedChoices: newestTurn.suggestedChoices,
+        index: choiceKey.pickedIndex,
+      });
     }
 
     // Host-managed first-message creation (e.g. /opti's TREATED OptiHashi session).
@@ -415,6 +438,7 @@ export function useSendMessage({
         console.error('Data Lake session create failed:', error);
         setSubmitting(false);
         toast.error("Couldn't start the chat - please try again.");
+        options?.onRefused?.();
         return;
       }
     }
@@ -693,6 +717,7 @@ export function useSendMessage({
     });
     if (refused) {
       setSubmitting(false);
+      options?.onRefused?.();
       return;
     }
 
@@ -1215,10 +1240,7 @@ export function useSendMessage({
    * with no error visible to the user.
    */
   const handleSendClick = useCallback(
-    async (
-      newPrompt?: string,
-      options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
-    ): Promise<IChatHistoryItemDocument | undefined> => {
+    async (newPrompt?: string, options?: SendClickOptions): Promise<IChatHistoryItemDocument | undefined> => {
       try {
         return await withSubmitMutex(submittingRef, setSubmittingState, () =>
           runSendClickRef.current(newPrompt, options)
@@ -1228,6 +1250,7 @@ export function useSendMessage({
         // send failures itself (LLMCommand toasts, optimistic rollback).
         console.error('Unexpected error sending message:', error);
         toast.error("Couldn't send your message - please try again.");
+        options?.onRefused?.();
         return undefined;
       }
     },

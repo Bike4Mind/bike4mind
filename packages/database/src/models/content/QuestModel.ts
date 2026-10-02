@@ -723,6 +723,22 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       ],
       required: false,
     },
+    // Next-step options stripped from the reply's trailing choices block - see replyChoices in
+    // common. The 2-4 option count there is enforced only by parseChoiceOptions at write time;
+    // Mongoose defaults a missing `options` array to [] rather than rejecting it, so `required`
+    // on the array path would not add real validation here.
+    suggestedChoices: {
+      type: subSchema({
+        options: [
+          subSchema({
+            label: { type: String, required: true },
+            description: { type: String, required: true },
+          }),
+        ],
+        selectedIndex: { type: Number, required: false },
+      }),
+      required: false,
+    },
     // Per-file attachment delivery problems, shown under the reply. Must stay in the
     // findPageBySessionId projection below or the banner vanishes on reload.
     attachmentNotices: { type: [String], required: false },
@@ -906,7 +922,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))

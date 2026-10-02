@@ -397,10 +397,17 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     await handleSendClick();
   }, [sendBlockedReason, handleSendClick, shouldToastBlockedSend, t]);
 
-  // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
+  // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard); resolves false when
+  // the send was refused before dispatch, so a caller can undo its own optimistic state.
   const sendPromptCallback = useCallback(
     async (prompt: string) => {
-      await handleSendClick(prompt);
+      let sent = true;
+      await handleSendClick(prompt, {
+        onRefused: () => {
+          sent = false;
+        },
+      });
+      return sent;
     },
 
     [handleSendClick]

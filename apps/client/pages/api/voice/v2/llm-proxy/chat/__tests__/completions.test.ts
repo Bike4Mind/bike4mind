@@ -150,4 +150,16 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
     expect((mockProcess.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
   });
+
+  // Speech streams from the raw reply, so a choices block would be read aloud.
+  it('withholds the reply-choices guidance on both the invoke and process bodies', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    type Body = { body: { skipReplyChoices?: boolean; skipAutoOffers?: boolean } };
+    for (const call of [mockInvoke.mock.calls[0][0], mockProcess.mock.calls[0][0]] as Body[]) {
+      expect(call.body.skipReplyChoices).toBe(true);
+      // Narrow on purpose: skipAutoOffers would also drop the knowledge and MCP offers voice uses.
+      expect(call.body.skipAutoOffers).toBeUndefined();
+    }
+  });
 });
