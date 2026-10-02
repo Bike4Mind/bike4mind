@@ -23,6 +23,17 @@ import {
 } from './kimiNativeTools';
 import { normalizeOpenAIFinishReason } from '../stopReason';
 
+/**
+ * Sent when Kimi is asked to continue after a tool result with no tools offered (base.ts
+ * drops them at the tool-call limit). Without it Kimi writes its next tool call out as
+ * visible text and never answers.
+ */
+const TOOLS_UNAVAILABLE_NUDGE =
+  'Tools are no longer available. Using the tool results above, answer the original request now in plain text. Do not write any tool call.';
+
+/** Raw tool-call text in any of the shapes Kimi emits; never an answer. */
+const RAW_TOOL_CALL_TEXT = /<\|tool_call|<function[=_]|<invoke\b/;
+
 /** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
 interface MoonshotMessage {
   content?: string;
@@ -182,6 +193,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         if ('tool_calls' in m || m.role === 'tool') return true;
         return typeof m.content === 'string' ? m.content !== '' : m.content !== null && m.content !== undefined;
       });
+
+    if (formattedMessages[formattedMessages.length - 1]?.role === 'tool' && !options.tools?.length) {
+      formattedMessages.push({ role: 'user', content: TOOLS_UNAVAILABLE_NUDGE });
+    }
 
     const body: Record<string, unknown> = {
       messages: formattedMessages,
@@ -493,7 +508,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       .map(p => p.trim())
       .filter(Boolean)
       .pop();
-    if (!tail) return;
+    if (!tail || RAW_TOOL_CALL_TEXT.test(tail)) return;
 
     // A still-open `reasoning_content` block must be closed first or the answer renders inside it.
     const closeOpenThink = this.isInThinkingBlock ? `${this.reasoningEscaper.flush()}</think>` : '';
