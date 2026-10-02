@@ -374,9 +374,6 @@ importers:
       '@tanstack/router-devtools':
         specifier: ^1.167.0
         version: 1.167.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@tanstack/router-core@1.171.14)(csstype@3.2.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/mailparser':
-        specifier: ^3.4.6
-        version: 3.4.6
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -518,9 +515,6 @@ importers:
       lucide-react:
         specifier: ^0.577.0
         version: 0.577.0(react@19.2.7)
-      mailparser:
-        specifier: ^3.9.26
-        version: 3.9.26
       mammoth:
         specifier: ^1.12.3
         version: 1.12.3
