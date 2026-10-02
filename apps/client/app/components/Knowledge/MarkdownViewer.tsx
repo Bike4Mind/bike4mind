@@ -9,7 +9,7 @@ import { ContentCopy, Check } from '@mui/icons-material';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 import { extractMermaidFence } from '@client/app/utils/mermaidFence';
-import { stripFrontmatter } from '@client/app/utils/stripFrontmatter';
+import { stripFrontmatter } from '@bike4mind/scripts/help/utils';
 
 interface Props {
   content: string;
