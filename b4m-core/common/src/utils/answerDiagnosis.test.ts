@@ -446,4 +446,85 @@ describe('tools check', () => {
   it('does not count a call with no recorded verdict as failed', () => {
     expect(statusOf({ functionCalls: [{ name: 'web_search' }] }, 'tools')).toBe('ok');
   });
+
+  describe('timeout failures', () => {
+    const SERP_TIMEOUT = 'Web search timed out: SerpAPI did not respond within 10s (tried 2 times)';
+    const timedOut = (name = 'web_search') => ({
+      name,
+      success: false,
+      returnValue: `Error processing ${name} tool: ${SERP_TIMEOUT}`,
+    });
+    const remedyOf = (promptMeta: PromptMeta) => diagnoseAnswer(promptMeta).checks.find(c => c.id === 'tools')!.remedy;
+
+    it('names the timeout and its message when the only call timed out', () => {
+      const meta: PromptMeta = { functionCalls: [timedOut()] };
+      expect(statusOf(meta, 'tools')).toBe('fail');
+      expect(detailOf(meta, 'tools')).toBe(`The only tool call timed out (web_search): ${SERP_TIMEOUT}.`);
+      expect(remedyOf(meta)).toContain('did not respond in time');
+    });
+
+    it('reads the timeout from error when the call recorded one', () => {
+      const meta: PromptMeta = { functionCalls: [{ name: 'web_search', error: 'Request timed out after 30s' }] };
+      expect(detailOf(meta, 'tools')).toContain('timed out (web_search): Request timed out after 30s.');
+    });
+
+    it('dedupes identical messages across several timed-out calls', () => {
+      const meta: PromptMeta = { functionCalls: [timedOut(), timedOut()] };
+      expect(detailOf(meta, 'tools')).toBe(`All 2 tool calls timed out (web_search, web_search): ${SERP_TIMEOUT}.`);
+    });
+
+    it('keeps partial-success wording when other calls succeeded', () => {
+      const meta: PromptMeta = { functionCalls: [timedOut(), { name: 'search_knowledge_base', success: true }] };
+      expect(statusOf(meta, 'tools')).toBe('warn');
+      expect(detailOf(meta, 'tools')).toContain(`1 of 2 tool calls timed out (web_search): ${SERP_TIMEOUT}.`);
+      expect(detailOf(meta, 'tools')).toContain('1 succeeded and the model replied with what it got');
+    });
+
+    it('names the timeout even when a fallback provider reported it', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          {
+            name: 'web_search',
+            success: false,
+            returnValue: 'Error processing web_search tool: SearXNG fallback timed out',
+          },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toContain('timed out (web_search): SearXNG fallback timed out.');
+    });
+
+    it('keeps the generic copy when a timeout is mixed with another failure', () => {
+      const meta: PromptMeta = {
+        functionCalls: [
+          timedOut(),
+          { name: 'fetch_url', success: false, returnValue: 'Error processing fetch_url tool: 404' },
+        ],
+      };
+      expect(detailOf(meta, 'tools')).toBe('All 2 tool calls failed (web_search, fetch_url).');
+    });
+
+    it.each([
+      ['redacted (no returnValue)', { name: 'web_search', success: false }],
+      ['empty returnValue', { name: 'web_search', success: false, returnValue: '' }],
+    ])('keeps the generic copy when the failure text is %s', (_label, call) => {
+      expect(detailOf({ functionCalls: [call] }, 'tools')).toBe('The only tool call failed (web_search).');
+    });
+
+    it('never reads a successful call whose content mentions a timeout as a failure', () => {
+      const meta: PromptMeta = {
+        functionCalls: [{ name: 'web_search', success: true, returnValue: 'Article: the request timed out' }],
+      };
+      expect(statusOf(meta, 'tools')).toBe('ok');
+    });
+
+    it('caps a long message and strips non-ASCII', () => {
+      const long = `Search timed out \u2014 ${'x'.repeat(400)}`;
+      const meta: PromptMeta = { functionCalls: [{ name: 'web_search', success: false, returnValue: long }] };
+      const detail = detailOf(meta, 'tools');
+      expect(detail).toMatch(/^[\x20-\x7e]+$/);
+      expect(detail).toContain('Search timed out x');
+      expect(detail).toContain('....');
+      expect(detail.length).toBeLessThan(220);
+    });
+  });
 });

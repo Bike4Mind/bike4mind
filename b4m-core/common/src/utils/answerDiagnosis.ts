@@ -446,6 +446,31 @@ function diagnoseContext(promptMeta: PromptMeta): DiagnosisCheck {
   return { id: 'context', label, status: 'unknown', detail: 'No context-assembly detail was recorded for this turn.' };
 }
 
+type FunctionCall = NonNullable<PromptMeta['functionCalls']>[number];
+
+// Prefix the Bedrock-backend tool loop (llm-adapters bedrockBackend/base.ts) puts on a thrown tool
+// error before storing it as the call's returnValue.
+const TOOL_ERROR_PREFIX = /^Error processing \S+ tool: /;
+const TIMED_OUT = /\btimed out\b/i;
+const MAX_TIMEOUT_MESSAGE_CHARS = 160;
+
+/**
+ * The failure text of a call that failed by timing out, else undefined. Only failed calls qualify,
+ * so a successful call whose content mentions a timeout never matches; a redacted call (no text)
+ * falls back to the generic copy.
+ */
+function timeoutMessage(call: FunctionCall): string | undefined {
+  if (call.success !== false && !call.error) return undefined;
+  const text = (call.error || call.returnValue || '')
+    .replace(TOOL_ERROR_PREFIX, '')
+    .replace(/[^\x20-\x7e]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.+$/, '');
+  if (!TIMED_OUT.test(text)) return undefined;
+  return text.length > MAX_TIMEOUT_MESSAGE_CHARS ? `${text.slice(0, MAX_TIMEOUT_MESSAGE_CHARS - 3)}...` : text;
+}
+
 function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
   const label = 'Tools';
   const calls = promptMeta.functionCalls;
@@ -472,6 +497,21 @@ function diagnoseTools(promptMeta: PromptMeta): DiagnosisCheck {
       explicitlySucceeded > 0
         ? `${explicitlySucceeded} succeeded${otherCount > 0 ? ` and ${otherCount} had no recorded verdict` : ''}`
         : `${otherCount} had no recorded verdict`;
+    const timeouts = failed.map(timeoutMessage);
+    if (timeouts.every((m): m is string => !!m)) {
+      const messages = [...new Set(timeouts)].join('; ');
+      return {
+        id: 'tools',
+        label,
+        status: allFailed ? 'fail' : 'warn',
+        detail: allFailed
+          ? `${failed.length === 1 ? 'The only tool call' : `All ${failed.length} tool calls`} timed out${named}: ${messages}.`
+          : `${failed.length} of ${calls.length} tool ${calls.length === 1 ? 'call' : 'calls'} timed out${named}: ${messages}. ${successPhrase[0].toUpperCase()}${successPhrase.slice(1)} and the model replied with what it got.`,
+        remedy: allFailed
+          ? 'The service behind the tool did not respond in time; this is usually transient, so retry the question.'
+          : 'Retry if the answer seems incomplete; a timeout is usually transient.',
+      };
+    }
     return {
       id: 'tools',
       label,

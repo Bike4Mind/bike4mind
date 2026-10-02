@@ -103,4 +103,23 @@ describe('AnswerDiagnosisPanel', () => {
     expect(screen.getByTestId('answer-diagnosis-check-corpus').getAttribute('data-status')).toBe('fail');
     expect(screen.getByTestId('answer-diagnosis-remedy-corpus')).toBeTruthy();
   });
+
+  it('names a tool timeout and its message rather than a bare failure', () => {
+    renderPanel({
+      ...healthy,
+      functionCalls: [
+        {
+          name: 'web_search',
+          success: false,
+          returnValue:
+            'Error processing web_search tool: Web search timed out: SerpAPI did not respond within 10s (tried 2 times)',
+        },
+      ],
+    });
+
+    const check = screen.getByTestId('answer-diagnosis-check-tools');
+    expect(check.getAttribute('data-status')).toBe('fail');
+    expect(check.textContent).toContain('timed out (web_search): Web search timed out: SerpAPI did not respond');
+    expect(screen.getByTestId('answer-diagnosis-remedy-tools').textContent).toContain('did not respond in time');
+  });
 });
