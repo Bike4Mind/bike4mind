@@ -24,9 +24,10 @@ import { cluster, resolvedVpcId } from './vpc';
  * Skipped in previews (cost per PR stage) and in `sst dev` (services are not deployed there).
  */
 const searxngImage = process.env.SEARXNG_IMAGE;
-const enabled = !$dev && !isPreviewStage && !!searxngImage;
+const isHostedStage = !$dev && !isPreviewStage;
+const enabled = isHostedStage && !!searxngImage;
 
-if (!$dev && !isPreviewStage && !searxngImage && process.env.CI === 'true') {
+if (isHostedStage && !searxngImage && process.env.CI === 'true') {
   console.warn('SEARXNG_IMAGE is not set; skipping the SearXNG service (web_search runs on SerpAPI only).');
 }
 
@@ -103,3 +104,7 @@ function createSearxng() {
 
 /** Base URL for SEARXNG_BASE_URL, or undefined when the service is not deployed on this stage. */
 export const searxngUrl = enabled ? createSearxng() : undefined;
+
+// Visible in deploy output so an admin can confirm the wired URL, or copy it into the
+// SearxngUrl admin setting to point at a different instance than the one this stage deployed.
+searxngUrl?.apply(url => console.log(`SearXNG internal URL: ${url}`));
