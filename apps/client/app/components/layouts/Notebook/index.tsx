@@ -20,6 +20,7 @@ import { keyframes } from '@mui/system';
 import NotebookHeader from './Header';
 import { gray } from '@client/app/utils/themes/colors';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
+import type { NotebookContentFilter, NotebookOriginFilter } from './Sidenav/sidenavFilters';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { edgeToEdgePaths, isEdgeToEdgePath } from '@client/app/utils/premiumEdgeToEdge';
 
@@ -35,6 +36,11 @@ interface NotebookLayoutState {
   setOpenSideNav: (val: boolean) => void;
   showMessageCounts: boolean;
   setShowMessageCounts: (val: boolean) => void;
+  /** Sidebar Content / Origin filters (see Sidenav/sidenavFilters.ts); persisted like showMessageCounts. */
+  contentFilter: NotebookContentFilter;
+  setContentFilter: (val: NotebookContentFilter) => void;
+  originFilter: NotebookOriginFilter;
+  setOriginFilter: (val: NotebookOriginFilter) => void;
 }
 
 export const useNotebookLayout = create<NotebookLayoutState>()(
@@ -44,6 +50,10 @@ export const useNotebookLayout = create<NotebookLayoutState>()(
       setOpenSideNav: (val: boolean) => set({ openSideNav: val }),
       showMessageCounts: false,
       setShowMessageCounts: (val: boolean) => set({ showMessageCounts: val }),
+      contentFilter: 'all',
+      setContentFilter: (val: NotebookContentFilter) => set({ contentFilter: val }),
+      originFilter: 'all',
+      setOriginFilter: (val: NotebookOriginFilter) => set({ originFilter: val }),
     }),
     {
       name: 'notebook-layout',

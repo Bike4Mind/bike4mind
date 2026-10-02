@@ -1,13 +1,10 @@
-import type { AccessContext, LakeAuditPrincipal } from '@bike4mind/common';
+import { buildDataLakeAccessContext, type AccessContext, type LakeAuditPrincipal } from '@bike4mind/common';
 import type { ToolContext } from '../base/types';
 
 export type ToolAccessContext = AccessContext & { auditPrincipal?: LakeAuditPrincipal };
 
 /**
- * The data-lake `AccessContext` for a tool call, built from the ToolContext the way
- * apps/client/server/dataLakes/toAccessContext.ts builds it from a request - keep the two in step.
- * Membership comes from the org documents' ACL, never `user.organizationId`, and a platform
- * admin gets no entitlement keys or administered orgs because the gates grant an admin outright.
+ * The data-lake `AccessContext` for a tool call - the shared builder fed from the ToolContext.
  *
  * A key-driven turn also carries an `auditPrincipal` (see toolAuditPrincipal); a session turn
  * carries none, so the audit falls back to `userId`.
@@ -15,21 +12,16 @@ export type ToolAccessContext = AccessContext & { auditPrincipal?: LakeAuditPrin
 export async function buildToolAccessContext(
   context: Pick<ToolContext, 'userId' | 'user' | 'entitlementKeys' | 'db' | 'apiKeyId'>
 ): Promise<ToolAccessContext> {
-  const isAdmin = !!context.user.isAdmin;
-  const [organizationIds, administeredOrgIds] = await Promise.all([
-    context.db.organizations.findMembershipOrgIds(context.userId),
-    isAdmin ? Promise.resolve([]) : context.db.organizations.findIdsWithAdminRights(context.userId),
-  ]);
+  const accessContext = await buildDataLakeAccessContext(
+    { id: context.userId, isAdmin: context.user.isAdmin, tags: context.user.tags },
+    {
+      membershipOrgIds: () => context.db.organizations.findMembershipOrgIds(context.userId),
+      entitlementKeys: async () => context.entitlementKeys ?? [],
+      administeredOrgIds: () => context.db.organizations.findIdsWithAdminRights(context.userId),
+    }
+  );
   const auditPrincipal = toolAuditPrincipal(context);
-  return {
-    userId: context.userId,
-    isAdmin,
-    userTags: context.user.tags ?? [],
-    organizationIds,
-    entitlementKeys: isAdmin ? [] : (context.entitlementKeys ?? []),
-    administeredOrgIds,
-    ...(auditPrincipal ? { auditPrincipal } : {}),
-  };
+  return auditPrincipal ? { ...accessContext, auditPrincipal } : accessContext;
 }
 
 /**

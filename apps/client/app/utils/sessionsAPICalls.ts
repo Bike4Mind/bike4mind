@@ -5,19 +5,23 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ISessionFavoriteItem,
+  SessionListFilters,
   SessionUpdateRequest,
 } from '@bike4mind/common';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export const getSessionsFromServer = async (
   search: string = '',
-  options: { pagination: { page: number; limit: number }; surface?: string } = { pagination: { page: 1, limit: 10 } }
+  options: { pagination: { page: number; limit: number }; surface?: string; filters?: SessionListFilters } = {
+    pagination: { page: 1, limit: 10 },
+  }
 ) => {
   const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean }>(`/api/sessions`, {
     params: {
       search,
       pagination: options.pagination,
       ...(options.surface ? { surface: options.surface } : {}),
+      ...options.filters,
     },
   });
 
@@ -26,12 +30,15 @@ export const getSessionsFromServer = async (
 
 export const getSharedSessionsFromServer = async (
   search: string = '',
-  options = { pagination: { page: 1, limit: 10 } }
+  options: { pagination: { page: number; limit: number }; filters?: SessionListFilters } = {
+    pagination: { page: 1, limit: 10 },
+  }
 ) => {
   const response = await api.get<{ data: ISessionDocument[]; hasMore: boolean }>(`/api/sessions/shared`, {
     params: {
       query: search,
       pagination: options.pagination,
+      ...options.filters,
     },
   });
 
