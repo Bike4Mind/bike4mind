@@ -205,15 +205,64 @@ const SUPERLATIVE_SUBJECT =
  * inside a unit WORD can shorten it into another valid unit, so `5 gbps` cut to `5 gb` reads as
  * gigabytes. Closing either means refusing a match rather than shortening one, which is a different
  * change to a rule two surfaces already depend on.
+ *
+ * Currency may sit before the value (`curpre`) or after it (`unit`). A K/M/B magnitude suffix must be
+ * ADJACENT to the digits and not followed by `[A-Za-z0-9/]`, so `120 m`, `5 m/s` and `2 B` stay
+ * unit abbreviations rather than becoming millions; spelled-out `thousand|million|billion|bn` may
+ * follow a space.
  */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?!\w))|(?!\w))/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*(?:(?<curpre>\p{Sc}|usd|eur|gbp|jpy|aud|cad|chf|cny|inr)\s*)?(?<val>[0-9](?:[0-9,.]*[0-9])?)(?:(?<mag>[kmb](?![A-Za-z0-9/])|\s+(?:thousand|million|billion|bn)(?!\w)))?(?:\s*(?<unit>%|(?:percent|ms|s|gb|mb|tb|x|usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|yen|rupees?|yuan)(?!\w))|(?!\w))/iu;
+
+/**
+ * Common currency words/codes/symbols, mapped to ISO-like lowercase codes for grouping.
+ *
+ * A plain lookup is the whole implementation: `raw` is always one of `METRIC`'s own currency
+ * captures (a `\p{Sc}` symbol or one of its alternation's codes/words), so there is no free text
+ * here to pattern-match against.
+ */
+const CURRENCY_UNIT: Record<string, string> = {
+  $: 'usd',
+  usd: 'usd',
+  dollar: 'usd',
+  dollars: 'usd',
+  '\u20AC': 'eur', // euro sign
+  eur: 'eur',
+  euro: 'eur',
+  euros: 'eur',
+  '\u00A3': 'gbp', // pound sign
+  gbp: 'gbp',
+  '\u00A5': 'jpy', // yen sign
+  jpy: 'jpy',
+  yen: 'jpy',
+  '\u20B9': 'inr', // rupee sign
+  inr: 'inr',
+  rupee: 'inr',
+  rupees: 'inr',
+  cny: 'cny',
+  yuan: 'cny',
+  aud: 'aud',
+  cad: 'cad',
+  chf: 'chf',
+};
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
-  const lower = unit?.toLowerCase() ?? '';
-  return lower === 'percent' ? '%' : lower;
+  const raw = unit ?? '';
+  const lower = raw.toLowerCase();
+  if (lower === 'percent' || raw === '%') return '%';
+  return CURRENCY_UNIT[lower] ?? lower;
 }
+
+const MAGNITUDE: Record<string, number> = {
+  k: 1e3,
+  thousand: 1e3,
+  m: 1e6,
+  million: 1e6,
+  b: 1e9,
+  billion: 1e9,
+  bn: 1e9,
+};
 
 /**
  * One FIGURE written two ways, compared as one: `99.90` and `99.9` are the same number, and reporting
@@ -223,16 +272,20 @@ function canonicalUnit(unit?: string): string {
  * group admits multiple separators, so `Version is 3.4.5` captures `3.4.5` and `Number` gives `NaN` -
  * every such version string would otherwise compare equal to every other.
  *
- * The trade, and it errs toward silence: past ~15 significant digits two genuinely different figures
+ * The trade, and it errs toward silence: past 15 significant digits two genuinely different figures
  * canonicalize to one double and stop being reported (`1e21` vs `1e21 + 1`, `2^53` vs `2^53 + 1`,
  * `0.1000000000000000055` vs `0.1`). This value never leaves the module - `InconsistencyFinding`
  * carries no `detail` - so the comparison changes but nothing rendered does, including the
  * exponential form `String(Number(...))` gives at those magnitudes.
  */
-function canonicalValue(value: string): string {
+function canonicalValue(value: string, mag?: string): string {
   const bare = value.replace(/,/g, '');
   const numeric = Number(bare);
-  return Number.isFinite(numeric) ? String(numeric) : bare;
+  if (!Number.isFinite(numeric)) return bare;
+  const scaled = numeric * (MAGNITUDE[(mag ?? '').trim().toLowerCase()] ?? 1);
+  // 15 digits absorbs the float artifact of scaling (2.01k) without narrowing ordinary figures.
+  const rounded = Number(scaled.toPrecision(15));
+  return String(rounded);
 }
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
@@ -414,12 +467,49 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
       if (!match) return null;
-      const [, label, value, unit] = match;
-      const canonical = canonicalUnit(unit);
+      const [, label] = match;
+      const groups = match.groups ?? {};
+      const value = groups.val;
+      if (!value) return null;
+      const unitRaw = groups.unit || groups.curpre;
+      const mag = groups.mag as string | undefined;
+      const canonical = canonicalUnit(unitRaw);
       if (unitRequired && !canonical) return null;
+      // Currency is decided from the matched group, not the canonical string: an unmapped `\p{Sc}`
+      // symbol canonicalizes to itself and would otherwise read as a non-currency unit.
+      const isCurrency = !!groups.curpre || (groups.unit ? groups.unit.toLowerCase() in CURRENCY_UNIT : false);
+
+      // Lowercase single-letter m/b should NOT scale unless a currency is present (e.g., `$5m`).
+      // Uppercase M/B or word magnitudes (thousand/million/billion/bn) continue to scale.
+      const effectiveMag = (() => {
+        if (!mag) return undefined;
+        const trimmed = mag.trim();
+        if (trimmed.length === 1) {
+          const lower = trimmed.toLowerCase();
+          if ((lower === 'm' || lower === 'b') && trimmed === lower && !isCurrency) return undefined;
+          // 'k' scales in either case; 'M'/'B' (captured under /i) scale too.
+          return lower;
+        }
+        // Word magnitudes (e.g., ' million') - keep.
+        return trimmed.toLowerCase();
+      })();
+
+      const scaled = canonicalValue(value, effectiveMag);
+      // A prefix unit survives a clip that lands inside the value (`$1,200,000` cut to `$1,2`), unlike a
+      // suffix unit, which the cut takes with it. A prefix-only value ending the passage is that fragment.
+      if (unitRequired && groups.curpre && !groups.unit) {
+        const end = match.index + match[0].length;
+        const tail = sentence.slice(end).trim();
+        const hasTerminator = /[.!?]/.test(tail);
+        const clippedTail =
+          !hasTerminator &&
+          (tail === '' || /^(?:[\s,]+)$/u.test(tail) || /^(?:b|m|bil|mil|billion|million)\b/i.test(tail));
+        if (clippedTail) return null;
+      }
+      const includeUnit = unitRequired || (!isCurrency && !!canonical);
       return {
         subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
-        detail: `${canonicalValue(value)}${canonical}`,
+        detail: includeUnit ? `${scaled}${canonical}` : `${scaled}`,
       };
     }),
     'metric-disagreement'
