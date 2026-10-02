@@ -810,6 +810,7 @@ export class ImageGenerationService {
       organizationId,
       intent = 'fresh',
     } = ImageGenerationBodySchema.parse(body);
+    const billedN = isKontextModel(model) ? 1 : n;
 
     // BFL and Gemini reject webp; only the gpt-image branch below gets the raw value.
     const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
@@ -887,7 +888,7 @@ export class ImageGenerationService {
         const { requiredCredits, usdCost } = await this.validateUserCredits(
           user,
           modelInfo,
-          n,
+          billedN,
           {
             model,
             size: effectiveSize,
@@ -1580,7 +1581,7 @@ export class ImageGenerationService {
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
-            units: n,
+            units: billedN,
             costUsd: usageCostUsd,
             creditsCharged: quest.creditsUsed,
             status: 'ok',
