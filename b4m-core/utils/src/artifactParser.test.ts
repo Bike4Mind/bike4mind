@@ -1383,6 +1383,33 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
     expect(out).toContain('<artifact identifier="mermaid-sequenceDiagram" type="application/vnd.ant.mermaid"');
   });
 
+  describe('near-duplicate echoes ignore title and comment lines', () => {
+    const BODY = ['sequenceDiagram', '    participant User', '    participant App', '    User->>App: request code'];
+    const art = (lines: string[]) =>
+      `<artifact identifier="mermaid-1" type="application/vnd.ant.mermaid" title="Login">\n${lines.join('\n')}\n</artifact>`;
+    const fenceOf = (lines: string[]) => `\`\`\`mermaid\n${lines.join('\n')}\n\`\`\``;
+    const withLine = (line: string) => [BODY[0], line, ...BODY.slice(1)];
+
+    it.each([
+      ['a title only in the fence', BODY, withLine('    title Checkout')],
+      ['a title only in the artifact', withLine('    title Checkout'), BODY],
+      ['a comment line only in the fence', BODY, withLine('    %% note to self')],
+      ['an accTitle line only in the fence', BODY, withLine('    accTitle: Checkout')],
+      ['an accDescr line only in the fence', BODY, withLine('    accDescr: how checkout works')],
+    ])('does not promote a fence differing by %s', (_name, artifactLines, fenceLines) => {
+      const fence = fenceOf(fenceLines);
+      const out = convertCodeBlocksToArtifacts(`${art(artifactLines)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+      expect(out).toContain(fence);
+    });
+
+    it('still promotes a fence that differs by a real message line', () => {
+      const fence = fenceOf([...BODY, '    App-->>User: code sent']);
+      const out = convertCodeBlocksToArtifacts(`${art(BODY)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(2);
+    });
+  });
+
   describe('sequence diagrams and stray openers', () => {
     it('does not promote raw lines that repeat a sequence diagram artifact', () => {
       const out = convertCodeBlocksToArtifacts(`${toolSeq}\n\nHere it is.\n${SEQ}\n`);
@@ -1547,6 +1574,43 @@ describe('sequence diagram syntax', () => {
   it('keeps lines after a title in a sequence diagram', () => {
     const body = 'sequenceDiagram\n    title Login\n    A->>B: hi\n    B-->>A: ok';
     expect(validateMermaidSyntax(body).cleanedContent).toBe(body);
+  });
+
+  it.each([
+    'App->>Email Service: x',
+    'Email Service-->>App: y',
+    'User Agent->>+Auth Server: z',
+    'User Agent-->>-Auth Server : done',
+  ])('accepts spaced participant names in %j', line => {
+    expect(isMermaidSyntax(line)).toBe(false);
+    expect(isMermaidSyntax(line, true)).toBe(true);
+  });
+
+  it('keeps a spaced-participant message when cleaning a sequence diagram', () => {
+    const body = 'sequenceDiagram\n    App->>Email Service: Request one-time code email';
+    expect(validateMermaidSyntax(body).cleanedContent).toBe(body);
+  });
+
+  it('still rejects prose that merely contains a colon', () => {
+    expect(isMermaidSyntax('Here is how it works: simple', true)).toBe(false);
+  });
+
+  it('stays linear on very long spaced lines', () => {
+    const run = (input: string) => String(isMermaidSyntax(input, true));
+    assertLinearGrowth(
+      n => 'A '.repeat(n),
+      50000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => `${'A '.repeat(n)}->> ${'B '.repeat(n)}`,
+      25000,
+      () => undefined,
+      run,
+      20
+    );
   });
 
   it('does not let sequence keywords keep prose in a flowchart', () => {

@@ -418,6 +418,14 @@ const ARTIFACT_CLOSE_LENGTH = '</artifact>'.length;
 
 const normalizeWhitespace = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
+// Single-line only: the body lines of a multi-line `accDescr {` block still count.
+const MERMAID_DEDUPE_IGNORED_LINE = /^(?:title|accTitle|accDescr)\b|^%%/;
+
+/** Dedupe form of a mermaid body: title, accessibility and comment lines dropped, whitespace normalized. */
+const mermaidDedupeLines = (value: string): string[] =>
+  value.split('\n').filter(line => !MERMAID_DEDUPE_IGNORED_LINE.test(line.trim()));
+const normalizeMermaid = (value: string): string => normalizeWhitespace(mermaidDedupeLines(value).join('\n'));
+
 /**
  * Protects every complete artifact span from the detectors and collects normalized mermaid bodies,
  * plus each body's first line (the raw pass matches only that). A span wrapping a tool-output
@@ -435,8 +443,9 @@ function protectArtifactSpans(content: string, mask: ToolOutputMask): { masked: 
         .filter(m => m[1] === 'type')
         .pop();
       if ((type?.[2] ?? type?.[3]) === 'application/vnd.ant.mermaid') {
-        mermaidBodies.add(normalizeWhitespace(block.body));
-        mermaidBodies.add(normalizeWhitespace(block.body.trim().split('\n', 1)[0]));
+        const lines = mermaidDedupeLines(block.body.trim());
+        mermaidBodies.add(normalizeMermaid(block.body));
+        mermaidBodies.add(normalizeWhitespace(lines[0] ?? ''));
       }
       // restore() is single-pass, so a span wrapping an already-protected region cannot itself be protected.
       if (mask.holds(block.fullMatch)) {
@@ -462,7 +471,7 @@ function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions,
   const spans = protectArtifactSpans(mask.masked, mask);
   content = spans.masked;
   const { mermaidBodies } = spans;
-  const isDuplicateMermaid = (text: string) => mermaidBodies.has(normalizeWhitespace(text));
+  const isDuplicateMermaid = (text: string) => mermaidBodies.size > 0 && mermaidBodies.has(normalizeMermaid(text));
   const { isToolEcho } = options;
   // Echoed spans become marked fences, protected at once so later passes skip them too.
   // A span that holds a placeholder wraps a protected region (tool output or an existing artifact);
@@ -996,7 +1005,7 @@ const SEQUENCE_PATTERNS = [
   /^(participant|actor)\s+\S/,
   /^(create\s+(participant|actor)|destroy)\s+\S/,
   /^box(\s|$)/,
-  /^[\w.]+\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+\s*:/,
+  /^[\w.]+(?: [\w.]+)*\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+(?: [\w.]+)*\s*:/,
   /^Note\s+(left of|right of|over)\s+\S/,
   /^(loop|alt|else|opt|par|and|critical|option|break|rect)(\s|$)/,
   /^(autonumber|activate|deactivate|links?)(\s|$)/,
