@@ -61,8 +61,10 @@ export async function runQuestNode(args: {
   userId: string;
   model: string;
   logger: Logger;
+  /** The caller's credential-scope denials (`dataLakeToolsDeniedFor`); see `IAgentExecution.scopeDeniedTools`. */
+  scopeDeniedTools?: string[];
 }): Promise<RunQuestNodeResult> {
-  const { node, graph, userId, model, logger } = args;
+  const { node, graph, userId, model, logger, scopeDeniedTools } = args;
 
   if (!graph.sessionId) {
     // AgentExecution.sessionId is required, and the session is what gives the
@@ -145,6 +147,7 @@ export async function runQuestNode(args: {
       connectionId: HEADLESS_CONNECTION_ID,
       approvedTools: [],
       deniedTools: [],
+      ...(scopeDeniedTools?.length ? { scopeDeniedTools } : {}),
       iterationBilling: [],
       totalCreditsUsed: 0,
       lambdaInvocationCount: 1,

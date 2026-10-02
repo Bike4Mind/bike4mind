@@ -131,6 +131,21 @@ describe('runQuestNode memory gating', () => {
 
     expect(create.mock.calls[0][0].enableMementos).toBe(false);
   });
+
+  it('persists the caller scope denials, and omits the field when there are none', async () => {
+    await runQuestNode({
+      node: node(),
+      graph: graph(),
+      userId: 'u1',
+      model: 'gpt-x',
+      logger,
+      scopeDeniedTools: ['save_content_to_data_lake'],
+    });
+    expect(create.mock.calls[0][0].scopeDeniedTools).toEqual(['save_content_to_data_lake']);
+
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger, scopeDeniedTools: [] });
+    expect(create.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
+  });
 });
 
 describe('runQuestNode stale sweep', () => {

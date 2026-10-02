@@ -9,6 +9,7 @@ import { requireExperimentalFeature } from '@server/middlewares/requireExperimen
 import { respond } from '@server/utils/respond';
 import { requireOwnedNode } from '@server/questmaster/v5/questGraphAccess';
 import { runQuestNode } from '@server/questmaster/v5/runQuestNode';
+import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import { QuestNodeRunResponseSchema, toQuestNodeWire } from '@server/questmaster/v5/wire';
 import { Logger } from '@bike4mind/observability';
 import { NextApiRequest, NextApiResponse } from 'next';
@@ -58,6 +59,8 @@ const handler = baseApi()
       userId: req.user.id,
       model: input.model,
       logger,
+      // An API key reaches this door too; same lake-tool scope gate as /api/v1/agent-executions.
+      scopeDeniedTools: dataLakeToolsDeniedFor(req),
     });
 
     respond(
