@@ -459,8 +459,10 @@ function unwrapJsonError(text: string): string {
   if (!text.startsWith('{')) return text;
   try {
     const parsed: unknown = JSON.parse(text);
-    if (parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string') {
-      return (parsed as { error: string }).error;
+    if (parsed && typeof parsed === 'object') {
+      // Any other JSON shape yields no message, so raw JSON never reaches the copy.
+      const { error } = parsed as { error?: unknown };
+      return typeof error === 'string' ? error : '';
     }
   } catch {
     // Not JSON; use the text as-is.
@@ -469,7 +471,9 @@ function unwrapJsonError(text: string): string {
 }
 
 function capMessage(text: string): string {
-  return text.length > MAX_TIMEOUT_MESSAGE_CHARS ? `${text.slice(0, MAX_TIMEOUT_MESSAGE_CHARS - 3)}...` : text;
+  if (text.length <= MAX_TIMEOUT_MESSAGE_CHARS) return text;
+  // Drop a cut-off separator or period so the ellipsis never renders as `....` or `; ...`.
+  return `${text.slice(0, MAX_TIMEOUT_MESSAGE_CHARS - 3).replace(/[\s.;,:]+$/, '')}...`;
 }
 
 /**

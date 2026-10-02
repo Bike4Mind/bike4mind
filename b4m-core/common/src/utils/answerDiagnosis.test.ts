@@ -527,6 +527,22 @@ describe('tools check', () => {
       expect(detail.length).toBeLessThan(220);
     });
 
+    it('never renders a cut-off period or separator before the ellipsis', () => {
+      const head = `Web search timed out: ${'a'.repeat(134)}`;
+      const atPeriod = `${head}. ${'b'.repeat(50)}`;
+      const atSeparator = [`${head.slice(0, 155)}`, `Web search timed out: ${'c'.repeat(50)}`];
+      const single = detailOf(
+        { functionCalls: [{ name: 'web_search', success: false, returnValue: atPeriod }] },
+        'tools'
+      );
+      const joined = detailOf(
+        { functionCalls: atSeparator.map(returnValue => ({ name: 'web_search', success: false, returnValue })) },
+        'tools'
+      );
+      expect(single).toMatch(/a\.\.\.$/);
+      expect(joined).toMatch(/a\.\.\.$/);
+    });
+
     it('says timed out once, in the provider message only', () => {
       const detail = detailOf({ functionCalls: [timedOut()] }, 'tools');
       expect(detail.match(/timed out/g)).toHaveLength(1);
@@ -549,6 +565,12 @@ describe('tools check', () => {
         functionCalls: [{ name: 'web_search', success: false, returnValue: JSON.stringify({ error: SERP_TIMEOUT }) }],
       };
       expect(detailOf(meta, 'tools')).toBe(`The only tool call failed (web_search): ${SERP_TIMEOUT}.`);
+    });
+
+    it('keeps the generic copy for a JSON shape with no string error', () => {
+      const returnValue = JSON.stringify({ error: { message: 'Request timed out' }, status: 'timed out' });
+      const meta: PromptMeta = { functionCalls: [{ name: 'web_search', success: false, returnValue }] };
+      expect(detailOf(meta, 'tools')).toBe('The only tool call failed (web_search).');
     });
 
     it('keeps the generic copy for a JSON error that is not a timeout', () => {
