@@ -14,7 +14,7 @@ import { revokeInstallerToken, type GitHubLakeAppConfig } from './lakeAppClient'
 export const GITHUB_LAKE_AUTH_GRANT_TTL_MS = 10 * 60 * 1000;
 
 // 403, never 401: the client answers a 401 with a session refresh and, failing that, a sign-out.
-const GRANT_EXPIRED_MESSAGE = 'Your GitHub authorization expired. Connect GitHub again.';
+export const GRANT_EXPIRED_MESSAGE = 'Your GitHub authorization expired. Connect GitHub again.';
 
 /** The flow's nonce hash (readStateNonceHash), or a 403 when this browser's nonce cookie is gone. */
 export function requireGitHubLakeFlowNonce(nonceHash: string | null): string {

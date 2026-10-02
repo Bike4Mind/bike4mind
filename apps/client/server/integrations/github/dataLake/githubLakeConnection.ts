@@ -39,6 +39,7 @@ import {
 import { Resource } from 'sst';
 import {
   consumeGitHubLakeAuthGrant,
+  GRANT_EXPIRED_MESSAGE,
   readGitHubLakeUserToken,
   requireGitHubLakeFlowNonce,
   storeGitHubLakeAuthGrant,
@@ -48,6 +49,7 @@ import {
   exchangeInstallerCode,
   getGitHubLakeAppConfig,
   getInstallation,
+  gitHubErrorStatus,
   listInstallerVisibleRepositories,
   listUserInstallations,
   type GitHubLakeAppConfig,
@@ -221,6 +223,31 @@ export async function authorizeGitHubLakeConnection(params: {
 }
 
 /**
+ * Runs a GitHub call made with the flow's held user token. A 401 means that token is dead - the user
+ * revoked the App's authorization at github.com/settings/applications, or a later authorize in the
+ * same flow superseded it - so it is reported as 403, never let through as-is: errorHandler copies a
+ * numeric error.status onto the response, and the client's session interceptor treats a 401 as a dead
+ * session, signing the user out. The now-useless grant is best-effort released alongside it.
+ */
+async function withGitHubLakeUserToken<T>(
+  config: GitHubLakeAppConfig,
+  nonceHash: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    if (gitHubErrorStatus(error) !== 401) throw error;
+    await consumeGitHubLakeAuthGrant(config, nonceHash).catch((consumeError: unknown) =>
+      Logger.warn('GitHub lake connect: could not consume the grant for a revoked token', {
+        error: serializeError(consumeError),
+      })
+    );
+    throw new ForbiddenError(GRANT_EXPIRED_MESSAGE);
+  }
+}
+
+/**
  * What the repository picker offers: every installation of the App the user's token can see, its
  * visible repositories annotated with any lake already bound to them, and the install fallback.
  * An installation that breaks the App policy is listed with the reason instead of its repositories.
@@ -236,9 +263,9 @@ export async function listGitHubLakeRepositoryChoices(params: {
   const { lakeId, organizationId } = await resolveConnectableLake(user, params.dataLakeId);
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
-  const installations = await listUserInstallations(userToken);
+  const installations = await withGitHubLakeUserToken(config, nonceHash, () => listUserInstallations(userToken));
   const choices = await Promise.all(
-    installations.map(installation => toInstallationChoice(userToken, installation, organizationId))
+    installations.map(installation => toInstallationChoice(config, nonceHash, userToken, installation, organizationId))
   );
   return {
     installations: choices,
@@ -247,6 +274,8 @@ export async function listGitHubLakeRepositoryChoices(params: {
 }
 
 async function toInstallationChoice(
+  config: GitHubLakeAppConfig,
+  nonceHash: string,
   userToken: string,
   installation: GitHubLakeUserInstallation,
   organizationId: string
@@ -264,7 +293,8 @@ async function toInstallationChoice(
     };
   }
   // Null only if the installation vanished between the two calls; it then offers nothing.
-  const repositories = (await listInstallerVisibleRepositories(userToken, id)) ?? [];
+  const repositories =
+    (await withGitHubLakeUserToken(config, nonceHash, () => listInstallerVisibleRepositories(userToken, id))) ?? [];
   const boundTo = await resolveRepositoryBindings(
     repositories.map(repo => repo.id),
     organizationId
@@ -327,7 +357,9 @@ export async function completeGitHubLakeConnection(params: {
   const { lakeId, organizationId } = await resolveConnectableLake(user, params.dataLakeId);
   const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
-  const visibleRepositories = await listInstallerVisibleRepositories(userToken, installationId);
+  const visibleRepositories = await withGitHubLakeUserToken(config, nonceHash, () =>
+    listInstallerVisibleRepositories(userToken, installationId)
+  );
   const repository = visibleRepositories?.find(repo => repo.id === repositoryId);
   if (!repository) {
     throw new ForbiddenError('Your GitHub account cannot access that repository through the data-lake GitHub App.');

@@ -227,6 +227,36 @@ describe('GitHubRepositoryPickerModal', () => {
     expect(screen.getByTestId('github-repo-picker-empty')).toBeInTheDocument();
   });
 
+  it('drops the preselected repository once a search hides it', () => {
+    h.data = choices({
+      installations: [
+        {
+          id: 10,
+          accountLogin: 'acme',
+          accountType: 'Organization',
+          settingsUrl: 'https://github.com/organizations/acme/settings/installations/10',
+          violation: null,
+          repositories: [{ id: 100, fullName: 'acme/docs', defaultBranch: 'main', private: false, boundTo: null }],
+        },
+      ],
+    });
+    wrap(<GitHubRepositoryPickerModal />);
+    expect(screen.getByTestId('github-repo-picker-confirm-btn')).not.toBeDisabled();
+
+    fireEvent.change(screen.getByTestId('github-repo-picker-search-input').querySelector('input')!, {
+      target: { value: 'nope' },
+    });
+
+    expect(screen.getByTestId('github-repo-picker-confirm-btn')).toBeDisabled();
+  });
+
+  it('says the App is not installed yet, rather than that no repository matched, with nothing installed', () => {
+    h.data = choices({ installations: [] });
+    wrap(<GitHubRepositoryPickerModal />);
+
+    expect(screen.getByTestId('github-repo-picker-empty')).toHaveTextContent(/isn't installed on any account/i);
+  });
+
   it('shows the reconnect door when the flow has expired', () => {
     h.error = {
       isAxiosError: true,

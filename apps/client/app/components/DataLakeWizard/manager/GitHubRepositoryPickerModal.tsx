@@ -87,16 +87,6 @@ export default function GitHubRepositoryPickerModal() {
     [installations]
   );
 
-  // Re-derived against every fetch, so a Refresh that shows the picked repository as now bound
-  // drops the pick instead of submitting it. A single eligible repository is preselected.
-  const stillEligible =
-    manualSelection &&
-    eligible.find(
-      repo =>
-        repo.installationId === manualSelection.installationId && repo.repositoryId === manualSelection.repositoryId
-    );
-  const selected = stillEligible ?? (eligible.length === 1 ? eligible[0] : null);
-
   const filteredInstallations = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return installations;
@@ -107,6 +97,18 @@ export default function GitHubRepositoryPickerModal() {
       }))
       .filter(installation => installation.violation || installation.repositories.length > 0);
   }, [installations, search]);
+
+  // Re-derived against every fetch and the search filter, so a Refresh that shows the picked
+  // repository as now bound - or a search that hides it - drops the pick instead of submitting a
+  // repository that is not on screen. A single eligible repository is preselected.
+  const visibleEligible = useMemo(() => listEligible(filteredInstallations), [filteredInstallations]);
+  const stillEligible =
+    manualSelection &&
+    visibleEligible.find(
+      repo =>
+        repo.installationId === manualSelection.installationId && repo.repositoryId === manualSelection.repositoryId
+    );
+  const selected = stillEligible ?? (eligible.length === 1 && visibleEligible.length === 1 ? eligible[0] : null);
 
   const handleClose = () => closePicker();
 
@@ -142,10 +144,15 @@ export default function GitHubRepositoryPickerModal() {
     const text =
       `Please add ${repoName} to the data-lake GitHub App installation on ${installation.accountLogin} ` +
       `so I can connect it to a data lake: ${installation.settingsUrl}`;
-    navigator.clipboard.writeText(text).then(
-      () => toast.success('Copied the request to your clipboard.'),
-      () => toast.error('Could not copy the request. Copy it manually instead.')
-    );
+    const onCopyFailed = () => toast.error('Could not copy the request. Copy it manually instead.');
+    // navigator.clipboard is undefined outside a secure context, where writeText would throw synchronously.
+    if (!navigator.clipboard) {
+      onCopyFailed();
+      return;
+    }
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success('Copied the request to your clipboard.'), onCopyFailed);
   };
 
   return (
@@ -187,6 +194,7 @@ export default function GitHubRepositoryPickerModal() {
               <Input
                 data-testid="github-repo-picker-search-input"
                 placeholder="Search repositories"
+                slotProps={{ input: { 'aria-label': 'Search repositories' } }}
                 value={search}
                 onChange={e => setSearch(e.target.value)}
                 sx={{ flex: 1 }}
@@ -206,7 +214,9 @@ export default function GitHubRepositoryPickerModal() {
             <Stack gap={2} sx={{ mt: 1 }}>
               {filteredInstallations.length === 0 && (
                 <Typography level="body-sm" color="neutral" data-testid="github-repo-picker-empty">
-                  No installation has a matching repository.
+                  {installations.length === 0
+                    ? "The GitHub App isn't installed on any account you can see yet."
+                    : 'No installation has a matching repository.'}
                 </Typography>
               )}
               {filteredInstallations.map(installation => (
@@ -308,6 +318,7 @@ export default function GitHubRepositoryPickerModal() {
                     data-testid={`github-repo-picker-org-request-${installation.id}`}
                   >
                     <Link
+                      data-testid={`github-repo-picker-settings-link-${installation.id}`}
                       href={installation.settingsUrl}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -320,6 +331,7 @@ export default function GitHubRepositoryPickerModal() {
                       <Input
                         data-testid={`github-repo-picker-request-repo-input-${installation.id}`}
                         placeholder="owner/repo"
+                        slotProps={{ input: { 'aria-label': `Repository to request on ${installation.accountLogin}` } }}
                         value={requestRepoNames[installation.id] ?? ''}
                         onChange={e => {
                           const { value } = e.target;
@@ -331,6 +343,7 @@ export default function GitHubRepositoryPickerModal() {
                         data-testid={`github-repo-picker-copy-request-btn-${installation.id}`}
                         variant="outlined"
                         color="neutral"
+                        aria-label={`Copy the request for ${installation.accountLogin}`}
                         onClick={() => handleCopyRequest(installation)}
                       >
                         <ContentCopyIcon />
@@ -348,7 +361,7 @@ export default function GitHubRepositoryPickerModal() {
 
             <Divider sx={{ my: 1 }} />
             <Stack direction="row" justifyContent="flex-end" gap={1}>
-              <Button variant="plain" color="neutral" onClick={handleClose}>
+              <Button data-testid="github-repo-picker-cancel-btn" variant="plain" color="neutral" onClick={handleClose}>
                 Cancel
               </Button>
               <Button
