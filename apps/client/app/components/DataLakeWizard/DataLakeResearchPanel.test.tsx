@@ -11,7 +11,7 @@ import {
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_STALE_AFTER_MS,
 } from '@bike4mind/common';
-import { DataLakeResearchPanel } from './DataLakeResearchPanel';
+import { DataLakeResearchPanel, formatWhen } from './DataLakeResearchPanel';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -637,9 +637,10 @@ describe('DataLakeResearchPanel', () => {
         configs: [config({ lastRunAt: new Date('2026-03-01T11:00:00.000Z') })],
         runs: [run({ startedAt })],
       });
-      const shown = (screen.getByTestId('datalake-research-run-when').textContent ?? '').split(' \u00b7 ')[0];
-      expect(shown).not.toBe('');
-      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(`Last run ${shown}`);
+      // Anchored to the fixture, not just row-vs-card: both read `runStartedAt`, so they would drift together.
+      const expected = formatWhen(startedAt);
+      expect(screen.getByTestId('datalake-research-run-when').textContent?.split(' \u00b7 ')[0]).toBe(expected);
+      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(`Last run ${expected}`);
     });
 
     // A retired or filtered model must still read as the selection, or the picker shows blank while
