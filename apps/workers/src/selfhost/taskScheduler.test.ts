@@ -59,7 +59,7 @@ vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch', () => ({ createFirecrawlApp: vi.fn() }));
 vi.mock('@bike4mind/auth/apiKeyService', () => ({ getFirecrawlConfig: vi.fn() }));
 vi.mock('@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry', () => ({ scrapeWithRetry: vi.fn() }));
-vi.mock('@server/jobs/researchTasks', () => ({ researchTaskJobs: {} }));
+vi.mock('@server/utils/researchTasks', () => ({ researchTaskJobs: {} }));
 vi.mock('@client/services/operationsModelService', () => ({
   OperationsModelService: { getOperationsTextModel: async () => ({ modelId: 'test-model', llm: {} }) },
 }));
