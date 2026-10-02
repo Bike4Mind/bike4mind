@@ -79,6 +79,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
   useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
+  useGetDataLakesWithRetrievability: (...args: unknown[]) => useGetDataLakesMock(...args),
   // The research tab (#1682). Mocked here rather than in its own file because the modal
   // value-imports every one of these at module load - a missing export throws before a single
   // assertion runs, whether or not the test touches that tab.

@@ -31,7 +31,9 @@ const {
   lakesState,
   workBenchState,
   mockFileOwnerId,
+  lakesHookSessionIds,
 } = vi.hoisted(() => ({
+  lakesHookSessionIds: [] as Array<string | null | undefined>,
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
@@ -153,6 +155,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     };
   },
   useGetDataLakes: () => ({ data: lakesState.value }),
+  useGetDataLakesWithRetrievability: (sessionId: string | null | undefined) => {
+    lakesHookSessionIds.push(sessionId);
+    return { data: lakesState.value };
+  },
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
     return { mutate: removeFileMutate, isPending: false };
@@ -350,6 +356,26 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
     // a close request is an actual transition rather than a no-op write.
     useSessionLayoutStore.setState({ layout: 'dockRight' });
+  });
+
+  it('asks for the lake labels of the current session and surfaces a server false on the header', () => {
+    lakesHookSessionIds.length = 0;
+    lakesState.value = [
+      {
+        id: 'lake-1',
+        name: 'Lake A',
+        datalakeTag: 'datalake:lake-a',
+        fileTagPrefix: 'lakea',
+        canManage: true,
+        status: 'active',
+        retrievable: false,
+      },
+    ];
+    sessionState.current = { id: 'sess-1', retrievalTags: ['datalake:lake-a'], lakeScopeExplicit: false };
+    renderExplorer();
+
+    expect(lakesHookSessionIds).toContain('sess-1');
+    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
   });
 
   it('renders chatSlot in the right pane', () => {
