@@ -11,7 +11,8 @@ import path from 'path';
  * fs-walking test under pages/ is traced as a route into the server Lambda).
  */
 const ROUTES_DIR = path.join(__dirname, '..', '..', 'pages', 'api', 'secret-rotations');
-const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*\]/;
+// Same pattern as the admin sweep (optional trailing comma); keep in sync with adminApiKeyScopeCoverage.test.ts.
+const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,?\s*\]/;
 
 function routeFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
