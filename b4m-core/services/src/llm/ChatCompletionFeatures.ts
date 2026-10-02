@@ -163,7 +163,9 @@ import { mergeRetrievalSummary, type RetrievalSummary } from './tools/retrievalS
 import { isObjectIdShaped } from './tools/base/objectId';
 
 interface DatabaseAdapters {
-  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent'>;
+  // `pullKnowledgeIds` backs the stale-attachment detach in scrubMissingKnowledgeIds - a $pull, so
+  // it cannot clobber a file attached concurrently the way rewriting the array through `update` would.
+  sessions: Pick<ISessionRepository, 'findById' | 'findAllByIds' | 'update' | 'attachAgent' | 'pullKnowledgeIds'>;
   users: Pick<
     IUserRepository,
     'findById' | 'update' | 'incrementCredits' | 'recordModerationHit' | 'setModerationStatus'

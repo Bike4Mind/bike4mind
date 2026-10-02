@@ -14,3 +14,4 @@ export * from './deleteMessage';
 export * from './addFavorite';
 export * from './deleteFavorite';
 export * from './autoName';
+export * from './scrubMissingKnowledgeIds';
