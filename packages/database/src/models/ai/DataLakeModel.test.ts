@@ -1741,6 +1741,29 @@ describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', ()
   });
 });
 
+describe('DataLakeBatchRepository.claimUploadHistory - one upload History row per batch', () => {
+  setupMongoTest();
+
+  it('lets exactly one caller claim, and a reopen does not release the claim', async () => {
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt', status: 'failed', error: 'enqueue: boom' }],
+    });
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(true);
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
+
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, {
+      fabFileId: 'f1',
+      errorPrefix: 'enqueue:',
+    });
+    expect(reopened?.status).toBe('processing');
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
+  });
+});
+
 describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal transition', () => {
   setupMongoTest();
 
