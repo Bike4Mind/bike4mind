@@ -134,7 +134,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value,
   },
   logging: {
-    retention: '3 days',
+    // Long enough to investigate a model-fallback or billing report after the fact; these
+    // are usually raised days later, well past a short retention window.
+    retention: '1 month',
   },
   // Give in-flight quests the full ECS-allowed grace period to drain on SIGTERM before
   // SIGKILL. SST's Service args don't expose the container `stopTimeout`, so inject it

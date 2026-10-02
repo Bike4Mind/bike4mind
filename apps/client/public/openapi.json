@@ -115,12 +115,38 @@
             "items": {
               "type": "string"
             }
+          },
+          "fallbackInfo": {
+            "type": "object",
+            "properties": {
+              "primaryModel": {
+                "type": "string"
+              },
+              "primaryModelName": {
+                "type": "string"
+              },
+              "fallbackModel": {
+                "type": "string"
+              },
+              "fallbackModelName": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "primaryModel",
+              "primaryModelName",
+              "fallbackModel",
+              "fallbackModelName"
+            ]
           }
         },
         "required": [
           "id"
         ],
-        "description": "Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: \"error\"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: \"message\"` even though it did not finish, so a caller gets the content rather than an error. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
+        "description": "Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: \"error\"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: \"message\"` even though it did not finish, so a caller gets the content rather than an error. `fallbackInfo` is present only when the requested model failed and another model produced the reply: `fallbackModel` answered, `primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
         "example": {
           "id": "664f1c2b9a1e4d0012ab34cd",
           "status": "done",
@@ -172,6 +198,32 @@
             "items": {
               "type": "string"
             }
+          },
+          "fallbackInfo": {
+            "type": "object",
+            "properties": {
+              "primaryModel": {
+                "type": "string"
+              },
+              "primaryModelName": {
+                "type": "string"
+              },
+              "fallbackModel": {
+                "type": "string"
+              },
+              "fallbackModelName": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "primaryModel",
+              "primaryModelName",
+              "fallbackModel",
+              "fallbackModelName"
+            ]
           },
           "sessionId": {
             "type": "string"
@@ -242,6 +294,32 @@
               "type": "string"
             }
           },
+          "fallbackInfo": {
+            "type": "object",
+            "properties": {
+              "primaryModel": {
+                "type": "string"
+              },
+              "primaryModelName": {
+                "type": "string"
+              },
+              "fallbackModel": {
+                "type": "string"
+              },
+              "fallbackModelName": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "primaryModel",
+              "primaryModelName",
+              "fallbackModel",
+              "fallbackModelName"
+            ]
+          },
           "sessionId": {
             "type": "string"
           },
@@ -310,6 +388,32 @@
             "items": {
               "type": "string"
             }
+          },
+          "fallbackInfo": {
+            "type": "object",
+            "properties": {
+              "primaryModel": {
+                "type": "string"
+              },
+              "primaryModelName": {
+                "type": "string"
+              },
+              "fallbackModel": {
+                "type": "string"
+              },
+              "fallbackModelName": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "primaryModel",
+              "primaryModelName",
+              "fallbackModel",
+              "fallbackModelName"
+            ]
           },
           "sessionId": {
             "type": "string"
@@ -2098,6 +2202,32 @@
                   "type": "string"
                 }
               },
+              "fallbackInfo": {
+                "type": "object",
+                "properties": {
+                  "primaryModel": {
+                    "type": "string"
+                  },
+                  "primaryModelName": {
+                    "type": "string"
+                  },
+                  "fallbackModel": {
+                    "type": "string"
+                  },
+                  "fallbackModelName": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "primaryModel",
+                  "primaryModelName",
+                  "fallbackModel",
+                  "fallbackModelName"
+                ]
+              },
               "sessionId": {
                 "type": "string"
               },
@@ -2440,6 +2570,32 @@
             "items": {
               "type": "string"
             }
+          },
+          "fallbackInfo": {
+            "type": "object",
+            "properties": {
+              "primaryModel": {
+                "type": "string"
+              },
+              "primaryModelName": {
+                "type": "string"
+              },
+              "fallbackModel": {
+                "type": "string"
+              },
+              "fallbackModelName": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "primaryModel",
+              "primaryModelName",
+              "fallbackModel",
+              "fallbackModelName"
+            ]
           },
           "sessionId": {
             "type": "string"
@@ -3065,6 +3221,32 @@
             "items": {
               "type": "string"
             }
+          },
+          "fallbackInfo": {
+            "type": "object",
+            "properties": {
+              "primaryModel": {
+                "type": "string"
+              },
+              "primaryModelName": {
+                "type": "string"
+              },
+              "fallbackModel": {
+                "type": "string"
+              },
+              "fallbackModelName": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "primaryModel",
+              "primaryModelName",
+              "fallbackModel",
+              "fallbackModelName"
+            ]
           },
           "sessionId": {
             "type": "string"
@@ -3864,6 +4046,32 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "fallbackInfo": {
+                "type": "object",
+                "properties": {
+                  "primaryModel": {
+                    "type": "string"
+                  },
+                  "primaryModelName": {
+                    "type": "string"
+                  },
+                  "fallbackModel": {
+                    "type": "string"
+                  },
+                  "fallbackModelName": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "primaryModel",
+                  "primaryModelName",
+                  "fallbackModel",
+                  "fallbackModelName"
+                ]
               },
               "sessionId": {
                 "type": "string"

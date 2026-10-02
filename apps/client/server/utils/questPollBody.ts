@@ -1,4 +1,10 @@
-import { redactPromptMetaForViewer, toToolPayloads, type IChatHistoryItemDocument } from '@bike4mind/common';
+import {
+  PolledFallbackInfoSchema,
+  redactPromptMetaForViewer,
+  toToolPayloads,
+  type IChatHistoryItemDocument,
+} from '@bike4mind/common';
+import type { ILogger } from '@bike4mind/observability';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
 
 /**
@@ -9,7 +15,10 @@ import { toGeneratedFiles } from '@server/utils/generatedFiles';
  * `isOwner` gates promptMeta redaction: a share grant authorizes reading the conversation, not
  * re-reading whatever the owner's tools touched (see redactPromptMetaForViewer).
  */
-export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { isOwner: boolean }) {
+export function toQuestPollBody(
+  quest: IChatHistoryItemDocument,
+  { isOwner, logger }: { isOwner: boolean; logger?: Pick<ILogger, 'warn'> }
+) {
   // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, a `.mp3` from
   // music_generation, or a `.xlsx` from excel_generation - not everything here is an image).
   // Programmatic pollers shouldn't have to know the CDN path convention, so we resolve each into
@@ -32,6 +41,20 @@ export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { 
   // them off loaded quests), so a share holder gains nothing new here.
   const toolPayloads = toToolPayloads(quest.uiSideEffects);
 
+  // safeParse: the model tolerates partial records, and one malformed fallbackInfo must not make
+  // the whole quest unreadable.
+  // Gated on `type` like errorCode: a timed-out or abandoned run is settled as an error by recovery
+  // paths that never touch fallbackInfo, and a failed turn must not claim a model answered it.
+  const parsedFallbackInfo =
+    quest.fallbackInfo && quest.type !== 'error' ? PolledFallbackInfoSchema.safeParse(quest.fallbackInfo) : undefined;
+  if (parsedFallbackInfo && !parsedFallbackInfo.success) {
+    logger?.warn('Dropping malformed fallbackInfo from quest poll body', {
+      questId: quest.id,
+      issues: parsedFallbackInfo.error.issues.map(issue => issue.path.join('.')),
+    });
+  }
+  const fallbackInfo = parsedFallbackInfo?.success ? parsedFallbackInfo.data : undefined;
+
   return {
     id: quest.id,
     status: quest.status,
@@ -50,6 +73,8 @@ export function toQuestPollBody(quest: IChatHistoryItemDocument, { isOwner }: { 
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,
+    // Which model actually answered, when the requested one failed over.
+    fallbackInfo,
     images,
     videos,
     files,

@@ -5,6 +5,7 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 // note in tools.contract.ts).
 import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
+import { FallbackInfoSchema } from './llm';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -209,6 +210,16 @@ export type ChatAck = z.infer<typeof ChatAckSchema>;
  * RUN_ABANDONED_FINISH_REASON (utils/stopReasons.ts) - plus a notice appended to
  * the reply.
  */
+// Exported so the /api/quests/[id] handler can build its response from this schema
+// instead of hand-listing the same fields, which would let the two drift apart silently.
+export const PolledFallbackInfoSchema = FallbackInfoSchema.pick({
+  primaryModel: true,
+  primaryModelName: true,
+  fallbackModel: true,
+  fallbackModelName: true,
+  reason: true,
+});
+
 export const ChatQuestPollResultSchema = z.object({
   id: z.string(),
   status: z.enum(['pending', 'stopped', 'running', 'done']).optional(),
@@ -225,6 +236,9 @@ export const ChatQuestPollResultSchema = z.object({
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
   reply: z.string().nullable().optional(),
   replies: z.array(z.string()).optional(),
+  // Present only when the requested model failed and another one answered. The answer in
+  // `reply` came from `fallbackModel`; `primaryModel` is what the caller asked for.
+  fallbackInfo: PolledFallbackInfoSchema.optional(),
 });
 
 export type ChatQuestPollResult = z.infer<typeof ChatQuestPollResultSchema>;
