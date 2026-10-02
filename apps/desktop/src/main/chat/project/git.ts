@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { basename, dirname } from 'node:path';
+import { stat } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -122,15 +123,40 @@ export interface WorktreeEntry {
   branch?: string;
 }
 
+/**
+ * True when `path` is itself a git directory (HEAD, objects/ and refs/), as <container>/.bare is.
+ * Checked on disk rather than through git: a bare repo that also carries core.bare=false in a
+ * shared config answers `rev-parse` as if it were a work tree.
+ */
+export async function isGitDirectory(path: string): Promise<boolean> {
+  try {
+    const [head, objects, refs] = await Promise.all([
+      stat(join(path, 'HEAD')),
+      stat(join(path, 'objects')),
+      stat(join(path, 'refs')),
+    ]);
+    return head.isFile() && objects.isDirectory() && refs.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checked-out worktrees only. The bare repo's own entry is dropped: it is not somewhere to run
+ * tools, and with core.bare unset in a shared config git lists it with a `branch` line, which
+ * made it win a lookup for the branch the main worktree actually holds.
+ */
 export async function listWorktrees(directory: string): Promise<WorktreeEntry[]> {
   const stdout = await git(directory, ['worktree', 'list', '--porcelain']);
-  const entries: WorktreeEntry[] = [];
-  let current: WorktreeEntry | null = null;
+  const entries: (WorktreeEntry & { bare?: boolean })[] = [];
+  let current: (WorktreeEntry & { bare?: boolean }) | null = null;
 
   for (const line of stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current) entries.push(current);
       current = { path: line.slice('worktree '.length).trim() };
+    } else if (line === 'bare' && current) {
+      current.bare = true;
     } else if (line.startsWith('branch refs/heads/') && current) {
       current.branch = line.slice('branch refs/heads/'.length).trim();
     } else if (line === '' && current) {
@@ -139,7 +165,13 @@ export async function listWorktrees(directory: string): Promise<WorktreeEntry[]>
     }
   }
   if (current) entries.push(current);
-  return entries;
+
+  const checkouts: WorktreeEntry[] = [];
+  for (const { bare, ...entry } of entries) {
+    if (bare || (await isGitDirectory(entry.path))) continue;
+    checkouts.push(entry);
+  }
+  return checkouts;
 }
 
 /**

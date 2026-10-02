@@ -40,7 +40,7 @@ import type { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { extractArtifacts, restoreArtifactMarkup } from './artifacts/extract';
 import { DESKTOP_ARTIFACT_PROMPT } from './artifacts/prompt';
 import { isValidBranchName } from './project/branchName';
-import { branchExists, listWorktrees, projectDisplayName } from './project/git';
+import { branchExists, isGitDirectory, listWorktrees, projectDisplayName } from './project/git';
 import type { DependencyInstaller } from './project/dependencyInstall';
 import { defaultUserInstructionsRoot } from './project/instructions';
 import { type MemoryStore, memoryStoreFor } from './project/memory';
@@ -639,13 +639,39 @@ export class ChatService {
   private async resolveToolScope(
     session: ChatSession
   ): Promise<{ roots: readonly string[]; workingDirectory?: string }> {
-    const project = session.project;
+    const project = await this.repairBareWorkingDirectory(session);
     if (!project) return { roots: session.mode === 'code' ? [] : await this.deps.access.list() };
 
     const granted = await this.deps.access.list();
     const owned = [project.workingDirectory, ...project.contextDirectories];
     const roots = [...owned, ...granted.filter(root => !owned.includes(root))];
     return { roots, workingDirectory: project.workingDirectory };
+  }
+
+  /**
+   * Sessions saved before worktree resolution skipped the bare repo can have the shared git dir
+   * (<container>/.bare) as their working directory, which no tool can read or run in. Re-resolve
+   * to the branch's worktree, or to the picked directory when that is not possible, and persist
+   * it so the conversation keeps working without being recreated.
+   */
+  private async repairBareWorkingDirectory(session: ChatSession): Promise<ChatProject | undefined> {
+    const project = session.project;
+    if (!project || !(await isGitDirectory(project.workingDirectory))) return project;
+
+    let workingDirectory = project.directory;
+    if (project.workspace && project.branch) {
+      try {
+        workingDirectory = (await resolveWorkspace(project.directory, project.branch)).workingDirectory;
+      } catch (err) {
+        this.deps.logger.warn(
+          `Could not repair the bare working directory: ${err instanceof Error ? err.message : 'unknown'}`
+        );
+      }
+    }
+    const repaired = { ...project, workingDirectory };
+    await this.deps.store.setProject(session.id, repaired);
+    session.project = repaired;
+    return repaired;
   }
 
   /** Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`. */

@@ -224,12 +224,6 @@ export interface ProjectBindingError {
   message: string;
   /** Refused on timing rather than validity: the same change works once the session is idle. */
   busy: boolean;
-  /**
-   * Set when nothing went wrong and nothing happened - a dismissed folder picker, above all.
-   * It still has to be said, because a click that produces no visible change is the failure
-   * this row exists to stop being silent; it just is not drawn in red.
-   */
-  info?: boolean;
 }
 
 /** Everything the chip row above the composer can change about a Code session's grounding. */
@@ -707,10 +701,7 @@ export function useConversation(
   const pickDirectory = useCallback(async () => {
     setProjectError(null);
     const directory = await window.b4m.chat.pickProjectDirectory();
-    if (!directory) {
-      setProjectError({ message: 'No folder chosen, so nothing changed.', busy: false, info: true });
-      return;
-    }
+    if (!directory) return;
     const inspected = await window.b4m.chat.inspectProject(directory);
     // The workspace choice does not travel: it named a worktree of the repository being left,
     // and carrying it across would create one in a repository the user has only just pointed at.
@@ -737,12 +728,9 @@ export function useConversation(
     if (!sessionId) return;
     setProjectError(null);
     const updated = await window.b4m.chat.addContextDirectory(sessionId);
-    // Null is a dismissed picker: the button is disabled until the session has a project, so
-    // the other way main returns null is not reachable from here.
-    if (!updated) {
-      setProjectError({ message: 'No folder chosen, so nothing was added.', busy: false, info: true });
-      return;
-    }
+    // Null is a dismissed picker, which is not an error: the button is disabled until the
+    // session has a project, so the other way main returns null is not reachable from here.
+    if (!updated) return;
     applySummary(updated);
   }, [sessionId, applySummary]);
 
