@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
@@ -79,6 +78,15 @@ describe('PUT /api/webhooks/jira/subscriptions/[id]', () => {
       autoDisabledReason: null,
       circuitBreakerOpenedAt: null,
     });
+  });
+
+  it('writes only enabled when disabling an auto-disabled subscription', async () => {
+    h.findById.mockResolvedValue({ ...tripped });
+
+    await put({ enabled: false });
+
+    expect(h.update).toHaveBeenCalledTimes(1);
+    expect(h.update.mock.calls[0][0]).toStrictEqual({ id: 'jsub-1', enabled: false });
   });
 
   it('writes only enabled when re-enabling a subscription that was not auto-disabled', async () => {

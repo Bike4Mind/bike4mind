@@ -951,21 +951,6 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     });
   });
 
-  it('writes retrievalIndexModel in the same chunk update when self-host OpenSearch is on', async () => {
-    h.selfHostOpenSearchEnabled.mockReturnValue(true);
-    h.indexChunks.mockResolvedValue(['c1']);
-
-    await dispatch(makeEvent(payload), {} as never, mockLogger);
-
-    expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
-    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
-      id: 'c1',
-      vector: [0.1, 0.2, 0.3],
-      embeddingModel: 'text-embedding-3-small',
-      retrievalIndexModel: 'text-embedding-3-small',
-    });
-  });
-
   it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
     h.selfHostOpenSearchEnabled.mockReturnValue(false);
 
@@ -992,6 +977,7 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
+    expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
     expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
       id: 'c1',
       vector: [0.1, 0.2, 0.3],

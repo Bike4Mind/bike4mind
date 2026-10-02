@@ -47,7 +47,7 @@ const logger = {
   error: vi.fn(),
   log: vi.fn(),
   updateMetadata: vi.fn(),
-} as never;
+};
 
 const makeEvent = (action: string) =>
   ({ Records: [{ body: JSON.stringify({ action, payload: { id: 'rt1', userId: 'u1' } }) }] }) as never;
@@ -62,7 +62,7 @@ describe('researchEngineQueue process - failure reset', () => {
   });
 
   it('writes exactly { id, status, statusFailedMessage, statusFailedAt } and swallows the error at the outer catch', async () => {
-    await expect(dispatch(makeEvent('process'), {} as never, logger)).resolves.toBeUndefined();
+    await expect(dispatch(makeEvent('process'), {} as never, logger as never)).resolves.toBeUndefined();
 
     expect(h.taskUpdate).toHaveBeenCalledTimes(1);
     expect(h.taskUpdate.mock.calls[0][0]).toStrictEqual({
@@ -77,7 +77,7 @@ describe('researchEngineQueue process - failure reset', () => {
   it('does not write when the task no longer exists', async () => {
     h.taskFindById.mockResolvedValue(null);
 
-    await dispatch(makeEvent('process'), {} as never, logger);
+    await dispatch(makeEvent('process'), {} as never, logger as never);
 
     expect(h.taskUpdate).not.toHaveBeenCalled();
   });

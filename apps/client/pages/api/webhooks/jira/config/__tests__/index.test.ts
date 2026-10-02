@@ -1,4 +1,3 @@
-// @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;

@@ -9,7 +9,7 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
-  putHandler: null as null | ((req: any, res: any) => unknown),
+  putHandler: null as null | ((req: unknown, res: unknown) => unknown),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -20,7 +20,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    put: (fn: any) => {
+    put: (fn: (req: unknown, res: unknown) => unknown) => {
       mockRefs.putHandler = fn;
       return chain;
     },
