@@ -16,6 +16,7 @@ import type {
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
+import type { CookieImportRequest } from '@shared/browserCookies';
 import {
   IPC_CHANNELS,
   type BrowserGoAction,
@@ -251,8 +252,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
 
   const foreground = new ForegroundCommandRegistry();
 
-  const browser = new BrowserManager((sessionId, state) =>
-    send(IPC_CHANNELS.browserPageState, { sessionId, ...state })
+  const browser = new BrowserManager(
+    (sessionId, state) => send(IPC_CHANNELS.browserPageState, { sessionId, ...state }),
+    state => send(IPC_CHANNELS.browserCookiesChanged, state)
   );
 
   const service = new ChatService({
@@ -483,6 +485,27 @@ export function registerChat(auth: AuthService): RegisteredChat {
     }
     return browser.go(request.sessionId, request.action);
   });
+
+  /**
+   * Importing the user's own Chrome cookies.
+   *
+   * Every one of these answers a click in the pane's menu. None of them is reachable from a
+   * tool, and the sites an import reads come from the request the chooser built out of the
+   * user's own Chrome profile - never from the open page, a reply, or anything the model said.
+   */
+  ipcMain.handle(IPC_CHANNELS.browserCookiesGetState, () => browser.cookies.state());
+  ipcMain.handle(IPC_CHANNELS.browserCookiesListProfiles, () => browser.cookies.profiles());
+  ipcMain.handle(IPC_CHANNELS.browserCookiesListHosts, (_event, profileDir: unknown) =>
+    browser.cookies.hosts(typeof profileDir === 'string' ? profileDir : '')
+  );
+  ipcMain.handle(IPC_CHANNELS.browserCookiesImport, (_event, request: CookieImportRequest) => {
+    const hosts = Array.isArray(request?.hosts) ? request.hosts.filter(host => typeof host === 'string') : [];
+    return browser.cookies.importSites(typeof request?.profileDir === 'string' ? request.profileDir : '', hosts);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserCookiesForget, (_event, host: unknown) =>
+    browser.cookies.forget(typeof host === 'string' ? host : '')
+  );
+  ipcMain.handle(IPC_CHANNELS.browserCookiesClear, () => browser.cookies.clear());
 
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));
   // The picker is the ONLY way a root is added. Keeping the grant behind an OS dialog the user

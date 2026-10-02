@@ -1,5 +1,12 @@
 import type { AccountCredits } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
+import type {
+  ChromeHostsResult,
+  ChromeProfilesResult,
+  CookieImportRequest,
+  CookieImportResult,
+  CookieImportState,
+} from './browserCookies';
 import type { McpMutationResult, McpServerInput, McpServersState } from './mcp';
 import type {
   AddAttachmentsResult,
@@ -158,6 +165,23 @@ export const IPC_CHANNELS = {
    * a navigation is also what settles whether there is anything to go back to.
    */
   browserPageState: 'browser:page-state',
+  /**
+   * Importing the user's own Chrome cookies, per site. Renderer -> main, every one of them.
+   *
+   * There is no tool behind any of these and no model-reachable path to one: an import happens
+   * because the user clicked it in the pane's menu and named the sites. See @shared/browserCookies.
+   */
+  browserCookiesGetState: 'browser:cookies-get-state',
+  browserCookiesListProfiles: 'browser:cookies-list-profiles',
+  /** The chooser's site list. Reads host names only - no Keychain prompt, nothing decrypted. */
+  browserCookiesListHosts: 'browser:cookies-list-hosts',
+  /** The one call that prompts the Keychain and writes to the jar. */
+  browserCookiesImport: 'browser:cookies-import',
+  browserCookiesForget: 'browser:cookies-forget',
+  /** Empties the partition, not only the imported rows. See CookieImporter.clear. */
+  browserCookiesClear: 'browser:cookies-clear',
+  /** main -> renderer push; what the pane's standing indicator draws. */
+  browserCookiesChanged: 'browser:cookies-changed',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
 } as const;
@@ -438,6 +462,24 @@ export interface DesktopApi {
     go(request: BrowserGoRequest): Promise<BrowserPaneState>;
     /** Subscribe to page state; returns the unsubscribe. */
     onPageState(listener: (event: BrowserPageStateEvent) => void): () => void;
+    /**
+     * The user's own Chrome cookies, for sites they name.
+     *
+     * Reached from the pane's menu and from nowhere else. Nothing here is a tool, and nothing
+     * that crosses it carries a cookie value or a cookie name - see @shared/browserCookies.
+     */
+    cookies: {
+      getState(): Promise<CookieImportState>;
+      listProfiles(): Promise<ChromeProfilesResult>;
+      /** The sites one profile has cookies for. Decrypts nothing; the Keychain is untouched. */
+      listHosts(profileDir: string): Promise<ChromeHostsResult>;
+      /** Prompts the Keychain. Only `hosts` are read, and only they go into the jar. */
+      import(request: CookieImportRequest): Promise<CookieImportResult>;
+      forget(host: string): Promise<CookieImportState>;
+      /** Signs the browser out of everything, imported or not. */
+      clear(): Promise<CookieImportState>;
+      onChanged(listener: (state: CookieImportState) => void): () => void;
+    };
   };
   files: {
     /**

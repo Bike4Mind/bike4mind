@@ -3,11 +3,14 @@ import Box from '@mui/joy/Box';
 import IconButton from '@mui/joy/IconButton';
 import Input from '@mui/joy/Input';
 import LinearProgress from '@mui/joy/LinearProgress';
+import Link from '@mui/joy/Link';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import type { CookieImportState } from '@shared/browserCookies';
 import { resolveAddress } from '@shared/browserUrl';
 import type { BrowserGoAction, BrowserPaneState } from '@shared/ipc';
-import { ArrowLeftIcon, ArrowRightIcon, ReloadIcon } from './icons';
+import { BrowserCookiesMenu } from './BrowserCookiesMenu';
+import { ArrowLeftIcon, ArrowRightIcon, ReloadIcon, WarningIcon } from './icons';
 
 /**
  * The url bar above the agent's browser.
@@ -19,15 +22,24 @@ import { ArrowLeftIcon, ArrowRightIcon, ReloadIcon } from './icons';
  * It also holds the one thing the pane cannot show: why nothing arrived. A failed load usually
  * leaves the PREVIOUS page on screen, so an error only in the hole would be invisible exactly
  * when it is needed.
+ *
+ * And the standing cookie indicator. It is a row rather than a toast because what it reports is
+ * a STATE, not an event: for as long as the agent's browser is carrying the user's own logins,
+ * that has to be readable at a glance, including by someone who was not watching when it
+ * started. It sits above the page for the same reason everything else here does.
  */
 export function BrowserNavbar({
   state,
+  cookies,
   onNavigate,
   onGo,
+  onCookieState,
 }: {
   state: BrowserPaneState;
+  cookies: CookieImportState;
   onNavigate: (url: string) => void;
   onGo: (action: BrowserGoAction) => void;
+  onCookieState: (state: CookieImportState) => void;
 }) {
   const [draft, setDraft] = useState(state.url);
   const [typedError, setTypedError] = useState('');
@@ -131,7 +143,38 @@ export function BrowserNavbar({
           // On the field itself rather than on Joy's wrapper, so what finds it has its value.
           slotProps={{ input: { 'aria-label': 'Address', 'data-testid': 'chat-browser-url' } }}
         />
+        <BrowserCookiesMenu state={cookies} onState={onCookieState} />
       </Stack>
+      {cookies.sites.length > 0 && (
+        <Stack
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
+          sx={{
+            mt: 0.75,
+            px: 0.75,
+            py: 0.5,
+            borderRadius: 'sm',
+            bgcolor: 'warning.softBg',
+            color: 'warning.plainColor',
+          }}
+          data-testid="chat-browser-cookies-indicator"
+        >
+          <WarningIcon />
+          <Typography level="body-xs" textColor="inherit" sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+            Signed in as you on {cookies.sites.map(site => site.host).join(', ')}
+          </Typography>
+          <Link
+            level="body-xs"
+            component="button"
+            color="warning"
+            onClick={() => void window.b4m.browser.cookies.clear().then(onCookieState)}
+            data-testid="chat-browser-cookies-indicator-clear"
+          >
+            Clear
+          </Link>
+        </Stack>
+      )}
       {error && (
         <Typography
           level="body-xs"
