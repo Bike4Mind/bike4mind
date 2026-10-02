@@ -74,6 +74,18 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
    */
   private nativeToolStream = new KimiNativeToolStream();
 
+  /**
+   * The round in flight: reasoning and prose the model produced alongside its tool
+   * call. base.ts only forwards this text to the client, so without keeping it here
+   * the replayed tool-call turn has `content: null` and the model never sees its own
+   * monologue on the next call. Cleared by takeReasoningBlocks; reset in getPayload.
+   */
+  private roundReasoning = '';
+  private roundProse = '';
+
+  /** Tool-call turns that already carry the round text, so parallel calls do not repeat it. */
+  private replayedRounds = new WeakSet<object>();
+
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {
@@ -202,6 +214,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     this.isInThinkingBlock = false;
     this.reasoningEscaper = createThinkMarkerEscaper();
     this.nativeToolStream = new KimiNativeToolStream();
+    this.roundReasoning = '';
+    this.roundProse = '';
 
     return {
       modelId: model,
@@ -275,6 +289,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // as the whole answer and never run the tool.
       const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
       if (toolCalls.length > 0) {
+        this.roundReasoning += payload.reasoning_content ?? '';
+        this.roundProse += payload.content ?? '';
         for (const [toolIndex, call] of toolCalls.entries()) {
           const idx = call.index ?? toolIndex;
           if (opts.streaming) {
@@ -342,6 +358,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const escapedReasoning = this.reasoningEscaper.push(reasoning);
           const chunkText = this.isInThinkingBlock ? escapedReasoning : `<think>${escapedReasoning}`;
           this.isInThinkingBlock = true;
+          this.roundReasoning += reasoning;
           choices.push({ status: ChoiceStatus.STREAM, index, chunkText, ...usageForIndex });
           continue;
         }
@@ -355,6 +372,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
           const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
+          this.roundReasoning += think;
           // Pushed ahead of the calls: they share index 0, and once base.ts has seen a tool
           // name at an index it appends every later non-TOOL_USE chunkText there to its args.
           choices.push({
@@ -381,6 +399,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         }
 
         // Prose, or the close of an open `reasoning_content` block.
+        this.roundProse += content;
         if (this.isInThinkingBlock && content) {
           this.isInThinkingBlock = false;
           choices.push({
@@ -414,6 +433,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
         const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
+        this.roundReasoning += think;
         let usageAttached = false;
         if (think) {
           choices.push({
@@ -440,6 +460,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         continue;
       }
 
+      this.roundReasoning += reasoning;
+      this.roundProse += content;
       const chunkText = (reasoning ? `<think>${reasoning}</think>` : '') + convertTags(content);
       choices.push({ status: ChoiceStatus.END, statusEndReason: endReason, index, chunkText, ...usageForIndex });
     }
@@ -454,13 +476,36 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
   }
 
   /**
+   * Hands the round's text to the tool loop as one replay block, in the shape the model
+   * emitted it (reasoning inside `<reasoning>`, then prose), and clears the buffer.
+   */
+  protected override takeReasoningBlocks(): unknown[] {
+    const text = (this.roundReasoning ? `<reasoning>${this.roundReasoning}</reasoning>` : '') + this.roundProse;
+    this.roundReasoning = '';
+    this.roundProse = '';
+    return text ? [{ text }] : [];
+  }
+
+  /** The round text for the first tool-call turn of a round; null for the rest. */
+  private claimRoundText(blocks?: unknown[]): string | null {
+    if (!blocks?.length || this.replayedRounds.has(blocks)) return null;
+    this.replayedRounds.add(blocks);
+    return (blocks[0] as { text?: string }).text ?? null;
+  }
+
+  /**
    * OpenAI-shaped tool history: an assistant turn carrying `tool_calls`, then a
    * `role: 'tool'` message keyed by `tool_call_id`. `name` is included because
    * Moonshot's tool-call guide shows it on the result message.
    */
-  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string): unknown {
+  pushToolMessages(
+    messages: IMessage[],
+    tool: IChoiceEndToolUse['tool'],
+    result: string,
+    thinkingBlocks?: unknown[]
+  ): unknown {
     messages.push({
-      content: null,
+      content: this.claimRoundText(thinkingBlocks),
       role: 'assistant',
       tool_calls: [
         {
