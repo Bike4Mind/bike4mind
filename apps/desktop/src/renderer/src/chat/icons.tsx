@@ -281,3 +281,29 @@ export function GlobeIcon() {
     </Glyph>
   );
 }
+
+/** The browser pane's url bar: back, forward, and a reload that is the same arc both ways. */
+export function ArrowLeftIcon() {
+  return (
+    <Glyph>
+      <path d="M12.75 8h-9M7.85 12.1 3.75 8l4.1-4.1" />
+    </Glyph>
+  );
+}
+
+export function ArrowRightIcon() {
+  return (
+    <Glyph>
+      <path d="M3.25 8h9M8.15 3.9 12.25 8l-4.1 4.1" />
+    </Glyph>
+  );
+}
+
+export function ReloadIcon() {
+  return (
+    <Glyph>
+      <path d="M13.25 8a5.25 5.25 0 1 1-1.9-4.05" />
+      <path d="M13.4 2.4v3.1h-3.1" />
+    </Glyph>
+  );
+}

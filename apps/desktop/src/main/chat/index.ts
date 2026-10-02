@@ -16,13 +16,21 @@ import type {
   SendMessageRequest,
   UpdateProjectRequest,
 } from '@shared/chat';
-import { IPC_CHANNELS, type BrowserPaneBounds, type BrowserPaneRequest, type BrowserPaneState } from '@shared/ipc';
+import {
+  IPC_CHANNELS,
+  type BrowserGoAction,
+  type BrowserGoRequest,
+  type BrowserNavigateRequest,
+  type BrowserPaneBounds,
+  type BrowserPaneRequest,
+  type BrowserPaneState,
+} from '@shared/ipc';
 import type { McpMutationResult, McpServerInput, McpServersState } from '@shared/mcp';
 import type { AuthService } from '../auth';
 import { createMainLogger } from '../logger';
 import { ApprovalModePreference } from './ApprovalModePreference';
 import { AttachmentStore } from './AttachmentStore';
-import { BrowserManager } from './browser/BrowserManager';
+import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
@@ -243,7 +251,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
 
   const foreground = new ForegroundCommandRegistry();
 
-  const browser = new BrowserManager((sessionId, url) => send(IPC_CHANNELS.browserPageUrl, { sessionId, url }));
+  const browser = new BrowserManager((sessionId, state) =>
+    send(IPC_CHANNELS.browserPageState, { sessionId, ...state })
+  );
 
   const service = new ChatService({
     store,
@@ -454,8 +464,24 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.browserSetPane, (event, request: BrowserPaneRequest): BrowserPaneState => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const sessionId = typeof request?.sessionId === 'string' ? request.sessionId : null;
-    if (!window) return { url: '' };
+    if (!window) return NO_PAGE;
     return browser.setPane(window, sessionId, paneBounds(request?.bounds));
+  });
+
+  // The url bar. Its requests name a conversation rather than being implied by the open pane,
+  // for the same reason setPane does: a second app window has a pane of its own.
+  ipcMain.handle(IPC_CHANNELS.browserNavigate, (_event, request: BrowserNavigateRequest) => {
+    if (typeof request?.sessionId !== 'string' || typeof request?.url !== 'string') {
+      throw new Error('A conversation and a url are required.');
+    }
+    return browser.navigate(request.sessionId, request.url);
+  });
+  ipcMain.handle(IPC_CHANNELS.browserGo, (_event, request: BrowserGoRequest): BrowserPaneState => {
+    const actions: readonly BrowserGoAction[] = ['back', 'forward', 'reload'];
+    if (typeof request?.sessionId !== 'string' || !actions.includes(request?.action)) {
+      throw new Error('A conversation and one of back, forward or reload are required.');
+    }
+    return browser.go(request.sessionId, request.action);
   });
 
   ipcMain.handle(IPC_CHANNELS.toolsGetAccess, async () => ({ roots: await access.list() }));

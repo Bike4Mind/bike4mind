@@ -7,7 +7,8 @@ import {
   type WebContents,
 } from 'electron';
 import type { ChatMedia } from '@shared/chat';
-import type { BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
+import { normalizeUrl } from '@shared/browserUrl';
+import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
 import { markAgentBrowserWindow } from '../../windows';
 import type { BrowserContext, BrowserPage, BrowserProvider } from '../tools/types';
 import { CLICK_REF, FILL_REF, pageCall, SNAPSHOT_PAGE, type ElementOutcome, type SnapshotResult } from './pageScripts';
@@ -66,13 +67,14 @@ class ElectronPage implements BrowserPage {
   private parent: BaseWindow;
   private readonly events: string[] = [];
   private lastStatus: number | undefined;
+  private lastError = '';
   inflight = 0;
   lastNetworkAt = 0;
 
   constructor(
     partition: Session,
     private readonly onClosed: () => void,
-    private readonly onNavigated: () => void
+    private readonly onChanged: () => void
   ) {
     this.host = new BrowserWindow({
       show: false,
@@ -102,29 +104,48 @@ class ElectronPage implements BrowserPage {
     });
     contents.on('did-navigate', (_event, url, status) => {
       this.lastStatus = status;
+      this.lastError = '';
       this.record(`navigated to ${url}${status ? ` (HTTP ${status})` : ''}`);
-      this.onNavigated();
+      this.onChanged();
     });
     // A route change inside a SPA never fires did-navigate, and the pane still has to learn
     // that this page is now somewhere.
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
-      if (isMainFrame) this.onNavigated();
+      if (isMainFrame) this.onChanged();
     });
+    // The url bar's spinner and its enabled state, which nothing else would tell it about: a
+    // reload moves neither the url nor the history.
+    contents.on('did-start-loading', () => {
+      this.lastError = '';
+      this.onChanged();
+    });
+    contents.on('did-stop-loading', () => this.onChanged());
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
       // -3 is ERR_ABORTED: a redirect or a client-side route change replacing the load, not a failure.
-      if (isMainFrame && code !== -3) this.record(`failed to load ${url}: ${description}`);
+      if (!isMainFrame || code === -3) return;
+      this.record(`failed to load ${url}: ${description}`);
+      this.fail(`${url} could not be loaded: ${description}`);
     });
     contents.on('console-message', (...args: unknown[]) => {
       const entry = consoleEntry(args as ConsoleArgs);
       if (!entry || (entry.level !== 'error' && entry.level !== 'warning')) return;
       this.record(`console ${entry.level}: ${entry.message.slice(0, 500)}${entry.source ? ` (${entry.source})` : ''}`);
     });
-    contents.on('render-process-gone', (_event, details) => this.record(`the page crashed (${details.reason})`));
+    contents.on('render-process-gone', (_event, details) => {
+      this.record(`the page crashed (${details.reason})`);
+      this.fail(`The page crashed (${details.reason}).`);
+    });
     contents.on('destroyed', () => this.onClosed());
   }
 
   get contentsId(): number {
     return this.view.webContents.id;
+  }
+
+  /** Say why nothing arrived, and tell the pane: a silent failure is a blank pane with no reason. */
+  fail(reason: string): void {
+    this.lastError = reason;
+    this.onChanged();
   }
 
   record(line: string): void {
@@ -163,6 +184,29 @@ class ElectronPage implements BrowserPage {
 
   currentUrl(): string {
     return this.view.webContents.isDestroyed() ? '' : this.view.webContents.getURL();
+  }
+
+  /** What the pane's url bar draws. A destroyed page has nothing to say and no controls to offer. */
+  state(): BrowserPaneState {
+    const contents = this.view.webContents;
+    if (contents.isDestroyed()) {
+      return { url: '', canGoBack: false, canGoForward: false, loading: false, error: this.lastError };
+    }
+    return {
+      url: hasContent(contents.getURL()) ? contents.getURL() : '',
+      canGoBack: contents.navigationHistory.canGoBack(),
+      canGoForward: contents.navigationHistory.canGoForward(),
+      loading: contents.isLoading(),
+      error: this.lastError,
+    };
+  }
+
+  /** Back, forward or reload, for the url bar. Doing neither of the first two is not an error. */
+  go(action: BrowserGoAction): void {
+    const history = this.contents.navigationHistory;
+    if (action === 'reload') this.contents.reload();
+    else if (action === 'back') history.goBack();
+    else history.goForward();
   }
 
   async navigate(url: string): Promise<{ url: string; title: string; status?: number }> {
@@ -268,6 +312,15 @@ class ElectronPage implements BrowserPage {
   }
 }
 
+/** What the url bar draws for a conversation that has no browser, or no window to put one in. */
+export const NO_PAGE: BrowserPaneState = {
+  url: '',
+  canGoBack: false,
+  canGoForward: false,
+  loading: false,
+  error: '',
+};
+
 /**
  * The agent's browser: one page per conversation, created on first use and closed with the
  * conversation or the app. Main-process only; tools reach it through {@link BrowserContext},
@@ -285,7 +338,7 @@ export class BrowserManager implements BrowserProvider {
   private pane: { window: BrowserWindow; sessionId: string; bounds: BrowserPaneBounds } | undefined;
   private readonly watchedWindows = new WeakSet<BrowserWindow>();
 
-  constructor(private readonly onPageUrl: (sessionId: string, url: string) => void = () => undefined) {}
+  constructor(private readonly onPageState: (sessionId: string, state: BrowserPaneState) => void = () => undefined) {}
 
   context(
     sessionId: string,
@@ -308,17 +361,46 @@ export class BrowserManager implements BrowserProvider {
   setPane(window: BrowserWindow, sessionId: string | null, bounds: BrowserPaneBounds | null): BrowserPaneState {
     if (!sessionId) {
       this.hidePane();
-      return { url: '' };
+      return NO_PAGE;
     }
     if (!bounds) {
       this.hidePane();
-      return { url: this.pages.get(sessionId)?.currentUrl() ?? '' };
+      return this.pages.get(sessionId)?.state() ?? NO_PAGE;
     }
     const page = this.pageFor(sessionId);
     this.pane = { window, sessionId, bounds };
     this.watch(window);
     this.apply();
-    return { url: page.currentUrl() };
+    return page.state();
+  }
+
+  /**
+   * Open what the user typed in the url bar.
+   *
+   * Unlike the agent's `browser_navigate` there is no approval in front of this: the person
+   * typing it is the person the approvals protect. The address is still resolved here rather
+   * than trusted from the renderer, because the http/https rule is what keeps `file:` out of a
+   * browser that bypasses every granted-roots check - and a failed load comes back as state the
+   * bar can draw, not as a rejection it would have to translate.
+   */
+  async navigate(sessionId: string, url: string): Promise<BrowserPaneState> {
+    const page = this.pageFor(sessionId);
+    const resolved = normalizeUrl(url);
+    try {
+      await page.navigate(resolved);
+    } catch (err) {
+      page.fail(err instanceof Error ? err.message : String(err));
+    }
+    this.apply();
+    return page.state();
+  }
+
+  /** Back, forward or reload. The resulting navigation arrives on its own as a state push. */
+  go(sessionId: string, action: BrowserGoAction): BrowserPaneState {
+    const page = this.pages.get(sessionId);
+    if (!page) return NO_PAGE;
+    page.go(action);
+    return page.state();
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -374,7 +456,7 @@ export class BrowserManager implements BrowserProvider {
         if (this.pane?.sessionId === sessionId) this.pane = undefined;
       },
       () => {
-        this.onPageUrl(sessionId, page.currentUrl());
+        this.onPageState(sessionId, page.state());
         this.apply();
       }
     );

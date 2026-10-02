@@ -14,7 +14,14 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
-import { IPC_CHANNELS, type BrowserPageUrlEvent, type BrowserPaneRequest, type DesktopApi } from '@shared/ipc';
+import {
+  IPC_CHANNELS,
+  type BrowserGoRequest,
+  type BrowserNavigateRequest,
+  type BrowserPageStateEvent,
+  type BrowserPaneRequest,
+  type DesktopApi,
+} from '@shared/ipc';
 import type { UpdateState } from '@shared/update';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
@@ -133,10 +140,12 @@ const api: DesktopApi = {
   },
   browser: {
     setPane: (request: BrowserPaneRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserSetPane, request),
-    onPageUrl: listener => {
-      const handler = (_event: unknown, event: BrowserPageUrlEvent) => listener(event);
-      ipcRenderer.on(IPC_CHANNELS.browserPageUrl, handler);
-      return () => ipcRenderer.removeListener(IPC_CHANNELS.browserPageUrl, handler);
+    navigate: (request: BrowserNavigateRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserNavigate, request),
+    go: (request: BrowserGoRequest) => ipcRenderer.invoke(IPC_CHANNELS.browserGo, request),
+    onPageState: listener => {
+      const handler = (_event: unknown, event: BrowserPageStateEvent) => listener(event);
+      ipcRenderer.on(IPC_CHANNELS.browserPageState, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.browserPageState, handler);
     },
   },
   files: {

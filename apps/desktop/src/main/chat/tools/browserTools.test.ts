@@ -110,6 +110,24 @@ describe('browser tools', () => {
     });
   });
 
+  /**
+   * The url bar means the user can sign in to anything in this cookie jar, so a script on a real
+   * site is asked about in EVERY mode, and under a key of its own: "always allow clicking here"
+   * must never also mean "and run whatever JavaScript you like here".
+   */
+  it('gates a script harder than a click, and in every mode', async () => {
+    const local = contextFor(fakePage('http://localhost:3080/app'));
+    expect(await browserEvaluate.needsApproval!({ expression: '1' }, local.context)).toBe(false);
+
+    const remote = contextFor(fakePage('https://app.example.com/inbox'));
+    expect(await browserEvaluate.needsApproval!({ expression: '1' }, remote.context)).toBe(true);
+    expect(await browserEvaluate.approval!({ expression: '1' }, remote.context)).toMatchObject({
+      key: 'browser-script:https://app.example.com',
+      askInAuto: true,
+      askInFull: true,
+    });
+  });
+
   it('returns the page after a click, accepting a bracketed ref', async () => {
     const page = fakePage('http://localhost:3080/app');
     const result = await browserClick.run({ ref: '[1]' }, contextFor(page).context);

@@ -10,6 +10,7 @@ import { MediaStore } from './media/MediaStore';
 import type { ModelCatalog } from './ModelCatalog';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
+import { ApprovalGate } from './tools/ApprovalGate';
 import type { BrowserPage, BrowserProvider } from './tools/types';
 
 function frame(payload: unknown): string {
@@ -26,9 +27,13 @@ describe('ChatService agent browser', () => {
   let root: string;
   let closed: string[];
   let models: ChatModelOption[];
+  let store: SessionStore;
+  let approvals: ApprovalGate;
+  /** Where the page is right now, which is what the script gate keys on. */
+  let pageUrl: string;
 
   const page: BrowserPage = {
-    currentUrl: () => 'http://localhost:3080/app',
+    currentUrl: () => pageUrl,
     navigate: async url => ({ url, title: 'App' }),
     back: async () => undefined,
     snapshot: async () => ({
@@ -41,7 +46,7 @@ describe('ChatService agent browser', () => {
     fill: async () => 'filled',
     press: async () => undefined,
     screenshot: async () => Buffer.from([137, 80, 78, 71]),
-    evaluate: async () => null,
+    evaluate: async () => ({ ok: true }),
     drainEvents: () => [],
     settle: async () => undefined,
     close: async () => undefined,
@@ -49,6 +54,8 @@ describe('ChatService agent browser', () => {
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-browser-')));
+    pageUrl = 'http://localhost:3080/app';
+    approvals = new ApprovalGate();
     events = [];
     streams = [];
     closed = [];
@@ -64,8 +71,10 @@ describe('ChatService agent browser', () => {
         closed.push(sessionId);
       },
     };
+    store = new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-browser-sessions-')), 'test-model');
     service = new ChatService({
-      store: new SessionStore(await mkdtemp(join(tmpdir(), 'b4m-browser-sessions-')), 'test-model'),
+      store,
+      approvals,
       access: { list: async () => [root] } as unknown as AccessStore,
       media: new MediaStore(await mkdtemp(join(tmpdir(), 'b4m-browser-media-'))),
       models: { list: async () => ({ models }), cached: () => [] } as unknown as ModelCatalog,
@@ -156,6 +165,52 @@ describe('ChatService agent browser', () => {
     const id = await codeSession();
     const messages = await screenshotRound(id);
     expect(JSON.stringify(messages)).not.toContain('"type":"image"');
+  });
+
+  /**
+   * Run one browser_evaluate in 'full' access and report whether the user was asked.
+   *
+   * 'full' is the mode that matters here: it is the one that otherwise runs everything, and a
+   * script on a signed-in site is exactly the risk a filesystem-shaped mode never spoke to.
+   */
+  async function evaluateInFullAccess(sessionId: string): Promise<boolean> {
+    await store.setApprovalMode(sessionId, 'full');
+    await service.send(sessionId, 'read the page');
+    await vi.waitUntil(() => streams.length === 1, { timeout: 3000, interval: 5 });
+    streams[0].write(
+      frame({
+        type: 'tool_use',
+        tools: [
+          { id: 'eval_1', name: 'browser_evaluate', arguments: JSON.stringify({ expression: 'document.title' }) },
+        ],
+      })
+    );
+    streams[0].write(frame('[DONE]'));
+    const asked = await vi
+      .waitUntil(() => events.find(event => event.type === 'tool-start' && event.call.status === 'awaiting-approval'), {
+        timeout: 1000,
+        interval: 5,
+      })
+      .catch(() => undefined);
+    if (asked && asked.type === 'tool-start' && asked.call.approvalId) {
+      approvals.resolve(asked.call.approvalId, { decision: 'once' });
+    }
+    await vi.waitUntil(() => post.mock.calls.length === 2, { timeout: 3000, interval: 5 });
+    streams[1].write(frame({ type: 'content', text: 'done' }));
+    streams[1].write(frame('[DONE]'));
+    await vi.waitUntil(() => events.find(event => event.type === 'done'), { timeout: 3000, interval: 5 });
+    return !!asked;
+  }
+
+  it('runs a script on the dev server without asking, even though it runs code', async () => {
+    expect(await evaluateInFullAccess(await codeSession())).toBe(false);
+  });
+
+  // The url bar is what makes this necessary: the user can sign in to anything in this cookie
+  // jar now, and a script in that page reads the cookies and answers to the model's provider.
+  it('asks before running a script on a site that is not local, in full access', async () => {
+    pageUrl = 'https://app.example.com/inbox';
+    expect(await evaluateInFullAccess(await codeSession())).toBe(true);
   });
 
   it('closes the browser with its conversation', async () => {

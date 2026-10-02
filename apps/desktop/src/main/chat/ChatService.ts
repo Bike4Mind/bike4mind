@@ -2687,10 +2687,12 @@ export class ChatService {
    * The mode is read from the store by the caller rather than from the session captured when
    * the turn started, so a user who lowers it mid-reply is obeyed by the very next tool call.
    *
-   * The two exclusions hold in every mode, 'full' included. An irreversible call is asked
-   * because there is nothing to undo it with, and a credit-spending call is asked because cost
-   * is a different axis from filesystem risk: deciding the agent may edit files and run the
-   * shell says nothing about whether the user wants to pay for an image.
+   * Three exclusions hold in every mode, 'full' included. An irreversible call is asked because
+   * there is nothing to undo it with; a credit-spending call is asked because cost is a
+   * different axis from filesystem risk; and an `askInFull` call is asked because its risk is
+   * someone else's - a signed-in site's. Deciding the agent may edit files and run the shell
+   * says nothing about whether the user wants to pay for an image, or wants a script run with
+   * their cookies on a site they happen to have open.
    *
    * 'auto' follows opencode: everything runs except a call that names a reason to stop - a
    * repeat of the last two calls, a read of a `.env` file, a script that does not parse, or a
@@ -2703,7 +2705,7 @@ export class ChatService {
     prompt: ApprovalPrompt,
     stuck: boolean
   ): boolean {
-    if (prompt.irreversible || spendsCredits(call.name)) return false;
+    if (prompt.irreversible || spendsCredits(call.name) || prompt.askInFull) return false;
     if (mode === 'ask') return false;
     if (mode === 'full') return true;
     if (stuck || prompt.askInAuto) return false;

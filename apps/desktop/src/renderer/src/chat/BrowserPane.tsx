@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Box from '@mui/joy/Box';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import type { BrowserPaneBounds } from '@shared/ipc';
+import type { BrowserGoAction, BrowserPaneBounds, BrowserPaneState } from '@shared/ipc';
+import { BrowserNavbar } from './BrowserNavbar';
 import {
   BROWSER_PANE_MAX_FRACTION,
   BROWSER_PANE_WIDTH,
@@ -28,26 +29,60 @@ const SETTLE_FRAMES = 12;
 /** Long enough for any layout transition in the app to have finished. See `settle` below. */
 const SETTLE_MS = 400;
 
+/** A conversation with no browser yet, and what the bar draws while one is being asked for. */
+const NO_PAGE: BrowserPaneState = { url: '', canGoBack: false, canGoForward: false, loading: false, error: '' };
+
 /**
  * The agent's browser, as a pane on the right of the window.
  *
- * What this component draws is a HOLE, not a web page: the page is a native view the main
- * process parents to the window and positions in front of the renderer, so nothing here can
- * contain it, style it or paint over it. This element's only jobs are to take up the right
- * amount of room, to tell main where that room ended up, and to say so when something has to
- * be drawn on top - see agentBrowser.ts for why that last one is not optional.
+ * What this component draws is a navbar and a HOLE, not a web page: the page is a native view
+ * the main process parents to the window and positions in front of the renderer, so nothing
+ * here can contain it, style it or paint over it. This element's only jobs are to take up the
+ * right amount of room, to tell main where that room ended up, and to say so when something has
+ * to be drawn on top - see agentBrowser.ts for why that last one is not optional.
+ *
+ * The hole is the INNER element, below the navbar, and that is load-bearing rather than
+ * cosmetic: the page covers every pixel of the rectangle reported from here, so a bar measured
+ * as part of it would be a bar nobody can see or click.
  *
  * The empty state underneath is visible exactly when there is no page to cover it.
  */
 export function BrowserPane({ sessionId, suspended }: { sessionId: string | null; suspended: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null);
-  const [url, setUrl] = useState('');
+  const [state, setState] = useState<BrowserPaneState>(NO_PAGE);
 
   const report = useCallback(
     (bounds: BrowserPaneBounds | null) => {
-      void window.b4m.browser.setPane({ sessionId, bounds }).then(state => setUrl(state.url));
+      void window.b4m.browser.setPane({ sessionId, bounds }).then(setState);
     },
     [sessionId]
+  );
+
+  // A conversation switch must not leave the previous one's address in the bar for as long as
+  // the first report of the new one is in flight.
+  useEffect(() => setState(NO_PAGE), [sessionId]);
+
+  /** A rejection from main - a scheme refused, a page already gone - is the bar's error to draw. */
+  const drive = useCallback((work: Promise<BrowserPaneState>) => {
+    void work
+      .then(setState)
+      .catch((err: unknown) =>
+        setState(current => ({ ...current, loading: false, error: err instanceof Error ? err.message : String(err) }))
+      );
+  }, []);
+
+  const navigate = useCallback(
+    (url: string) => {
+      if (sessionId) drive(window.b4m.browser.navigate({ sessionId, url }));
+    },
+    [sessionId, drive]
+  );
+
+  const go = useCallback(
+    (action: BrowserGoAction) => {
+      if (sessionId) drive(window.b4m.browser.go({ sessionId, action }));
+    },
+    [sessionId, drive]
   );
 
   /** Where the page may draw, or null for "not right now" - see agentBrowser.ts for the cases. */
@@ -103,8 +138,10 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
     overlays.observe(document.body, { childList: true, subtree: false });
     window.addEventListener('resize', settle);
 
-    const unsubscribe = window.b4m.browser.onPageUrl(event => {
-      if (event.sessionId === sessionId) setUrl(event.url);
+    const unsubscribe = window.b4m.browser.onPageState(event => {
+      if (event.sessionId !== sessionId) return;
+      const { sessionId: _ignored, ...next } = event;
+      setState(next);
     });
 
     return () => {
@@ -122,29 +159,32 @@ export function BrowserPane({ sessionId, suspended }: { sessionId: string | null
 
   return (
     <Box
-      ref={ref}
       sx={{
         width: `min(${BROWSER_PANE_WIDTH}px, ${BROWSER_PANE_MAX_FRACTION})`,
         flexShrink: 0,
         height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
         borderLeft: '1px solid',
         borderColor: 'divider',
         bgcolor: 'background.level1',
-        display: 'grid',
-        placeItems: 'center',
       }}
       data-testid="chat-browser-pane"
     >
-      {!url && (
-        <Stack spacing={0.5} alignItems="center" sx={{ px: 3, textAlign: 'center' }}>
-          <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-browser-pane-empty">
-            This conversation&apos;s browser has not opened a page yet.
-          </Typography>
-          <Typography level="body-xs" textColor="text.tertiary">
-            Ask the agent to open one, and it appears here.
-          </Typography>
-        </Stack>
-      )}
+      <BrowserNavbar state={state} onNavigate={navigate} onGo={go} />
+      <Box ref={ref} sx={{ flex: 1, minHeight: 0, display: 'grid', placeItems: 'center' }}>
+        {!state.url && (
+          <Stack spacing={0.5} alignItems="center" sx={{ px: 3, textAlign: 'center' }}>
+            <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-browser-pane-empty">
+              This conversation&apos;s browser has not opened a page yet.
+            </Typography>
+            <Typography level="body-xs" textColor="text.tertiary">
+              Type an address above, or ask the agent to open one.
+            </Typography>
+          </Stack>
+        )}
+      </Box>
     </Box>
   );
 }

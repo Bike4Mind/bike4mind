@@ -350,6 +350,16 @@ export interface ApprovalPrompt {
    */
   askInAuto?: true;
   /**
+   * Asked in every mode, 'full' included, and so stronger than `askInAuto` - a call 'full' must
+   * stop for is not one 'auto' may run. For a call whose risk is NOT the filesystem risk that
+   * 'full' is a decision about: a script in a page the user has signed in to reads that site's
+   * cookies and calls its API as them, and what it returns goes to the model's provider.
+   *
+   * Unlike `irreversible` this still allows an 'always': the consent is specific and the user
+   * gave it, it just cannot be inherited from a mode they set for something else.
+   */
+  askInFull?: true;
+  /**
    * For a shell command: what "always allow" remembers. Each sub-command of the script is
    * covered by a prefix pattern, and each directory outside the project by the directory.
    */

@@ -141,8 +141,23 @@ export const IPC_CHANNELS = {
    * hole it has left for it actually is.
    */
   browserSetPane: 'browser:set-pane',
-  /** main -> renderer push; one conversation's page went somewhere. */
-  browserPageUrl: 'browser:page-url',
+  /**
+   * Open what the user typed in the pane's url bar. Renderer -> main.
+   *
+   * The USER's navigation, not the agent's, so it goes nowhere near the tool approval gate -
+   * but main still resolves the address itself, because the http/https rule is not the
+   * renderer's to enforce. See @shared/browserUrl.
+   */
+  browserNavigate: 'browser:navigate',
+  /** Back, forward or reload from the pane's url bar. Renderer -> main. */
+  browserGo: 'browser:go',
+  /**
+   * main -> renderer push; one conversation's page moved, started loading, or failed to.
+   *
+   * Everything the url bar draws arrives on this one channel, because it all changes together:
+   * a navigation is also what settles whether there is anything to go back to.
+   */
+  browserPageState: 'browser:page-state',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
 } as const;
@@ -179,14 +194,37 @@ export interface BrowserPaneRequest {
   bounds: BrowserPaneBounds | null;
 }
 
-/** Where the named conversation's page is. Empty when it has none, or has been nowhere. */
+/**
+ * Everything the pane's url bar draws. The empty url is a conversation whose browser has no
+ * page, or has been nowhere.
+ */
 export interface BrowserPaneState {
+  url: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  loading: boolean;
+  /**
+   * Why the last load did not arrive, or '' when it did. A failed load usually leaves the
+   * PREVIOUS page on screen, so this is the only thing that says so - which is the whole point
+   * of carrying it rather than letting the pane show a page that is quietly out of date.
+   */
+  error: string;
+}
+
+export type BrowserPageStateEvent = BrowserPaneState & { sessionId: string };
+
+/** Which conversation's browser to send to `url`. The url is resolved again in main. */
+export interface BrowserNavigateRequest {
+  sessionId: string;
   url: string;
 }
 
-export interface BrowserPageUrlEvent {
+/** The history controls, which take no url. */
+export type BrowserGoAction = 'back' | 'forward' | 'reload';
+
+export interface BrowserGoRequest {
   sessionId: string;
-  url: string;
+  action: BrowserGoAction;
 }
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
@@ -388,15 +426,18 @@ export interface DesktopApi {
   /**
    * The agent's browser, as something the user can watch.
    *
-   * There is deliberately nothing here that DRIVES the page: the view takes the user's own
-   * clicks and keystrokes directly, and the agent drives it through its tools in main. This
-   * channel only says where to draw it.
+   * The page takes the user's own clicks and keystrokes directly, and the agent drives it
+   * through its tools in main. What is here is the url bar: the one part of driving the page
+   * that the user cannot do by clicking on it, because the page has no chrome of its own.
    */
   browser: {
-    /** Draw this conversation's page at these bounds, or nothing. Returns where that page is. */
+    /** Draw this conversation's page at these bounds, or nothing. Returns what the bar draws. */
     setPane(request: BrowserPaneRequest): Promise<BrowserPaneState>;
-    /** Subscribe to page navigations; returns the unsubscribe. */
-    onPageUrl(listener: (event: BrowserPageUrlEvent) => void): () => void;
+    /** Open a url the user typed. Rejects with a reason for a scheme that is refused. */
+    navigate(request: BrowserNavigateRequest): Promise<BrowserPaneState>;
+    go(request: BrowserGoRequest): Promise<BrowserPaneState>;
+    /** Subscribe to page state; returns the unsubscribe. */
+    onPageState(listener: (event: BrowserPageStateEvent) => void): () => void;
   };
   files: {
     /**
