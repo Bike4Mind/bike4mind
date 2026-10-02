@@ -89,14 +89,18 @@ interface UseSendMessageParams {
   onAgentsAttached?: () => void;
 }
 
+interface SendClickOptions {
+  forceEnableQuestMaster?: boolean;
+  toolsOverride?: B4MLLMTools[];
+  /** Called when the send is refused before dispatch (one already in flight, validation, setup). */
+  onRefused?: () => void;
+}
+
 interface UseSendMessageResult {
   submitting: boolean;
   stoppingMessage: boolean;
   pendingAutoSubmitGoal: string | null;
-  handleSendClick: (
-    prompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
-  ) => Promise<IChatHistoryItemDocument | undefined>;
+  handleSendClick: (prompt?: string, options?: SendClickOptions) => Promise<IChatHistoryItemDocument | undefined>;
   handleStopMessage: () => Promise<void>;
 }
 
@@ -349,9 +353,12 @@ export function useSendMessage({
   // directly: the wrapper is what releases the submit mutex if this throws.
   const runSendClick = async (
     newPrompt?: string,
-    options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
+    options?: SendClickOptions
   ): Promise<IChatHistoryItemDocument | undefined> => {
-    if (submittingRef.current) return;
+    if (submittingRef.current) {
+      options?.onRefused?.();
+      return;
+    }
 
     // Lock out concurrent sends immediately so a second click/Enter during
     // validation or the host-create await cannot slip through the guard above.
@@ -389,6 +396,7 @@ export function useSendMessage({
       console.error(errorMessage);
       toast.error(errorMessage);
       setSubmitting(false);
+      options?.onRefused?.();
       return;
     }
     if (currentSession && newestTurn?.suggestedChoices && choiceKey?.pickedIndex != null) {
@@ -430,6 +438,7 @@ export function useSendMessage({
         console.error('Data Lake session create failed:', error);
         setSubmitting(false);
         toast.error("Couldn't start the chat - please try again.");
+        options?.onRefused?.();
         return;
       }
     }
@@ -708,6 +717,7 @@ export function useSendMessage({
     });
     if (refused) {
       setSubmitting(false);
+      options?.onRefused?.();
       return;
     }
 
@@ -1232,10 +1242,7 @@ export function useSendMessage({
    * with no error visible to the user.
    */
   const handleSendClick = useCallback(
-    async (
-      newPrompt?: string,
-      options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
-    ): Promise<IChatHistoryItemDocument | undefined> => {
+    async (newPrompt?: string, options?: SendClickOptions): Promise<IChatHistoryItemDocument | undefined> => {
       try {
         return await withSubmitMutex(submittingRef, setSubmittingState, () =>
           runSendClickRef.current(newPrompt, options)
@@ -1245,6 +1252,7 @@ export function useSendMessage({
         // send failures itself (LLMCommand toasts, optimistic rollback).
         console.error('Unexpected error sending message:', error);
         toast.error("Couldn't send your message - please try again.");
+        options?.onRefused?.();
         return undefined;
       }
     },

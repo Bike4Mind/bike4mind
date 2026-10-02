@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SuggestedChoices } from '@bike4mind/common';
@@ -32,7 +32,7 @@ const renderChoices = (suggestedChoices: SuggestedChoices = choices) =>
     </QueryClientProvider>
   );
 
-const sendPrompt = vi.fn(async () => {});
+const sendPrompt = vi.fn(async (_prompt: string) => true);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -41,32 +41,53 @@ beforeEach(() => {
 });
 
 describe('ReplyChoiceButtons', () => {
-  it('numbers each option and labels it', () => {
+  it('numbers each option and shows its label and full description', () => {
     renderChoices();
-    expect(screen.getByTestId('choice-btn-1').textContent).toBe('1Reformulate');
-    expect(screen.getByTestId('choice-btn-2').textContent).toBe('2Extend');
+    expect(screen.getByTestId('choice-btn-1-label').textContent).toBe('1Reformulate');
+    expect(screen.getByTestId('choice-btn-1-description').textContent).toBe('Re-formulate with all three pools.');
+    expect(screen.getByTestId('choice-btn-2-label').textContent).toBe('2Extend');
+    expect(screen.getByTestId('choice-btn-2-description').textContent).toBe('Extend the loaded brief.');
   });
 
-  it('sends the visible option text and records the pick', () => {
+  it('sends the visible option text and records the pick once it was sent', async () => {
     renderChoices();
     fireEvent.click(screen.getByTestId('choice-btn-2'));
 
     expect(sendPrompt).toHaveBeenCalledWith('Extend: Extend the loaded brief.');
-    expect(mockRecord).toHaveBeenCalledWith(expect.anything(), {
-      sessionId: 'sess-1',
-      questId: 'quest-1',
-      suggestedChoices: choices,
-      index: 1,
-    });
+    await waitFor(() =>
+      expect(mockRecord).toHaveBeenCalledWith(expect.anything(), {
+        sessionId: 'sess-1',
+        questId: 'quest-1',
+        suggestedChoices: choices,
+        index: 1,
+      })
+    );
+    expect(screen.getByTestId('choice-btn-2').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('choice-btn-1')).toBeDisabled();
   });
 
-  it('sends once on a double tap', () => {
+  it('records nothing and stays clickable when the send is refused', async () => {
+    sendPrompt.mockResolvedValueOnce(false);
+    renderChoices();
+    fireEvent.click(screen.getByTestId('choice-btn-2'));
+
+    await waitFor(() => expect(screen.getByTestId('choice-btn-1')).not.toBeDisabled());
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(screen.getByTestId('choice-btn-2').getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(screen.getByTestId('choice-btn-1'));
+    expect(sendPrompt).toHaveBeenLastCalledWith('Reformulate: Re-formulate with all three pools.');
+    await waitFor(() => expect(mockRecord).toHaveBeenCalledTimes(1));
+  });
+
+  it('sends once on a double tap', async () => {
     renderChoices();
     fireEvent.click(screen.getByTestId('choice-btn-1'));
     fireEvent.click(screen.getByTestId('choice-btn-1'));
     fireEvent.click(screen.getByTestId('choice-btn-2'));
 
     expect(sendPrompt).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockRecord).toHaveBeenCalledTimes(1));
   });
 
   it('marks a stored pick and disables the rest', () => {

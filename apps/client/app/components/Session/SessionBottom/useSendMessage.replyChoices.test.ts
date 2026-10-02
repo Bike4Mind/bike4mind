@@ -29,4 +29,11 @@ describe('useSendMessage - typed reply-choice keys', () => {
     const validationReturn = at('if (errorMessage) {');
     expect(at('void recordReplyChoice(queryClient, {')).toBeGreaterThan(validationReturn);
   });
+
+  // ReplyChoiceButtons records a click only when sendPrompt resolves true, which it does unless
+  // onRefused fired (SessionBottom's sendPromptCallback).
+  it('reports a send refused while another is in flight or by validation', () => {
+    expect(source).toMatch(/if \(submittingRef\.current\) \{\s*options\?\.onRefused\?\.\(\);\s*return;/);
+    expect(source).toMatch(/toast\.error\(errorMessage\);\s*setSubmitting\(false\);\s*options\?\.onRefused\?\.\(\);/);
+  });
 });
