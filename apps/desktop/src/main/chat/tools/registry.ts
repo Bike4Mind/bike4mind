@@ -129,15 +129,20 @@ export function findTool(name: string): ToolDefinition | undefined {
 /**
  * Tool declarations for the request body, in the endpoint's `{ toolSchema }` envelope.
  *
- * The four families are declared independently, because they become available for unrelated
- * reasons. No granted folder means no local tools at all: declaring file tools the model can
+ * Every family is declared independently, because each becomes available for its own unrelated
+ * reason. No granted folder means no local tools at all: declaring file tools the model can
  * only be denied teaches it to keep retrying, and an undeclared tool is a cleaner "not
  * available" than one that always fails. The generation tools need only a signed-in session,
  * so they are offered to a user who has shared nothing. The host tools need a project, which
- * is what makes them Code-only. MCP tools are a fourth family, passed in rather than declared
- * here because they only exist once a server the user configured is connected. The skill tool
- * is the one family that needs neither a folder nor a sign-in: it reads the user's own skill
- * files, so it is offered wherever a catalog exists.
+ * is what makes them Code-only. MCP tools are passed in rather than declared here because they
+ * only exist once a server the user configured is connected.
+ *
+ * Two families need neither a folder nor a project nor a sign-in. The skill tool reads the
+ * user's own skill files, so it is offered wherever a catalog exists. The browser tools drive
+ * a page keyed on the conversation id and nothing else: they are offered in every conversation
+ * that has a browser to drive, Chat sessions and projectless Code sessions included. They were
+ * once gated with the host tools, which was never a precondition of theirs - browsing needs
+ * nothing from a folder.
  */
 export function toolsForRequest(options: {
   roots: readonly string[];
@@ -151,7 +156,7 @@ export function toolsForRequest(options: {
   explore?: boolean;
   /** The session's model id; decides between apply_patch and file_edit/file_write. */
   modelId?: string;
-  /** A hidden browser for this session; Code sessions get one, to test what they build. */
+  /** A hidden browser for this session. Every conversation gets one; it needs no project. */
   browser?: boolean;
   /** A resolved memory store. Needs a project, which is what the store is keyed on. */
   memory?: boolean;

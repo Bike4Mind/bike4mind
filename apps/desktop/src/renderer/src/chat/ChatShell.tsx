@@ -190,13 +190,12 @@ export function ChatShell({ account }: { account?: ReactNode }) {
   /**
    * Whether this conversation HAS an agent browser to show.
    *
-   * The same condition main offers the browser tools on - a Code session with a project - and
-   * deliberately so: the pane's point is that the agent and the user drive one page, and a
-   * conversation whose agent cannot reach the page would be offering half of that. The toggle
-   * stays on screen and disabled rather than disappearing, so switching to a Chat session says
-   * why the browser is not there instead of quietly removing the control.
+   * A conversation is all it takes, which is the same condition main offers the browser tools
+   * on: the page is keyed on the conversation id and nothing about it is project-shaped. The
+   * one thing it cannot do is belong to no conversation, so the toggle stays on screen and
+   * disabled on the empty window rather than disappearing from it.
    */
-  const browserAvailable = conversation.session?.mode === 'code' && !!conversation.session.project;
+  const browserAvailable = !!activeId;
 
   // Re-read when a reply ends anywhere, which is the only moment this window knows the balance
   // moved. See useAccountCredits for why it is not polled.
@@ -448,7 +447,7 @@ export function ChatShell({ account }: { account?: ReactNode }) {
                     ? browserOpen
                       ? 'Hide the browser'
                       : 'Show the browser'
-                    : 'The browser belongs to a Code session with a folder.'
+                    : 'Open a conversation to use the browser.'
                 }
               >
                 <Box component="span" sx={{ display: 'inline-flex' }}>

@@ -1344,10 +1344,12 @@ export class ChatService {
       const { roots, workingDirectory } = await this.resolveToolScope(session);
       const media = this.buildMediaContext(session, api, serverConfig.cdnUrl);
       const host = this.buildHostContext(session);
-      const browser =
-        host && this.deps.browser
-          ? this.deps.browser.context(sessionId, (bytes, caption) => this.keepScreenshot(sessionId, bytes, caption))
-          : undefined;
+      // Not tied to `host`: a page is keyed on the conversation id and its screenshots are
+      // stored under the same id in userData, so nothing here wants a project. Every
+      // conversation that has a browser provider gets one.
+      const browser = this.deps.browser?.context(sessionId, (bytes, caption) =>
+        this.keepScreenshot(sessionId, bytes, caption)
+      );
       // Awaited, not fired and forgotten: the tool list the model is shown has to be the real
       // one. A server that fails to come up is marked failed and the turn goes on without it.
       await this.deps.mcp?.ensureConnected();
@@ -2965,6 +2967,9 @@ function buildSystemMessage(
         'path or contents. If asked about local files, say plainly that you have no access and ask',
         'the user to give this conversation a folder: a Code session takes one from the folder chip',
         'above the message box, and the sidebar card shares one with every conversation.',
+        // The browser is not file access and is not withheld with it: a conversation that can
+        // read nothing on disk can still open a page, and needs to be told how.
+        ...(browser ? BROWSER_GUIDANCE : []),
         ...(media ? MEDIA_GUIDANCE : []),
         ...(host ? HOST_GUIDANCE : []),
         ...(memory ? MEMORY_GUIDANCE : []),
@@ -3134,10 +3139,12 @@ function pruneScreenshots(wire: CompletionMessage[], turns: number[]): void {
 
 const BROWSER_GUIDANCE: readonly string[] = [
   'You also have a browser (browser_navigate, browser_click, browser_type, browser_screenshot and',
-  'the rest): a real Chromium window with its own cookies. To test a web app, open it and use it',
-  'the way a user would - sign in, go through the flow, check what the page shows - rather than',
-  'predicting its behaviour from the code. Each action returns the new page snapshot with [ref]',
-  'numbers and any console errors or failed requests, so do not call browser_snapshot after it.',
+  'the rest): a real Chromium window with its own cookies. Open a page whenever the answer is on',
+  'one - documentation, a changelog, a site the user is asking about - instead of going from',
+  'memory. To test a web app, use it the way a user would - sign in, go through the flow, check',
+  'what the page shows - rather than predicting its behaviour from the code. Each action returns',
+  'the new page snapshot with [ref] numbers and any console errors or failed requests, so do not',
+  'call browser_snapshot after it.',
   'Take a browser_screenshot at the states worth showing; the user sees it in the conversation.',
   'browser_evaluate runs JavaScript in the page with its cookies, for reading state or calling',
   'the app API as the signed-in user.',
