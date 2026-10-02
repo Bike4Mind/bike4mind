@@ -710,6 +710,34 @@ describe('MoonshotBedrockBackend reasoning-only final turn', () => {
     expect(whole).not.toMatch(/<\/think>.+/);
   });
 
+  it('escapes think markers inside the promoted tail', () => {
+    const zw = '\u200b';
+    const streamed = render(fresh(), [
+      { choices: [{ delta: { reasoning_content: 'a\n\nWrap it in <think> tags.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(streamed).toBe(`<think>a\n\nWrap it in <${zw}think> tags.</think>Wrap it in <${zw}think> tags.`);
+
+    const whole = render(
+      fresh(),
+      [
+        {
+          choices: [{ message: { content: '<reasoning>a\n\nUse </think> here.</reasoning>' }, finish_reason: 'stop' }],
+        },
+      ],
+      false
+    );
+    expect(whole.slice(whole.lastIndexOf('</think>') + '</think>'.length)).toBe(`Use <${zw}/think> here.`);
+  });
+
+  it('does not promote after a native tool marker in streamed reasoning_content', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { reasoning_content: 'x <|tool_calls_section_begin|> y\n\nClean last paragraph.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).not.toContain('</think>Clean last paragraph.');
+  });
+
   it('does not carry a promoted answer or flags into the next request', () => {
     const be = fresh();
     render(be, [{ choices: [{ delta: { content: '<reasoning>a</reasoning>' }, finish_reason: 'stop' }] }]);

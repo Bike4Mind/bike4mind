@@ -506,12 +506,14 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
    * or a round that called a tool or already wrote prose.
    */
   private promoteReasoningTail(choices: ICompletionResponseChunk['choices']): void {
-    if (this.roundCalledTool || this.roundProse.trim()) return;
-    const tail = this.roundReasoning
-      .split(/\n\s*\n/)
-      .map(p => p.trim())
-      .filter(Boolean)
-      .pop();
+    if (this.roundCalledTool || this.roundProse.trim() || hasNativeToolMarker(this.roundReasoning)) return;
+    const tail = escapeThinkMarkers(
+      this.roundReasoning
+        .split(/\n\s*\n/)
+        .map(p => p.trim())
+        .filter(Boolean)
+        .pop() ?? ''
+    );
     if (!tail || RAW_TOOL_CALL_TEXT.test(tail)) return;
 
     // A still-open `reasoning_content` block must be closed first or the answer renders inside it.
