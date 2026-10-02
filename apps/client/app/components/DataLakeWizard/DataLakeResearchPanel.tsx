@@ -413,6 +413,35 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
 };
 
 /**
+ * Every bucket a candidate can only reach after a successful score: must stay in sync with the
+ * post-judgment branches of `executeResearchRun` (b4m-core/services/src/dataLakeResearchService).
+ * Keyed like `DROP_REASON_LABEL`, so a new `ResearchRunTotals` field fails the build until it is
+ * placed here or excluded.
+ */
+const JUDGED_BUCKETS: Record<
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged'>,
+  true
+> = {
+  belowRelevance: true,
+  fetchFailed: true,
+  proposed: true,
+  duplicatePending: true,
+  alreadyInLake: true,
+  suppressedByTombstone: true,
+  unusableSource: true,
+};
+
+/** Names the judge model on a run's meta line, or null when the judge never ran. */
+const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
+  if (!run.judgeModel) return null;
+  const { totals } = run;
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  if (judged) return `judged by ${run.judgeModel}`;
+  if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
+  return null;
+};
+
+/**
  * The Research tab (#1682): a lake's saved run configurations, and the history of what they did.
  *
  * Every value on the form is a lever the run provably reads - there are no constants hidden behind
@@ -978,10 +1007,9 @@ export function DataLakeResearchPanel({
                     {runConfigLabel(run, configById)}
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-when">
-                    {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
-                    {run.judgeModel && (run.totals.proposed > 0 || run.totals.belowRelevance > 0)
-                      ? ` \u00b7 judged by ${run.judgeModel}`
-                      : ''}
+                    {[formatWhen(runStartedAt(run)), formatSpend(run.spentMicroUsd), judgeLabel(run)]
+                      .filter(Boolean)
+                      .join(' \u00b7 ')}
                   </Typography>
                 </Stack>
                 {run.error && (
