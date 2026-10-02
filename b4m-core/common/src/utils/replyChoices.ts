@@ -152,6 +152,7 @@ export const REPLY_CHOICES_GUIDANCE = [
   '- The block must be the very last thing in the reply, and there is at most one.',
   '- Do not add a block for steps the user carries out themselves, ranked results or examples,',
   '  an open question that needs a typed answer, or a single recommendation the user simply accepts or redirects.',
+  `- If the user asks to see or discuss this format itself, show it in a \`json\` fence, never a \`${CHOICES_FENCE_LANGUAGE}\` one, so the example is not turned into buttons.`,
 ].join('\n');
 
 /**
