@@ -69,6 +69,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -1628,6 +1629,7 @@ async function processExecution(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
       },
       sessionRepository: sessionRepository,
       storage: getFilesStorage(),
@@ -3442,6 +3444,7 @@ async function processSubagentDispatch(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
       },
       sessionRepository,
       storage: getFilesStorage(),

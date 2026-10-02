@@ -38,6 +38,9 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {},
   projectRepository: {},
   lakeAccessEventRepository: {},
+  lakeMembershipRemovalRepository: {},
+  lakeConfigChangeEventRepository: {},
+  lakeMembershipChangeEventRepository: {},
   scopedSettingsRepository: {},
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {

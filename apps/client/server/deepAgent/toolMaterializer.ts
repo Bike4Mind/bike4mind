@@ -24,6 +24,7 @@ import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import type { ToolMaterializer } from '@bike4mind/agents';
 import { buildSystemApiKeyTable } from './resolveBackend';
@@ -102,6 +103,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
       },
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
