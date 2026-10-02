@@ -413,6 +413,27 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
 };
 
 /**
+ * Names the judge model on a run's meta line, or null when the judge never ran. "Judged" counts
+ * every bucket a candidate can only reach after a successful score, so must stay in sync with the
+ * post-judgment branches of `executeResearchRun` (b4m-core/services/src/dataLakeResearchService).
+ */
+const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
+  if (!run.judgeModel) return null;
+  const { totals } = run;
+  const judged =
+    totals.belowRelevance +
+    totals.fetchFailed +
+    totals.proposed +
+    totals.duplicatePending +
+    totals.alreadyInLake +
+    totals.suppressedByTombstone +
+    totals.unusableSource;
+  if (judged > 0) return `judged by ${run.judgeModel}`;
+  if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
+  return null;
+};
+
+/**
  * The Research tab (#1682): a lake's saved run configurations, and the history of what they did.
  *
  * Every value on the form is a lever the run provably reads - there are no constants hidden behind
@@ -978,10 +999,9 @@ export function DataLakeResearchPanel({
                     {runConfigLabel(run, configById)}
                   </Typography>
                   <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-when">
-                    {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
-                    {run.judgeModel && (run.totals.proposed > 0 || run.totals.belowRelevance > 0)
-                      ? ` \u00b7 judged by ${run.judgeModel}`
-                      : ''}
+                    {[formatWhen(runStartedAt(run)), formatSpend(run.spentMicroUsd), judgeLabel(run)]
+                      .filter(Boolean)
+                      .join(' \u00b7 ')}
                   </Typography>
                 </Stack>
                 {run.error && (
