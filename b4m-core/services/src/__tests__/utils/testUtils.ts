@@ -367,6 +367,7 @@ export const mockResearchAgent = (value: Partial<IResearchAgent> = {}): IResearc
   return Object.assign(mock, value) as IResearchAgent;
 };
 
+// Shared spies, never reset between tests: assert with toHaveBeenCalledWith, not a call count.
 export const silentLogger = {
   debug: vi.fn(),
   info: vi.fn(),
