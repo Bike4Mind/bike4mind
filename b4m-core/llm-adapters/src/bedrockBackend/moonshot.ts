@@ -75,16 +75,14 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
   private nativeToolStream = new KimiNativeToolStream();
 
   /**
-   * The round in flight: reasoning and prose the model produced alongside its tool
-   * call. base.ts only forwards this text to the client, so without keeping it here
-   * the replayed tool-call turn has `content: null` and the model never sees its own
-   * monologue on the next call. Cleared by takeReasoningBlocks; reset in getPayload.
+   * The round in flight: the reasoning and prose the model produced, used by
+   * promoteReasoningTail to spot a reasoning-only turn. Reset in getPayload.
    */
   private roundReasoning = '';
   private roundProse = '';
 
-  /** Tool-call turns that already carry the round text, so parallel calls do not repeat it. */
-  private replayedRounds = new WeakSet<object>();
+  /** Whether the round in flight called a tool; a tool-call round is never a reasoning-only answer. */
+  private roundCalledTool = false;
 
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
@@ -216,6 +214,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     this.nativeToolStream = new KimiNativeToolStream();
     this.roundReasoning = '';
     this.roundProse = '';
+    this.roundCalledTool = false;
 
     return {
       modelId: model,
@@ -289,8 +288,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // as the whole answer and never run the tool.
       const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
       if (toolCalls.length > 0) {
-        this.roundReasoning += payload.reasoning_content ?? '';
-        this.roundProse += payload.content ?? '';
+        this.roundCalledTool = true;
         for (const [toolIndex, call] of toolCalls.entries()) {
           const idx = call.index ?? toolIndex;
           if (opts.streaming) {
@@ -373,6 +371,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
           const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
           this.roundReasoning += think;
+          if (nativeCalls.length > 0) this.roundCalledTool = true;
           // Pushed ahead of the calls: they share index 0, and once base.ts has seen a tool
           // name at an index it appends every later non-TOOL_USE chunkText there to its args.
           choices.push({
@@ -434,6 +433,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
         this.roundReasoning += think;
+        if (nativeCalls.length > 0) this.roundCalledTool = true;
         let usageAttached = false;
         if (think) {
           choices.push({
@@ -460,8 +460,11 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         continue;
       }
 
-      this.roundReasoning += reasoning;
-      this.roundProse += content;
+      // The inline <reasoning> envelope is reasoning, not prose; counting it as prose would
+      // hide a reasoning-only turn from promoteReasoningTail.
+      const envelope = /<reasoning>([\s\S]*?)<\/reasoning>/g;
+      this.roundReasoning += reasoning + [...content.matchAll(envelope)].map(m => m[1]).join('');
+      this.roundProse += content.replace(envelope, '').replace(/<\/?reasoning>/g, '');
       const chunkText = (reasoning ? `<think>${reasoning}</think>` : '') + convertTags(content);
       choices.push({ status: ChoiceStatus.END, statusEndReason: endReason, index, chunkText, ...usageForIndex });
     }
@@ -471,26 +474,43 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // output budget on the monologue reached the user as a reasoning trace ending at
     // </think>, with nothing marking it as cut off.
     const stopReason = normalizeOpenAIFinishReason(response.choices?.[0]?.finish_reason);
+    if (response.choices?.[0]?.finish_reason === 'stop') this.promoteReasoningTail(choices);
 
     return { done: true, chunk: { model, choices, ...(stopReason ? { stopReason } : {}) } };
   }
 
   /**
-   * Hands the round's text to the tool loop as one replay block, in the shape the model
-   * emitted it (reasoning inside `<reasoning>`, then prose), and clears the buffer.
+   * Kimi sometimes ends a turn with `finish_reason: stop` and its whole answer inside
+   * `<reasoning>`, nothing after it. The monologue renders as a collapsed thought and
+   * the user is left with a blank turn, so the last reasoning paragraph is also shown
+   * as the visible answer. Never for `length` (a cut-off monologue is not an answer)
+   * or a round that called a tool or already wrote prose.
    */
-  protected override takeReasoningBlocks(): unknown[] {
-    const text = (this.roundReasoning ? `<reasoning>${this.roundReasoning}</reasoning>` : '') + this.roundProse;
-    this.roundReasoning = '';
-    this.roundProse = '';
-    return text ? [{ text }] : [];
-  }
+  private promoteReasoningTail(choices: ICompletionResponseChunk['choices']): void {
+    if (this.roundCalledTool || this.roundProse.trim()) return;
+    const tail = this.roundReasoning
+      .split(/\n\s*\n/)
+      .map(p => p.trim())
+      .filter(Boolean)
+      .pop();
+    if (!tail) return;
 
-  /** The round text for the first tool-call turn of a round; null for the rest. */
-  private claimRoundText(blocks?: unknown[]): string | null {
-    if (!blocks?.length || this.replayedRounds.has(blocks)) return null;
-    this.replayedRounds.add(blocks);
-    return (blocks[0] as { text?: string }).text ?? null;
+    // A still-open `reasoning_content` block must be closed first or the answer renders inside it.
+    const closeOpenThink = this.isInThinkingBlock ? `${this.reasoningEscaper.flush()}</think>` : '';
+    this.isInThinkingBlock = false;
+    this.roundProse += tail;
+
+    const target = [...choices].reverse().find(c => c.index === 0 && !c.tool && 'chunkText' in c);
+    if (target && 'chunkText' in target) {
+      target.chunkText = (target.chunkText ?? '') + closeOpenThink + tail;
+      return;
+    }
+    choices.push({
+      status: ChoiceStatus.END,
+      statusEndReason: ChoiceEndReason.STOP,
+      index: 0,
+      chunkText: closeOpenThink + tail,
+    });
   }
 
   /**
@@ -498,14 +518,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
    * `role: 'tool'` message keyed by `tool_call_id`. `name` is included because
    * Moonshot's tool-call guide shows it on the result message.
    */
-  pushToolMessages(
-    messages: IMessage[],
-    tool: IChoiceEndToolUse['tool'],
-    result: string,
-    thinkingBlocks?: unknown[]
-  ): unknown {
+  pushToolMessages(messages: IMessage[], tool: IChoiceEndToolUse['tool'], result: string): unknown {
     messages.push({
-      content: this.claimRoundText(thinkingBlocks),
+      content: null,
       role: 'assistant',
       tool_calls: [
         {
