@@ -74,4 +74,20 @@ describe('PermissionPrompt Arguments block', () => {
     expect(frame).toContain('\\u202e');
     expect(frame).not.toContain('\u202e');
   });
+
+  it('escapes the tool name and description', () => {
+    const { lastFrame } = render(
+      <PermissionPrompt
+        toolName={'mcp_tool\u202eevil'}
+        toolDescription={'read file\rdelete file'}
+        args={{}}
+        canBeTrusted
+        onResponse={() => {}}
+      />
+    );
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('mcp_tool\\u202eevil');
+    expect(frame).toContain('read file\\x0ddelete file');
+    expect(frame).not.toContain('\r');
+  });
 });

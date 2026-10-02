@@ -5,9 +5,11 @@ export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always'
 
 /**
  * Escape characters that let untrusted text render differently from what
- * actually runs, into a visible escape form. Shared by every approval prompt
- * (model-authored tool previews/arguments here, repo-authored MCP definitions in
- * McpApprovalPrompt), so the approved text cannot differ from what runs.
+ * actually runs, into a visible escape form. Shared by every prompt that shows
+ * untrusted text for the user to decide on: tool previews/arguments here,
+ * repo-authored MCP definitions (McpApprovalPrompt), and model-authored
+ * ReviewGatePrompt / UserQuestionPrompt text. Display only - never escape the
+ * value that is acted on or sent back.
  * These ranges are covered, deliberately and no wider:
  *   - C0 controls (minus tab/newline), DEL and C1 controls -> `\xHH`: a raw
  *     `\r`, ESC or 8-bit CSI (U+009B) could rewrite the line being approved.
@@ -203,14 +205,14 @@ export function PermissionPrompt({
       <Box marginTop={1}>
         <Text dimColor>Tool: </Text>
         <Text bold color="cyan">
-          {toolName}
+          {escapeTerminalControlChars(toolName)}
         </Text>
       </Box>
 
       {toolDescription && (
         <Box>
           <Text dimColor>Action: </Text>
-          <Text>{toolDescription}</Text>
+          <Text>{escapeTerminalControlChars(toolDescription)}</Text>
         </Box>
       )}
 

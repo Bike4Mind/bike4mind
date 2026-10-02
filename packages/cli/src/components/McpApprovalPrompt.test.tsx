@@ -80,9 +80,11 @@ describe('McpApprovalPrompt', () => {
   });
 
   it('keeps each repo field on one line', () => {
-    const srv: PendingMcpApproval = { ...servers[0], name: 'svc\nApprove all - safe' };
+    const srv: PendingMcpApproval = { ...servers[0], name: 'svc\nApprove all\t- safe', args: ['a\nb', 'say "hi"'] };
     const { lastFrame } = render(<McpApprovalPrompt projectRoot="/r" servers={[srv]} onSelect={() => {}} />);
-    expect(lastFrame()).toContain('svc\\x0aApprove all - safe');
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('svc\\x0aApprove all\\x09- safe');
+    expect(frame).toContain('node "a\\x0ab" "say \\"hi\\""');
   });
 
   it('selects skip on Enter (the safe default)', async () => {
