@@ -8,7 +8,19 @@ describe('parseImageSize', () => {
   });
 
   it('returns undefined for values that are not two positive integers', () => {
-    for (const value of ['', 'auto', '1024', '1024x', 'x768', '0x768', '1024x0', '1024X768', '10.5x20', null, undefined]) {
+    for (const value of [
+      '',
+      'auto',
+      '1024',
+      '1024x',
+      'x768',
+      '0x768',
+      '1024x0',
+      '1024X768',
+      '10.5x20',
+      null,
+      undefined,
+    ]) {
       expect(parseImageSize(value)).toBeUndefined();
     }
   });
@@ -33,7 +45,28 @@ describe('resolveImageDimensions', () => {
       width: undefined,
       height: undefined,
     });
-    expect(resolveImageDimensions({ size: '1440x810' }, BFL_DIMENSION_BOUNDS)).toEqual({ width: 1440, height: 810 });
+    expect(resolveImageDimensions({ size: '1440x810' }, BFL_DIMENSION_BOUNDS)).toEqual({ width: 1440, height: 800 });
+  });
+
+  it('rounds each dimension to the nearest multiple of the bounds step', () => {
+    expect(resolveImageDimensions({ size: '1280x720' }, BFL_DIMENSION_BOUNDS)).toEqual({ width: 1280, height: 736 });
+    expect(resolveImageDimensions({ size: '600x800' }, BFL_DIMENSION_BOUNDS)).toEqual({ width: 608, height: 800 });
+    expect(resolveImageDimensions({ width: 1000, height: 1001 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 992,
+      height: 992,
+    });
+  });
+
+  it('keeps the range edges on the grid', () => {
+    const { min, max } = BFL_DIMENSION_BOUNDS;
+    expect(resolveImageDimensions({ size: `${min}x${max}` }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: min,
+      height: max,
+    });
+  });
+
+  it('does not round when the bounds carry no step', () => {
+    expect(resolveImageDimensions({ size: '1440x810' }, { min: 256, max: 1440 })).toEqual({ width: 1440, height: 810 });
   });
 
   it('keeps an out-of-range preset when no bounds are supplied', () => {

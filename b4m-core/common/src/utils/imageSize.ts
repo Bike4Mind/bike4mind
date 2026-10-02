@@ -19,11 +19,17 @@ export function parseImageSize(size?: string | null): { width: number; height: n
   return { width, height };
 }
 
-/** BFL rejects a request outside this range outright, so a preset beyond it must not be forwarded. */
+/**
+ * BFL rejects a request outside this range outright, so a preset beyond it must not be forwarded.
+ * Its API also requires each dimension to be a multiple of `step`.
+ */
 export const BFL_DIMENSION_BOUNDS = {
   min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,
   max: IMAGE_SIZE_CONSTRAINTS.BFL.maxWidth,
+  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
 } as const;
+
+type DimensionBounds = { min: number; max: number; step?: number };
 
 /**
  * Dimensions for a backend that sizes from discrete width/height. Explicit values win; otherwise
@@ -33,15 +39,21 @@ export const BFL_DIMENSION_BOUNDS = {
  * for another provider survives a model switch (GPT Image 2 offers 3840x2160, BFL caps at 1440),
  * and sending it on would turn a wrong-size image into a failed generation. Both dimensions have
  * to fit, since using one and defaulting the other would distort the aspect ratio.
+ *
+ * With a `step`, each resolved dimension is rounded to the nearest multiple of it. That covers
+ * presets such as 1280x720 that sit off BFL's 32px grid, and explicit values from API callers.
+ * Bounds that are themselves multiples of `step` keep an in-range value in range.
  */
 export function resolveImageDimensions(
   { width, height, size }: { width?: number; height?: number; size?: string | null },
-  bounds?: { min: number; max: number }
+  bounds?: DimensionBounds
 ): { width?: number; height?: number } {
   const preset = parseImageSize(size);
   const usablePreset =
     preset && (!bounds || [preset.width, preset.height].every(v => v >= bounds.min && v <= bounds.max))
       ? preset
       : undefined;
-  return { width: width ?? usablePreset?.width, height: height ?? usablePreset?.height };
+  const snap = (value?: number) =>
+    value === undefined || !bounds?.step ? value : Math.round(value / bounds.step) * bounds.step;
+  return { width: snap(width ?? usablePreset?.width), height: snap(height ?? usablePreset?.height) };
 }

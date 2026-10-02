@@ -26,7 +26,8 @@ import {
  * - `presets`: one of the listed `WxH` strings.
  * - `constrained`: a preset, `autoSize`, or any `WxH` meeting `constraints`
  *   (see satisfiesGptImage2Constraints).
- * - `dimensions`: discrete `width`/`height` within the bounds, in multiples of `step`.
+ * - `dimensions`: discrete `width`/`height` within the bounds. Each is rounded to the nearest
+ *   multiple of `step` before it is sent (resolveImageDimensions), presets included.
  * - `aspectRatio`: an `aspect_ratio` string such as `16:9`; the provider picks the pixels.
  * - `inputImage`: sized by the input image, so no `size` is taken.
  * - `fixed`: the provider takes no size at all.
