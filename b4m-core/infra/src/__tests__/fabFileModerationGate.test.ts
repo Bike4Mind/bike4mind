@@ -168,7 +168,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
   'apps/client/server/queueHandlers/researchEngineQueue.ts':
     'DI passthrough — storage adapter consumed by already-gated researchTaskService.process/downloadRelevantLinks (routes through findOrUpdateExistingResearchData, gated commit 63cc8f9d3e, and createFabFile)',
-  'apps/client/server/queueHandlers/notebookCuration.ts':
+  'apps/workers/src/queueHandlers/notebookCuration.ts':
     'DI passthrough — storage adapter consumed by NotebookCurationService.storeFile, which calls the already-gated fabFileService.createFabFile with a converter-produced mimeType that is always markdown/txt/html, never an image',
   'apps/workers/src/events/sessionSummarization.ts':
     'text-only mime (session summary is always SupportedFabFileMimeTypes.TXT_PLAIN) — DI passthrough to already-gated fabFileService.update/create',
@@ -204,9 +204,9 @@ const ALLOWLIST: Record<string, string> = {
 
   // --- `.getFileContent(`/`getFileContent(` match is githubService's GitHub-content
   // fetcher (SRE agent code review), unrelated to FabFile/S3 storage. ---
-  'apps/client/server/queueHandlers/sreRevision.ts':
+  'apps/workers/src/queueHandlers/sreRevision.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
-  'apps/client/server/queueHandlers/sreAnalysis.ts':
+  'apps/workers/src/queueHandlers/sreAnalysis.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
   'apps/client/server/services/whatsNewDataCollector.ts':
     'githubService.getFileContent — GitHub repo content fetch (CHANGELOG.md), unrelated to FabFile storage',
