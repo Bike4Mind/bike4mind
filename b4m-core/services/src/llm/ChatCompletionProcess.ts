@@ -111,6 +111,7 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import {
@@ -2883,6 +2884,23 @@ export class ChatCompletionProcess {
         attachmentNotices,
         attachmentDelivery,
       } = dataSources;
+
+      // A pinned document that no longer exists would otherwise re-attach, re-fail and re-cost a
+      // turn on every subsequent prompt - the "ghost files" report. Detach it once, here, where the
+      // turn has just established it did not resolve. Deliberately NOT driven by
+      // `attachmentDelivery.droppedIds`: that set also holds live files this turn merely could not
+      // inline (audio, an image on a vision-less model, a held or oversized image), and detaching
+      // those would destroy notebook contents as a side effect of an ordinary prompt. The helper
+      // re-checks both halves; see its docstring for the two gates.
+      const scrubbed = await scrubMissingKnowledgeIds(session.knowledgeIds ?? [], dataSources.fileNotices, {
+        db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions },
+        logger: this.logger,
+      });
+      if (scrubbed.length > 0) {
+        // Keep the in-memory copy in step so later reads in this run see the cleaned set.
+        const removed = new Set(scrubbed);
+        session.knowledgeIds = (session.knowledgeIds ?? []).filter((id: string) => !removed.has(id));
+      }
 
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
       // even on a turn that later errors out, and this is the only durable record the user sees.
@@ -6777,6 +6795,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
      *  thing - an attachment must never fail silently (#2228). */
     attachmentNotices: string[];
+    /** The same notices before they were flattened to prose. Carries `band`, which is the only thing
+     *  separating "this id resolved to no document" from "this live file could not be inlined this
+     *  turn" - a distinction `attachmentNotices` and `attachmentDelivery.droppedIds` both lose, and
+     *  which `scrubMissingKnowledgeIds` must have before it detaches anything. */
+    fileNotices: FabFileNotice[];
     /** Affirmative delivery report - the counts behind the notices, and the only record of a turn
      *  whose attachments ALL arrived (which produces no notices at all). `undefined` when the turn
      *  carried no attachments, so a caller can tell "none sent" from "none arrived". */
@@ -6971,6 +6994,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
       attachmentNotices: toAttachmentNoticeStrings(fileNotices),
+      fileNotices,
       attachmentDelivery,
     };
   }

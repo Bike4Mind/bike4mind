@@ -100,7 +100,7 @@ import {
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
 } from '@bike4mind/services/llm';
-import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
+import { creditService, apiKeyService, estimateGeneratedMediaUsd, sessionService } from '@bike4mind/services';
 import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
 import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
@@ -803,7 +803,7 @@ async function materializeAttachmentsForRun(args: {
       AGENT_SYSTEM_PROMPT_RESERVE
     );
 
-    return await materializeAttachmentContent(
+    const materialized = await materializeAttachmentContent(
       files,
       missingIds,
       fabFiles =>
@@ -829,6 +829,17 @@ async function materializeAttachmentsForRun(args: {
         ),
       logger
     );
+
+    // Detach pinned documents that no longer exist, so they stop re-attaching and re-failing on
+    // every later run - the chat path does the same, through the same helper and the same two
+    // gates. `materialized.delivery.droppedIds` is deliberately NOT the input: it also names live
+    // files this run simply could not inline, and detaching those would destroy notebook contents.
+    await sessionService.scrubMissingKnowledgeIds(sessionKnowledgeIds, materialized.notices, {
+      db: { fabFiles: fabFileRepository, sessions: sessionRepository },
+      logger,
+    });
+
+    return materialized;
   } catch (err) {
     logger.error('[AttachmentContent] Materialization failed; falling back to the metadata preamble', {
       requested: requestedIds.length,
