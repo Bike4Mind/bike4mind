@@ -20,15 +20,16 @@ const cancel = vi.fn<RenderTaskDouble['cancel']>();
 const getPage = vi.fn<(pageNumber: number) => void>();
 const getDocument = vi.fn<(src: { url: string }) => LoadingTaskDouble>();
 
-// Kept in sync with the literal below by hand: vi.mock's factory is hoisted above this file's
-// other top-level statements, so it can't reference a const declared alongside it.
+// vi.hoisted runs before vi.mock's factory, which is itself hoisted above this file's other
+// top-level statements - the one source for the version both the mock and the assertions below
+// read, instead of a hand-duplicated literal.
+const { mockPdfjsVersion } = vi.hoisted(() => ({ mockPdfjsVersion: '6.3.289' }));
+
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
-  version: '6.3.289',
+  version: mockPdfjsVersion,
   getDocument: (src: { url: string }) => getDocument(src),
 }));
-
-const mockPdfjsVersion = '6.3.289';
 
 vi.mock('next/dynamic', () => ({
   default: (loader: () => Promise<unknown>) => {
@@ -142,7 +143,7 @@ describe('PdfViewer', () => {
     await expect(destroy.mock.results[0]!.value).rejects.toThrow('worker never set up');
   });
 
-  it('shows the error message when the document fails to load', async () => {
+  it('renders the default error for an unrecognised failure, with technical details and a download link', async () => {
     getDocument.mockImplementation(() => ({
       destroy,
       promise: Promise.reject(new Error('Invalid parameter object')),
@@ -151,15 +152,43 @@ describe('PdfViewer', () => {
     const PdfViewer = await importViewer();
     render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
 
-    await waitFor(() => expect(screen.getByText(/Unable to load PDF document/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('Unable to load PDF document')
+    );
     expect(screen.queryByText(/Loading PDF/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('pdf-viewer-error-detail')).toHaveTextContent(/Reload the page/);
+    expect(screen.getByTestId('pdf-viewer-error-technical')).toHaveTextContent('Error: Invalid parameter object');
+    const downloadBtn = screen.getByTestId('pdf-viewer-error-download-btn');
+    expect(downloadBtn).toHaveAttribute('href', FILE);
+    expect(downloadBtn).toHaveAttribute('target', '_blank');
+    expect(downloadBtn).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('renders reload guidance and technical details for a worker/API version mismatch', async () => {
+    const versionMismatch = new Error('The API version "6.3.289" does not match the Worker version "5.6.205".');
+    versionMismatch.name = 'UnknownErrorException';
+    getDocument.mockImplementation(() => ({
+      destroy,
+      promise: Promise.reject(versionMismatch),
+    }));
+
+    const PdfViewer = await importViewer();
+    render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('PDF viewer is out of date')
+    );
+    expect(screen.getByTestId('pdf-viewer-error-detail')).toHaveTextContent(/Reload the page/);
+    expect(screen.getByTestId('pdf-viewer-error-technical')).toHaveTextContent(
+      'UnknownErrorException: The API version "6.3.289" does not match the Worker version "5.6.205".'
+    );
   });
 
   it('reports an error when no file is supplied', async () => {
     const PdfViewer = await importViewer();
     render(<PdfViewer file={undefined} />, { wrapper: TestWrapper });
 
-    await waitFor(() => expect(screen.getByText(/No file provided/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('No file provided'));
     expect(getDocument).not.toHaveBeenCalled();
   });
 });
