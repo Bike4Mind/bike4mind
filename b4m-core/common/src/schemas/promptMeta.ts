@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
+import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -890,6 +891,18 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Why reply-choice buttons did or did not appear: `offered` is whether REPLY_CHOICES_GUIDANCE was
+   * in the prompt, `status`/`reason` the finalize outcome (see ReplyChoicesOutcome in
+   * ../utils/replyChoices.ts). Written once at finalize; absent on turns that never finalized.
+   */
+  replyChoices: z
+    .object({
+      offered: z.boolean(),
+      status: z.enum(['parsed', 'absent', 'invalid']),
+      reason: z.enum(REPLY_CHOICES_INVALID_REASONS).optional(),
+    })
+    .optional(),
   /**
    * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
    * place of real code, or calls into functions that were never defined. The complement to

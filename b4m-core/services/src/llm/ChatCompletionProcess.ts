@@ -2000,6 +2000,12 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      // Whether REPLY_CHOICES_GUIDANCE ships this turn. Decided here, ahead of the history fetch,
+      // because history re-attaches stored choices only when the guidance is offered (see
+      // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
+      // Research Mode is excluded because its early return never reaches applyReplyChoices.
+      const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
       const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
@@ -2655,6 +2661,7 @@ export class ChatCompletionProcess {
         // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
         // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
         model: modelInfo.id,
+        includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
@@ -3078,7 +3085,6 @@ export class ChatCompletionProcess {
 
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
       // would let one configuration's searches cap another's.
-      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
       const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
       if (allTools && !isResearchMode) {
         allTools = webSearchBudget.apply(allTools);
@@ -3452,12 +3458,8 @@ export class ChatCompletionProcess {
             ]
           : [],
         // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
-        // withheld with the other auto-offers. The block it asks for is stripped by applyReplyChoices,
-        // which Research Mode's early return never reaches - so it is withheld there too.
-        replyChoices:
-          skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices
-            ? []
-            : [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }],
+        // withheld with the other auto-offers - see replyChoicesOffered.
+        replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
         toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
@@ -5000,7 +5002,16 @@ export class ChatCompletionProcess {
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
-        applyReplyChoices(quest);
+        const replyChoicesOutcome = applyReplyChoices(quest);
+        if (quest.promptMeta) quest.promptMeta.replyChoices = { offered: replyChoicesOffered, ...replyChoicesOutcome };
+        if (replyChoicesOutcome.status === 'invalid') {
+          logger.warn('[ReplyChoices] Choices block failed validation; no buttons shown', {
+            questId,
+            model: currentModel.id,
+            offered: replyChoicesOffered,
+            reason: replyChoicesOutcome.reason,
+          });
+        }
 
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: quest.status === 'stopped',
