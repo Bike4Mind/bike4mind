@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { registerSendPrompt } from '@client/app/hooks/useChatActions';
+import { registerSendPrompt, type SendPromptOptions } from '@client/app/hooks/useChatActions';
 
 import { Box, Typography, useTheme } from '@mui/joy';
 import Grid from '@mui/joy/Grid';
@@ -401,13 +401,15 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard, reply-choice
-  // buttons); resolves false when the send was refused before dispatch (including by the
-  // blocked-send gate below) so a caller can undo its own optimistic state.
+  // buttons); resolves false when the send was refused before dispatch so a caller can undo
+  // its own optimistic state. The blocked-send gate only applies when a caller opts in via
+  // `respectBlockedState` (ReplyChoiceButtons) - other programmatic callers like chess must
+  // keep sending exactly as they did before that gate existed.
   const sendPromptCallback = useCallback(
-    (prompt: string) =>
+    (prompt: string, options?: SendPromptOptions) =>
       sendPromptViaComposer({
         prompt,
-        sendBlockedReason,
+        sendBlockedReason: options?.respectBlockedState ? sendBlockedReason : null,
         shouldToastBlockedSend,
         toastInfo: toast.info,
         t,
