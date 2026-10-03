@@ -36,4 +36,17 @@ describe('useSendMessage - typed reply-choice keys', () => {
     expect(source).toMatch(/if \(submittingRef\.current\) \{\s*options\?\.onRefused\?\.\(\);\s*return;/);
     expect(source).toMatch(/toast\.error\(errorMessage\);\s*setSubmitting\(false\);\s*options\?\.onRefused\?\.\(\);/);
   });
+
+  // A throw reaching handleSendClick's outer catch after `handler()` already posted the
+  // message (quest adoption, cache migration, cleanup) must not be reported as a refusal -
+  // ReplyChoiceButtons would otherwise drop a pick for a message that actually sent.
+  it('only reports a refusal for a throw before the message was dispatched', () => {
+    const dispatchCall = at('data = await handler(sessionToSend);');
+    const dispatchedFlagSet = at('dispatchedRef.current = true;');
+    const guardedOuterRefusal = at('if (!dispatchedRef.current) options?.onRefused?.();');
+    expect(dispatchedFlagSet).toBeGreaterThan(dispatchCall);
+    expect(guardedOuterRefusal).toBeGreaterThan(dispatchedFlagSet);
+    // Reset per call so a later send doesn't inherit a stale `true` from an earlier one.
+    expect(source).toMatch(/dispatchedRef\.current = false;\s*\n\s*if \(submittingRef\.current\) \{/);
+  });
 });

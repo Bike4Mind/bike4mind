@@ -38,7 +38,7 @@ const ReplyChoiceButtons: FC<ReplyChoiceButtonsProps> = ({ questId, sessionId, s
     inFlight.current = true;
     setPendingPick(index);
     try {
-      const sent = await sendPrompt(formatChoiceReply(suggestedChoices.options[index]));
+      const sent = await sendPrompt(formatChoiceReply(suggestedChoices.options[index]), { respectBlockedState: true });
       if (sent) {
         setLocalPick(index);
         void recordReplyChoice(queryClient, { sessionId, questId, suggestedChoices, index });
