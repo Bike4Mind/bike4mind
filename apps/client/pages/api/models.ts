@@ -5,6 +5,7 @@ import { apiKeyRepository, adminSettingsRepository, cacheRepository } from '@bik
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { modelCatalogListingOptions } from '@server/utils/modelCatalogOptions';
+import { getImageModelCapabilities, isImageModel, type ModelInfo } from '@bike4mind/common';
 
 // Short floor for cross-tab / fresh page loads. The dominant repeat-open case is
 // already absorbed by useModelInfo's 1h client staleTime; this just bounds how
@@ -16,6 +17,12 @@ const MODELS_CACHE_TTL_MS = 60_000;
 // a list assembled from someone else's keys.
 const ANONYMOUS_CACHE_ID = 'anonymous';
 
+// Self-hosted `local-image/*` checkpoints are discovered at runtime and carry no known rules.
+function withImageCapabilities(model: ModelInfo): ModelInfo {
+  if (!isImageModel(model.id)) return model;
+  return { ...model, image: getImageModelCapabilities(model.id) };
+}
+
 async function buildModelsResponse(userId: string | null) {
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters);
@@ -25,12 +32,13 @@ async function buildModelsResponse(userId: string | null) {
   // provider missing from the table is a provider no user can select.
   const apiKeys = buildApiKeyTable(coreKeys);
 
-  const models = await getAvailableModels(apiKeys, modelCatalogListingOptions());
+  const listedModels = await getAvailableModels(apiKeys, modelCatalogListingOptions());
+  const models = listedModels.map(withImageCapabilities);
 
   // Superseded pins the client can offer to upgrade, resolved by llm-adapters
   // through the same catalog-overlay-then-static-map chain a pinned request takes.
   // Reads the fan-out getAvailableModels just did, so it costs no extra work.
-  return { models, supersededModels: getSupersededModels(models) };
+  return { models, supersededModels: getSupersededModels(listedModels) };
 }
 
 const handler = baseApi().get(async (req, res) => {
