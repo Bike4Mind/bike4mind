@@ -281,6 +281,10 @@ export function useSendMessage({
     submittingRef.current = value;
     setSubmittingState(value);
   }, []);
+  // Set once `handler()` below has actually posted the message. A throw past that point
+  // (quest adoption, cache migration, cleanup) must not be reported as a refusal - the
+  // send already happened, so `onRefused` would wrongly tell the caller its pick was lost.
+  const dispatchedRef = useRef(false);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
@@ -355,6 +359,7 @@ export function useSendMessage({
     newPrompt?: string,
     options?: SendClickOptions
   ): Promise<IChatHistoryItemDocument | undefined> => {
+    dispatchedRef.current = false;
     if (submittingRef.current) {
       options?.onRefused?.();
       return;
@@ -1171,6 +1176,10 @@ export function useSendMessage({
       return;
     }
 
+    // The message is posted from here on; a later throw (quest adoption, cache migration,
+    // cleanup) is cleanup failing, not a refusal, so the outer catch must not report it as one.
+    dispatchedRef.current = true;
+
     setWorkBenchAgents([]);
     setSubmitting(false);
 
@@ -1250,7 +1259,10 @@ export function useSendMessage({
         // send failures itself (LLMCommand toasts, optimistic rollback).
         console.error('Unexpected error sending message:', error);
         toast.error("Couldn't send your message - please try again.");
-        options?.onRefused?.();
+        // A throw after dispatch (`dispatchedRef`) is cleanup failing on an already-sent
+        // message, not a refusal - calling onRefused here would tell the caller (e.g. a
+        // reply-choice button) its pick was lost when it wasn't.
+        if (!dispatchedRef.current) options?.onRefused?.();
         return undefined;
       }
     },
