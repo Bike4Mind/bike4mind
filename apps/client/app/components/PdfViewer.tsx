@@ -13,7 +13,8 @@ import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
 //
 // Load the worker as a plain same-origin static asset (copied into /public from the installed
 // pdfjs-dist by scripts/copy-pdf-worker.mjs, which must copy out of the same build directory this
-// import points at). pdf.js instantiates the module worker itself from this URL.
+// import points at, and name it with this same `pdfjsLib.version`). pdf.js instantiates the
+// module worker itself from this URL.
 //
 // We intentionally do NOT use `new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs',
 // import.meta.url), { type: 'module' })`: Turbopack rewrites that into its own worker helper,
@@ -21,9 +22,11 @@ import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
 // shim. That shim can't run pdf.js's pre-built ESM worker, so the worker never initializes and
 // `getDocument()` hangs forever on "Loading PDF...". Pointing `workerSrc` at a
 // static file sidesteps the bundler's worker transform entirely; CSP `worker-src 'self'` allows
-// it, and the copied file always matches the resolved pdfjs-dist version.
+// it. The version in the filename keeps the URL from being cached across a pdfjs-dist bump: pdf.js
+// hard-errors on an API/worker version mismatch, so an unversioned URL could serve a returning
+// browser's cached worker from an older build.
 if (typeof window !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `/pdf.worker-${pdfjsLib.version}.min.mjs`;
 }
 
 // Maximum pages to render at once to prevent memory issues
