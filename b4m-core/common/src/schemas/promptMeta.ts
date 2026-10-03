@@ -892,9 +892,12 @@ export const PromptMetaZodSchema = z.object({
    */
   finishReason: z.string().optional(),
   /**
-   * Why reply-choice buttons did or did not appear: `offered` is whether REPLY_CHOICES_GUIDANCE was
-   * in the prompt, `status`/`reason` the finalize outcome (see ReplyChoicesOutcome in
-   * ../utils/replyChoices.ts). Written once at finalize; absent on turns that never finalized.
+   * Why reply-choice buttons did or did not appear: `offered` is whether REPLY_CHOICES_GUIDANCE
+   * actually reached the model this turn - requested AND not evicted by the system-prompt budget
+   * (see SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) - `status`/`reason` the
+   * finalize outcome (see ReplyChoicesOutcome in ../utils/replyChoices.ts). Written once at
+   * finalize; absent on Research Mode turns (which skip finalize entirely) and any other turn that
+   * never finalized.
    */
   replyChoices: z
     .object({

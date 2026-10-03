@@ -4982,10 +4982,18 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      // Echoes the admitted system/context stack (argument 2) back into the returned messages, so
+      // systemPromptDetails' delivered-by-reference check (toPromptDetails in systemPromptSources.ts)
+      // reports every admitted source as delivered - matching production when nothing is evicted.
+      // The reply-choices eviction test below overrides this per-call via mockImplementationOnce.
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [...(contextAndSystemMessages ?? []), { role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -5088,6 +5096,27 @@ describe('ChatCompletionProcess', () => {
         expect.stringContaining('[ReplyChoices]'),
         expect.objectContaining({ reason: 'too_few', offered: false })
       );
+    });
+
+    // The system-prompt budget can evict REPLY_CHOICES_GUIDANCE (lowest priority - see
+    // SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) even though it was requested,
+    // so `offered` must reflect delivery, not just the request-time decision.
+    it('records offered: false when the guidance was requested but evicted by the system-prompt budget', async () => {
+      mockedBuildAndSortMessages.mockImplementationOnce(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [
+              ...(contextAndSystemMessages ?? []).filter((m: any) => m.content !== REPLY_CHOICES_GUIDANCE),
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
+
+      await runWithTools([], undefined, {});
+
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'absent' });
     });
   });
 

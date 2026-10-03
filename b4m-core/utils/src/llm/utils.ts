@@ -29,6 +29,7 @@ import {
   resolveHistoryFetchLimit,
   formatChoicesBlock,
   MIN_REPLY_CHOICES,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -399,6 +400,24 @@ function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchMode
 }
 
 /**
+ * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
+ * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
+ */
+function isFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
+  const replies = item.replies ?? [];
+  const firstNonThinkIndex = replies.findIndex(r => !r.trim().startsWith('<think>'));
+  if (firstNonThinkIndex === -1) return false;
+  let lastVisibleIndex = -1;
+  for (let i = replies.length - 1; i >= 0; i--) {
+    if (visibleReplyText(replies[i])) {
+      lastVisibleIndex = i;
+      break;
+    }
+  }
+  return lastVisibleIndex !== -1 && firstNonThinkIndex === lastVisibleIndex;
+}
+
+/**
  * The turn's history text with its stored choices re-attached as a ```choices block. Finalize
  * strips the block from the stored reply, so without this the model sees its own earlier turns end
  * without one and drifts into omitting it. Model-facing only; the stored quest is never touched.
@@ -576,8 +595,10 @@ export async function fetchAndProcessPreviousMessages(
     model?: string;
     /**
      * Re-attach each turn's stored `suggestedChoices` to its assistant text as a choices block.
-     * Set only when REPLY_CHOICES_GUIDANCE ships on this request (ChatCompletionProcess
-     * `replyChoicesOffered`), so history never demonstrates a format the model was not told about.
+     * Set only when REPLY_CHOICES_GUIDANCE was requested this turn (ChatCompletionProcess
+     * `replyChoicesOffered`). That does not guarantee the model actually saw the guidance this
+     * turn - the system-prompt budget can still evict it (see systemPromptSources.ts) - so history
+     * can demonstrate a format offered but not delivered on the current request.
      */
     includeReplyChoices?: boolean;
   }
@@ -714,10 +735,11 @@ export async function fetchAndProcessPreviousMessages(
       const assistantContent: MessageContentObject[] = [];
 
       if (textReply) {
-        const text = stripToolOutputMarker(textReply);
+        // No choices block here: this text precedes the tool_use parts, so it would teach the model
+        // to offer choices before calling a tool.
         assistantContent.push({
           type: 'text',
-          text: includeReplyChoices ? withStoredChoices(text, cur) : text,
+          text: stripToolOutputMarker(textReply),
         } as MessageContentText);
       }
 
@@ -751,7 +773,10 @@ export async function fetchAndProcessPreviousMessages(
       const textReply = historyTextReply(cur);
       if (textReply) {
         const text = stripToolOutputMarker(textReply);
-        acc.push({ role: 'assistant', content: includeReplyChoices ? withStoredChoices(text, cur) : text });
+        // Only re-attach when the picked slot is also the turn's final visible answer - see
+        // isFinalVisibleReply for why an earlier slot must never get the block.
+        const reattach = includeReplyChoices && isFinalVisibleReply(cur);
+        acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
       }
     }
 

@@ -4391,14 +4391,27 @@ describe('fetchAndProcessPreviousMessages - stored reply choices', () => {
     expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
   });
 
-  it('appends to the text block of a replayed tool turn', async () => {
+  it('never attaches a block on a replayed tool turn, even when offered', async () => {
     const item = makeItem(1, {
       suggestedChoices: { options },
       promptMeta: { functionCalls: [{ id: 'toolu_1', name: 'web_search', parameters: {}, returnValue: 'ok' }] },
     });
     const messages = await fetchWith(item, true);
     const content = messages[1].content as Array<{ type: string; text?: string }>;
-    expect(content[0]).toEqual({ type: 'text', text: 'reply 1' + formatChoicesBlock(options) });
+    // historyTextReply returns the slot BEFORE the tool_use blocks (the pre-tool-call preamble),
+    // never the turn's final answer, so a block here would teach "choices before the tool call".
+    expect(content[0]).toEqual({ type: 'text', text: 'reply 1' });
     expect(content[1].type).toBe('tool_use');
+  });
+
+  it('does not attach a block when the first visible slot is not the last', async () => {
+    const item = makeItem(1, {
+      replies: ['partial answer before tool call', 'final answer after tool call'],
+      suggestedChoices: { options },
+    });
+    const messages = await fetchWith(item, true);
+    // historyTextReply picks the FIRST non-<think> slot ('partial answer...'), which is not the
+    // last slot carrying visible text ('final answer...') - so no block is attached.
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'partial answer before tool call' });
   });
 });
