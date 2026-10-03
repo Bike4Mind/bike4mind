@@ -3,6 +3,7 @@ import { FC, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
+import { describePdfLoadError, type PdfLoadErrorDescription } from './pdfLoadError';
 
 // We import the `legacy/` entry point, not pdfjs-dist's default build. The default build is
 // compiled for "the latest" browsers and reaches for globals well above this app's Next target:
@@ -13,7 +14,8 @@ import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
 //
 // Load the worker as a plain same-origin static asset (copied into /public from the installed
 // pdfjs-dist by scripts/copy-pdf-worker.mjs, which must copy out of the same build directory this
-// import points at). pdf.js instantiates the module worker itself from this URL.
+// import points at, and name it with this same `pdfjsLib.version`). pdf.js instantiates the
+// module worker itself from this URL.
 //
 // We intentionally do NOT use `new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs',
 // import.meta.url), { type: 'module' })`: Turbopack rewrites that into its own worker helper,
@@ -21,9 +23,13 @@ import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
 // shim. That shim can't run pdf.js's pre-built ESM worker, so the worker never initializes and
 // `getDocument()` hangs forever on "Loading PDF...". Pointing `workerSrc` at a
 // static file sidesteps the bundler's worker transform entirely; CSP `worker-src 'self'` allows
-// it, and the copied file always matches the resolved pdfjs-dist version.
+// it. Some client-side cache keyed by the URL (browser HTTP cache, a service worker, or a CDN
+// edge - which layer held it is not known) kept serving a worker from an older pdfjs-dist, and
+// pdf.js hard-errors on an API/worker version mismatch rather than tolerating it. Baking the
+// version into the filename gives every pdfjs-dist bump a fresh URL that no URL-keyed cache can
+// hold stale.
 if (typeof window !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `/pdf.worker-${pdfjsLib.version}.min.mjs`;
 }
 
 // Maximum pages to render at once to prevent memory issues
@@ -41,14 +47,18 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
   const theme = useTheme();
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PdfLoadErrorDescription | null>(null);
   const [numPages, setNumPages] = useState(0);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
 
   useEffect(() => {
     if (!file) {
-      setError('No file provided');
+      setError({
+        title: 'No file provided',
+        detail: 'No file was supplied to the PDF viewer, so there is nothing to display.',
+        technical: 'No file provided',
+      });
       setLoading(false);
       return;
     }
@@ -124,8 +134,9 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
-        console.error('Error loading PDF:', err);
-        setError('Unable to load PDF document. Please try again or download the file.');
+        const description = describePdfLoadError(err);
+        console.error('Error loading PDF:', err, description.technical);
+        setError(description);
         setLoading(false);
       }
     };
@@ -193,13 +204,40 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
             alignItems: 'center',
             justifyContent: 'center',
             flexDirection: 'column',
-            gap: 2,
+            gap: 1.5,
             backgroundColor: 'background.level2',
             zIndex: 10,
+            padding: 3,
+            textAlign: 'center',
           }}
         >
-          <Typography level="body-sm" color="danger">
-            {error}
+          <Typography level="title-md" color="danger" data-testid="pdf-viewer-error-title">
+            {error.title}
+          </Typography>
+          <Typography level="body-sm" sx={{ maxWidth: 480 }} data-testid="pdf-viewer-error-detail">
+            {error.detail}
+          </Typography>
+          {file && (
+            <Button
+              component="a"
+              href={file}
+              download={filename}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              variant="solid"
+              color="primary"
+              data-testid="pdf-viewer-error-download-btn"
+            >
+              Download
+            </Button>
+          )}
+          <Typography
+            level="body-xs"
+            sx={{ color: 'text.tertiary', maxWidth: 480 }}
+            data-testid="pdf-viewer-error-technical"
+          >
+            Technical details: {error.technical}
           </Typography>
         </Box>
       )}
@@ -231,7 +269,16 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
             )}
           </Box>
           {file && (
-            <Button component="a" href={file} download={filename} size="sm" variant="solid" color="primary">
+            <Button
+              component="a"
+              href={file}
+              download={filename}
+              target="_blank"
+              rel="noopener noreferrer"
+              size="sm"
+              variant="solid"
+              color="primary"
+            >
               Download
             </Button>
           )}
