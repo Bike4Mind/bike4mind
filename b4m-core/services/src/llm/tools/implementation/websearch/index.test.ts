@@ -707,6 +707,36 @@ describe('webSearchTool - hedged backup and cache', () => {
     expect(calls(fetchStub, isSearxng)).toBe(1);
   });
 
+  it('starts the backup at once when the lead answers with no results, and returns its answer', async () => {
+    vi.useFakeTimers();
+    configure('auto');
+    const fetchStub = stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [serpHit] });
+
+    const pending = buildTool().toolFn({ query: 'q' });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+    await expect(pending).resolves.toContain('serp.example');
+  });
+
+  it('returns no results rather than failing when the lead is empty and the backup fails', async () => {
+    configure('auto');
+    stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+  });
+
+  it('returns no results when both providers answer empty', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({
+      searxng: { status: 200, body: { results: [] } },
+      serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+    });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
   it('sends the image search to the provider that answered, not the one that failed', async () => {
     configure('auto');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
