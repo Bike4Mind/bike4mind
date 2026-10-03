@@ -4951,14 +4951,19 @@ describe('ChatCompletionProcess', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
     const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
 
-    const runWithTools = async (tools: any[], disabledTools?: string[], extraBody: Record<string, unknown> = {}) => {
+    const runWithTools = async (
+      tools: any[],
+      disabledTools?: string[],
+      extraBody: Record<string, unknown> = {},
+      reply = 'Hi!'
+    ) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
-          await cb(['Hi!']);
+          await cb([reply]);
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
@@ -4977,10 +4982,18 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      // Echoes the admitted system/context stack (argument 2) back into the returned messages, so
+      // systemPromptDetails' delivered-by-reference check (toPromptDetails in systemPromptSources.ts)
+      // reports every admitted source as delivered - matching production when nothing is evicted.
+      // The reply-choices eviction test below overrides this per-call via mockImplementationOnce.
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [...(contextAndSystemMessages ?? []), { role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
@@ -5039,6 +5052,71 @@ describe('ChatCompletionProcess', () => {
     // Voice sets this: it speaks the raw reply stream and has no buttons to render.
     it('omits the reply-choices guidance under skipReplyChoices', async () => {
       expect(await hasReplyChoices({ skipReplyChoices: true })).toBe(false);
+    });
+
+    // History re-attaches stored choices only when the guidance ships, so it never demonstrates a
+    // format the model was not told about.
+    const historyIncludesReplyChoices = async (extraBody: Record<string, unknown>) => {
+      mockedFetchAndProcessPreviousMessages.mockClear();
+      await runWithTools([], undefined, extraBody);
+      return mockedFetchAndProcessPreviousMessages.mock.calls.map(call => call[2]?.includeReplyChoices);
+    };
+
+    it('asks history for stored choices when the guidance is offered', async () => {
+      expect(await historyIncludesReplyChoices({})).toEqual([true]);
+    });
+
+    it.each([{ skipReplyChoices: true }, { skipAutoOffers: true }, { promptMode: 'raw' }])(
+      'does not ask history for stored choices under %j',
+      async extraBody => {
+        expect(await historyIncludesReplyChoices(extraBody)).toEqual([false]);
+      }
+    );
+
+    it('records on promptMeta that choices were offered but absent', async () => {
+      await runWithTools([], undefined, {});
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'absent' });
+    });
+
+    it('records parsed choices on promptMeta', async () => {
+      const options = [
+        { label: 'One', description: 'Do the first thing.' },
+        { label: 'Two', description: 'Do the second thing.' },
+      ];
+      await runWithTools([], undefined, {}, 'Pick one.\n\n```choices\n' + JSON.stringify({ options }) + '\n```');
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'parsed' });
+      expect(mockQuest.suggestedChoices).toEqual({ options });
+    });
+
+    it('records and logs an invalid block with its reason', async () => {
+      const reply = 'Pick one.\n\n```choices\n{"options":[{"label":"Only","description":"One option."}]}\n```';
+      await runWithTools([], undefined, { skipReplyChoices: true }, reply);
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'invalid', reason: 'too_few' });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[ReplyChoices]'),
+        expect.objectContaining({ reason: 'too_few', offered: false })
+      );
+    });
+
+    // The system-prompt budget can evict REPLY_CHOICES_GUIDANCE (lowest priority - see
+    // SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) even though it was requested,
+    // so `offered` must reflect delivery, not just the request-time decision.
+    it('records offered: false when the guidance was requested but evicted by the system-prompt budget', async () => {
+      mockedBuildAndSortMessages.mockImplementationOnce(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [
+              ...(contextAndSystemMessages ?? []).filter((m: any) => m.content !== REPLY_CHOICES_GUIDANCE),
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
+
+      await runWithTools([], undefined, {});
+
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'absent' });
     });
   });
 

@@ -26,6 +26,27 @@ export const MAX_REPLY_CHOICES = 4;
 export const MAX_CHOICE_LABEL_LENGTH = 40;
 export const MAX_CHOICE_DESCRIPTION_LENGTH = 300;
 
+/** Why a choices block produced no buttons. Machine-readable; persisted on promptMeta.replyChoices. */
+export const REPLY_CHOICES_INVALID_REASONS = [
+  'json',
+  'shape',
+  'label_length',
+  'description_length',
+  'duplicate_label',
+  'too_few',
+  'unterminated',
+  'think_unclosed',
+] as const;
+export type ReplyChoicesInvalidReason = (typeof REPLY_CHOICES_INVALID_REASONS)[number];
+
+/**
+ * What became of a reply's choices block: `parsed` (buttons), `absent` (no block in the final
+ * answer), or `invalid` with the first rule it broke. Must stay in sync with the Zod
+ * `PromptMetaZodSchema.replyChoices` in ../schemas/promptMeta.ts.
+ */
+export type ReplyChoicesOutcome =
+  { status: 'parsed' } | { status: 'absent' } | { status: 'invalid'; reason: ReplyChoicesInvalidReason };
+
 export interface ExtractedChoices {
   /** The reply with the block removed; the input unchanged when there was none. */
   text: string;
@@ -33,7 +54,11 @@ export interface ExtractedChoices {
   choices: ChoiceOption[] | null;
   /** True when a block was found and stripped, valid or not. */
   found: boolean;
+  outcome: ReplyChoicesOutcome;
 }
+
+const ABSENT: ReplyChoicesOutcome = { status: 'absent' };
+const invalid = (reason: ReplyChoicesInvalidReason): ReplyChoicesOutcome => ({ status: 'invalid', reason });
 
 interface FenceSpan {
   /** Offset of the open fence line. */
@@ -114,9 +139,12 @@ function findLastChoicesFence(text: string): FenceSpan | null {
  * from the prose.
  */
 export function extractChoicesBlock(reply: string): ExtractedChoices {
-  const unchanged = { text: reply, choices: null, found: false };
+  const unchanged = { text: reply, choices: null, found: false, outcome: ABSENT };
   const start = answerStart(reply);
-  if (start === null) return unchanged;
+  // Reported, not read: a block inside an unclosed <think> is still reasoning.
+  if (start === null) {
+    return findLastChoicesFence(reply) ? { ...unchanged, outcome: invalid('think_unclosed') } : unchanged;
+  }
   const answer = reply.slice(start);
   const fence = findLastChoicesFence(answer);
   if (!fence) return unchanged;
@@ -124,8 +152,11 @@ export function extractChoicesBlock(reply: string): ExtractedChoices {
   const before = answer.slice(0, fence.start).trimEnd();
   const after = fence.end === null ? '' : answer.slice(fence.end).replace(/^(?:[ \t]*\r?\n)+/, '');
   const kept = after.trim() ? (before ? `${before}\n\n${after}` : after) : before;
-  const choices = fence.end === null ? null : parseChoiceOptions(fence.body);
-  return { text: reply.slice(0, start) + kept, choices, found: true };
+  const parsed = fence.end === null ? { reason: 'unterminated' as const } : parseChoiceOptions(fence.body);
+  const text = reply.slice(0, start) + kept;
+  return 'options' in parsed
+    ? { text, choices: parsed.options, found: true, outcome: { status: 'parsed' } }
+    : { text, choices: null, found: true, outcome: invalid(parsed.reason) };
 }
 
 /**
@@ -137,47 +168,63 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
   replies: string[];
   choices: ChoiceOption[] | null;
   found: boolean;
+  outcome: ReplyChoicesOutcome;
 } {
   const stripped = [...replies];
   let answerIndex = stripped.length - 1;
   while (answerIndex >= 0 && !visibleReplyText(stripped[answerIndex])) answerIndex -= 1;
-  if (answerIndex < 0) return { replies: stripped, choices: null, found: false };
+  if (answerIndex < 0) return { replies: stripped, choices: null, found: false, outcome: ABSENT };
 
   const result = extractChoicesBlock(stripped[answerIndex]);
   if (result.found) stripped[answerIndex] = result.text;
-  return { replies: stripped, choices: result.choices, found: result.found };
+  return { replies: stripped, choices: result.choices, found: result.found, outcome: result.outcome };
 }
 
-function parseChoiceOptions(body: string): ChoiceOption[] | null {
+type ParsedOptions = { options: ChoiceOption[] } | { reason: ReplyChoicesInvalidReason };
+
+function parseChoiceOptions(body: string): ParsedOptions {
   let parsed: unknown;
   try {
     parsed = JSON.parse(body.trim());
   } catch {
-    return null;
+    return { reason: 'json' };
   }
   const raw = Array.isArray(parsed)
     ? parsed
     : parsed && typeof parsed === 'object' && Array.isArray((parsed as { options?: unknown }).options)
       ? (parsed as { options: unknown[] }).options
       : null;
-  if (!raw) return null;
+  if (!raw) return { reason: 'shape' };
 
   const options: ChoiceOption[] = [];
   const seenLabels = new Set<string>();
   for (const item of raw.slice(0, MAX_REPLY_CHOICES)) {
-    if (!item || typeof item !== 'object') return null;
+    if (!item || typeof item !== 'object') return { reason: 'shape' };
     const { label, description } = item as { label?: unknown; description?: unknown };
-    if (typeof label !== 'string' || typeof description !== 'string') return null;
+    if (typeof label !== 'string' || typeof description !== 'string') return { reason: 'shape' };
     const cleanLabel = label.trim();
     const cleanDescription = description.trim();
-    if (!cleanLabel || cleanLabel.length > MAX_CHOICE_LABEL_LENGTH) return null;
-    if (!cleanDescription || cleanDescription.length > MAX_CHOICE_DESCRIPTION_LENGTH) return null;
+    if (!cleanLabel || cleanLabel.length > MAX_CHOICE_LABEL_LENGTH) return { reason: 'label_length' };
+    if (!cleanDescription || cleanDescription.length > MAX_CHOICE_DESCRIPTION_LENGTH) {
+      return { reason: 'description_length' };
+    }
     // A duplicate label would render two buttons with identical visible text.
-    if (seenLabels.has(cleanLabel)) return null;
+    if (seenLabels.has(cleanLabel)) return { reason: 'duplicate_label' };
     seenLabels.add(cleanLabel);
     options.push({ label: cleanLabel, description: cleanDescription });
   }
-  return options.length >= MIN_REPLY_CHOICES ? options : null;
+  return options.length >= MIN_REPLY_CHOICES ? { options } : { reason: 'too_few' };
+}
+
+/**
+ * A choices block in exactly the {@link REPLY_CHOICES_GUIDANCE} format, for re-attaching stored
+ * options to an assistant turn in model-facing history (finalize strips the block from the stored
+ * reply, so without it the model's own history teaches it to omit the block). Only label and
+ * description are emitted - never selectedIndex or any other stored field.
+ */
+export function formatChoicesBlock(options: readonly ChoiceOption[]): string {
+  const payload = { options: options.map(({ label, description }) => ({ label, description })) };
+  return '\n\n```' + CHOICES_FENCE_LANGUAGE + '\n' + JSON.stringify(payload) + '\n```';
 }
 
 /**
@@ -219,19 +266,22 @@ export const REPLY_CHOICES_GUIDANCE = [
 /**
  * Finalize step for a completed reply: strips a trailing choices block from `replies` and `reply`
  * and sets `suggestedChoices` (cleared when this reply offered none, so a regenerated turn never
- * keeps the previous answer's buttons). Mutates `quest`.
+ * keeps the previous answer's buttons). Mutates `quest`. Returns why buttons did or did not appear;
+ * when neither source parsed, the slots' outcome wins unless they had no block at all.
  */
 export function applyReplyChoices(quest: {
   reply?: string | null;
   replies?: string[];
   suggestedChoices?: SuggestedChoices;
-}): void {
+}): ReplyChoicesOutcome {
   const fromSlots = stripChoicesFromReplies(quest.replies ?? []);
   const fromReply = typeof quest.reply === 'string' ? extractChoicesBlock(quest.reply) : null;
   if (fromSlots.found) quest.replies = fromSlots.replies;
   if (fromReply?.found) quest.reply = fromReply.text;
   const options = fromSlots.choices ?? fromReply?.choices ?? null;
   quest.suggestedChoices = options ? { options } : undefined;
+  if (options) return { status: 'parsed' };
+  return fromSlots.outcome.status !== 'absent' ? fromSlots.outcome : (fromReply?.outcome ?? ABSENT);
 }
 
 /**
