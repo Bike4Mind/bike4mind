@@ -12,7 +12,13 @@ import {
   ATTACHMENT_DELIVERED_NOTICE,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
-import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import {
+  DEFAULT_HISTORY_FETCH_LIMIT,
+  FORMAT_PROMPT_TEMPLATE,
+  UNLIMITED_HISTORY_COUNT,
+  extractChoicesBlock,
+  formatChoicesBlock,
+} from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -4333,5 +4339,66 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
     expect(untouched.messageTruncation?.wasTruncated).toBe(false);
     expect(truncated.messageTruncation?.wasTruncated).toBe(true);
     expect(truncated.messageTruncation?.truncationMethod).toBe('token-budget');
+  });
+});
+
+describe('fetchAndProcessPreviousMessages - stored reply choices', () => {
+  const options = [
+    { label: 'Extend', description: 'Extend the brief.' },
+    { label: 'Ship', description: 'Ship it as is.' },
+  ];
+  const makeItem = (n: number, overrides: Record<string, unknown> = {}) => ({
+    id: String(n).padStart(24, '0'),
+    sessionId: 'session1',
+    prompt: `prompt ${n}`,
+    reply: `reply ${n}`,
+    replies: [`reply ${n}`],
+    timestamp: new Date(n * 1000),
+    type: 'message',
+    status: 'done',
+    ...overrides,
+  });
+  const session = { id: 'session1' } as unknown as ISessionDocument;
+  const fetchWith = async (item: Record<string, unknown>, includeReplyChoices?: boolean) => {
+    const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
+    const [messages] = await fetchAndProcessPreviousMessages(session, 10, { db, includeReplyChoices });
+    return messages;
+  };
+
+  it('re-attaches stored choices to the assistant turn when the guidance is offered', async () => {
+    const item = makeItem(1, { suggestedChoices: { options, selectedIndex: 1 } });
+    const messages = await fetchWith(item, true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' + formatChoicesBlock(options) });
+    // The re-attached block parses back to exactly the stored options, and selectedIndex never leaks.
+    const content = messages[1].content as string;
+    expect(extractChoicesBlock(content).choices).toEqual(options);
+    expect(content).not.toContain('selectedIndex');
+    expect(item.replies).toEqual(['reply 1']);
+  });
+
+  it('leaves history alone when the guidance is withheld', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options } }), false);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('defaults to leaving history alone', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options } }));
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('skips a turn with fewer than two stored options', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options: [options[0]] } }), true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('appends to the text block of a replayed tool turn', async () => {
+    const item = makeItem(1, {
+      suggestedChoices: { options },
+      promptMeta: { functionCalls: [{ id: 'toolu_1', name: 'web_search', parameters: {}, returnValue: 'ok' }] },
+    });
+    const messages = await fetchWith(item, true);
+    const content = messages[1].content as Array<{ type: string; text?: string }>;
+    expect(content[0]).toEqual({ type: 'text', text: 'reply 1' + formatChoicesBlock(options) });
+    expect(content[1].type).toBe('tool_use');
   });
 });

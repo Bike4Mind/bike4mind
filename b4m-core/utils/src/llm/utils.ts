@@ -27,6 +27,8 @@ import {
   SupportedEmbeddingModel,
   isUnlimitedHistory,
   resolveHistoryFetchLimit,
+  formatChoicesBlock,
+  MIN_REPLY_CHOICES,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -396,6 +398,17 @@ function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchMode
   return reply || researchModeReplyText(item.researchModeResults);
 }
 
+/**
+ * The turn's history text with its stored choices re-attached as a ```choices block. Finalize
+ * strips the block from the stored reply, so without this the model sees its own earlier turns end
+ * without one and drifts into omitting it. Model-facing only; the stored quest is never touched.
+ */
+function withStoredChoices(text: string, item: Pick<IChatHistoryItem, 'suggestedChoices'>): string {
+  const options = item.suggestedChoices?.options;
+  if (!text || !options || options.length < MIN_REPLY_CHOICES) return text;
+  return text + formatChoicesBlock(options);
+}
+
 /** Stands in for a tool_result whose returnValue was never recorded; must not be empty. */
 export const TOOL_RESULT_NOT_RECORDED = '[tool result not recorded]';
 
@@ -528,6 +541,7 @@ export async function fetchAndProcessPreviousMessages(
     verbatimTokenBudget,
     excludeCurrentPrompt = false,
     model,
+    includeReplyChoices = false,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
@@ -560,6 +574,12 @@ export async function fetchAndProcessPreviousMessages(
      * automatically for every caller instead of depending on each one remembering to opt in.
      */
     model?: string;
+    /**
+     * Re-attach each turn's stored `suggestedChoices` to its assistant text as a choices block.
+     * Set only when REPLY_CHOICES_GUIDANCE ships on this request (ChatCompletionProcess
+     * `replyChoicesOffered`), so history never demonstrates a format the model was not told about.
+     */
+    includeReplyChoices?: boolean;
   }
 ): Promise<
   [
@@ -694,7 +714,11 @@ export async function fetchAndProcessPreviousMessages(
       const assistantContent: MessageContentObject[] = [];
 
       if (textReply) {
-        assistantContent.push({ type: 'text', text: stripToolOutputMarker(textReply) } as MessageContentText);
+        const text = stripToolOutputMarker(textReply);
+        assistantContent.push({
+          type: 'text',
+          text: includeReplyChoices ? withStoredChoices(text, cur) : text,
+        } as MessageContentText);
       }
 
       for (const fc of toolCalls) {
@@ -725,7 +749,10 @@ export async function fetchAndProcessPreviousMessages(
     // Priority 3: Legacy fallback - text-only replies
     else {
       const textReply = historyTextReply(cur);
-      if (textReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(textReply) });
+      if (textReply) {
+        const text = stripToolOutputMarker(textReply);
+        acc.push({ role: 'assistant', content: includeReplyChoices ? withStoredChoices(text, cur) : text });
+      }
     }
 
     return acc;
