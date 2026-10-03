@@ -5003,12 +5003,23 @@ export class ChatCompletionProcess {
         quest.status = successStatus();
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
         const replyChoicesOutcome = applyReplyChoices(quest);
-        if (quest.promptMeta) quest.promptMeta.replyChoices = { offered: replyChoicesOffered, ...replyChoicesOutcome };
+        // The system-prompt budget can evict the guidance after it was requested (lowest priority in
+        // systemPromptSources.ts), so `offered` reads what was actually delivered.
+        const replyChoicesDelivered =
+          quest.promptMeta?.context?.systemPromptDetails?.some(
+            detail => detail.name === 'reply_choices' && detail.wasIncluded
+          ) ?? false;
+        if (quest.promptMeta) {
+          quest.promptMeta.replyChoices = {
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            ...replyChoicesOutcome,
+          };
+        }
         if (replyChoicesOutcome.status === 'invalid') {
           logger.warn('[ReplyChoices] Choices block failed validation; no buttons shown', {
             questId,
             model: currentModel.id,
-            offered: replyChoicesOffered,
+            offered: replyChoicesOffered && replyChoicesDelivered,
             reason: replyChoicesOutcome.reason,
           });
         }
