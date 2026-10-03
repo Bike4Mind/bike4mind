@@ -56,6 +56,26 @@ describe('sendPromptViaComposer', () => {
     expect(handleSendClick).toHaveBeenCalledWith('2) Extend', { onRefused: expect.any(Function) });
   });
 
+  it('ignores shouldToastBlockedSend entirely when sendBlockedReason is null - the ungated, chess-style caller', async () => {
+    const handleSendClick = vi.fn().mockResolvedValue(undefined);
+    const shouldToastBlockedSend = vi.fn().mockReturnValue(true);
+    const toastInfo = vi.fn();
+
+    const sent = await sendPromptViaComposer({
+      prompt: 'I play e4 [FEN: ...]',
+      sendBlockedReason: null,
+      shouldToastBlockedSend,
+      toastInfo,
+      t,
+      handleSendClick,
+    });
+
+    expect(sent).toBe(true);
+    expect(shouldToastBlockedSend).not.toHaveBeenCalled();
+    expect(toastInfo).not.toHaveBeenCalled();
+    expect(handleSendClick).toHaveBeenCalledWith('I play e4 [FEN: ...]', { onRefused: expect.any(Function) });
+  });
+
   it('resolves false when handleSendClick reports the send as refused', async () => {
     const handleSendClick = vi.fn(async (_prompt?: string, options?: { onRefused?: () => void }) => {
       options?.onRefused?.();

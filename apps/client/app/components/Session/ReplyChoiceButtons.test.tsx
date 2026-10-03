@@ -53,7 +53,9 @@ describe('ReplyChoiceButtons', () => {
     renderChoices();
     fireEvent.click(screen.getByTestId('choice-btn-2'));
 
-    expect(sendPrompt).toHaveBeenCalledWith('Extend: Extend the loaded brief.');
+    // respectBlockedState: true is what scopes the blocked-send gate to the reply-choice path -
+    // chess and other programmatic sendPrompt callers must stay ungated (see InteractiveChessBoard).
+    expect(sendPrompt).toHaveBeenCalledWith('Extend: Extend the loaded brief.', { respectBlockedState: true });
     await waitFor(() =>
       expect(mockRecord).toHaveBeenCalledWith(expect.anything(), {
         sessionId: 'sess-1',
@@ -76,7 +78,9 @@ describe('ReplyChoiceButtons', () => {
     expect(screen.getByTestId('choice-btn-2').getAttribute('aria-pressed')).toBe('false');
 
     fireEvent.click(screen.getByTestId('choice-btn-1'));
-    expect(sendPrompt).toHaveBeenLastCalledWith('Reformulate: Re-formulate with all three pools.');
+    expect(sendPrompt).toHaveBeenLastCalledWith('Reformulate: Re-formulate with all three pools.', {
+      respectBlockedState: true,
+    });
     await waitFor(() => expect(mockRecord).toHaveBeenCalledTimes(1));
   });
 

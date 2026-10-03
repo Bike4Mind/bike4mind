@@ -34,10 +34,7 @@ const CapturedStrip: React.FC<CapturedStripProps> = ({ pieces, advantage }) => {
       data-testid="chess-captured-strip"
     >
       {pieces.map((p, i) => (
-        <Typography
-          key={`${p}-${i}`}
-          sx={{ fontSize: '1.1rem', lineHeight: 1, color: 'text.secondary' }}
-        >
+        <Typography key={`${p}-${i}`} sx={{ fontSize: '1.1rem', lineHeight: 1, color: 'text.secondary' }}>
           {PIECE_GLYPH[p]}
         </Typography>
       ))}
@@ -232,6 +229,15 @@ const InteractiveChessBoard: React.FC<InteractiveChessBoardProps> = ({
     [playerColor]
   );
 
+  // Undoes the optimistic move and unlocks the board: used whether sendPrompt threw, resolved
+  // false (refused - e.g. another send in flight), or was never available.
+  const revertOptimisticMove = useCallback(() => {
+    setOptimisticFen(null);
+    setOptimisticLastMove(null);
+    gameRef.current = new Chess(fen);
+    setIsSubmitting(false);
+  }, [fen]);
+
   const handleSquareClick = useCallback(
     async (square: string) => {
       const game = gameRef.current;
@@ -301,22 +307,18 @@ const InteractiveChessBoard: React.FC<InteractiveChessBoardProps> = ({
         try {
           if (sendPrompt) {
             // Include FEN so the LLM can call play_turn with the correct position
-            await sendPrompt(`I play ${san} [FEN: ${fen}]`);
+            const sent = await sendPrompt(`I play ${san} [FEN: ${fen}]`);
+            if (!sent) {
+              console.error('[InteractiveChessBoard] Move refused by sendPrompt');
+              revertOptimisticMove();
+            }
           } else {
             console.error('[InteractiveChessBoard] sendPrompt not available — SessionBottom not mounted?');
-            // Revert optimistic state and reset game to pre-move FEN
-            setOptimisticFen(null);
-            setOptimisticLastMove(null);
-            gameRef.current = new Chess(fen);
-            setIsSubmitting(false);
+            revertOptimisticMove();
           }
         } catch (err) {
           console.error('[InteractiveChessBoard] Failed to submit move:', err);
-          // Revert optimistic state and reset game to pre-move FEN
-          setOptimisticFen(null);
-          setOptimisticLastMove(null);
-          gameRef.current = new Chess(fen);
-          setIsSubmitting(false);
+          revertOptimisticMove();
         }
       } else {
         // Click illegal square: deselect
@@ -336,6 +338,7 @@ const InteractiveChessBoard: React.FC<InteractiveChessBoardProps> = ({
       playCapture,
       playMove,
       playGameStartIfFresh,
+      revertOptimisticMove,
     ]
   );
 
@@ -422,7 +425,7 @@ const InteractiveChessBoard: React.FC<InteractiveChessBoardProps> = ({
           {chessData.moveNumber ? ` \u2014 Move ${chessData.moveNumber}` : ''}
         </Typography>
         {isSubmitting && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Box data-testid="chess-submitting-indicator" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             <CircularProgress size="sm" sx={{ '--CircularProgress-size': '14px' }} />
             <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
               Waiting for opponent...
