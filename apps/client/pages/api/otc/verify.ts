@@ -33,6 +33,8 @@ import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { Config } from '@server/utils/config';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
+import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { mfaService } from '@bike4mind/services';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import jwt from 'jsonwebtoken';
@@ -477,6 +479,17 @@ const handler = baseApi({ auth: false })
       type: AuthEvents.REGISTER,
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
+    // Credit the signup to the product the visitor came through, if any, and only with consent
+    // - see readConsentedAcquisitionTouches. Never throws.
+    //
+    // Awaited rather than fire-and-forget for the reason the OAuth callback sets out: a signup
+    // occurs once per account, so an emit lost to a freeze is lost permanently, and the wait is
+    // paid only by the signups that actually name a product.
+    await emitSignupForSourceProducts({
+      userId: newUser.id,
+      touches: readConsentedAcquisitionTouches(req),
+      method: 'otc',
+    });
 
     const registrationSession = await authSessionService.issueSession(
       newUser.id,

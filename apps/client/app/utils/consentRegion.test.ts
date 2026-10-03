@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { readConsentRegion, readSharedConsent, REGION_COOKIE, DECISION_COOKIE } from './consentRegion';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { APP_DECISION_COOKIE, DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { readConsentRegion, readSharedConsent, publishResolvedConsent } from './consentRegion';
 
 function setCookie(raw: string) {
   document.cookie = raw;
@@ -81,5 +82,62 @@ describe('readSharedConsent', () => {
     setCookie(`${DECISION_COOKIE}=denied`);
     expect(readConsentRegion()).toBe('row');
     expect(readSharedConsent()).toBe('denied');
+  });
+});
+
+describe('publishResolvedConsent', () => {
+  afterEach(clearCookies);
+
+  const published = () =>
+    document.cookie
+      .split('; ')
+      .find(c => c.startsWith(`${APP_DECISION_COOKIE}=`))
+      ?.slice(APP_DECISION_COOKIE.length + 1);
+
+  // The server cannot read this origin's localStorage decision, so the banner hands it the
+  // resolution instead. Both values matter: 'denied' is what stops a stale marketing grant
+  // attributing a visitor who declined here.
+  it.each(['granted', 'denied'] as const)('publishes %s where the server can read it', value => {
+    publishResolvedConsent(value);
+    expect(published()).toBe(value);
+  });
+
+  // The counterweight to publishing an auto-allow: a visitor who carries one into the opt-in
+  // region resolves to 'unset' on the next load, and must stop being attributed at that point
+  // rather than keeping a 90-day grant they never gave.
+  it('withdraws a previously published decision on unset', () => {
+    publishResolvedConsent('granted');
+    expect(published()).toBe('granted');
+
+    publishResolvedConsent('unset');
+    expect(published()).toBeUndefined();
+  });
+
+  // Load-bearing, not cosmetic: the OAuth callback reads this cookie on a top-level cross-site
+  // GET from the IdP, and SameSite=Strict is withheld on exactly that navigation. Under Strict
+  // every app-direct consented OAuth signup is suppressed, and the callback tests cannot see it
+  // because they inject the cookie straight into the request headers - so it fails here.
+  it.each(['granted', 'denied', 'unset'] as const)('writes %s as a SameSite=Lax, path=/ cookie', value => {
+    const setSpy = vi.spyOn(document, 'cookie', 'set');
+    try {
+      publishResolvedConsent(value);
+      const written = setSpy.mock.calls.map(([v]) => v as string).find(v => v.startsWith(`${APP_DECISION_COOKIE}=`));
+      expect(written).toBeDefined();
+      expect(written).toContain('path=/');
+      expect(written).toContain('SameSite=Lax');
+      expect(written).not.toContain('SameSite=Strict');
+    } finally {
+      setSpy.mockRestore();
+    }
+  });
+
+  it('leaves the marketing site and region cookies alone', () => {
+    setCookie(`${DECISION_COOKIE}=denied`);
+    setCookie(`${REGION_COOKIE}=eu`);
+
+    publishResolvedConsent('granted');
+
+    expect(readSharedConsent()).toBe('denied');
+    expect(readConsentRegion()).toBe('eu');
   });
 });

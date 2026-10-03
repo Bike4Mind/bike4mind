@@ -108,6 +108,10 @@ vi.mock('@server/auth/tokenGenerator', () => ({
 }));
 vi.mock('@server/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+const mockEmitSignup = vi.fn().mockResolvedValue([]);
+vi.mock('@server/analytics/signupEvents', () => ({
+  emitSignupForSourceProducts: (...a: unknown[]) => mockEmitSignup(...a),
+}));
 vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 vi.mock('jsonwebtoken', () => ({
   default: { verify: (...a: unknown[]) => mockJwtVerify(...a), sign: (...a: unknown[]) => mockJwtSign(...a) },
@@ -199,6 +203,34 @@ describe('/api/otc/verify — enumeration resistance', () => {
       handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes)
     ).rejects.toThrow('Invalid code.');
     expect(mockFindByEmail).not.toHaveBeenCalled();
+  });
+
+  // `signup` means a new account, and this suite owns the returning-user path. The emit sits
+  // after the existingUser branch returns, so the guard is structural - move it, or add a
+  // second call site on the login path, and every returning login would report itself as a
+  // signup to whichever product its cookies name. Consent is granted here on purpose: the gate
+  // is not what should be stopping this, the branch is.
+  it('does not report a signup when the code proves a returning user', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      toJSON: () => ({ id: 'u1', username: 'bob' }),
+    });
+    const req = makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' });
+    (req as any).headers = {
+      ...((req as any).headers ?? {}),
+      cookie: `b4m-first-touch=${encodeURIComponent(JSON.stringify({ source: 'widgets' }))}; b4m_consent=granted`,
+    };
+
+    await handler(req, mockRes);
+
+    expect(mockRes.status).toHaveBeenCalledWith(200);
+    expect(mockEmitSignup).not.toHaveBeenCalled();
   });
 
   it('logs in an existing user on a correct code (existence checked only AFTER verification)', async () => {

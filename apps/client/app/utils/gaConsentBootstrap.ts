@@ -1,4 +1,5 @@
-import { CONSENT_KEY, DECISION_COOKIE, REGION_COOKIE } from './consentRegion';
+import { DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
+import { CONSENT_KEY } from './consentRegion';
 
 declare global {
   interface Window {

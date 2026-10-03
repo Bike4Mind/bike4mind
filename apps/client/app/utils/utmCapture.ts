@@ -18,6 +18,20 @@ export const APP_FIRST_TOUCH_COOKIE_NAME = ACQUISITION_COOKIES.appFirstTouch;
 const LAST_TOUCH_TTL_SECONDS = 30 * 24 * 60 * 60;
 const APP_FIRST_TOUCH_TTL_SECONDS = 90 * 24 * 60 * 60;
 
+// Lax, not Strict: an OAuth signup returns the browser to /api/auth/<strategy>/callback via a
+// top-level cross-site GET from the IdP, and Strict is withheld on exactly that navigation - the
+// same transport fact oauthFlowCookie.ts records as its reason for keeping the nonce cookie Lax.
+// Under Strict these three cookies were unreadable on the one request that credits a new account,
+// so an OAuth signup could never be attributed to anything but the marketing site's parent-domain
+// cookie.
+//
+// The widening this buys an attacker is nil in practice: these carry only a campaign label the
+// visitor already chooses by putting ?utm_source= on the link they follow, no request is
+// authorized by them, and every server reader treats them as an untrusted claim. Lax still
+// withholds them from cross-site subresource and form-POST requests, which is the part that
+// matters. Do NOT copy this to a cookie that authorizes anything.
+const SAME_SITE = 'SameSite=Lax';
+
 function hasCookie(name: string): boolean {
   return document.cookie.split('; ').some(c => c.startsWith(`${name}=`));
 }
@@ -79,10 +93,10 @@ export function flushUtmCapture(): void {
 
   const value = pending;
   const expiresIn = (seconds: number) => new Date(Date.now() + seconds * 1000).toUTCString();
-  document.cookie = `${UTM_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(TTL_SECONDS)}`;
-  document.cookie = `${LAST_TOUCH_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(LAST_TOUCH_TTL_SECONDS)}`;
+  document.cookie = `${UTM_COOKIE_NAME}=${value}; path=/; ${SAME_SITE}; expires=${expiresIn(TTL_SECONDS)}`;
+  document.cookie = `${LAST_TOUCH_COOKIE_NAME}=${value}; path=/; ${SAME_SITE}; expires=${expiresIn(LAST_TOUCH_TTL_SECONDS)}`;
   if (!hasCookie(APP_FIRST_TOUCH_COOKIE_NAME)) {
-    document.cookie = `${APP_FIRST_TOUCH_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(APP_FIRST_TOUCH_TTL_SECONDS)}`;
+    document.cookie = `${APP_FIRST_TOUCH_COOKIE_NAME}=${value}; path=/; ${SAME_SITE}; expires=${expiresIn(APP_FIRST_TOUCH_TTL_SECONDS)}`;
   }
   pending = undefined;
 }
@@ -96,7 +110,7 @@ export function clearAttributionCookies(): void {
   if (typeof document === 'undefined') return;
 
   for (const name of [UTM_COOKIE_NAME, LAST_TOUCH_COOKIE_NAME, APP_FIRST_TOUCH_COOKIE_NAME]) {
-    document.cookie = `${name}=; path=/; SameSite=Strict; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+    document.cookie = `${name}=; path=/; ${SAME_SITE}; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
   }
   pending = undefined;
 }

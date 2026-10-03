@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 
-import { acquisitionFromStripeMetadata, acquisitionToStripeMetadata, readAcquisitionTouches } from './acquisition';
+import {
+  acquisitionFromStripeMetadata,
+  acquisitionToStripeMetadata,
+  readAcquisitionTouches,
+  readConsentedAcquisitionTouches,
+} from './acquisition';
 
 const cookie = (jar: Record<string, unknown>) => ({
   headers: {
@@ -45,6 +50,28 @@ describe('readAcquisitionTouches', () => {
     expect(t.firstTouch).toBeUndefined();
     expect(t.lastTouch?.source).toHaveLength(128);
     expect(readAcquisitionTouches({ headers: {} })).toEqual({});
+  });
+});
+
+describe('readConsentedAcquisitionTouches', () => {
+  // Consent values are bare strings, not JSON, so they join the encoded touch jar as a raw pair.
+  const withConsent = (consent: string | undefined) => {
+    const jar = cookie({ b4m_last_touch: { source: 'widgets', medium: 'teaser' } }).headers.cookie;
+    return { headers: { cookie: consent === undefined ? jar : `${jar}; ${consent}` } };
+  };
+
+  it('returns the touches on a granted decision', () => {
+    expect(readConsentedAcquisitionTouches(withConsent('b4m_consent=granted'))).toEqual({
+      lastTouch: { source: 'widgets', medium: 'teaser' },
+    });
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['denied', 'b4m_consent=denied'],
+    ['unrecognised', 'b4m_consent=yes'],
+  ])('returns nothing when consent is %s, though a touch is present', (_, consent) => {
+    expect(readConsentedAcquisitionTouches(withConsent(consent))).toEqual({});
   });
 });
 

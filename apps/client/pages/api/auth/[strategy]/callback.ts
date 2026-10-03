@@ -14,6 +14,8 @@ import passport from 'passport';
 import { z } from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { readConsentedAcquisitionTouches } from '@server/analytics/acquisition';
+import { emitSignupForSourceProducts } from '@server/analytics/signupEvents';
 import { AuthEvents } from '@bike4mind/common';
 import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 import { isLocalAppUrl } from '@server/utils/validators';
@@ -112,22 +114,6 @@ const handler = baseApi({ auth: false })
           return res.redirect('/login?error=account_suspended');
         }
 
-        const { accessToken } = await issueBrowserSession(req, res, user.id, {
-          createdVia: 'oauth',
-          tokenVersion: user.tokenVersion ?? 0,
-        });
-        const tokens = { accessToken };
-
-        try {
-          await logEvent({
-            userId: user.id,
-            type: AuthEvents.LOGIN,
-            metadata: { strategy, ip, userAgent },
-          });
-        } catch (logError) {
-          console.error('Failed to log OAuth login:', logError);
-        }
-
         // A brand-new account (flagged by verifyCallback's User.create branch)
         // also logs REGISTER, matching the OTC signup path (pages/api/otc/verify.ts)
         // - OAuth signups used to be indistinguishable from logins in the event log.
@@ -142,6 +128,45 @@ const handler = baseApi({ auth: false })
           } catch (logError) {
             console.error('Failed to log OAuth registration:', logError);
           }
+          // Credit the signup to the product the visitor came through, if any, and only with
+          // consent - see readConsentedAcquisitionTouches. Before the session is minted, as in
+          // OTC: a mint failure after the account exists would otherwise lose the signup for
+          // good, since the retry sees isNewUser false.
+          //
+          // The IdP returns the browser here by a top-level CROSS-SITE GET, so the app's own
+          // campaign cookies only arrive because utmCapture.ts writes them SameSite=Lax; under
+          // Strict they would be withheld on exactly this request and every OAuth signup would
+          // emit nothing. That coupling is easy to undo by accident, so it is asserted in
+          // utmCapture.test.ts rather than left to this comment.
+          //
+          // Awaited, against the `void ... .catch()` form analyticsMiddleware and
+          // pages/api/analytics/visit.ts use, and deliberately: those emit a daily or
+          // per-session event whose loss an idempotent upsert and the next request absorb,
+          // while a signup happens once per account and has no later occurrence to recover it
+          // - a Lambda freeze after the redirect would drop it for good. The cost is bounded
+          // and narrow: emitProductEvent has its own 2s timeout and per-emit catch, and a
+          // signup naming no product resolves here immediately, which is most of them.
+          await emitSignupForSourceProducts({
+            userId: user.id,
+            touches: readConsentedAcquisitionTouches(req),
+            method: strategy,
+          });
+        }
+
+        const { accessToken } = await issueBrowserSession(req, res, user.id, {
+          createdVia: 'oauth',
+          tokenVersion: user.tokenVersion ?? 0,
+        });
+        const tokens = { accessToken };
+
+        try {
+          await logEvent({
+            userId: user.id,
+            type: AuthEvents.LOGIN,
+            metadata: { strategy, ip, userAgent },
+          });
+        } catch (logError) {
+          console.error('Failed to log OAuth login:', logError);
         }
 
         // Every OAuth callback is a successful authentication; only a genuine
