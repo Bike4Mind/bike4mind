@@ -1,5 +1,15 @@
 # @bike4mind/cli
 
+## 1.3.1
+
+### Patch Changes
+
+- [#3698](https://github.com/Bike4Mind/bike4mind/pull/3698) [`3412bf6`](https://github.com/Bike4Mind/bike4mind/commit/3412bf663a5068ed68e712d276790e00754eb7db) Thanks [@jjmarfa](https://github.com/jjmarfa)! - distinguish a missing credential from an expired session
+
+- [#3747](https://github.com/Bike4Mind/bike4mind/pull/3747) [`fc67333`](https://github.com/Bike4Mind/bike4mind/commit/fc673338c4450638acb93708a423298141b98e28) Thanks [@julsanchez](https://github.com/julsanchez)! - escape untrusted text in CLI approval and question prompts
+
+- [#3749](https://github.com/Bike4Mind/bike4mind/pull/3749) [`52c290e`](https://github.com/Bike4Mind/bike4mind/commit/52c290eb2a6812aaaee1c47fd321ca2301dbd99f) Thanks [@julsanchez](https://github.com/julsanchez)! - name a missing verification URL and strip control chars from login strings
+
 ## 1.3.0
 
 ### Minor Changes
