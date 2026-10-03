@@ -4,6 +4,7 @@ import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
+import { searxngUrl } from './searxng';
 import { allSecrets, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
@@ -132,6 +133,9 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // — the URL is a secret, sidestepping any creation-order coupling.
     OPTIHASHI_INSTANCE_SERVICE_URL: secrets.OPTIHASHI_INSTANCE_SERVICE_URL.value,
     OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value,
+    // Internal SearXNG (infra/searxng.ts), only where it is deployed. Set on this service alone:
+    // web_search runs here, and the URL resolves only inside the VPC.
+    ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
   },
   logging: {
     retention: '3 days',

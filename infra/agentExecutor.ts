@@ -13,6 +13,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { searxngUrl } from './searxng';
 import { allSecrets, secrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
@@ -57,6 +58,11 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     // default 'not-configured' (inert until ops sets them).
     OPTIHASHI_INSTANCE_SERVICE_URL: secrets.OPTIHASHI_INSTANCE_SERVICE_URL.value,
     OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value,
+    // Internal SearXNG (infra/searxng.ts), only where it is deployed. The agent path's
+    // web_search/deep_research tools need the same explicit wiring as the chat path
+    // (infra/chatCompletion.ts) -- without it, agent-mode web search never sees the backup
+    // provider and stays exposed to the SerpAPI hangs this service exists to hedge against.
+    ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
   },
   permissions: [
     {
