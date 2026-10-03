@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // pdf.js v6 removed the two calling conventions this component used to rely on: `getDocument` no
@@ -19,10 +20,15 @@ const cancel = vi.fn<RenderTaskDouble['cancel']>();
 const getPage = vi.fn<(pageNumber: number) => void>();
 const getDocument = vi.fn<(src: { url: string }) => LoadingTaskDouble>();
 
+// Kept in sync with the literal below by hand: vi.mock's factory is hoisted above this file's
+// other top-level statements, so it can't reference a const declared alongside it.
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
+  version: '6.3.289',
   getDocument: (src: { url: string }) => getDocument(src),
 }));
+
+const mockPdfjsVersion = '6.3.289';
 
 vi.mock('next/dynamic', () => ({
   default: (loader: () => Promise<unknown>) => {
@@ -77,6 +83,11 @@ describe('PdfViewer', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('points the worker at a filename carrying the pdfjs-dist version', async () => {
+    await importViewer();
+    expect(pdfjsLib.GlobalWorkerOptions.workerSrc).toBe(`/pdf.worker-${mockPdfjsVersion}.min.mjs`);
   });
 
   it('passes the file to getDocument as a parameter object', async () => {
