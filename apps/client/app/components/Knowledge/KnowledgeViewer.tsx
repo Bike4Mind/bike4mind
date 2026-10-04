@@ -2377,6 +2377,15 @@ export const FileContent = ({
     const fetchContent = async () => {
       if (!file?.mimeType) return;
 
+      // The PDF branch below renders PdfViewer straight off `signedUrl` and never reads
+      // `content`; fetching it here would re-download the file and extract its text on the
+      // main thread through the lazily-loaded unpdf (and its ~1.6 MB pdf.js bundle) for nothing.
+      if (file.mimeType === SupportedFabFileMimeTypes.PDF) {
+        setContent('');
+        setIsLoading(false);
+        return;
+      }
+
       try {
         setIsLoading(true);
 
