@@ -1,3 +1,5 @@
+// unpdf bundles its own pdf.js and sets `globalThis.pdfjsWorker` on load; PdfViewer.tsx passes an
+// explicit worker port so that global cannot hijack it (a version mismatch breaks every PDF view).
 import { extractText, getDocumentProxy } from 'unpdf';
 import mammoth from 'mammoth';
 import axios from 'axios';

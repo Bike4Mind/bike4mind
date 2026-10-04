@@ -19,9 +19,11 @@ import { createPdfWorkerFailureError, describePdfLoadError, type PdfLoadErrorDes
 // version mismatch rather than tolerating it.
 //
 // Each load spawns its own module worker from that URL and hands it to pdf.js as an explicit
-// `port`. Another pdf.js copy on the page (e.g. one injected by a browser extension) can set
-// `globalThis.pdfjsWorker`, and pdf.js would then silently run that main-thread worker - possibly
-// a different version - instead of `workerSrc`. An explicit port bypasses that lookup.
+// `port`. `unpdf` (imported by app/utils/fabFileUtils.tsx, which KnowledgeViewer loads) bundles
+// its own pdf.js and sets `globalThis.pdfjsWorker` on load, and pdf.js would then silently run
+// that main-thread worker - a different version - instead of `workerSrc`. That broke every PDF
+// view once our pdfjs-dist moved past unpdf's bundled version. An explicit port bypasses that
+// lookup, so do not remove it.
 //
 // We intentionally pass `new Worker` a plain string URL, NOT `new URL('pdfjs-dist/build/
 // pdf.worker.min.mjs', import.meta.url)`: Turbopack rewrites that form into its own worker helper,
