@@ -2503,14 +2503,11 @@ export const FileContent = ({
             display: 'flex',
             width: '100%',
             height: '100%',
+            // Size only the PdfViewer root. Forcing its children to full height too stretched the
+            // sticky file info bar over the rendered pages.
             '& > div': {
-              // Target the PdfViewer's root div
               width: '100%',
               height: '100%',
-              '& > div': {
-                // Target PDF viewer's internal div
-                height: '100%',
-              },
             },
           }}
         >

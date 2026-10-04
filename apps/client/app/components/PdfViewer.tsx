@@ -304,28 +304,37 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         </Box>
       )}
 
-      {/* PDF Controls - only show when loaded */}
+      {/* PDF Pages Container - always mounted so ref is available during render loop */}
+      <Box ref={canvasContainerRef} sx={{ width: '100%' }} />
+
+      {/* File info bar - a compact strip pinned to the bottom of the scroll area, after the pages */}
       {!loading && !error && filename && (
         <Box
+          data-testid="pdf-viewer-info-bar"
           sx={{
             position: 'sticky',
-            top: 0,
+            bottom: 0,
             zIndex: 10,
+            height: 'auto',
             backgroundColor: 'background.surface',
-            padding: 1,
-            marginBottom: 2,
+            borderTop: '1px solid',
+            borderColor: 'divider',
             borderRadius: 'sm',
+            boxShadow: 'sm',
+            px: 1.5,
+            py: 0.5,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            gap: 1,
           }}
         >
-          <Box>
-            <Typography level="body-sm">
+          <Box sx={{ minWidth: 0 }}>
+            <Typography level="body-xs" noWrap>
               {filename} - {numPages} {numPages === 1 ? 'page' : 'pages'}
             </Typography>
             {numPages > MAX_PAGES_TO_RENDER && (
-              <Typography level="body-xs" color="warning" sx={{ mt: 0.5 }}>
+              <Typography level="body-xs" color="warning" noWrap>
                 Showing first {MAX_PAGES_TO_RENDER} pages. Download for full PDF.
               </Typography>
             )}
@@ -340,15 +349,14 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
               size="sm"
               variant="solid"
               color="primary"
+              sx={{ flexShrink: 0 }}
+              data-testid="pdf-viewer-download-btn"
             >
               Download
             </Button>
           )}
         </Box>
       )}
-
-      {/* PDF Pages Container - always mounted so ref is available during render loop */}
-      <Box ref={canvasContainerRef} sx={{ width: '100%' }} />
     </Box>
   );
 };
