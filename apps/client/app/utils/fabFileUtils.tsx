@@ -1,6 +1,3 @@
-// unpdf bundles its own pdf.js and sets `globalThis.pdfjsWorker` on load; PdfViewer.tsx passes an
-// explicit worker port so that global cannot hijack it (a version mismatch breaks every PDF view).
-import { extractText, getDocumentProxy } from 'unpdf';
 import mammoth from 'mammoth';
 import axios from 'axios';
 import {
@@ -99,6 +96,9 @@ export async function extractTextFromFile(type: string, arrayBuffer: ArrayBuffer
   let content = '';
   switch (type) {
     case SupportedFabFileMimeTypes.PDF: {
+      // loaded on demand: unpdf bundles its own ~1.6 MB pdf.js and sets `globalThis.pdfjsWorker` on
+      // load; PdfViewer.tsx passes an explicit worker port so that global cannot hijack it.
+      const { getDocumentProxy, extractText } = await import('unpdf');
       const pdf = await getDocumentProxy(new Uint8Array(Buffer.from(arrayBuffer)));
       const { text } = await extractText(pdf, { mergePages: true });
       content = text as string; // Text should be a string due to mergePages: true
