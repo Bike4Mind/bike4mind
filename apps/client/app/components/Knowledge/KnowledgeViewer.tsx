@@ -2512,14 +2512,11 @@ export const FileContent = ({
             display: 'flex',
             width: '100%',
             height: '100%',
+            // Size only the PdfViewer root - its own flex-column layout (scroll area + info bar)
+            // needs a bounded height from here to divide between them.
             '& > div': {
-              // Target the PdfViewer's root div
               width: '100%',
               height: '100%',
-              '& > div': {
-                // Target PDF viewer's internal div
-                height: '100%',
-              },
             },
           }}
         >

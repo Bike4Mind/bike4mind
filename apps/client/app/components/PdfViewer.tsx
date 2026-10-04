@@ -225,10 +225,10 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
       sx={{
         width: '100%',
         height: '100%',
-        overflow: 'auto',
-        backgroundColor: 'background.level2',
-        padding: 2,
+        display: 'flex',
+        flexDirection: 'column',
         position: 'relative',
+        backgroundColor: 'background.level2',
       }}
     >
       {/* Loading overlay */}
@@ -305,28 +305,47 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         </Box>
       )}
 
-      {/* PDF Controls - only show when loaded */}
+      {/* Scroll region - holds the rendered pages. The root itself no longer scrolls, so the info
+          bar below sits as a normal flex item instead of needing a scroll container to pin
+          "sticky" against (a host that does not constrain the viewer's height left sticky with
+          nothing to pin to). */}
+      <Box
+        data-testid="pdf-viewer-scroll-area"
+        sx={{
+          flex: '1 1 auto',
+          minHeight: 0,
+          overflow: 'auto',
+          padding: 2,
+        }}
+      >
+        {/* PDF Pages Container - always mounted so ref is available during render loop */}
+        <Box ref={canvasContainerRef} sx={{ width: '100%' }} />
+      </Box>
+
+      {/* File info bar - a compact footer after the scroll area, not inside it, so it never
+          overlaps the pages while scrolling and always lands at the bottom even for a short PDF. */}
       {!loading && !error && filename && (
         <Box
+          data-testid="pdf-viewer-info-bar"
           sx={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 10,
+            flexShrink: 0,
             backgroundColor: 'background.surface',
-            padding: 1,
-            marginBottom: 2,
-            borderRadius: 'sm',
+            borderTop: '1px solid',
+            borderColor: 'divider',
+            px: 1.5,
+            py: 0.5,
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
+            gap: 1,
           }}
         >
-          <Box>
-            <Typography level="body-sm">
+          <Box sx={{ minWidth: 0 }}>
+            <Typography level="body-xs" noWrap>
               {filename} - {numPages} {numPages === 1 ? 'page' : 'pages'}
             </Typography>
             {numPages > MAX_PAGES_TO_RENDER && (
-              <Typography level="body-xs" color="warning" sx={{ mt: 0.5 }}>
+              <Typography level="body-xs" color="warning" noWrap>
                 Showing first {MAX_PAGES_TO_RENDER} pages. Download for full PDF.
               </Typography>
             )}
@@ -341,15 +360,14 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
               size="sm"
               variant="solid"
               color="primary"
+              sx={{ flexShrink: 0 }}
+              data-testid="pdf-viewer-download-btn"
             >
               Download
             </Button>
           )}
         </Box>
       )}
-
-      {/* PDF Pages Container - always mounted so ref is available during render loop */}
-      <Box ref={canvasContainerRef} sx={{ width: '100%' }} />
     </Box>
   );
 };
