@@ -227,15 +227,18 @@ export function createWebSearchBudget(maxSearches: number) {
   };
 }
 
+class EmptySearchAnswer extends Error {}
+
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
  * Organic search as a hedged request: the lead starts at once, and the backup starts alongside it
  * once the lead has been silent for WEB_SEARCH_HEDGE_DELAY_MS, or as soon as the lead fails. The
- * first success wins; the loser runs on to its own timeout and is ignored. With no backup the lead
- * keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the provider that
- * answered so the image/place calls go to a live provider. When both fail it throws, so the
- * backend records the call as failed.
+ * first non-empty answer wins; the loser runs on to its own timeout and is ignored. An empty lead
+ * answer also starts the backup, since a throttled SearXNG answers 200 with no results. With no
+ * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
+ * provider that answered so the image/place calls go to a live provider. When both come back empty
+ * it returns the empty answer; when both fail it throws, so the backend records the call as failed.
  */
 async function searchWithHedge(
   lead: WebSearchProvider,
@@ -247,10 +250,13 @@ async function searchWithHedge(
   if (!backup) return { results: await lead.search(query, numResults, searchOptions), servedBy: lead };
 
   const fromLead = lead.search(query, numResults, { ...searchOptions, throwOnError: true });
-  const backupStart = new Promise<'slow' | 'failed'>(start => {
+  const backupStart = new Promise<'slow' | 'failed' | 'empty'>(start => {
     const timer = setTimeout(() => start('slow'), WEB_SEARCH_HEDGE_DELAY_MS);
     fromLead.then(
-      () => clearTimeout(timer),
+      results => {
+        clearTimeout(timer);
+        if (results.length === 0) start('empty');
+      },
       () => {
         clearTimeout(timer);
         start('failed');
@@ -271,13 +277,19 @@ async function searchWithHedge(
     });
   });
 
+  // An empty answer rejects here so Promise.any keeps waiting for the other provider.
+  const nonEmpty = (answer: Promise<WebSearchProviderResult[]>, provider: WebSearchProvider) =>
+    answer.then(results => {
+      if (results.length === 0) throw new EmptySearchAnswer();
+      return { results, servedBy: provider };
+    });
+
   try {
-    return await Promise.any([
-      fromLead.then(results => ({ results, servedBy: lead })),
-      fromBackup.then(results => ({ results, servedBy: backup })),
-    ]);
+    return await Promise.any([nonEmpty(fromLead, lead), nonEmpty(fromBackup, backup)]);
   } catch (error) {
     const [leadError, backupError] = error instanceof AggregateError ? error.errors : [error, error];
+    if (leadError instanceof EmptySearchAnswer) return { results: [], servedBy: lead };
+    if (backupError instanceof EmptySearchAnswer) return { results: [], servedBy: backup };
     throw new Error(
       `Web search failed on both providers. ${lead.name}: ${errorMessage(leadError)}; ` +
         `${backup.name}: ${errorMessage(backupError)}`

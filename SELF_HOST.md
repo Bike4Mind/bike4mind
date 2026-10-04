@@ -454,7 +454,7 @@ The `web_search` tool (and `deep_research`) can run against a self-hosted [SearX
    docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
    ```
 
-Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
+Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` leads with SerpAPI when a key is set (`SerperKey` in Admin > API Keys) and otherwise uses SearXNG, so a SearXNG-only install needs no extra setting; with both configured, the other provider is the backup. Set it to `serpapi` or `searxng` to lead with that provider (an unconfigured choice disables search rather than switching providers). The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
 
 ### Reading pages: web_fetch and Firecrawl
 
