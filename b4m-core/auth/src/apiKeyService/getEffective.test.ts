@@ -377,15 +377,21 @@ describe('getSearxngUrl / getWebSearchProviderSetting', () => {
     });
   });
 
-  it('ignores SEARXNG_BASE_URL outside self-host', async () => {
+  it('falls back to SEARXNG_BASE_URL even outside self-host (not a secret, unlike envKey())', async () => {
     await withEnv({ B4M_SELF_HOST: undefined, SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
-      expect(await getSearxngUrl(adapters({}))).toBeNull();
+      expect(await getSearxngUrl(adapters({}))).toBe('http://searxng:8080');
     });
   });
 
   it('prefers the admin SearxngUrl over the env fallback', async () => {
     await withEnv({ B4M_SELF_HOST: 'true', SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
       expect(await getSearxngUrl(adapters({ SearxngUrl: 'http://admin:8080' }))).toBe('http://admin:8080');
+    });
+  });
+
+  it('treats a blank SEARXNG_BASE_URL as unset (whitespace does not enable the provider)', async () => {
+    await withEnv({ B4M_SELF_HOST: undefined, SEARXNG_BASE_URL: '   ' }, async () => {
+      expect(await getSearxngUrl(adapters({}))).toBeNull();
     });
   });
 

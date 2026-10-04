@@ -385,14 +385,21 @@ describe('resolveWebSearchProvider precedence', () => {
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
 
-  it('auto: prefers SearXNG when a URL is configured', async () => {
+  it('auto: keeps SerpAPI as the lead when a SearXNG URL is configured too', async () => {
     mockGetProvider.mockResolvedValue(null); // unset -> auto
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
     mockGetSerperKey.mockResolvedValue('serp-key');
+    expect((await resolveWebSearchProvider(adapters))?.name).toBe('serpapi');
+  });
+
+  it('auto: falls back to SearXNG when only a URL is configured', async () => {
+    mockGetProvider.mockResolvedValue('auto');
+    mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue(null);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
-  it('auto: falls back to SerpAPI when only a Serper key is set', async () => {
+  it('auto: uses SerpAPI when only a Serper key is set', async () => {
     mockGetProvider.mockResolvedValue('auto');
     mockGetSearxngUrl.mockResolvedValue(null);
     mockGetSerperKey.mockResolvedValue('serp-key');
@@ -744,7 +751,7 @@ describe('web_search time budget', () => {
 
 describe('resolveWebSearchProviders lead and backup', () => {
   it.each([
-    ['auto' as const, ['searxng', 'serpapi']],
+    ['auto' as const, ['serpapi', 'searxng']],
     ['serpapi' as const, ['serpapi', 'searxng']],
     ['searxng' as const, ['searxng', 'serpapi']],
   ])('under %s with both configured, leads with the choice and backs it up with the other', async (choice, order) => {
@@ -755,6 +762,19 @@ describe('resolveWebSearchProviders lead and backup', () => {
     const [lead, backup] = await resolveWebSearchProviders(adapters);
 
     expect([lead?.name, backup?.name]).toEqual(order);
+  });
+
+  it.each([
+    ['auto: SearXNG only', null, ['searxng', null]],
+    ['auto: Serper key only', 'serp-key', ['serpapi', null]],
+  ])('%s leads with the configured provider and has no backup', async (_label, serperKey, order) => {
+    mockGetProvider.mockResolvedValue('auto');
+    mockGetSearxngUrl.mockResolvedValue(serperKey ? null : 'http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue(serperKey);
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup?.name ?? null]).toEqual(order);
   });
 
   it('has no backup when only the lead is configured', async () => {

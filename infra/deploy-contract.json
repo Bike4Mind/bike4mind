@@ -5,6 +5,11 @@
       "name": "chat-completion",
       "dockerfile": "apps/client/Dockerfile.chatcompletion",
       "env": "CHAT_COMPLETION_IMAGE"
+    },
+    {
+      "name": "searxng",
+      "dockerfile": "infra/searxng/Dockerfile",
+      "env": "SEARXNG_IMAGE"
     }
   ],
   "externalImages": [

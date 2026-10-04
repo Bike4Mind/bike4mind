@@ -699,16 +699,62 @@ describe('webSearchTool - hedged backup and cache', () => {
     await expect(pending).resolves.toContain('searx.example');
   });
 
-  it('leads with SearXNG under auto and backs it up with SerpAPI', async () => {
+  it('leads with SerpAPI under auto even when SearXNG is configured', async () => {
     configure('auto');
+    const fetchStub = stubProviders({ serpOrganic: [serpHit], searxng: searxngHit });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('serp.example');
+    expect(calls(fetchStub, isSearxng)).toBe(0);
+  });
+
+  it('backs SerpAPI up with SearXNG under auto when SerpAPI fails', async () => {
+    configure('auto');
+    const fetchStub = stubProviders({ serpOrganic: [{ status: 400 }], searxng: searxngHit });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('searx.example');
+    expect(calls(fetchStub, isSearxng)).toBe(1);
+  });
+
+  it('backs an explicit SearXNG lead up with SerpAPI', async () => {
+    configure('searxng');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
 
     await expect(buildTool().toolFn({ query: 'q' })).resolves.toContain('serp.example');
     expect(calls(fetchStub, isSearxng)).toBe(1);
   });
 
+  it('starts the backup at once when the lead answers with no results, and returns its answer', async () => {
+    vi.useFakeTimers();
+    configure('searxng');
+    const fetchStub = stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [serpHit] });
+
+    const pending = buildTool().toolFn({ query: 'q' });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+    await expect(pending).resolves.toContain('serp.example');
+  });
+
+  it('returns no results rather than failing when the lead is empty and the backup fails', async () => {
+    configure('searxng');
+    stubProviders({ searxng: { status: 200, body: { results: [] } }, serpOrganic: [{ status: 503 }] });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+  });
+
+  it('returns no results when both providers answer empty', async () => {
+    configure('searxng');
+    const fetchStub = stubProviders({
+      searxng: { status: 200, body: { results: [] } },
+      serpOrganic: [{ status: 200, body: { organic_results: [] } }],
+    });
+
+    await expect(buildTool().toolFn({ query: 'q' })).resolves.toBe('No results found from web search.');
+    expect(calls(fetchStub, isSerpOrganic)).toBe(1);
+  });
+
   it('sends the image search to the provider that answered, not the one that failed', async () => {
-    configure('auto');
+    configure('searxng');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [serpHit] });
 
     await buildTool().toolFn({ query: 'q', include_images: true });
@@ -718,7 +764,7 @@ describe('webSearchTool - hedged backup and cache', () => {
   });
 
   it('gives a SerpAPI backup one attempt and throws naming both providers when both fail', async () => {
-    configure('auto');
+    configure('searxng');
     const fetchStub = stubProviders({ searxng: { status: 502 }, serpOrganic: [{ status: 503 }, { status: 503 }] });
 
     await expect(buildTool().toolFn({ query: 'q' })).rejects.toThrow(

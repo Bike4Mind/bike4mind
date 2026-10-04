@@ -13,6 +13,7 @@ import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
 import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -933,6 +934,9 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Research runs resolve the web-search provider like ChatCompletion does; same wiring
+      // as infra/chatCompletion.ts and infra/agentExecutor.ts.
+      ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     },
   },
   SINGLE_RECORD_BATCH
