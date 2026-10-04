@@ -184,6 +184,20 @@ describe('PdfViewer', () => {
     expect(container.querySelectorAll('canvas')).toHaveLength(2);
   });
 
+  it('places the file info bar after the rendered pages, pinned to the bottom', async () => {
+    const PdfViewer = await importViewer();
+    const { container } = render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
+
+    const infoBar = await screen.findByTestId('pdf-viewer-info-bar');
+    const lastCanvas = container.querySelectorAll('canvas')[1];
+    // The bar follows the pages in document order, so a sticky `bottom: 0` pins it below them
+    // instead of floating over the first page.
+    expect(lastCanvas.compareDocumentPosition(infoBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(getComputedStyle(infoBar).position).toBe('sticky');
+    expect(getComputedStyle(infoBar).bottom).toBe('0px');
+    expect(screen.getByTestId('pdf-viewer-download-btn')).toHaveAttribute('href', FILE);
+  });
+
   it('tears the document down through the loading task on unmount', async () => {
     const PdfViewer = await importViewer();
     const { unmount } = render(<PdfViewer file={FILE} />, { wrapper: TestWrapper });
