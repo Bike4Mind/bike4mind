@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { createPdfWorkerStartError, describePdfLoadError } from './pdfLoadError';
+import { createPdfWorkerFailureError, describePdfLoadError } from './pdfLoadError';
 
 describe('describePdfLoadError', () => {
   it('classifies a worker/API version mismatch and points at reloading', () => {
@@ -139,7 +139,7 @@ describe('describePdfLoadError', () => {
 
     const result = describePdfLoadError(err);
 
-    expect(result.title).toBe('PDF viewer failed to start');
+    expect(result.title).toBe('PDF viewer stopped unexpectedly');
     expect(result.detail).toMatch(/Reload the page/);
   });
 
@@ -149,24 +149,24 @@ describe('describePdfLoadError', () => {
       filename: 'https://app.example.test/pdf.worker-6.3.289.min.mjs',
     });
 
-    const err = createPdfWorkerStartError(event);
+    const err = createPdfWorkerFailureError(event);
     const result = describePdfLoadError(err);
 
-    expect(err.name).toBe('PdfWorkerStartError');
-    expect(result.title).toBe('PDF viewer failed to start');
+    expect(err.name).toBe('PdfWorkerFailureError');
+    expect(result.title).toBe('PDF viewer stopped unexpectedly');
     expect(result.detail).toMatch(/deploy/);
     expect(result.detail).toMatch(/Reload the page/);
     expect(result.technical).toBe(
-      'PdfWorkerStartError: PDF worker failed to start (error event): SyntaxError: Unexpected token < in ' +
+      'PdfWorkerFailureError: PDF worker stopped (error event): SyntaxError: Unexpected token < in ' +
         'https://app.example.test/pdf.worker-6.3.289.min.mjs'
     );
   });
 
-  it('describes a worker startup failure from a bare event with no message', () => {
-    const result = describePdfLoadError(createPdfWorkerStartError(new Event('messageerror')));
+  it('describes a worker failure from a bare event with no message', () => {
+    const result = describePdfLoadError(createPdfWorkerFailureError(new Event('messageerror')));
 
-    expect(result.title).toBe('PDF viewer failed to start');
-    expect(result.technical).toBe('PdfWorkerStartError: PDF worker failed to start (messageerror event)');
+    expect(result.title).toBe('PDF viewer stopped unexpectedly');
+    expect(result.technical).toBe('PdfWorkerFailureError: PDF worker stopped (messageerror event)');
   });
 
   it('falls back to a default message for an unrecognised error', () => {

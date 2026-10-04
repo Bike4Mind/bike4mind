@@ -97,7 +97,16 @@ const loadsDocument = (numPages = 2) =>
   }));
 
 const FILE = 'https://example.test/doc.pdf';
+const FILE_B = 'https://example.test/doc-b.pdf';
 const importViewer = async () => (await import('./PdfViewer')).default;
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 describe('PdfViewer', () => {
   beforeEach(() => {
@@ -231,7 +240,7 @@ describe('PdfViewer', () => {
     expect(downloadBtn).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
-  it('fails fast with the worker-start error when the worker script fails to load', async () => {
+  it('fails fast with the worker-failure error when the worker script fails to load', async () => {
     getDocument.mockImplementation(() => ({ destroy, promise: new Promise(() => {}) }));
 
     const PdfViewer = await importViewer();
@@ -241,16 +250,50 @@ describe('PdfViewer', () => {
     WorkerDouble.instances[0]!.dispatchEvent(new Event('error'));
 
     await waitFor(() =>
-      expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('PDF viewer failed to start')
+      expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('PDF viewer stopped unexpectedly')
     );
     expect(screen.queryByText(/Loading PDF/)).not.toBeInTheDocument();
     expect(screen.getByTestId('pdf-viewer-error-technical')).toHaveTextContent(
-      'PdfWorkerStartError: PDF worker failed to start (error event)'
+      'PdfWorkerFailureError: PDF worker stopped (error event)'
     );
     expectAllReleased();
   });
 
-  it('ignores a worker error event that arrives after the document loaded', async () => {
+  it('fails fast with the worker-failure error when the worker dies while a page is still rendering', async () => {
+    const deferredRender = createDeferred<void>();
+    const pendingPage: PageDouble = {
+      getViewport: () => viewport,
+      render: () => ({ promise: deferredRender.promise, cancel }) as RenderTask,
+    };
+    getDocument.mockImplementation(() => ({
+      destroy,
+      promise: Promise.resolve({
+        numPages: 2,
+        getPage: async (pageNumber: number) => {
+          getPage(pageNumber);
+          return pendingPage as PDFPageProxy;
+        },
+      } as PDFDocumentProxy),
+    }));
+
+    const PdfViewer = await importViewer();
+    render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
+
+    await waitFor(() => expect(getPage).toHaveBeenCalledWith(1));
+    // Still rendering page 1: the loading overlay is up, so the worker listeners must still be
+    // attached for this to be observed rather than hanging.
+    expect(screen.getByText(/Loading PDF/)).toBeInTheDocument();
+
+    WorkerDouble.instances[0]!.dispatchEvent(new Event('error'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('PDF viewer stopped unexpectedly')
+    );
+    expect(screen.queryByText(/Loading PDF/)).not.toBeInTheDocument();
+    expectAllReleased();
+  });
+
+  it('ignores a worker error event that arrives after every page has rendered', async () => {
     const PdfViewer = await importViewer();
     const { container } = render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
 
@@ -302,6 +345,37 @@ describe('PdfViewer', () => {
     expect(screen.getByTestId('pdf-viewer-error-technical')).toHaveTextContent(
       'UnknownErrorException: The API version "6.3.289" does not match the Worker version "5.6.205".'
     );
+  });
+
+  it('does not let a stale run detach the current run worker listeners once its own race finally settles (regression)', async () => {
+    const deferredA = createDeferred<PDFDocumentProxy>();
+    const deferredB = createDeferred<PDFDocumentProxy>();
+    let callCount = 0;
+    getDocument.mockImplementation(() => {
+      callCount += 1;
+      return { destroy, promise: callCount === 1 ? deferredA.promise : deferredB.promise };
+    });
+
+    const PdfViewer = await importViewer();
+    const { rerender } = render(<PdfViewer file={FILE} filename="a.pdf" />, { wrapper: TestWrapper });
+    await waitFor(() => expect(getDocument).toHaveBeenCalledTimes(1));
+
+    rerender(<PdfViewer file={FILE_B} filename="b.pdf" />);
+    await waitFor(() => expect(getDocument).toHaveBeenCalledTimes(2));
+
+    // File A's load settles only after its effect was already cancelled in favor of file B.
+    deferredA.resolve(makeDocument(1) as PDFDocumentProxy);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // File B's worker now dies. A per-run bug would let A's late continuation detach B's
+    // listeners first, so B's load would hang forever instead of surfacing this.
+    WorkerDouble.instances[1]!.dispatchEvent(new Event('error'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('pdf-viewer-error-title')).toHaveTextContent('PDF viewer stopped unexpectedly')
+    );
+    expect(WorkerDouble.instances[1]!.terminate).toHaveBeenCalledTimes(1);
+    expect(PDFWorkerDouble.instances[1]!.destroy).toHaveBeenCalledTimes(1);
   });
 
   it('reports an error when no file is supplied', async () => {

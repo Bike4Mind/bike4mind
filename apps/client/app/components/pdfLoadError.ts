@@ -64,22 +64,21 @@ function describeTechnical(err: unknown): string {
   }
 }
 
-export const PDF_WORKER_START_ERROR_NAME = 'PdfWorkerStartError';
+export const PDF_WORKER_FAILURE_ERROR_NAME = 'PdfWorkerFailureError';
 
 /**
  * Builds the error PdfViewer rejects with when its dedicated worker fires `error` (the script
- * failed to load or parse) or `messageerror`. pdf.js never settles a load in that case when it was
- * handed an explicit port. Duck-typed rather than `instanceof ErrorEvent`, which Node lacks.
+ * failed to load or parse, or an uncaught exception/crash during rendering) or `messageerror`.
+ * pdf.js never settles a pending load or page render in that case when it was handed an explicit
+ * port. Duck-typed rather than `instanceof ErrorEvent`, which Node lacks.
  */
-export function createPdfWorkerStartError(event: Event): Error {
+export function createPdfWorkerFailureError(event: Event): Error {
   const message = getStringField(event, 'message');
   const filename = getStringField(event, 'filename');
   const error = new Error(
-    `PDF worker failed to start (${event.type} event)` +
-      (message ? `: ${message}` : '') +
-      (filename ? ` in ${filename}` : '')
+    `PDF worker stopped (${event.type} event)` + (message ? `: ${message}` : '') + (filename ? ` in ${filename}` : '')
   );
-  error.name = PDF_WORKER_START_ERROR_NAME;
+  error.name = PDF_WORKER_FAILURE_ERROR_NAME;
   return error;
 }
 
@@ -90,7 +89,7 @@ const ACCESS_EXPIRED_TITLE = 'Access to this file has expired';
 const NOT_FOUND_TITLE = 'File not found';
 const SERVER_ERROR_TITLE = 'The file server returned an error';
 const NETWORK_ERROR_TITLE = 'Could not download the file';
-const WORKER_START_TITLE = 'PDF viewer failed to start';
+const WORKER_FAILURE_TITLE = 'PDF viewer stopped unexpectedly';
 const DEFAULT_TITLE = 'Unable to load PDF document';
 
 /** Classifies a pdf.js load failure (or any thrown value) into a title, a verbose plain-language detail, and a technical string for support. */
@@ -99,13 +98,14 @@ export function describePdfLoadError(err: unknown): PdfLoadErrorDescription {
   const message = getStringField(err, 'message');
   const technical = describeTechnical(err);
 
-  if (name === PDF_WORKER_START_ERROR_NAME || /setting up fake worker failed/i.test(message)) {
+  if (name === PDF_WORKER_FAILURE_ERROR_NAME || /setting up fake worker failed/i.test(message)) {
     return {
-      title: WORKER_START_TITLE,
+      title: WORKER_FAILURE_TITLE,
       detail:
-        "The PDF viewer's background component failed to start in this browser. This is usually " +
-        'a transient problem with the page rather than the file itself. It can follow a deploy ' +
-        'of this app, and a reload usually picks up the current files. Reload the page to try ' +
+        "The PDF viewer's background rendering process failed to start, or it stopped responding " +
+        'partway through this file. This is usually a transient problem with the page rather than ' +
+        'the file itself: it can follow a deploy of this app, or a very large or complex PDF can ' +
+        'exhaust the available memory and crash the background process. Reload the page to try ' +
         'again; the Download button lets you open the file in another app meanwhile.',
       technical,
     };

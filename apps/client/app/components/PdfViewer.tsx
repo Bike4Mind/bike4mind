@@ -3,7 +3,7 @@ import { FC, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
-import { createPdfWorkerStartError, describePdfLoadError, type PdfLoadErrorDescription } from './pdfLoadError';
+import { createPdfWorkerFailureError, describePdfLoadError, type PdfLoadErrorDescription } from './pdfLoadError';
 
 // We import the `legacy/` entry point, not pdfjs-dist's default build. The default build is
 // compiled for "the latest" browsers and reaches for globals well above this app's Next target:
@@ -28,8 +28,9 @@ import { createPdfWorkerStartError, describePdfLoadError, type PdfLoadErrorDescr
 // which strips `{ type: 'module' }` and boots the worker through a classic-worker `importScripts`
 // shim. That shim can't run pdf.js's pre-built ESM worker, so the worker never initializes and
 // `getDocument()` hangs forever on "Loading PDF...". A static file sidesteps the bundler's worker
-// transform entirely; CSP `worker-src 'self'` allows it. `workerSrc` is still set as a fallback
-// for any other pdf.js call path.
+// transform entirely; CSP `worker-src 'self'` allows it. `workerSrc` is set only because pdf.js
+// requires it to be defined; every load below passes an explicit `port` instead, and any future
+// pdf.js caller that skips doing so can be hijacked via `globalThis.pdfjsWorker`.
 const PDF_WORKER_SRC = `/pdf.worker-${pdfjsLib.version}.min.mjs`;
 
 if (typeof window !== 'undefined') {
@@ -53,11 +54,6 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PdfLoadErrorDescription | null>(null);
   const [numPages, setNumPages] = useState(0);
-  const renderTaskRef = useRef<RenderTask | null>(null);
-  const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
-  const pdfWorkerRef = useRef<pdfjsLib.PDFWorker | null>(null);
-  const webWorkerRef = useRef<Worker | null>(null);
-  const detachWorkerListenersRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -72,19 +68,35 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
 
     let cancelled = false;
 
+    // Every handle from this run only, so a stale run can never release or detach a later run's
+    // resources (each effect run gets its own `resources` via closure, unlike a component-level ref).
+    const resources: {
+      webWorker: Worker | null;
+      pdfWorker: pdfjsLib.PDFWorker | null;
+      loadingTask: PDFDocumentLoadingTask | null;
+      renderTask: RenderTask | null;
+      detachWorkerListeners: (() => void) | null;
+    } = {
+      webWorker: null,
+      pdfWorker: null,
+      loadingTask: null,
+      renderTask: null,
+      detachWorkerListeners: null,
+    };
+
     // Idempotent: runs on load failure and again from the effect cleanup. Destroying the loading
     // task only tears down the document; pdf.js leaves a caller-supplied PDFWorker alive, and
     // PDFWorker.destroy() never terminates a caller-supplied port, so each is released here.
     const releasePdfResources = () => {
-      detachWorkerListenersRef.current?.();
-      detachWorkerListenersRef.current = null;
+      resources.detachWorkerListeners?.();
+      resources.detachWorkerListeners = null;
       // destroy() rejects if the worker never finished setting up, which is not actionable here.
-      loadingTaskRef.current?.destroy().catch(() => {});
-      loadingTaskRef.current = null;
-      pdfWorkerRef.current?.destroy();
-      pdfWorkerRef.current = null;
-      webWorkerRef.current?.terminate();
-      webWorkerRef.current = null;
+      resources.loadingTask?.destroy().catch(() => {});
+      resources.loadingTask = null;
+      resources.pdfWorker?.destroy();
+      resources.pdfWorker = null;
+      resources.webWorker?.terminate();
+      resources.webWorker = null;
     };
 
     const loadPdf = async () => {
@@ -94,32 +106,37 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
 
         // Every handle is stored before the await, so an unmount mid-load can still release them.
         const webWorker = new Worker(PDF_WORKER_SRC, { type: 'module' });
-        webWorkerRef.current = webWorker;
+        resources.webWorker = webWorker;
         // create() rather than the constructor: pdf.js's generated constructor typings declare
         // `port` as null-only. For a fresh port create() just constructs a new PDFWorker.
         const pdfWorker = pdfjsLib.PDFWorker.create({ port: webWorker });
-        pdfWorkerRef.current = pdfWorker;
+        resources.pdfWorker = pdfWorker;
         const loadingTask = pdfjsLib.getDocument({ url: file, worker: pdfWorker });
-        loadingTaskRef.current = loadingTask;
+        resources.loadingTask = loadingTask;
 
         // With an explicit port pdf.js has no startup handshake, so a worker script that fails to
-        // load or parse (404, HTML from the SPA fallback, CSP) would leave the load pending
-        // forever. Surface it instead; no timeout, since a large PDF on a slow link is legitimate.
-        const workerStartFailure = new Promise<never>((_, reject) => {
-          const onWorkerError = (event: Event) => reject(createPdfWorkerStartError(event));
-          webWorker.addEventListener('error', onWorkerError);
-          webWorker.addEventListener('messageerror', onWorkerError);
-          detachWorkerListenersRef.current = () => {
-            webWorker.removeEventListener('error', onWorkerError);
-            webWorker.removeEventListener('messageerror', onWorkerError);
-          };
+        // load or parse (404, HTML from the SPA fallback, CSP) - or that throws/crashes partway
+        // through rendering - would otherwise leave the load or a page render pending forever.
+        // Raced against every awaited pdf.js call below, from the initial load through the last
+        // page render, so a dead worker is observed instead of hanging "Loading PDF..." forever.
+        // No timeout, since a large PDF on a slow link is legitimate. Created once per run and
+        // given a no-op `.catch` so it never becomes an unhandled rejection on a run where nothing
+        // ends up racing it (e.g. the load fails some other way first).
+        let rejectWorkerDeath!: (error: Error) => void;
+        const workerDeath = new Promise<never>((_, reject) => {
+          rejectWorkerDeath = reject;
         });
+        workerDeath.catch(() => {});
 
-        const pdf = await Promise.race([loadingTask.promise, workerStartFailure]);
+        const onWorkerError = (event: Event) => rejectWorkerDeath(createPdfWorkerFailureError(event));
+        webWorker.addEventListener('error', onWorkerError);
+        webWorker.addEventListener('messageerror', onWorkerError);
+        resources.detachWorkerListeners = () => {
+          webWorker.removeEventListener('error', onWorkerError);
+          webWorker.removeEventListener('messageerror', onWorkerError);
+        };
 
-        // Only a still-pending load reacts to worker errors; a late one must not replace a document.
-        detachWorkerListenersRef.current?.();
-        detachWorkerListenersRef.current = null;
+        const pdf = await Promise.race([loadingTask.promise, workerDeath]);
 
         if (cancelled) return;
 
@@ -139,7 +156,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
           for (let pageNum = 1; pageNum <= pagesToRender; pageNum++) {
             if (cancelled) return;
 
-            const page = await pdf.getPage(pageNum);
+            const page = await Promise.race([pdf.getPage(pageNum), workerDeath]);
 
             if (cancelled) return;
 
@@ -168,12 +185,17 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
               viewport,
             };
 
-            renderTaskRef.current = page.render(renderContext);
-            await renderTaskRef.current.promise;
+            resources.renderTask = page.render(renderContext);
+            await Promise.race([resources.renderTask.promise, workerDeath]);
 
             if (cancelled) return;
           }
         }
+
+        // Only a still-rendering load reacts to worker failure; once rendering has finished, a
+        // later error must not replace an already-rendered document.
+        resources.detachWorkerListeners?.();
+        resources.detachWorkerListeners = null;
 
         setLoading(false);
       } catch (err) {
@@ -190,9 +212,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
 
     return () => {
       cancelled = true;
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel?.();
-      }
+      resources.renderTask?.cancel?.();
       releasePdfResources();
     };
   }, [file, theme.palette.divider]);
