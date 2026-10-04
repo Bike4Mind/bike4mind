@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { describePdfLoadError } from './pdfLoadError';
+import { createPdfWorkerStartError, describePdfLoadError } from './pdfLoadError';
 
 describe('describePdfLoadError', () => {
   it('classifies a worker/API version mismatch and points at reloading', () => {
@@ -141,6 +141,32 @@ describe('describePdfLoadError', () => {
 
     expect(result.title).toBe('PDF viewer failed to start');
     expect(result.detail).toMatch(/Reload the page/);
+  });
+
+  it('classifies a dedicated-worker startup failure and mentions a deploy', () => {
+    const event = Object.assign(new Event('error'), {
+      message: 'SyntaxError: Unexpected token <',
+      filename: 'https://app.example.test/pdf.worker-6.3.289.min.mjs',
+    });
+
+    const err = createPdfWorkerStartError(event);
+    const result = describePdfLoadError(err);
+
+    expect(err.name).toBe('PdfWorkerStartError');
+    expect(result.title).toBe('PDF viewer failed to start');
+    expect(result.detail).toMatch(/deploy/);
+    expect(result.detail).toMatch(/Reload the page/);
+    expect(result.technical).toBe(
+      'PdfWorkerStartError: PDF worker failed to start (error event): SyntaxError: Unexpected token < in ' +
+        'https://app.example.test/pdf.worker-6.3.289.min.mjs'
+    );
+  });
+
+  it('describes a worker startup failure from a bare event with no message', () => {
+    const result = describePdfLoadError(createPdfWorkerStartError(new Event('messageerror')));
+
+    expect(result.title).toBe('PDF viewer failed to start');
+    expect(result.technical).toBe('PdfWorkerStartError: PDF worker failed to start (messageerror event)');
   });
 
   it('falls back to a default message for an unrecognised error', () => {

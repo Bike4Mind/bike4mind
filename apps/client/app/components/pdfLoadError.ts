@@ -64,6 +64,25 @@ function describeTechnical(err: unknown): string {
   }
 }
 
+export const PDF_WORKER_START_ERROR_NAME = 'PdfWorkerStartError';
+
+/**
+ * Builds the error PdfViewer rejects with when its dedicated worker fires `error` (the script
+ * failed to load or parse) or `messageerror`. pdf.js never settles a load in that case when it was
+ * handed an explicit port. Duck-typed rather than `instanceof ErrorEvent`, which Node lacks.
+ */
+export function createPdfWorkerStartError(event: Event): Error {
+  const message = getStringField(event, 'message');
+  const filename = getStringField(event, 'filename');
+  const error = new Error(
+    `PDF worker failed to start (${event.type} event)` +
+      (message ? `: ${message}` : '') +
+      (filename ? ` in ${filename}` : '')
+  );
+  error.name = PDF_WORKER_START_ERROR_NAME;
+  return error;
+}
+
 const VERSION_MISMATCH_TITLE = 'PDF viewer is out of date';
 const INVALID_PDF_TITLE = 'This file is not a valid PDF';
 const PASSWORD_TITLE = 'This PDF is password-protected';
@@ -80,12 +99,13 @@ export function describePdfLoadError(err: unknown): PdfLoadErrorDescription {
   const message = getStringField(err, 'message');
   const technical = describeTechnical(err);
 
-  if (/setting up fake worker failed/i.test(message)) {
+  if (name === PDF_WORKER_START_ERROR_NAME || /setting up fake worker failed/i.test(message)) {
     return {
       title: WORKER_START_TITLE,
       detail:
         "The PDF viewer's background component failed to start in this browser. This is usually " +
-        'a transient problem with the page rather than the file itself. Reload the page to try ' +
+        'a transient problem with the page rather than the file itself. It can follow a deploy ' +
+        'of this app, and a reload usually picks up the current files. Reload the page to try ' +
         'again; the Download button lets you open the file in another app meanwhile.',
       technical,
     };

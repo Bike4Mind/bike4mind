@@ -3,7 +3,7 @@ import { FC, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentLoadingTask, RenderTask } from 'pdfjs-dist';
-import { describePdfLoadError, type PdfLoadErrorDescription } from './pdfLoadError';
+import { createPdfWorkerStartError, describePdfLoadError, type PdfLoadErrorDescription } from './pdfLoadError';
 
 // We import the `legacy/` entry point, not pdfjs-dist's default build. The default build is
 // compiled for "the latest" browsers and reaches for globals well above this app's Next target:
@@ -14,22 +14,26 @@ import { describePdfLoadError, type PdfLoadErrorDescription } from './pdfLoadErr
 //
 // Load the worker as a plain same-origin static asset (copied into /public from the installed
 // pdfjs-dist by scripts/copy-pdf-worker.mjs, which must copy out of the same build directory this
-// import points at, and name it with this same `pdfjsLib.version`). pdf.js instantiates the
-// module worker itself from this URL.
+// import points at, and name it with this same `pdfjsLib.version`). The versioned filename keeps
+// the worker URL in step with the installed pdfjs-dist; pdf.js hard-errors on an API/worker
+// version mismatch rather than tolerating it.
 //
-// We intentionally do NOT use `new Worker(new URL('pdfjs-dist/build/pdf.worker.min.mjs',
-// import.meta.url), { type: 'module' })`: Turbopack rewrites that into its own worker helper,
+// Each load spawns its own module worker from that URL and hands it to pdf.js as an explicit
+// `port`. Another pdf.js copy on the page (e.g. one injected by a browser extension) can set
+// `globalThis.pdfjsWorker`, and pdf.js would then silently run that main-thread worker - possibly
+// a different version - instead of `workerSrc`. An explicit port bypasses that lookup.
+//
+// We intentionally pass `new Worker` a plain string URL, NOT `new URL('pdfjs-dist/build/
+// pdf.worker.min.mjs', import.meta.url)`: Turbopack rewrites that form into its own worker helper,
 // which strips `{ type: 'module' }` and boots the worker through a classic-worker `importScripts`
 // shim. That shim can't run pdf.js's pre-built ESM worker, so the worker never initializes and
-// `getDocument()` hangs forever on "Loading PDF...". Pointing `workerSrc` at a
-// static file sidesteps the bundler's worker transform entirely; CSP `worker-src 'self'` allows
-// it. Some client-side cache keyed by the URL (browser HTTP cache, a service worker, or a CDN
-// edge - which layer held it is not known) kept serving a worker from an older pdfjs-dist, and
-// pdf.js hard-errors on an API/worker version mismatch rather than tolerating it. Baking the
-// version into the filename gives every pdfjs-dist bump a fresh URL that no URL-keyed cache can
-// hold stale.
+// `getDocument()` hangs forever on "Loading PDF...". A static file sidesteps the bundler's worker
+// transform entirely; CSP `worker-src 'self'` allows it. `workerSrc` is still set as a fallback
+// for any other pdf.js call path.
+const PDF_WORKER_SRC = `/pdf.worker-${pdfjsLib.version}.min.mjs`;
+
 if (typeof window !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `/pdf.worker-${pdfjsLib.version}.min.mjs`;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_SRC;
 }
 
 // Maximum pages to render at once to prevent memory issues
@@ -51,6 +55,9 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
   const [numPages, setNumPages] = useState(0);
   const renderTaskRef = useRef<RenderTask | null>(null);
   const loadingTaskRef = useRef<PDFDocumentLoadingTask | null>(null);
+  const pdfWorkerRef = useRef<pdfjsLib.PDFWorker | null>(null);
+  const webWorkerRef = useRef<Worker | null>(null);
+  const detachWorkerListenersRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!file) {
@@ -65,17 +72,54 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
 
     let cancelled = false;
 
+    // Idempotent: runs on load failure and again from the effect cleanup. Destroying the loading
+    // task only tears down the document; pdf.js leaves a caller-supplied PDFWorker alive, and
+    // PDFWorker.destroy() never terminates a caller-supplied port, so each is released here.
+    const releasePdfResources = () => {
+      detachWorkerListenersRef.current?.();
+      detachWorkerListenersRef.current = null;
+      // destroy() rejects if the worker never finished setting up, which is not actionable here.
+      loadingTaskRef.current?.destroy().catch(() => {});
+      loadingTaskRef.current = null;
+      pdfWorkerRef.current?.destroy();
+      pdfWorkerRef.current = null;
+      webWorkerRef.current?.terminate();
+      webWorkerRef.current = null;
+    };
+
     const loadPdf = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // Held before the await: the loading task is the only teardown handle that exists while
-        // the document is still loading, so an unmount mid-load can still terminate the worker.
-        const loadingTask = pdfjsLib.getDocument({ url: file });
+        // Every handle is stored before the await, so an unmount mid-load can still release them.
+        const webWorker = new Worker(PDF_WORKER_SRC, { type: 'module' });
+        webWorkerRef.current = webWorker;
+        // create() rather than the constructor: pdf.js's generated constructor typings declare
+        // `port` as null-only. For a fresh port create() just constructs a new PDFWorker.
+        const pdfWorker = pdfjsLib.PDFWorker.create({ port: webWorker });
+        pdfWorkerRef.current = pdfWorker;
+        const loadingTask = pdfjsLib.getDocument({ url: file, worker: pdfWorker });
         loadingTaskRef.current = loadingTask;
 
-        const pdf = await loadingTask.promise;
+        // With an explicit port pdf.js has no startup handshake, so a worker script that fails to
+        // load or parse (404, HTML from the SPA fallback, CSP) would leave the load pending
+        // forever. Surface it instead; no timeout, since a large PDF on a slow link is legitimate.
+        const workerStartFailure = new Promise<never>((_, reject) => {
+          const onWorkerError = (event: Event) => reject(createPdfWorkerStartError(event));
+          webWorker.addEventListener('error', onWorkerError);
+          webWorker.addEventListener('messageerror', onWorkerError);
+          detachWorkerListenersRef.current = () => {
+            webWorker.removeEventListener('error', onWorkerError);
+            webWorker.removeEventListener('messageerror', onWorkerError);
+          };
+        });
+
+        const pdf = await Promise.race([loadingTask.promise, workerStartFailure]);
+
+        // Only a still-pending load reacts to worker errors; a late one must not replace a document.
+        detachWorkerListenersRef.current?.();
+        detachWorkerListenersRef.current = null;
 
         if (cancelled) return;
 
@@ -134,6 +178,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
         setLoading(false);
       } catch (err) {
         if (cancelled) return;
+        releasePdfResources();
         const description = describePdfLoadError(err);
         console.error('Error loading PDF:', err, description.technical);
         setError(description);
@@ -148,12 +193,7 @@ const BasePdfViewer: FC<PdfViewerProps> = ({ file, filename }) => {
       if (renderTaskRef.current) {
         renderTaskRef.current.cancel?.();
       }
-      if (loadingTaskRef.current) {
-        // Destroying the loading task destroys the document and terminates the worker. It rejects
-        // if the worker never finished setting up, which is not actionable once we are unmounting.
-        loadingTaskRef.current.destroy().catch(() => {});
-        loadingTaskRef.current = null;
-      }
+      releasePdfResources();
     };
   }, [file, theme.palette.divider]);
 
