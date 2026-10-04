@@ -338,7 +338,7 @@ export function createArtifactPayload(parsedArtifact: ParsedArtifact): ArtifactP
  */
 export function extractPythonPackages(content: string): string[] {
   const packages: Set<string> = new Set();
-  const supportedPackages = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'sklearn', 'scikit-learn'];
+  const supportedPackages = ['numpy', 'pandas', 'matplotlib', 'scipy', 'sklearn', 'scikit-learn'];
 
   // Match import statements
   const importPatterns = [/^import\s+(\w+)/gm, /^from\s+(\w+)\s+import/gm];
