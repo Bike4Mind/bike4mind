@@ -50,10 +50,10 @@ describe('pyodideManager', () => {
       expect(packages).toContain('numpy');
     });
 
-    it('should detect seaborn import', () => {
+    it('does not detect seaborn (not bundled with Pyodide, so it can never load)', () => {
       const code = 'import seaborn as sns\nsns.heatmap(data)';
       const packages = detectPackages(code);
-      expect(packages).toContain('seaborn');
+      expect(packages).not.toContain('seaborn');
     });
 
     it('should detect sklearn import with direct import', () => {
@@ -109,7 +109,7 @@ import seaborn as sns
       expect(packages).toContain('pandas');
       expect(packages).toContain('matplotlib');
       expect(packages).toContain('scipy');
-      expect(packages).toContain('seaborn');
+      expect(packages).not.toContain('seaborn');
     });
 
     it('should not duplicate packages', () => {
@@ -200,7 +200,7 @@ from numpy import array
       expect(packages).toContain('pandas');
       expect(packages).toContain('matplotlib');
       expect(packages).toContain('scipy');
-      expect(packages).toContain('seaborn');
+      expect(packages).not.toContain('seaborn');
       expect(packages).toContain('scikit-learn');
     });
   });

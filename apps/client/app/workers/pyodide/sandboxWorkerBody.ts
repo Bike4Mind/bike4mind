@@ -21,7 +21,7 @@ import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } fro
  */
 export function pyodideSandboxWorkerBody(): void {
   const DEFAULT_PYODIDE_BASE_URL = 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/';
-  const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn'];
+  const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'scikit-learn'];
   // Import name -> distribution name, for the micropip backstop.
   const PACKAGE_NAME_MAP: Record<string, string> = {
     sklearn: 'scikit-learn',
@@ -29,7 +29,10 @@ export function pyodideSandboxWorkerBody(): void {
 
   interface PyodideInterface {
     loadPackage: (packages: string | string[]) => Promise<void>;
-    loadPackagesFromImports: (code: string, options?: { messageCallback?: (message: string) => void }) => Promise<void>;
+    loadPackagesFromImports: (
+      code: string,
+      options?: { messageCallback?: (message: string) => void }
+    ) => Promise<unknown[]>;
     loadedPackages: Record<string, string>;
     pyimport: (name: string) => { install: (pkg: string) => Promise<void> };
     runPythonAsync: (
