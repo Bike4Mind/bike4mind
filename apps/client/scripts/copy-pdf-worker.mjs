@@ -1,18 +1,16 @@
 /**
  * Copy the Mozilla pdf.js worker to the public directory.
  *
- * PdfViewer sets `GlobalWorkerOptions.workerSrc = \`/pdf.worker-${pdfjsLib.version}.min.mjs\``,
- * i.e. it loads the worker as a plain same-origin static asset. We deliberately do NOT let the
- * bundler wrap the worker: Turbopack's `new Worker(new URL(...))` transform strips
- * `{ type: 'module' }` and boots the worker through a classic-worker `importScripts` shim, which
- * cannot run pdf.js's pre-built ESM worker and leaves `getDocument()` hanging forever.
+ * PdfViewer loads the worker from `/pdf.worker-${pdfjsLib.version}.min.mjs` (its own module
+ * worker per load, plus `GlobalWorkerOptions.workerSrc`), i.e. as a plain same-origin static
+ * asset. We deliberately do NOT let the bundler wrap the worker: Turbopack's
+ * `new Worker(new URL(...))` transform strips `{ type: 'module' }` and boots the worker through a
+ * classic-worker `importScripts` shim, which cannot run pdf.js's pre-built ESM worker and leaves
+ * `getDocument()` hanging forever.
  *
  * The destination filename carries the resolved `pdfjs-dist` version (e.g.
- * `pdf.worker-6.3.289.min.mjs`). Some client-side cache keyed by the URL (browser HTTP cache, a
- * service worker, or a CDN edge - which layer held it is not known) can keep a returning visitor
- * running an old worker build after we ship a new `pdfjs-dist` - pdf.js then refuses to run,
- * since it hard-errors on an API/worker version mismatch. Baking the version into the filename
- * gives a version bump a fresh URL that no URL-keyed cache can hold stale. Any other
+ * `pdf.worker-6.3.289.min.mjs`), keeping the worker URL in step with the installed `pdfjs-dist`;
+ * pdf.js hard-errors on an API/worker version mismatch rather than tolerating it. Any other
  * `pdf.worker*.mjs` left over from a prior version is removed so a stale worker never ships
  * alongside the new one.
  *
