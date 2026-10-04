@@ -184,6 +184,22 @@ describe('PdfViewer', () => {
     expect(container.querySelectorAll('canvas')).toHaveLength(2);
   });
 
+  it('places the file info bar after the rendered pages, pinned to the bottom', async () => {
+    const PdfViewer = await importViewer();
+    const { container } = render(<PdfViewer file={FILE} filename="doc.pdf" />, { wrapper: TestWrapper });
+
+    const infoBar = await screen.findByTestId('pdf-viewer-info-bar');
+    const scrollArea = screen.getByTestId('pdf-viewer-scroll-area');
+    const lastCanvas = container.querySelectorAll('canvas')[1];
+    // The canvases render inside the scroll area, and the bar is a sibling AFTER it (not a
+    // sticky overlay inside it), so it reads as a normal footer rather than floating over a page.
+    expect(scrollArea.contains(lastCanvas)).toBe(true);
+    expect(scrollArea.contains(infoBar)).toBe(false);
+    expect(scrollArea.compareDocumentPosition(infoBar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(getComputedStyle(scrollArea).overflow).toBe('auto');
+    expect(screen.getByTestId('pdf-viewer-download-btn')).toHaveAttribute('href', FILE);
+  });
+
   it('tears the document down through the loading task on unmount', async () => {
     const PdfViewer = await importViewer();
     const { unmount } = render(<PdfViewer file={FILE} />, { wrapper: TestWrapper });
