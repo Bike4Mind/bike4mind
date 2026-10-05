@@ -79,6 +79,7 @@ import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
+import { pickerAttachedAgents } from './resolveDispatchAgent';
 import { SlashCommandSuggestions } from '@client/app/components/common/CommandSuggestions';
 import { useContentTransformDetector } from '@client/app/hooks/useContentTransformDetector';
 
@@ -327,7 +328,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const chatHistory = useMemo(() => (questsData?.pages || []).map(page => page.data).flat(), [questsData?.pages]);
 
   // Combine session agents and workBench agents for display
-  const displayAgents = currentSessionId ? sessionAgents : workBenchAgents;
+  const displayAgents = pickerAttachedAgents(currentSessionId, sessionAgents, workBenchAgents);
 
   // Prepare data for LexicalChatInput. Memoised because the identity becomes the
   // mention plugin's `items`, where a new array per render drives an un-bailable

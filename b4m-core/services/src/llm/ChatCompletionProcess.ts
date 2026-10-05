@@ -43,6 +43,7 @@ import {
   isEarlyStop,
   visibleReplyText,
   tokenEstimateMultiplier,
+  pairDataLakeTools,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -698,10 +699,8 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
   paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
-  // The Smart Tools toggle exposes only the save tool; it cannot name a target lake without the
-  // list, or make one without the create.
-  paired = addPairedTool(paired, 'save_content_to_data_lake', 'list_my_data_lakes');
-  paired = addPairedTool(paired, 'save_content_to_data_lake', 'create_data_lake');
+  // The Smart Tools toggle exposes only the save tool.
+  paired = pairDataLakeTools(paired);
   return paired.filter(tool => !denied.has(tool));
 }
 
