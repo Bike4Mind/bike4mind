@@ -483,6 +483,24 @@ describe('processFabFilesServer file notices', () => {
     expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false })]);
   });
 
+  it('does not report read_failed for a file already delivered when a later step throws', async () => {
+    const failing = deps();
+    failing.db.fabfiles.update = vi.fn().mockRejectedValue(new Error('db down'));
+
+    const { fileNotices, deliveredFileIds } = await processFabFilesServer(
+      embeddingFactory,
+      [textFile('a')],
+      'prompt',
+      4000,
+      modelInfo,
+      async () => {},
+      failing
+    );
+
+    expect(deliveredFileIds).toEqual(['a']);
+    expect(fileNotices.filter(n => n.fabFileId === 'a' && n.band === 'read_failed')).toEqual([]);
+  });
+
   it('reports an image on a backend that takes no image payload', async () => {
     const storage = { download: vi.fn(), getSignedUrl: vi.fn().mockResolvedValue('https://signed') };
     const withPath = {

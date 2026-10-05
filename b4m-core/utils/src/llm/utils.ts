@@ -2032,10 +2032,17 @@ export async function processFabFilesServer(
     } catch (error) {
       // Per-line metadata, not updateMetadata: that mutates the run's shared logger, so every later
       // line - for every other file, and the rest of the run - was stamped with this file's ids.
-      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`, {
+      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}:`, error, {
         fileId: file.id,
         filePath: file.filePath,
       });
+      // Content already reached the prompt (a later step such as the metadata update threw), so
+      // reporting read_failed would contradict what the model received.
+      if (delivered) {
+        deliveredFileIds.add(file.id);
+        if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
+        return;
+      }
       // Contain the failure to this file. Rethrowing rejected the whole Promise.all, so one
       // unreadable attachment dropped every sibling that had read fine along with it.
       fileNotices.push({

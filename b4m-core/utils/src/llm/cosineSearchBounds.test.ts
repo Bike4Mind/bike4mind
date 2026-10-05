@@ -149,7 +149,7 @@ describe('the attachment cosine scan is bounded', () => {
     // The guard fires after one repeat, and processFabFilesServer contains it to this file: logged
     // loudly, reported to the model as unread, and the rest of the turn proceeds.
     expect(stuck.findVectorsByFabFileIds).toHaveBeenCalledTimes(2);
-    expect(logger.error.mock.calls.some(c => String(c[0]).includes('cursor failed to advance'))).toBe(true);
+    expect(logger.error.mock.calls.some(c => c.some(a => String(a).includes('cursor failed to advance')))).toBe(true);
     expect(deliveredFileIds).toEqual([]);
     expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'file-1', band: 'read_failed' })]);
   });
