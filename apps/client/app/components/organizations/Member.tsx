@@ -1,4 +1,4 @@
-import { InviteType, IOrganizationDocument, IUserDocument, Permission } from '@bike4mind/common';
+import { getPeriodUsedCredits, InviteType, IOrganizationDocument, IUserDocument, Permission } from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -83,7 +83,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
         ...u,
         status: 'accepted' as const,
         permissions: organization.users.find(m => m.userId === u.id)?.permissions || [],
-        usedCredits: organization.userDetails?.find(m => m.id === u.id)?.usedCredits || 0,
+        usedCredits: getPeriodUsedCredits(organization.userDetails?.find(m => m.id === u.id)),
       })) || [];
     result.push(
       ...(pendingUsers?.map(u => ({ ...u, status: 'pending' as const, permissions: [], usedCredits: 0 })) || [])

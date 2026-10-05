@@ -201,6 +201,8 @@ import {
   deductCreditsWithOrgSupport,
   subtractCredits,
   getMemberUsedCredits,
+  getMemberCreditCap,
+  getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
 } from '../creditService';
 import {
@@ -4054,7 +4056,9 @@ export class ChatCompletionProcess {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),
-                cap: organization.maxCreditsPerMember!,
+                // Non-null: isMemberCreditCapExceeded is false whenever no cap applies.
+                cap: getMemberCreditCap(organization, this.user.id)!,
+                resetsAt: getMemberCreditPeriodEnd(),
                 organizationName: organization.name,
               }),
               'insufficient_credits'

@@ -1,4 +1,4 @@
-import { IOrganizationDocument } from '@bike4mind/common';
+import { getPeriodUsedCredits, IOrganizationDocument } from '@bike4mind/common';
 
 /**
  * Per-member credit cap logic, factored out so the two reservation pre-flights
@@ -52,38 +52,60 @@ export function isMemberCreditCapError(error: unknown): boolean {
   return false;
 }
 
-/** Credits a member has already spent against the org pool (0 when untracked). */
-export function getMemberUsedCredits(organization: Pick<IOrganizationDocument, 'userDetails'>, userId: string): number {
-  return organization.userDetails?.find(u => u.id === userId)?.usedCredits ?? 0;
+export { getMemberCreditPeriodEnd, getMemberCreditPeriodStart } from '@bike4mind/common';
+
+/**
+ * Credits a member has spent against the org pool in the current monthly period (0 when
+ * untracked or when the row's period has rolled over; see `getPeriodUsedCredits`).
+ */
+export function getMemberUsedCredits(
+  organization: Pick<IOrganizationDocument, 'userDetails'>,
+  userId: string,
+  now: Date = new Date()
+): number {
+  return getPeriodUsedCredits(
+    organization.userDetails?.find(u => u.id === userId),
+    now
+  );
 }
 
 /**
- * Whether charging `credits` to `userId` would push them past the org's
- * per-member cap. Returns false when no cap is configured (`maxCreditsPerMember`
- * null/undefined). Uses the caller's estimate at reservation; a request already
- * in flight is allowed to finish and settle its actuals, so a single request may
- * nudge fractionally over the cap (mirrors the org-pool reservation, which also
- * gates on the estimate).
+ * The monthly cap that applies to `userId`: their per-member override when set,
+ * otherwise the org default. null means uncapped.
+ */
+export function getMemberCreditCap(organization: MemberCapOrg, userId: string): number | null {
+  const override = organization.userDetails?.find(u => u.id === userId)?.maxCredits;
+  return override ?? organization.maxCreditsPerMember ?? null;
+}
+
+/**
+ * Whether charging `credits` to `userId` would push them past their monthly cap
+ * (`getMemberCreditCap`). Returns false when no cap applies. Uses the caller's
+ * estimate at reservation; a request already in flight is allowed to finish and
+ * settle its actuals, so a single request may nudge fractionally over the cap
+ * (mirrors the org-pool reservation, which also gates on the estimate).
  */
 export function isMemberCreditCapExceeded(organization: MemberCapOrg, userId: string, credits: number): boolean {
-  if (organization.maxCreditsPerMember == null) {
+  const cap = getMemberCreditCap(organization, userId);
+  if (cap == null) {
     return false;
   }
-  return getMemberUsedCredits(organization, userId) + credits > organization.maxCreditsPerMember;
+  return getMemberUsedCredits(organization, userId) + credits > cap;
 }
 
 /**
- * Whether `userId` is already at or over the org's per-member cap, with no
- * charge estimate. This is the gate for spend paths that bill incrementally and
- * have no single upfront cost (e.g. an agent run settling per-iteration): they
- * can only refuse to START an already-capped member. Deliberately stricter than
+ * Whether `userId` is already at or over their monthly cap, with no charge
+ * estimate. This is the gate for spend paths that bill incrementally and have no
+ * single upfront cost (e.g. an agent run settling per-iteration): they can only
+ * refuse to START an already-capped member. Deliberately stricter than
  * `isMemberCreditCapExceeded` - `>=` (at the cap blocks) rather than
  * `used + estimate > cap` - because there is no estimate to add. Returns false
- * when no cap is configured.
+ * when no cap applies.
  */
 export function isMemberAtOrOverCap(organization: MemberCapOrg, userId: string): boolean {
-  if (organization.maxCreditsPerMember == null) {
+  const cap = getMemberCreditCap(organization, userId);
+  if (cap == null) {
     return false;
   }
-  return getMemberUsedCredits(organization, userId) >= organization.maxCreditsPerMember;
+  return getMemberUsedCredits(organization, userId) >= cap;
 }

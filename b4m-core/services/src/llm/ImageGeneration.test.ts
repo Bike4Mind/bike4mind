@@ -856,7 +856,7 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
-      userDetails: [{ id: 'user1', usedCredits: 1000 }],
+      userDetails: [{ id: 'user1', usedCredits: 1000, periodStart: new Date() }],
     };
     await expect(validate(organization)).rejects.toThrow(/member credit limit/i);
   });
@@ -866,7 +866,7 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 1_000_000,
-      userDetails: [{ id: 'user1', usedCredits: 0 }],
+      userDetails: [{ id: 'user1', usedCredits: 0, periodStart: new Date() }],
     };
     await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
   });
@@ -876,7 +876,7 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: null,
-      userDetails: [{ id: 'user1', usedCredits: 999_999 }],
+      userDetails: [{ id: 'user1', usedCredits: 999_999, periodStart: new Date() }],
     };
     await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
   });
