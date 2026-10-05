@@ -1434,7 +1434,8 @@ export class ChatService {
           patchEdits,
           !!memory,
           skillsSection,
-          !session.origin
+          !session.origin,
+          session.model
         )
       );
       // Taken whether or not it is used, so a nudge the model ignored once does not follow the
@@ -2952,7 +2953,7 @@ function projectPreamble(project: ChatProject): string[] {
  *    invented a filename and byte count rather than saying it could not look. Saying "you have
  *    no access" explicitly is what stops that, so this is never omitted.
  */
-function buildSystemMessage(
+export function buildSystemMessage(
   roots: readonly string[],
   media: boolean,
   host: boolean,
@@ -2970,7 +2971,8 @@ function buildSystemMessage(
    * of tools this model has and not an instruction the user wrote.
    */
   skillsSection = '',
-  ask = false
+  ask = false,
+  modelId = ''
 ): CompletionMessage {
   if (roots.length === 0) {
     return {
@@ -3096,6 +3098,7 @@ function buildSystemMessage(
       ...(host ? HOST_GUIDANCE : []),
       ...(memory ? MEMORY_GUIDANCE : []),
       ...(ask ? ASK_GUIDANCE : []),
+      ...(/gpt/i.test(modelId) ? GPT_GUIDANCE : []),
       ...mcpGuidance(mcpServers),
       ...(skillsSection ? [skillsSection] : []),
       '',
@@ -3186,12 +3189,28 @@ const MEDIA_GUIDANCE: readonly string[] = [
  */
 /** Kept short: the tool's own description carries the detail. */
 const ASK_GUIDANCE: readonly string[] = [
-  `Use ${ASK_USER_TOOL_NAME} only when blocked on a decision that is genuinely the user's; decide the`,
-  "rest yourself from the code, the project's conventions and sensible defaults. Never end a turn",
-  'with a list of "want me to do X, Y or Z?" options - ask them with the tool instead, with your',
-  'recommendation first and " (Recommended)" appended to its label. Never add an "Other" option,',
-  'and never use it to ask "should I proceed?". Keep labels short, a few words, and put the detail',
-  'in the description.',
+  `Use ${ASK_USER_TOOL_NAME} only when truly blocked after checking the repo and no safe default`,
+  'exists: a requirement the code cannot resolve, a destructive or irreversible choice, a missing',
+  'secret or credential. Otherwise decide yourself and say what you chose. Do all the work that',
+  'is not blocked first, then ask, with your recommendation first and " (Recommended)" appended',
+  'to its label. Never add an "Other" option, never use it to ask "should I proceed?", and never',
+  'end a turn with an offer of next steps. Keep labels short, a few words, and put the detail in',
+  'the description.',
+];
+
+/** For GPT models, which stop at plans and offers more readily than the rest. */
+const GPT_GUIDANCE: readonly string[] = [
+  'Keep going until the task is fully handled in this turn: implement, verify, then report. Do',
+  'not stop at a plan, a proposal or an acknowledgement; if the user asked for a change, make it.',
+  'Never ask permission ("Should I proceed?", "Want me to run the tests?") and never end with',
+  'offers of next steps. Pick the most reasonable option, do it, and say what you did.',
+  'Prefer the smallest correct change: no speculative refactors, and no backward-compatibility',
+  'shims without a concrete need.',
+  'Verify in proportion to the change: run the checks that fit what you touched (the typecheck',
+  'or tests the project uses). Once they pass, test further only if new changes or failures',
+  'justify it.',
+  'Keep the final message short: one line for a simple task. Refer to files by path and never',
+  'paste back code you wrote.',
 ];
 
 const MEMORY_GUIDANCE: readonly string[] = [

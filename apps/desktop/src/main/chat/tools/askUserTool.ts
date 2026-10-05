@@ -33,8 +33,6 @@ export const askUser: ToolDefinition = {
       'default - make that call and say so. Do not use it to ask "should I proceed?" or to ask',
       'permission to do what the user already asked for.',
       '',
-      'Prefer this over ending a turn with a list of "want me to do X, Y or Z?" options.',
-      '',
       'Put the option you recommend first and append " (Recommended)" to its label. Never include',
       'an "Other" option: the card always adds one with a text field. Set multiSelect when more',
       'than one option can apply. If the user skips, proceed with your best judgment or stop and',
