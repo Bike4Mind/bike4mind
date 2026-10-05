@@ -9,6 +9,10 @@ export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
 
 export type VoiceGenerationVendor = z.infer<typeof supportedVoiceGenerationVendor>;
 
+// Provider POST /api/ai/tts uses when the request names none. Shared so a client
+// reporting the provider of a non-fallback response cannot drift from the route.
+export const DEFAULT_TTS_PROVIDER: VoiceGenerationVendor = 'openai';
+
 // Display names for the TTS providers. Shared so the provider picker and any
 // message that has to name the vendor that actually produced the audio (e.g. a
 // fallback notice) read identically.
