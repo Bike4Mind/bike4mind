@@ -599,6 +599,7 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
           eventId: { type: String, required: true },
           state: { type: String, enum: QuestCallbackStateSchema.options, required: true },
           dispatchedAt: { type: Date },
+          redispatchCount: { type: Number },
           completedAt: { type: Date },
           lastStatusCode: { type: Number },
           lastError: { type: String },
@@ -839,6 +840,29 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
  * callback handler can check a quest is still settled before delivering against it.
  */
 export const TERMINAL_QUEST_STATUSES: readonly NonNullable<IChatHistoryItemDocument['status']>[] = ['done', 'stopped'];
+
+/** Which `dispatched` callbacks count as stuck; one value feeds both the sweep's read and its reclaim. */
+export type StaleCallbackDispatchCriteria = {
+  /** Claims made before this are past every delivery the queue could still be retrying. */
+  dispatchedBefore: Date;
+  /** Claims made before this are too old to re-send: the caller has stopped waiting for them. */
+  dispatchedAfter: Date;
+  /** Reclaims allowed per arm; a callback that has used them all is left for a human. */
+  maxRedispatches: number;
+};
+
+function staleCallbackDispatchFilter({
+  dispatchedBefore,
+  dispatchedAfter,
+  maxRedispatches,
+}: StaleCallbackDispatchCriteria) {
+  return {
+    'callback.state': 'dispatched',
+    'callback.dispatchedAt': { $lt: dispatchedBefore, $gte: dispatchedAfter },
+    // $not rather than $lt, so a callback never reclaimed (field absent) also matches.
+    'callback.redispatchCount': { $not: { $gte: maxRedispatches } },
+  };
+}
 
 class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implements IChatHistoryItemRepository {
   ctx: mongoose.mongo.ClientSession | null;
@@ -1316,6 +1340,26 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     );
   }
 
+  /**
+   * The `dispatched -> dispatched` re-claim of a callback whose queue message is gone: its claim
+   * is older than every delivery the queue could still be retrying but not past the re-send
+   * horizon, and it has reclaims left. The
+   * same atomic shape as claimCallbackDispatch, so concurrent sweeps re-enqueue it once: moving
+   * `dispatchedAt` forward takes the callback out of the stale window. Returns the claimed event
+   * id, kept so the receiver dedupes a redelivery, or null when nothing matched.
+   */
+  async reclaimStaleCallbackDispatch(id: string, criteria: StaleCallbackDispatchCriteria): Promise<string | null> {
+    const doc = await this.model
+      .findOneAndUpdate(
+        { _id: id, ...staleCallbackDispatchFilter(criteria) },
+        { $set: { 'callback.dispatchedAt': new Date() }, $inc: { 'callback.redispatchCount': 1 } },
+        { projection: { 'callback.eventId': 1 } }
+      )
+      .lean<{ callback?: Pick<IQuestCallback, 'eventId'> }>()
+      .exec();
+    return doc?.callback?.eventId ?? null;
+  }
+
   async findCallbackById(id: string): Promise<IQuestCallback | null> {
     const doc = await this.model.findById(id).select('+callback').lean<{ callback?: IQuestCallback }>().exec();
     return doc?.callback ?? null;
@@ -1371,6 +1415,20 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       )
       .sort({ updatedAt: 1 })
       .limit(opts.limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
+    return docs.map(doc => doc._id.toString());
+  }
+
+  /**
+   * Quests whose callback is stuck at `dispatched` with no queue message behind it: the process
+   * died between the claim and the send, or the send and its compensating release both failed.
+   * Candidates for reclaimStaleCallbackDispatch, oldest claim first.
+   */
+  async findStaleDispatchedCallbacks(criteria: StaleCallbackDispatchCriteria & { limit: number }): Promise<string[]> {
+    const docs = await this.model
+      .find(staleCallbackDispatchFilter(criteria), { _id: 1 })
+      .sort({ 'callback.dispatchedAt': 1 })
+      .limit(criteria.limit)
       .lean<Array<{ _id: mongoose.Types.ObjectId }>>();
     return docs.map(doc => doc._id.toString());
   }
@@ -1481,6 +1539,13 @@ function initializeQuestModel() {
     ChatHistoryItemSchema.index(
       { 'callback.state': 1, updatedAt: 1 },
       { name: 'callbackState_updatedAt', partialFilterExpression: { 'callback.state': 'pending' } }
+    );
+
+    // Serves findStaleDispatchedCallbacks (questTimeoutSweep backstop). Partial, so it holds only
+    // the in-flight callbacks. Pre-built by 20260921235990_ensure-quest-callback-dispatched-index.
+    ChatHistoryItemSchema.index(
+      { 'callback.state': 1, 'callback.dispatchedAt': 1 },
+      { name: 'callbackState_dispatchedAt', partialFilterExpression: { 'callback.state': 'dispatched' } }
     );
   } catch (error) {
     // Plugin already applied, ignore error

@@ -1,9 +1,11 @@
 import { isAxiosError } from 'axios';
+import type { z } from 'zod';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
   ttsBase64ResponseSchema,
+  type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
@@ -40,7 +42,8 @@ export interface ChatWaitResponse {
   // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
   // caller sending `newConversation: true`) gets a freshly created notebook's id here.
   sessionId?: string;
-  // The wait path returns the reply in `responses`; the scalar `response` is null.
+  // `response` is the visible answer text; `responses` is the raw reply slots. Older servers left
+  // `response` null on the wait path.
   response?: string | null;
   responses?: string[];
   // Failure classifier. A failed turn still resolves 200 with the explanation in the reply
@@ -60,8 +63,12 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
+  promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
+
+export type RawCitable = z.infer<typeof CitableSourceSchema> & { [key: string]: unknown };
 
 /** One matching session from POST /api/sessions/semantic-search (`scores` entries). */
 export interface SessionScore {
@@ -109,6 +116,18 @@ export interface GeneratedSound {
   fabFileId?: string;
   fileName?: string;
   fileUrl?: string;
+}
+
+/** A data lake as returned by GET /api/v1/data-lakes (`DataLakeResource`, snake_case). */
+export interface RawDataLake {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  built_in?: boolean;
+  status?: string;
+  file_count?: number;
+  [key: string]: unknown;
 }
 
 export interface RawProject {
@@ -179,11 +198,26 @@ export class B4mApiClient {
     return this.client.get<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`);
   }
 
-  async createNotebook(args: { name?: string; projectId?: string }): Promise<RawNotebook> {
+  async createNotebook(args: { name?: string; projectId?: string; dataLakeId?: string }): Promise<RawNotebook> {
     return this.client.post<RawNotebook>('/api/sessions/create', {
       ...(args.name ? { name: args.name } : {}),
       ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.dataLakeId ? { dataLakeId: args.dataLakeId } : {}),
     });
+  }
+
+  /**
+   * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
+   * `{ data, next_cursor }` body), so `toList` does not apply.
+   */
+  async listDataLakes(args: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ data: RawDataLake[]; nextCursor: string | null }> {
+    const result = await this.client.get<{ data: RawDataLake[]; next_cursor: string | null }>('/api/v1/data-lakes', {
+      params: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
   }
 
   async sendChat(args: {
@@ -365,6 +399,10 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
+      // requireFeatureEnabled answers 403 too; no key scope fixes an instance-disabled feature.
+      if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
+        return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
+      }
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }

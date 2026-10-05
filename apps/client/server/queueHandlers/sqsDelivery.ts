@@ -9,6 +9,8 @@ export const FAB_FILE_CHUNK_MAX_RECEIVE_COUNT = 3; // mirrors fabFileChunkQueue.
 export const FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT = 3; // mirrors fabFileVectorizeQueue.dlq.retry
 // Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
 export const GENERATION_CALLBACK_MAX_RECEIVE_COUNT = 5; // mirrors generationCallbackQueue.dlq.retry
+// Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
+export const GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC = 120; // mirrors generationCallbackQueue.visibilityTimeout
 
 /**
  * Delivery number of this SQS message (1-based). Both queues these helpers serve are pinned to

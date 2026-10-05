@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -9,6 +10,7 @@ import {
   registerTools,
   listNotebooks,
   listFiles,
+  listLakes,
   createNotebook,
   sendMessage,
   searchKnowledgeBase,
@@ -27,6 +29,7 @@ describe('TOOL_NAMES', () => {
       'create_notebook',
       'send_message',
       'search_knowledge_base',
+      'list_lakes',
       'list_files',
       'get_file',
       'generate_sound_effect',
@@ -88,8 +91,55 @@ describe('tool handlers', () => {
     expect(create).toHaveBeenCalledWith({ name: 'My NB', projectId: 'p1' });
   });
 
+  it('create_notebook forwards a dataLakeId', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'nb1' });
+    const client = mockClient({ createNotebook: create });
+
+    await createNotebook(client, { dataLakeId: 'lake-1' });
+
+    expect(create).toHaveBeenCalledWith({ name: 'New Notebook', dataLakeId: 'lake-1' });
+  });
+
+  it('list_lakes projects each lake to a summary and passes the cursor through', async () => {
+    const list = vi.fn().mockResolvedValue({
+      data: [
+        {
+          id: 'l1',
+          name: 'Docs',
+          slug: 'docs',
+          description: 'Product docs',
+          built_in: false,
+          status: 'ready',
+          file_count: 3,
+          organization_id: 'o1',
+          total_size_bytes: 99,
+        },
+      ],
+      nextCursor: 'c2',
+    });
+    const client = mockClient({ listDataLakes: list });
+
+    const result = await listLakes(client, { limit: 25, cursor: 'c1' });
+
+    expect(list).toHaveBeenCalledWith({ limit: 25, cursor: 'c1' });
+    expect(result).toEqual({
+      lakes: [
+        {
+          id: 'l1',
+          name: 'Docs',
+          slug: 'docs',
+          description: 'Product docs',
+          builtIn: false,
+          status: 'ready',
+          fileCount: 3,
+        },
+      ],
+      nextCursor: 'c2',
+    });
+  });
+
   it('send_message extracts the reply from responses and returns the supplied notebookId', async () => {
-    const getQuest = vi.fn();
+    const getQuest = vi.fn().mockResolvedValue({ id: 'q1', status: 'done', sessionId: 'other-nb' });
     // The real wait:true response carries the reply in `responses`; `response` is null.
     const client = mockClient({
       sendChat: vi
@@ -100,8 +150,52 @@ describe('tool handlers', () => {
 
     const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
 
-    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt' });
-    expect(getQuest).not.toHaveBeenCalled();
+    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: [] });
+  });
+
+  it('send_message returns the quest citables, projected without metadata', async () => {
+    const client = mockClient({
+      sendChat: vi
+        .fn()
+        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['grounded'], model: 'gpt' }),
+      getQuest: vi.fn().mockResolvedValue({
+        id: 'q1',
+        status: 'done',
+        sessionId: 'nb1',
+        promptMeta: {
+          citables: [
+            {
+              id: 'fab1',
+              type: 'document',
+              title: 'Handbook.pdf',
+              url: '/files/fab1',
+              description: 'p. 3',
+              metadata: { fullContext: 'long passage text' },
+            },
+          ],
+        },
+      }),
+    });
+
+    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
+
+    expect(result.reply).toBe('grounded');
+    expect(result.citables).toEqual([
+      { id: 'fab1', type: 'document', title: 'Handbook.pdf', url: '/files/fab1', description: 'p. 3' },
+    ]);
+  });
+
+  it('send_message still returns the reply, with citables omitted, when the quest fetch fails', async () => {
+    const client = mockClient({
+      sendChat: vi
+        .fn()
+        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' }),
+      getQuest: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+
+    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
+
+    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: undefined });
   });
 
   it('send_message joins multiple responses with a blank line', async () => {
@@ -143,8 +237,8 @@ describe('tool handlers', () => {
     expect(result.notebookId).toBe('resolved-nb');
   });
 
-  it('send_message prefers the sessionId echoed on the chat response over a quest re-fetch', async () => {
-    const getQuest = vi.fn();
+  it('send_message prefers the sessionId echoed on the chat response over the quest', async () => {
+    const getQuest = vi.fn().mockResolvedValue({ id: 'q1', status: 'done', sessionId: 'quest-nb' });
     const client = mockClient({
       sendChat: vi.fn().mockResolvedValue({
         id: 'q1',
@@ -160,7 +254,7 @@ describe('tool handlers', () => {
     const result = await sendMessage(client, { message: 'hi' });
 
     expect(result.notebookId).toBe('echoed-nb');
-    expect(getQuest).not.toHaveBeenCalled();
+    expect(getQuest).toHaveBeenCalledWith('q1');
   });
 
   it('search_knowledge_base wraps the score array in a results object', async () => {
@@ -348,14 +442,32 @@ describe('tool handlers', () => {
 describe('registerTools', () => {
   const collectTools = (client: B4mApiClient) => {
     const tools = new Map<string, (args: unknown) => Promise<CallToolResult>>();
+    const schemas = new Map<string, z.ZodRawShape>();
     const server = {
-      registerTool: (name: string, _config: unknown, cb: (args: unknown) => Promise<CallToolResult>) => {
+      registerTool: (
+        name: string,
+        config: { inputSchema: z.ZodRawShape },
+        cb: (args: unknown) => Promise<CallToolResult>
+      ) => {
         tools.set(name, cb);
+        schemas.set(name, config.inputSchema);
       },
     } as unknown as McpServer;
     registerTools(server, client);
-    return tools;
+    return Object.assign(tools, { schemas });
   };
+
+  // The SDK validates arguments against inputSchema before the handler runs, so a field
+  // missing from a shape is silently stripped and never reaches the client.
+  it('create_notebook input schema keeps dataLakeId', () => {
+    const shape = collectTools(mockClient({})).schemas.get('create_notebook')!;
+    expect(z.object(shape).parse({ name: 'n', dataLakeId: 'l1' })).toEqual({ name: 'n', dataLakeId: 'l1' });
+  });
+
+  it('list_lakes input schema keeps cursor and defaults limit to 25', () => {
+    const shape = collectTools(mockClient({})).schemas.get('list_lakes')!;
+    expect(z.object(shape).parse({ cursor: 'c1' })).toEqual({ cursor: 'c1', limit: 25 });
+  });
 
   it('registers every tool in TOOL_NAMES', () => {
     const tools = collectTools(mockClient({}));
@@ -401,6 +513,44 @@ describe('registerTools', () => {
     expect(result.content[0]).toMatchObject({
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: files:read)",
+    });
+  });
+
+  it('maps a FEATURE_DISABLED 403 to a feature-disabled message, not a scope hint', async () => {
+    const disabled = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: { error: 'Feature not available', code: 'FEATURE_DISABLED' },
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ listDataLakes: vi.fn().mockRejectedValue(disabled) }));
+
+    const result = await tools.get('list_lakes')!({ limit: 25 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: 'feature disabled on this Bike4Mind instance (ask an admin to enable it)',
+    });
+  });
+
+  it('list_lakes maps a 403 to a structured isError naming datalake:read', async () => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ listDataLakes: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get('list_lakes')!({ limit: 25 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: "API key forbidden: check the key's scopes and account access (recommended scope: datalake:read)",
     });
   });
 

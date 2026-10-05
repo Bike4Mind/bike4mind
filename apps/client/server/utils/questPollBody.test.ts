@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { IChatHistoryItemDocument } from '@bike4mind/common';
+import { formatChoicesBlock, type IChatHistoryItemDocument } from '@bike4mind/common';
 import { toQuestPollBody } from './questPollBody';
 
 const ORIGINAL_CDN = process.env.NEXT_PUBLIC_CDN_URL;
@@ -66,5 +66,53 @@ describe('toQuestPollBody', () => {
       const body = toQuestPollBody(quest({ type: 'error', fallbackInfo: info }), { isOwner: true });
       expect(body.fallbackInfo).toBeUndefined();
     });
+  });
+});
+
+describe('toQuestPollBody reply', () => {
+  const body = (overrides: Partial<IChatHistoryItemDocument>) => toQuestPollBody(quest(overrides), { isOwner: true });
+
+  it('derives reply from replies[] when the pipeline left the scalar null', () => {
+    const out = body({ reply: null, replies: ['Hi'] });
+
+    expect(out.reply).toBe('Hi');
+    expect(out.replies).toEqual(['Hi']);
+  });
+
+  it('joins the visible text of every slot, dropping thinking blocks', () => {
+    const replies = ['<think>plan</think>', 'Answer part 1', ' part 2'];
+
+    const out = body({ reply: null, replies });
+
+    expect(out.reply).toBe('Answer part 1 part 2');
+    expect(out.replies).toEqual(replies);
+  });
+
+  it('returns the full answer, not the stale rapid-reply prefix', () => {
+    expect(body({ reply: 'Quick ', replies: ['Quick full answer'] }).reply).toBe('Quick full answer');
+  });
+
+  it('strips a trailing choices block from the answer', () => {
+    const block = formatChoicesBlock([
+      { label: 'A', description: 'first' },
+      { label: 'B', description: 'second' },
+    ]);
+
+    expect(body({ reply: null, replies: [`Pick one.${block}`] }).reply).toBe('Pick one.');
+  });
+
+  it('keeps the scalar reply when there are no slots', () => {
+    const out = body({ type: 'error', reply: 'Something went wrong', replies: [] });
+
+    expect(out.reply).toBe('Something went wrong');
+    expect(out.replies).toEqual([]);
+  });
+
+  it('keeps the scalar reply when every slot is thinking-only', () => {
+    expect(body({ type: 'error', reply: 'err', replies: ['<think>x</think>'] }).reply).toBe('err');
+  });
+
+  it('is null when the quest has no content at all', () => {
+    expect(body({}).reply).toBeNull();
   });
 });
