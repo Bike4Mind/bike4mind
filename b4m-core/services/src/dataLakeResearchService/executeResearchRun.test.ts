@@ -94,6 +94,26 @@ describe('executeResearchRun', () => {
     expect(calls.proposals[0].title).toBe('Result 1');
   });
 
+  it('keeps the search hit title when the fetched title is only the url last path segment', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [
+        { title: 'Job shop scheduling with deep RL', url: 'https://arxiv.org/pdf/1909.08247', snippet: 's' },
+      ],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({ title: '1909.08247', text: 'body' });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('Job shop scheduling with deep RL');
+  });
+
+  it('keeps the fetched title when it is a placeholder but the hit title is blank', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [{ title: '   ', url: 'https://arxiv.org/pdf/1909.08247', snippet: 's' }],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({ title: '1909.08247', text: 'body' });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('1909.08247');
+  });
+
   // Rule 1: the free filter runs first, so a narrow allow list costs nothing to enforce.
   describe('rule 1 - the source filter is free and runs first', () => {
     it('drops a filtered candidate without judging or fetching it', async () => {
