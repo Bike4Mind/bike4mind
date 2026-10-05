@@ -196,6 +196,20 @@ describe('FindingCorpusActions', () => {
     expect(screen.queryByTestId('finding-corpus-supersede-error')).not.toBeInTheDocument();
   });
 
+  it('shows a server refusal inline in the merge dialog and clears it on a new choice', () => {
+    h.mutate.mockImplementationOnce((_vars, options) =>
+      options.onError({ serverMessage: 'would retire every document' })
+    );
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-merge-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-merge-error')).toHaveTextContent('would retire every document');
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-merge-keep-file-b')).getByRole('radio'));
+    expect(screen.queryByTestId('finding-corpus-merge-error')).not.toBeInTheDocument();
+  });
+
   it('blocks a retag until the current tags have loaded, then posts the complete edited set', () => {
     const { rerender } = renderActions();
 
@@ -253,5 +267,19 @@ describe('FindingCorpusActions', () => {
     fireEvent.click(screen.getByTestId('finding-corpus-retag-add-btn'));
 
     expect(screen.getByTestId('finding-corpus-retag-invalid')).toHaveTextContent(/tag limit/i);
+  });
+
+  it('shows a server refusal inline in the retag dialog and clears it on a new choice', () => {
+    h.lakeTags.mockReturnValue({ data: { prefix: 'lk:', current: [] }, isLoading: false, isError: false });
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError({ serverMessage: 'tag set is too large' }));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-retag-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-retag-refusal')).toHaveTextContent('tag set is too large');
+    expect(screen.queryByTestId('finding-corpus-retag-error')).not.toBeInTheDocument();
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-retag-file-file-b')).getByRole('radio'));
+    expect(screen.queryByTestId('finding-corpus-retag-refusal')).not.toBeInTheDocument();
   });
 });
