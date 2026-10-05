@@ -121,6 +121,7 @@ const UNREACHABLE_ON_SELF_HOST: Record<string, string> = {
   tavernHeartbeatQueue: 'premium overlay (b4m-tavern) handler; open core cannot consume it',
   optihashiRunCompletionQueue: 'premium overlay handler; open core cannot consume it',
   bobRunQueue: 'premium overlay handler; open core cannot consume it',
+  libreoncologyAudioRenderQueue: 'premium overlay handler; open core cannot consume it',
 };
 
 /**

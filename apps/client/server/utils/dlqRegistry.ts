@@ -199,6 +199,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'bobRunQueue',
   },
   {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+  },
+  {
     label: 'data-lake-cleanup',
     displayName: 'Data Lake Cleanup',
     application: 'DataLakeManagement',
