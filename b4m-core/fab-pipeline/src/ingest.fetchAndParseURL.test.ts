@@ -1170,4 +1170,50 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(text).toContain('Plans for teams of every size.');
     expect(text).toContain('We offered coffee to every attendee.');
   });
+
+  it('keeps promo-named inline elements inside a sentence', async () => {
+    const page =
+      '<html><body><main>' +
+      '<p>Read our <a class="cta-link" href="/g">pricing guide</a> before you choose a plan.</p>' +
+      '<p>Annual plans include <span class="offer">two months free</span> compared with monthly billing.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Read our pricing guide before you choose a plan.');
+    expect(text).toContain('Annual plans include two months free compared with monthly billing.');
+  });
+
+  it('keeps headings and API entries whose id is a promo word, and ignores ids for promo matching', async () => {
+    const page =
+      '<html><body><main>' +
+      '<h2 id="subscribe-to-a-topic">Subscribe to a topic</h2><p>Call client.subscribe(topic) to listen.</p>' +
+      '<div id="subscribe" class="method"><h4>subscribe()</h4><p>Registers a listener for events.</p></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of ['Subscribe to a topic', 'client.subscribe(topic)', 'subscribe()', 'Registers a listener']) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('keeps a button link whose neighbour is inline markup separated by a comment', async () => {
+    const page =
+      '<html><body><main><div><em>Linux users:</em><!-- dl --><a class="btn" href="/dl">Download v3.2</a></div>' +
+      '</main></body></html>';
+
+    expect(await fetchText(page)).toContain('Download v3.2');
+  });
+
+  it('restores a promo card and its nested button when pruning would leave too little text', async () => {
+    const page =
+      '<html><body><main><div class="offer-card"><h4>Spring sale</h4>' +
+      '<a class="button-classic" href="/signup">Try it free</a></div></main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Spring sale');
+    expect(text).toContain('Try it free');
+  });
 });

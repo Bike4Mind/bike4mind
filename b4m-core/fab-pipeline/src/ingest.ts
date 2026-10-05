@@ -238,9 +238,14 @@ const NON_CONTENT_SELECTOR = [
 ].join(', ');
 
 /**
- * Class/id words a page uses for promotional chrome - the offer card, the newsletter box, the
+ * Elements that are running content themselves; a promo-named one is a content slug, not chrome.
+ */
+const PROMO_CONTENT_ELEMENT_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, td, th, dt, dd, pre';
+
+/**
+ * Class words a page uses for promotional chrome - the offer card, the newsletter box, the
  * sign-up band. The Readability "unlikely candidate" idea, cut down to words that never name an
- * article's own content. Matched as whole tokens (`offer-card`, `header-offer`, `newsletter-form`),
+ * article's own content. Matched as whole tokens (`offer-card`, `newsletter-form`),
  * never substrings, so `coffee` or `offered` cannot match. Being HIDDEN is deliberately not a
  * signal: a collapsed accordion answer is just as hidden as a script-revealed offer card.
  */
@@ -249,11 +254,7 @@ const PROMO_TOKENS = new Set(['cta', 'promo', 'promotion', 'offer', 'newsletter'
 /** `btn`, `btn-primary`, `button`, `button-classic`: a link styled as a call-to-action button. */
 const BUTTON_CLASS_PATTERN = /^(btn|button)(-|$)/;
 
-/**
- * Bootstrap's in-text link style, which matches `BUTTON_CLASS_PATTERN` but is not a button. Also the
- * table cells and headings a button-styled link can be the whole of (a release table's version
- * link, a heading's anchor) - places where removing it empties real content.
- */
+/** Bootstrap's in-text link style, which matches `BUTTON_CLASS_PATTERN` but is not a button. */
 const NOT_A_BUTTON_CLASS = 'btn-link';
 
 /**
@@ -290,7 +291,10 @@ const STRIP_CONTAINER_SELECTOR = 'div, span, ul, ol, nav, header, footer, aside,
  */
 const PROSE_ANCESTOR_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, dt, dd, blockquote, figcaption, caption';
 
-/** See `NOT_A_BUTTON_CLASS`. */
+/**
+ * Places a button-styled link can be the whole of (a release table's version link, a heading's
+ * anchor), where removing it empties real content.
+ */
 const BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR = `${PROSE_ANCESTOR_SELECTOR}, td, th`;
 
 /**
@@ -474,7 +478,8 @@ function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
   type Sibling = { type?: string; data?: string; prev?: Sibling | null; next?: Sibling | null } | null | undefined;
   const nearest = (start: Sibling, step: 'prev' | 'next'): Sibling => {
     let current = start;
-    while (current && current.type === 'text' && !squash(current.data ?? '')) current = current[step];
+    while (current && (current.type === 'comment' || (current.type === 'text' && !squash(current.data ?? ''))))
+      current = current[step];
     return current;
   };
   const node = element as Sibling & object;
@@ -488,17 +493,21 @@ function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
 }
 
 /**
- * True when `element` is labelled as promotional chrome by its own class or id (`PROMO_TOKENS`).
- * Declined for anything holding an `<h1>`-`<h3>`, a `<pre>`, an `<article>`/`<main>`, or more than
- * `MAX_PROMO_TEXT_CHARS` of text: a promo word on a wrapper that big names a page section, not chrome.
+ * True when `element` is labelled as promotional chrome by its own class (`PROMO_TOKENS`); ids are
+ * ignored because they are usually content-derived slugs (`#subscribe-to-a-topic`). Declined for
+ * inline elements and anything in or beside running prose, for content elements themselves, and for
+ * anything holding a heading, a `<pre>`, an `<article>`/`<main>`, or more than `MAX_PROMO_TEXT_CHARS`
+ * of text: a promo word on a wrapper that big names a page section, not chrome.
  */
-function isPromoBlock($: CheerioAPI, element: DomNode): boolean {
-  const attribs = (element as { attribs?: Record<string, string> }).attribs ?? {};
-  const tokens = `${attribs.class ?? ''} ${attribs.id ?? ''}`.toLowerCase().split(/[^a-z0-9]+/);
+function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | undefined): boolean {
+  const classAttr = (element as { attribs?: Record<string, string> }).attribs?.class ?? '';
+  const tokens = classAttr.toLowerCase().split(/[^a-z0-9]+/);
   if (!tokens.some(token => PROMO_TOKENS.has(token))) return false;
   const $element = $(element);
+  if (documentRoot && hasProseAncestor($, element, documentRoot)) return false;
+  if (hasAdjacentProseText(element) || hasAdjacentInlineElement($, element)) return false;
   return (
-    !$element.is('html, body, main, article') &&
+    !$element.is(`html, body, main, article, ${INLINE_SELECTOR}, ${PROMO_CONTENT_ELEMENT_SELECTOR}`) &&
     $element.find('h1, h2, h3, pre, main, article').length === 0 &&
     squash($element.text()).length <= MAX_PROMO_TEXT_CHARS
   );
@@ -520,8 +529,8 @@ function isButtonLink($: CheerioAPI, element: DomNode): boolean {
 }
 
 /**
- * Removes control strips and non-content elements from `scope`, together, with ONE rollback
- * covering both.
+ * Removes control strips, non-content elements, promo blocks and CTA button links from `scope`,
+ * together, with ONE rollback covering all of them.
  *
  * Both prunings are done via a placeholder swap rather than an outright `remove()`, so either can
  * be undone. They are decided together - not the strip rule with its own guard and the non-content
@@ -576,9 +585,9 @@ function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
     ...new Set([
       ...scope.find(NON_CONTENT_SELECTOR).toArray(),
       ...scope
-        .find('[class], [id]')
+        .find('[class]')
         .toArray()
-        .filter(element => isPromoBlock($, element)),
+        .filter(element => isPromoBlock($, element, documentRoot)),
       ...scope
         .find('a[href][class]')
         .toArray()
