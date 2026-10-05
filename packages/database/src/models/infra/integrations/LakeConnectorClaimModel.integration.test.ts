@@ -100,16 +100,24 @@ describe('lakeConnectorClaimRepository release', () => {
 describe('connector release() drops the matching claim', () => {
   it('GitHub: deleting the row releases its claim; a refused release keeps it', async () => {
     const lakeId = oid();
-    const conn = await orgGitHubLakeConnectionRepository.create({
-      organizationId: 'org-1',
-      targetDataLakeId: lakeId,
-      installationId: 1,
-      accountLogin: 'acme',
-      repositoryId: 1,
-      repositoryFullName: 'acme/one',
-      connectedBy: 'user-1',
-      connectedAt: new Date(),
-    });
+    const presetId = oid();
+    // The connect routes write the row under the id the claim was taken with; create must honor it.
+    const conn = await orgGitHubLakeConnectionRepository.create(
+      Object.assign(
+        {
+          organizationId: 'org-1',
+          targetDataLakeId: lakeId,
+          installationId: 1,
+          accountLogin: 'acme',
+          repositoryId: 1,
+          repositoryFullName: 'acme/one',
+          connectedBy: 'user-1',
+          connectedAt: new Date(),
+        },
+        { _id: new mongoose.Types.ObjectId(presetId) }
+      )
+    );
+    expect(conn.id).toBe(presetId);
     await lakeConnectorClaimRepository.tryAcquire({ lakeId, kind: 'github', connectionId: conn.id });
 
     expect(await orgGitHubLakeConnectionRepository.release(conn.id, 'org-2')).toBe(false);

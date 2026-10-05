@@ -5,6 +5,8 @@ import { NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
+  claimTryAcquire: vi.fn(async () => ({ acquired: true })),
+  claimRelease: vi.fn(async () => true),
   exchangeInstallerCode: vi.fn(),
   listInstallerVisibleRepositories: vi.fn(),
   revokeInstallerToken: vi.fn(),
@@ -49,6 +51,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
   return {
     ...actual,
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
+    lakeConnectorClaimRepository: {
+      ...actual.lakeConnectorClaimRepository,
+      tryAcquire: h.claimTryAcquire,
+      releaseByConnectionId: h.claimRelease,
+    },
     orgGitHubLakeConnectionRepository: {
       ...actual.orgGitHubLakeConnectionRepository,
       findByDataLakeIdAny: h.ghConnFindByDataLakeIdAny,
@@ -383,6 +390,25 @@ describe('completeGitHubLakeConnection', () => {
   it('reports a conflict when create races another connect (duplicate key)', async () => {
     h.ghConnCreate.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
     await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/just connected by another request/i);
+    const [{ connectionId }] = h.claimTryAcquire.mock.calls[0] as unknown as [{ connectionId: string }];
+    expect(h.claimRelease).toHaveBeenCalledWith(connectionId);
+  });
+
+  it('takes the lake claim and writes the row under the claimed id', async () => {
+    await completeGitHubLakeConnection(params());
+    expect(h.claimTryAcquire).toHaveBeenCalledWith(expect.objectContaining({ lakeId: 'lake1', kind: 'github' }));
+    const [{ connectionId }] = h.claimTryAcquire.mock.calls[0] as unknown as [{ connectionId: string }];
+    const [created] = h.ghConnCreate.mock.calls[0] as [{ _id: { toString(): string } }];
+    expect(created._id.toString()).toBe(connectionId);
+  });
+
+  it('refuses with 409 when a Drive connect holds the lake claim, and creates nothing', async () => {
+    h.claimTryAcquire.mockResolvedValueOnce({
+      acquired: false,
+      holder: { kind: 'googleDrive', connectionId: 'd1', claimedAt: new Date() },
+    });
+    await expect(completeGitHubLakeConnection(params())).rejects.toThrow(/already connected to a Google Drive folder/i);
+    expect(h.ghConnCreate).not.toHaveBeenCalled();
   });
 });
 

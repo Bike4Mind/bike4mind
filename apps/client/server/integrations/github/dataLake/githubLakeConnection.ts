@@ -17,7 +17,11 @@ import { Logger } from '@bike4mind/observability';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
-import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
+import {
+  assertLakeConnectorFree,
+  withConnectionId,
+  withLakeConnectorClaim,
+} from '@server/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
@@ -240,16 +244,20 @@ export async function completeGitHubLakeConnection(params: {
 
   let connection: IOrgGitHubLakeConnectionDocument;
   try {
-    connection = await orgGitHubLakeConnectionRepository.create({
-      organizationId,
-      targetDataLakeId: lakeId,
-      installationId,
-      accountLogin: installation.accountLogin,
-      repositoryId: pick.repository.id,
-      repositoryFullName: pick.repository.fullName,
-      connectedBy: user.id,
-      connectedAt: new Date(),
-    });
+    connection = await withLakeConnectorClaim(lakeId, 'github', claimedId =>
+      orgGitHubLakeConnectionRepository.create(
+        withConnectionId(claimedId, {
+          organizationId,
+          targetDataLakeId: lakeId,
+          installationId,
+          accountLogin: installation.accountLogin,
+          repositoryId: pick.repository.id,
+          repositoryFullName: pick.repository.fullName,
+          connectedBy: user.id,
+          connectedAt: new Date(),
+        })
+      )
+    );
   } catch (error) {
     // Unique repositoryId / targetDataLakeId: a concurrent connect won the claim after our checks.
     if (isDuplicateKeyError(error)) {
