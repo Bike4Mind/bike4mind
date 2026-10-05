@@ -49,6 +49,7 @@ import {
   usdToCredits as realUsdToCredits,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  REPLY_CHOICES_GUIDANCE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -254,7 +255,12 @@ describe('ChatCompletionProcess', () => {
         update: vi.fn(),
         attachAgent: vi.fn().mockResolvedValue(mockSession),
       },
-      organizations: { findById: vi.fn(), update: vi.fn(), findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      organizations: {
+        findById: vi.fn(),
+        update: vi.fn(),
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
       quests: {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
@@ -4084,6 +4090,9 @@ describe('ChatCompletionProcess', () => {
       admittedPreauthorizedTags?: string[];
       // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
       userIsAdmin?: boolean;
+      // Wires mockDb.dataLakes.findByDatalakeTags, which the seed's not-serving (draft) count reads
+      // for the session-named lakes that did not make lakeScope.
+      lakesByTag?: Array<{ datalakeTag: string; status: string; createdByUserId: string }>;
       // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
       // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
       attachmentLakes?: unknown[];
@@ -4095,8 +4104,19 @@ describe('ChatCompletionProcess', () => {
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
       (service as any).user.isAdmin = opts.userIsAdmin;
-      if (opts.countGateExcludedLakesImpl) {
-        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      if (opts.countGateExcludedLakesImpl || opts.lakesByTag) {
+        mockDb.dataLakes = {
+          ...(opts.countGateExcludedLakesImpl
+            ? { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) }
+            : {}),
+          ...(opts.lakesByTag
+            ? {
+                findByDatalakeTags: vi.fn(async (tags: string[]) =>
+                  opts.lakesByTag!.filter(lake => tags.includes(lake.datalakeTag))
+                ),
+              }
+            : {}),
+        };
       }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
@@ -4647,6 +4667,50 @@ describe('ChatCompletionProcess', () => {
           });
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
+
+        // A draft lake is not in any retrieval arm (active-only), so a session naming one narrows to
+        // an empty scope. notServingLakes is what lets the answer diagnosis say why.
+        describe('notServingLakes', () => {
+          const draftWorld = [
+            { datalakeTag: 'datalake:my-draft', status: 'draft', createdByUserId: 'user1' },
+            { datalakeTag: 'datalake:their-draft', status: 'draft', createdByUserId: 'someone-else' },
+          ];
+
+          it("records the caller's own draft that the session named", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:my-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 1, reason: 'draft' } });
+          });
+
+          it("does not count another user's draft", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:their-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('does not count an active lake that is missing for another reason (that is excludedLakes)', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:gated'],
+              lakesByTag: [{ datalakeTag: 'datalake:gated', status: 'active', createdByUserId: 'user1' }],
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('stays absent when the session names no lake', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval && 'notServingLakes' in retrieval).toBe(false);
+          });
+        });
       });
 
       it('writes no retrieval record at all when there was nothing to retrieve from', async () => {
@@ -4887,14 +4951,19 @@ describe('ChatCompletionProcess', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
     const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
 
-    const runWithTools = async (tools: any[], disabledTools?: string[]) => {
+    const runWithTools = async (
+      tools: any[],
+      disabledTools?: string[],
+      extraBody: Record<string, unknown> = {},
+      reply = 'Hi!'
+    ) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
-          await cb(['Hi!']);
+          await cb([reply]);
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
@@ -4913,14 +4982,22 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      // Echoes the admitted system/context stack (argument 2) back into the returned messages, so
+      // systemPromptDetails' delivered-by-reference check (toPromptDetails in systemPromptSources.ts)
+      // reports every admitted source as delivered - matching production when nothing is evicted.
+      // The reply-choices eviction test below overrides this per-call via mockImplementationOnce.
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [...(contextAndSystemMessages ?? []), { role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined, ...extraBody };
       await service.process({ body, logger: mockLogger });
 
       buildToolsSpy.mockRestore();
@@ -4961,6 +5038,85 @@ describe('ChatCompletionProcess', () => {
     // requested list still names it. Gating on the requested list described a tool the model lacked.
     it('omits the view registry when navigate_view never reached the built tool list', async () => {
       expect(await hasViewRegistry([])).toBe(false);
+    });
+
+    const hasReplyChoices = async (extraBody: Record<string, unknown>) =>
+      ((await runWithTools([], undefined, extraBody))?.[1] ?? ([] as any[])).some(
+        (m: any) => typeof m?.content === 'string' && m.content === REPLY_CHOICES_GUIDANCE
+      );
+
+    it('includes the reply-choices guidance on an in-app turn', async () => {
+      expect(await hasReplyChoices({})).toBe(true);
+    });
+
+    // Voice sets this: it speaks the raw reply stream and has no buttons to render.
+    it('omits the reply-choices guidance under skipReplyChoices', async () => {
+      expect(await hasReplyChoices({ skipReplyChoices: true })).toBe(false);
+    });
+
+    // History re-attaches stored choices only when the guidance ships, so it never demonstrates a
+    // format the model was not told about.
+    const historyIncludesReplyChoices = async (extraBody: Record<string, unknown>) => {
+      mockedFetchAndProcessPreviousMessages.mockClear();
+      await runWithTools([], undefined, extraBody);
+      return mockedFetchAndProcessPreviousMessages.mock.calls.map(call => call[2]?.includeReplyChoices);
+    };
+
+    it('asks history for stored choices when the guidance is offered', async () => {
+      expect(await historyIncludesReplyChoices({})).toEqual([true]);
+    });
+
+    it.each([{ skipReplyChoices: true }, { skipAutoOffers: true }, { promptMode: 'raw' }])(
+      'does not ask history for stored choices under %j',
+      async extraBody => {
+        expect(await historyIncludesReplyChoices(extraBody)).toEqual([false]);
+      }
+    );
+
+    it('records on promptMeta that choices were offered but absent', async () => {
+      await runWithTools([], undefined, {});
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'absent' });
+    });
+
+    it('records parsed choices on promptMeta', async () => {
+      const options = [
+        { label: 'One', description: 'Do the first thing.' },
+        { label: 'Two', description: 'Do the second thing.' },
+      ];
+      await runWithTools([], undefined, {}, 'Pick one.\n\n```choices\n' + JSON.stringify({ options }) + '\n```');
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'parsed' });
+      expect(mockQuest.suggestedChoices).toEqual({ options });
+    });
+
+    it('records and logs an invalid block with its reason', async () => {
+      const reply = 'Pick one.\n\n```choices\n{"options":[{"label":"Only","description":"One option."}]}\n```';
+      await runWithTools([], undefined, { skipReplyChoices: true }, reply);
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'invalid', reason: 'too_few' });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[ReplyChoices]'),
+        expect.objectContaining({ reason: 'too_few', offered: false })
+      );
+    });
+
+    // The system-prompt budget can evict REPLY_CHOICES_GUIDANCE (lowest priority - see
+    // SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) even though it was requested,
+    // so `offered` must reflect delivery, not just the request-time decision.
+    it('records offered: false when the guidance was requested but evicted by the system-prompt budget', async () => {
+      mockedBuildAndSortMessages.mockImplementationOnce(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [
+              ...(contextAndSystemMessages ?? []).filter((m: any) => m.content !== REPLY_CHOICES_GUIDANCE),
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
+
+      await runWithTools([], undefined, {});
+
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'absent' });
     });
   });
 

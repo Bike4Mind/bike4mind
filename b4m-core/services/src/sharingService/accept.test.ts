@@ -425,7 +425,13 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
-    expect(adapters.db.invites.update).toHaveBeenCalled();
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['anyone@x.com'] },
+      accepted: 1,
+      remaining: 999,
+    });
   });
 
   it('reports "already accepted" for a re-accept, not "not sent to your account", when other recipients are still pending', async () => {
@@ -496,7 +502,13 @@ describe('sharingService - acceptInvite (expiry)', () => {
 
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
-    expect(adapters.db.invites.update).toHaveBeenCalled();
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['a@x.com'] },
+      accepted: 1,
+      remaining: 0,
+    });
   });
 
   it('allows redemption of an invite with no expiresAt set', async () => {
@@ -506,7 +518,13 @@ describe('sharingService - acceptInvite (expiry)', () => {
 
     await acceptInvite(userId, { id: inviteId }, adapters as any);
 
-    expect(adapters.db.invites.update).toHaveBeenCalled();
+    expect(adapters.db.invites.update).toHaveBeenCalledTimes(1);
+    expect(adapters.db.invites.update.mock.calls[0][0]).toStrictEqual({
+      id: inviteId,
+      recipients: { pending: [], refused: [], accepted: ['a@x.com'] },
+      accepted: 1,
+      remaining: 0,
+    });
   });
 });
 

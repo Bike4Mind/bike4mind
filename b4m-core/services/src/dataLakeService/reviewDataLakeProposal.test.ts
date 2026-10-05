@@ -360,7 +360,13 @@ describe('approveDataLakeProposal', () => {
         principalId: OWNER,
         dataLakeId: 'lake-1',
         action: 'approve-proposal',
-        changes: [{ field: 'proposalReview', kind: 'literal', after: 'approved: https://example.com/report' }],
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'approved: Quarterly report (https://example.com/report)',
+          },
+        ],
       })
     );
   });
@@ -425,7 +431,13 @@ describe('declineDataLakeProposal', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'decline-proposal',
-        changes: [{ field: 'proposalReview', kind: 'literal', after: 'declined: https://example.com/report' }],
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'declined: Quarterly report (https://example.com/report)',
+          },
+        ],
       })
     );
   });
@@ -508,7 +520,13 @@ describe('restoreDataLakeProposal', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'restore-proposal',
-        changes: [{ field: 'proposalReview', kind: 'literal', after: 'restored: https://example.com/report' }],
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'restored: Quarterly report (https://example.com/report)',
+          },
+        ],
       })
     );
   });

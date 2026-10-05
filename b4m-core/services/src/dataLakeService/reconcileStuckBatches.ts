@@ -1,4 +1,5 @@
 import type {
+  IDataLakeAccessGrantRepository,
   IDataLakeBatchSummary,
   IDataLakeRepository,
   IDataLakeBatchRepository,
@@ -7,6 +8,7 @@ import type {
 import { BATCH_NON_TERMINAL_STATUSES } from '@bike4mind/common';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { recordLakeUploadBatch } from './recordLakeUploadBatch';
 
 /**
  * Default stuck-batch timeout: a non-terminal batch idle longer than this is forced terminal.
@@ -27,7 +29,7 @@ export const DEFAULT_STUCK_BATCH_TIMEOUT_MS = 180 * 60 * 1000; // 180 minutes (3
 interface ReconcileStuckBatchesAdapters {
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
-    batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive'>;
+    batches: Pick<IDataLakeBatchRepository, 'markTerminalIfActive' | 'claimUploadHistory'>;
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
     // Forwarded straight to recomputeLakeStats. This reconciler forces terminal exactly the
     // batches that never reached `finalizeBatchIfComplete`, so it is the ONLY path that can
@@ -36,6 +38,8 @@ interface ReconcileStuckBatchesAdapters {
     // rather than failing the reconcile.
     lakeConfigChangeEvents?: LakeConfigAuditAdapters['db']['lakeConfigChangeEvents'];
     adminSettings?: LakeConfigAuditAdapters['db']['adminSettings'];
+    // Resolves the uploader's rung for the `upload stopped` History row on batches that carry none.
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
   logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
   /**
@@ -99,6 +103,10 @@ export const reconcileStuckBatches = async (
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);
       if (lake) {
+        // Before the recompute, as in finalizeBatchIfComplete: this batch never reached that
+        // finalize, so without this row an abandoned upload's Draft -> Published would appear in
+        // History with no upload ahead of it. Never throws.
+        await recordLakeUploadBatch(lake, won, { db, logger }, 'stopped');
         // `logger` forwarded, not just `db`: the audit write inside is best-effort and reports a
         // failure through `warn`, so without it an audit going dark on this path falls to
         // console.warn where log-based alerting cannot see it.

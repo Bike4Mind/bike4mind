@@ -6,6 +6,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'fab-file-chunk': 'https://sqs.us-east-2.amazonaws.com/123456789/fabFileChunkQueueDLQ',
   'image-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/imageGenerationDLQ',
   'image-edit': 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditDLQ',
+  'generation-callback': 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueueDLQ',
   'video-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
   'whats-new-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
@@ -46,6 +47,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   fabFileChunkQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/fabFileChunkQueue',
   imageGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageGenerationQueue',
   imageEditQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditQueue',
+  generationCallbackQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueue',
   videoGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
@@ -93,9 +95,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 37 DLQ entries', () => {
+    it('returns all 38 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(37);
+      expect(registry).toHaveLength(38);
     });
 
     it('each entry has required fields', () => {

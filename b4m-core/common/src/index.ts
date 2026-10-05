@@ -25,6 +25,7 @@ export * from './schemas';
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
 // NOT exported here - it runs extendZodWithOpenApi and is generate-time only.
 export * from './api-contract';
+export type { GeneratedFile } from './schemas/quest';
 export * from './constants/user';
 export * from './constants/organization';
 export * from './constants/dataLakes';
@@ -97,6 +98,7 @@ export * from './utils/imageSizes';
 export * from './utils/activity';
 export * from './utils/sseEvents';
 export * from './utils/streamVisibility';
+export * from './utils/replyChoices';
 export * from './utils/ttfvt';
 export * from './utils/shareableAccess';
 export * from './utils/inviteVisibility';
@@ -125,6 +127,7 @@ export * from './utils/multimodalContent';
 export * from './utils/attachmentScope';
 export * from './utils/dataLakeTaxonomy';
 export * from './utils/dataLakeSlug';
+export * from './utils/dataLakeAccessContext';
 export * from './utils/tagName';
 export * from './utils/generatedMedia';
 export * from './utils/imageSize';

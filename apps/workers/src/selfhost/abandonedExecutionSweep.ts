@@ -1,4 +1,4 @@
-import { runAbandonedExecutionSweep } from '@server/cron/agentExecutionAbandonedSweep';
+import { runAbandonedExecutionSweep } from '@workers/cron/agentExecutionAbandonedSweep';
 import type { SelfHostWorker } from './selfHostWorker';
 
 export function registerAbandonedExecutionSweep(worker: SelfHostWorker): void {

@@ -95,6 +95,8 @@ export interface UploadProgress {
    * target lake, never assumed - absent means a fallback lake, which always serves.
    */
   lakeStatus?: DataLakeStatus;
+  /** Id of that same lake, so the Complete screen can publish a draft in place. Set beside lakeStatus. */
+  lakeId?: string;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -162,17 +164,23 @@ export interface WizardTargetLake {
   requiredEntitlement?: string;
   /**
    * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
-   * connect control the way `SelectedLakeHeader` does: connecting is an org-lake capability
-   * server-side, so offering it on a personal lake is a button that can only ever fail.
+   * connect control the way `SelectedLakeHeader` does (canConnectLakeDrive): an org lake needs a
+   * manager, a personal lake its creator, so offering it otherwise is a button that can only ever fail.
    *
-   * REQUIRED-and-nullable rather than optional, matching `isOwn` on ManageableDataLakeConfig and for
-   * the same reason: an absent field would read as "personal" and silently hide the control on a
+   * REQUIRED-and-nullable rather than optional, matching `isCreator` on ManageableDataLakeConfig and
+   * for the same reason: an absent field would read as "personal" and silently hide the control on a
    * real org lake, with a green typecheck. Required makes a call site that forgets it a compile
    * error instead.
    */
   organizationId: string | null;
   /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
+  /**
+   * Whether the caller created this lake (ManageableDataLakeConfig.isCreator) - the personal half of
+   * that gate. Creator, not effective owner (`isOwn`): personal-lake membership and the ingest's
+   * admin-actor writes are anchored to `createdByUserId`, which an ownership transfer leaves unchanged.
+   */
+  isCreator: boolean;
   /**
    * Lake lifecycle, so appending files to a lake that is still `draft` discloses on the Complete
    * screen that the new files ground nothing yet (#3222). Optional because `DataLakeConfig.status`
@@ -198,6 +206,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement?: string;
   organizationId?: string | null;
   canManage?: boolean;
+  isCreator: boolean;
   status?: DataLakeStatus;
 }): WizardTargetLake => ({
   id: lake.id,
@@ -208,6 +217,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement: lake.requiredEntitlement,
   organizationId: lake.organizationId ?? null,
   canManage: lake.canManage ?? false,
+  isCreator: lake.isCreator,
   status: lake.status,
 });
 
@@ -270,6 +280,11 @@ interface DataLakeWizardStore {
    * Cleared on close so re-deep-linking the SAME lake still fires the panel's sync effect.
    */
   managerLakeId: string | null;
+  /**
+   * Lake id the GitHub repository picker is open for, or null when closed. Opened only by the GitHub
+   * callback page; read by GitHubRepositoryPickerModal, mounted once in DataLakeManagerPanel.
+   */
+  gitHubRepoPickerLakeId: string | null;
 
   // Navigation
   openWizard: () => void;
@@ -277,6 +292,8 @@ interface DataLakeWizardStore {
   closeWizard: () => void;
   openManager: (tab?: ManagerTab, lakeId?: string | null) => void;
   closeManager: () => void;
+  openGitHubRepoPicker: (lakeId: string) => void;
+  closeGitHubRepoPicker: () => void;
   setStep: (step: WizardStep) => void;
 
   // Source step
@@ -330,6 +347,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
+  gitHubRepoPickerLakeId: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -340,7 +358,12 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // An optional tab lets callers deep-link straight to the public discover catalog.
   openManager: (tab: ManagerTab = 'mine', lakeId: string | null = null) =>
     set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
-  closeManager: () => set({ isManagerOpen: false, managerLakeId: null }),
+  // The picker is mounted inside the manager, so closing the manager closes it too; left set, it
+  // would pop back up on the next, unrelated manager open.
+  closeManager: () => set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null }),
+
+  openGitHubRepoPicker: lakeId => set({ gitHubRepoPickerLakeId: lakeId }),
+  closeGitHubRepoPicker: () => set({ gitHubRepoPickerLakeId: null }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values.

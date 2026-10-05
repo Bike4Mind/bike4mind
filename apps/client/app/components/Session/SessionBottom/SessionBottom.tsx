@@ -1,5 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { registerSendPrompt } from '@client/app/hooks/useChatActions';
+import { registerSendPrompt, type SendPromptOptions } from '@client/app/hooks/useChatActions';
 
 import { Box, Typography, useTheme } from '@mui/joy';
 import Grid from '@mui/joy/Grid';
@@ -73,7 +73,8 @@ import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
 import { useSessionFiles } from './useSessionFiles';
 import { useSendMessage } from './useSendMessage';
-import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
+import { createBlockedSendToastGate, getSendBlockedReason } from './sendBlockedReason';
+import { sendPromptViaComposer } from './sendPromptViaComposer';
 import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
@@ -390,20 +391,31 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const handleEditorSubmit = useCallback(async () => {
     // Same gate as the Send button: Enter must not send what the button would refuse. The
     // tooltip explaining why is out of sight while typing, so say it here too.
-    if (sendBlockedReason) {
-      if (shouldToastBlockedSend(sendBlockedReason)) toast.info(getSendBlockedLabel(sendBlockedReason, t));
-      return;
-    }
-    await handleSendClick();
-  }, [sendBlockedReason, handleSendClick, shouldToastBlockedSend, t]);
+    await sendPromptViaComposer({
+      sendBlockedReason,
+      shouldToastBlockedSend,
+      toastInfo: toast.info,
+      t,
+      handleSendClick,
+    });
+  }, [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick]);
 
-  // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
+  // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard, reply-choice
+  // buttons); resolves false when the send was refused before dispatch so a caller can undo
+  // its own optimistic state. The blocked-send gate only applies when a caller opts in via
+  // `respectBlockedState` (ReplyChoiceButtons) - other programmatic callers like chess must
+  // keep sending exactly as they did before that gate existed.
   const sendPromptCallback = useCallback(
-    async (prompt: string) => {
-      await handleSendClick(prompt);
-    },
-
-    [handleSendClick]
+    (prompt: string, options?: SendPromptOptions) =>
+      sendPromptViaComposer({
+        prompt,
+        sendBlockedReason: options?.respectBlockedState ? sendBlockedReason : null,
+        shouldToastBlockedSend,
+        toastInfo: toast.info,
+        t,
+        handleSendClick,
+      }),
+    [sendBlockedReason, shouldToastBlockedSend, t, handleSendClick]
   );
   useEffect(() => {
     registerSendPrompt(sendPromptCallback);

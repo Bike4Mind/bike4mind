@@ -225,4 +225,23 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
 
     expect(h.countDistinctDataLakeFilesByMembership.mock.calls[0][0]).toEqual(scopes());
   });
+
+  it('hands both tree counters the creator-anchored scopes only, never the registry scope', async () => {
+    // Without them a prefix-only member (no lake meta-tag, owned by the creator) is listed on open
+    // but missing from the tree counts for a non-creator viewer. The registry scope is unanchored,
+    // so it must stay out of these shared-`$or` counters (it keeps matching via the open prefix arm).
+    const registryLake = DATA_LAKES[0];
+    h.findByDatalakeTags.mockResolvedValue([
+      { datalakeTag: 'datalake:lake-0', fileTagPrefix: 'stored0:', createdByUserId: 'creator-0' },
+    ]);
+
+    await queryDataLakeTagCounts(req, [lake(0), registryLake as never]);
+
+    const owned = [
+      { kind: 'owned', datalakeTag: 'datalake:lake-0', fileTagPrefix: 'stored0:', creatorUserId: 'creator-0' },
+    ];
+    expect(h.countDataLakeTagsByPrefix.mock.calls[0][2].lakeMemberships).toEqual(owned);
+    expect(h.countDataLakeUniqueFilesByPrefix.mock.calls[0][2].lakeMemberships).toEqual(owned);
+    expect(scopes().some((s: { kind: string }) => s.kind === 'registry')).toBe(true);
+  });
 });

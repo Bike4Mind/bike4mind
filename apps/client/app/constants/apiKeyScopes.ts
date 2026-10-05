@@ -54,15 +54,17 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: [
       'POST /api/v1/image-generations',
       'POST /api/v1/image-edits',
+      'POST /api/v1/video-generations',
       'POST /api/v1/embeddings',
       'GET /api/v1/quests/:id',
+      'GET /api/v1/credits',
     ],
   },
   {
     value: ApiKeyScope.AI_CHAT,
     label: 'AI Chat',
     description: 'Use AI chat features',
-    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id'],
+    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id', 'GET /api/v1/credits'],
   },
   {
     value: ApiKeyScope.READ_PROJECTS,
@@ -79,8 +81,8 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.ME_READ,
     label: 'Account: Read',
-    description: "Read the key owner's own plan tier, credit balance, and entitlements; gates GET /api/v1/me only",
-    endpoints: ['GET /api/v1/me'],
+    description: "Read the key owner's own plan tier, credit balance, and entitlements",
+    endpoints: ['GET /api/v1/me', 'GET /api/v1/credits'],
   },
   {
     value: ApiKeyScope.MARKETING_REPORTS_READ,

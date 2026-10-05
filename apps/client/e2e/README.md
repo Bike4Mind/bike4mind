@@ -389,7 +389,7 @@ If you see any of these, the fix is to set the repo secret, not to debug the sui
 Each stage that reports to `/status` needs:
 
 1. A non-admin service user tagged `qa-ingest`.
-2. An API key for that user with only the `qa:ingest` scope, stored as repo secret `QA_INGEST_KEY`.
+2. An API key for that user with only the `qa:ingest` scope, stored as repo secret `QA_INGEST_KEY`. Mint it from Admin -> Users -> (user) -> Generate API Key -> Service ingest key -> QA: Ingest. Without step 1's tag the key gets a 403.
 3. Repo variables `QA_INGEST_URL` (origin only) and `QA_PRODUCT`.
 4. SST secret `QA_ALARM_SLACK_WEBHOOKS` for state-change alarms.
 

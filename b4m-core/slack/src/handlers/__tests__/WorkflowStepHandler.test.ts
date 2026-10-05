@@ -276,7 +276,10 @@ describe('WorkflowStepHandler', () => {
 
       expect(createSession).toHaveBeenCalledWith(
         mockUser.id,
-        expect.objectContaining({ name: expect.stringContaining('Workflow') }),
+        expect.objectContaining({
+          name: expect.stringContaining('Workflow'),
+          origin: { channel: 'slack' },
+        }),
         expect.any(Object),
         expect.any(Object)
       );

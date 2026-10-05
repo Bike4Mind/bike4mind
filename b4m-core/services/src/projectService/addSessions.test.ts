@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, Mock, vi, afterEach } from 'vitest';
 import { addSessions } from './addSessions';
 import {
+  captureWrites,
   createMockProjectRepository,
   createMockSessionRepository,
   createMockUser,
@@ -40,16 +41,8 @@ describe('projectService - addSessions', () => {
     mockSessionRepo = createMockSessionRepository();
     mockFabFileRepo = createMockFabFileRepository();
     mockUser = { ...createMockUser(), id: adderId } as unknown as IUserDocument;
-    // Cloned at call time: pushShareable mutates `users` in place, so mock.calls would also match a
-    // write made before the grants were pushed.
-    sessionWrites = [];
-    fabFileWrites = [];
-    (mockSessionRepo.update as Mock).mockImplementation(async (partial: unknown) => {
-      sessionWrites.push(structuredClone(partial));
-    });
-    (mockFabFileRepo.update as Mock).mockImplementation(async (partial: unknown) => {
-      fabFileWrites.push(structuredClone(partial));
-    });
+    sessionWrites = captureWrites(mockSessionRepo.update);
+    fabFileWrites = captureWrites(mockFabFileRepo.update);
 
     adapters = {
       db: {

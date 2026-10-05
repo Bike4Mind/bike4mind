@@ -147,6 +147,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
   try {
     const config = await configStore.load();
+    configStore.warnPendingMcpApprovals();
 
     // Load additional directories from all sources. The B4M_ADDITIONAL_DIRS
     // bridge is validated strictly (array of strings) rather than blindly cast.

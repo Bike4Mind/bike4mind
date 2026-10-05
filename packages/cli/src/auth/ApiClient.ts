@@ -38,6 +38,18 @@ export class SessionRevokedError extends Error {
 }
 
 /**
+ * 401 with no credential at all (no API key, no stored tokens): a config gap, not an expiry.
+ * Not a SessionRevokedError, so checkSessionValid still reports "not revoked". The message keeps
+ * `Authentication failed` for string-matching callers (turnController, handoff, ServerLlmBackend).
+ */
+export class NotAuthenticatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotAuthenticatedError';
+  }
+}
+
+/**
  * Authenticated API client for B4M services
  * Automatically injects access tokens from ConfigStore
  */
@@ -110,13 +122,16 @@ export class ApiClient {
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
 
+          // Outside the try: the catch below would rewrite a no-token throw as "Authentication expired".
+          const tokens = await this.configStore.getAuthTokens();
+
+          if (!tokens) {
+            throw new NotAuthenticatedError(
+              'Authentication failed: not logged in. Please run `b4m login` to authenticate.'
+            );
+          }
+
           try {
-            const tokens = await this.configStore.getAuthTokens();
-
-            if (!tokens) {
-              throw new Error('Not authenticated');
-            }
-
             // Skip refresh while the stored access token has not expired yet: a 401 against a
             // token that is still inside its own lifetime is far more likely a transient server
             // error than an auth failure, and refreshing would spend a rotation for nothing.

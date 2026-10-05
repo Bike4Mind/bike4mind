@@ -13,6 +13,7 @@ import {
   createSearxngProvider,
   createSerpApiProvider,
   resolveWebSearchProvider,
+  resolveWebSearchProviders,
   serpApiSearch,
 } from './providers';
 
@@ -384,14 +385,21 @@ describe('resolveWebSearchProvider precedence', () => {
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
 
-  it('auto: prefers SearXNG when a URL is configured', async () => {
+  it('auto: keeps SerpAPI as the lead when a SearXNG URL is configured too', async () => {
     mockGetProvider.mockResolvedValue(null); // unset -> auto
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
     mockGetSerperKey.mockResolvedValue('serp-key');
+    expect((await resolveWebSearchProvider(adapters))?.name).toBe('serpapi');
+  });
+
+  it('auto: falls back to SearXNG when only a URL is configured', async () => {
+    mockGetProvider.mockResolvedValue('auto');
+    mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue(null);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
-  it('auto: falls back to SerpAPI when only a Serper key is set', async () => {
+  it('auto: uses SerpAPI when only a Serper key is set', async () => {
     mockGetProvider.mockResolvedValue('auto');
     mockGetSearxngUrl.mockResolvedValue(null);
     mockGetSerperKey.mockResolvedValue('serp-key');
@@ -699,6 +707,37 @@ describe('web_search time budget', () => {
     await expect(pending).resolves.toEqual([]);
   });
 
+  it('throws an explicit timeout from a hung SearXNG search when asked to, so failover can fire', async () => {
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(
+      createSearxngProvider('http://searxng:8080').search('q', 3, { throwOnError: true })
+    ).rejects.toThrow('Web search timed out: SearXNG did not respond within 10s');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await pending;
+  });
+
+  it('throws on a SearXNG HTTP error only when asked to', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 502));
+    const provider = createSearxngProvider('http://searxng:8080');
+
+    await expect(provider.search('q', 3)).resolves.toEqual([]);
+    await expect(provider.search('q', 3, { throwOnError: true })).rejects.toThrow('SearXNG error: HTTP 502');
+  });
+
+  // The failover path (SearXNG timeout, then SerpAPI) must fit the same budget as SerpAPI alone.
+  it('bounds the SerpAPI fallback to a single attempt with no retry delay', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(serpApiSearch(adapters, 'q', 3, { maxAttempts: 1 })).rejects.toThrow('tried 1 times');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('fails a hung organic SerpAPI search by 20.5s, still inside the Lambda', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     fetchMock.mockImplementation(neverSettlingFetch());
@@ -707,5 +746,52 @@ describe('web_search time budget', () => {
     await vi.advanceTimersByTimeAsync(20_500);
 
     await pending;
+  });
+});
+
+describe('resolveWebSearchProviders lead and backup', () => {
+  it.each([
+    ['auto' as const, ['serpapi', 'searxng']],
+    ['serpapi' as const, ['serpapi', 'searxng']],
+    ['searxng' as const, ['searxng', 'serpapi']],
+  ])('under %s with both configured, leads with the choice and backs it up with the other', async (choice, order) => {
+    mockGetProvider.mockResolvedValue(choice);
+    mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup?.name]).toEqual(order);
+  });
+
+  it.each([
+    ['auto: SearXNG only', null, ['searxng', null]],
+    ['auto: Serper key only', 'serp-key', ['serpapi', null]],
+  ])('%s leads with the configured provider and has no backup', async (_label, serperKey, order) => {
+    mockGetProvider.mockResolvedValue('auto');
+    mockGetSearxngUrl.mockResolvedValue(serperKey ? null : 'http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue(serperKey);
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup?.name ?? null]).toEqual(order);
+  });
+
+  it('has no backup when only the lead is configured', async () => {
+    mockGetProvider.mockResolvedValue('serpapi');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup]).toEqual(['serpapi', null]);
+  });
+
+  it('does not substitute the other provider when the explicit choice is unconfigured', async () => {
+    mockGetProvider.mockResolvedValue('searxng');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    await expect(resolveWebSearchProviders(adapters)).resolves.toEqual([null, null]);
   });
 });

@@ -289,6 +289,23 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('audit attribution of a tool-driven lake write', () => {
+    const invokedApiKeyId = () => (mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId;
+
+    it('hands invoke() the authenticating key id', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(invokedApiKeyId()).toBe('k1');
+    });
+
+    it('ignores a client-supplied apiKeyId, so a browser caller cannot forge one', async () => {
+      const { req, res } = fire({ apiKey: null, body: { apiKeyId: 'forged' } });
+      await handler(req, res);
+      expect(invokedApiKeyId()).toBeUndefined();
+    });
+  });
+
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);

@@ -20,6 +20,11 @@
  */
 
 import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from '@client/app/workers/pyodide/types';
+import {
+  SUPPORTED_PYTHON_PACKAGES,
+  describePythonImportError,
+  detectPythonPackages,
+} from '@client/app/utils/pythonPackages';
 
 /** The sandbox route. Framed with `allow-scripts` ONLY - never `allow-same-origin`. */
 export const PYODIDE_SANDBOX_SRC = '/api/pyodide-sandbox';
@@ -70,17 +75,10 @@ export interface PyodideManagerState {
   error: string | null;
   isReady: boolean;
   isExecuting: boolean;
+  // What the worker is doing during a run (e.g. loading packages), for the Run status line.
+  executionStatus: string | null;
   streamingOutput: string;
 }
-
-// Supported packages (pre-built in Pyodide)
-const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn'];
-
-// Package name mapping (npm name -> Pyodide package name)
-const PACKAGE_NAME_MAP: Record<string, string> = {
-  'scikit-learn': 'sklearn',
-  sklearn: 'sklearn',
-};
 
 class PyodideManager {
   private state: PyodideManagerState = {
@@ -90,6 +88,7 @@ class PyodideManager {
     error: null,
     isReady: false,
     isExecuting: false,
+    executionStatus: null,
     streamingOutput: '',
   };
 
@@ -248,7 +247,7 @@ class PyodideManager {
         break;
 
       case 'executing':
-        this.updateState({ isExecuting: true, streamingOutput: '' });
+        this.updateState({ isExecuting: true, executionStatus: msg.message, streamingOutput: '' });
         break;
 
       case 'output':
@@ -258,9 +257,10 @@ class PyodideManager {
         break;
 
       case 'result':
-        this.updateState({ isExecuting: false });
+        this.updateState({ isExecuting: false, executionStatus: null });
         if (this.executeResolver) {
-          this.executeResolver(msg.result);
+          const { result } = msg;
+          this.executeResolver(result.error ? { ...result, error: describePythonImportError(result.error) } : result);
           this.executeResolver = null;
           this.executeRejecter = null;
         }
@@ -271,6 +271,7 @@ class PyodideManager {
         this.updateState({
           isLoading: false,
           isExecuting: false,
+          executionStatus: null,
           error: msg.error,
         });
         if (this.initRejecter) {
@@ -380,6 +381,7 @@ class PyodideManager {
 
     this.updateState({
       isExecuting: false,
+      executionStatus: null,
       isReady: false,
       loadProgress: 0,
       loadedPackages: new Set(),
@@ -404,25 +406,7 @@ class PyodideManager {
 
   /** Detect required packages from import statements. */
   detectPackages(code: string): string[] {
-    const packages: Set<string> = new Set();
-
-    const importPatterns = [/^import\s+(\w+)/gm, /^from\s+(\w+)\s+import/gm];
-
-    for (const pattern of importPatterns) {
-      let match;
-      while ((match = pattern.exec(code)) !== null) {
-        const pkg = match[1];
-        if (
-          SUPPORTED_PACKAGES.includes(pkg) ||
-          Object.keys(PACKAGE_NAME_MAP).includes(pkg) ||
-          Object.values(PACKAGE_NAME_MAP).includes(pkg)
-        ) {
-          packages.add(pkg);
-        }
-      }
-    }
-
-    return Array.from(packages);
+    return detectPythonPackages(code);
   }
 
   private updateState(partial: Partial<PyodideManagerState>): void {
@@ -444,7 +428,7 @@ class PyodideManager {
   }
 
   getSupportedPackages(): string[] {
-    return [...SUPPORTED_PACKAGES];
+    return [...SUPPORTED_PYTHON_PACKAGES];
   }
 }
 

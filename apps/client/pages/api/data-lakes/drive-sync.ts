@@ -3,7 +3,7 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, orgGoogleDriveConnectionRepository, User } from '@bike4mind/database';
 import { acceptsConnectorContent, isLakeIngestable } from '@bike4mind/common';
-import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { authorizeLakeDriveAccess } from '@server/integrations/google/drive/authorizeLakeDriveAccess';
 import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import {
   isValidDriveFolderId,
@@ -32,16 +32,17 @@ const Body = z.object({
 });
 
 /**
- * Capture the connecting user's Drive refresh token as the connection's OWN durable credential.
- *
- * The token is copied verbatim from `User.googleDrive.refreshToken` (already encrypted at rest with
- * the same key/scheme), so ingest survives the user later disconnecting their personal Drive or
- * leaving the org - the connection no longer depends on `User.googleDrive` (see
- * getValidConnectionDriveAccessToken). Fails fast if the credential is missing, not encrypted, or
+ * Read the connecting user's Drive refresh token, failing fast if it is missing, not encrypted, or
  * unreadable, so we never persist a connection that cannot actually sync. This is also the isEncrypted
  * guard the model relies on (crypto is not reachable from packages/database).
+ *
+ * An ORG connection stores the result as its OWN durable credential - copied verbatim (already
+ * encrypted at rest with the same key/scheme), so ingest survives the user later disconnecting their
+ * personal Drive or leaving the org (see getValidConnectionDriveAccessToken). A PERSONAL connection
+ * stores nothing and syncs on the user's live grant, so the user's own profile disconnect ends it;
+ * the check still runs there because a grant without offline access could never poll.
  */
-async function captureOrgCredential(userId: string): Promise<string> {
+async function readUserDriveCredential(userId: string): Promise<string> {
   const user = await User.findById(userId, 'googleDrive');
   const encryptedRefresh = user?.googleDrive?.refreshToken;
   if (!encryptedRefresh) {
@@ -65,10 +66,11 @@ async function captureOrgCredential(userId: string): Promise<string> {
 /**
  * Connect a Google Drive folder to a data lake and enqueue a background ingest (#1589).
  *
- * Creates (or refreshes) the OrgGoogleDriveConnection binding with an org-owned credential and
- * enqueues by connectionId (202). Binding an org-wide credential and globally claiming a Drive folder
- * is an org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the
- * lake's creator. The folder picker that supplies driveFolderId lands in the same PR's UI commit.
+ * Creates (or refreshes) the OrgGoogleDriveConnection binding and enqueues by connectionId (202).
+ * On an org lake, binding an org-wide credential and globally claiming a Drive folder is an
+ * org-administrative act, so this gates on org owner/manager (verifyOrgAccess), NOT merely the lake's
+ * creator. On a personal lake the creator is the only one who may connect, and the connection keeps
+ * no credential copy (see authorizeLakeDriveAccess and readUserDriveCredential).
  */
 const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -82,16 +84,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     if (!lake) {
       throw new NotFoundError('Data lake not found');
     }
-    if (!lake.organizationId) {
-      // The connection model is org-scoped (organizationId required); a fallback/personal lake has
-      // no org and so is excluded here. Personal-lake support is a follow-up.
-      throw new BadRequestError('Google Drive ingest currently requires an organization-scoped data lake');
-    }
+    // Org lake: owner/manager (or platform admin) only - not the lake creator. Personal lake: its
+    // creator only. See the handler note.
+    const owner = await authorizeLakeDriveAccess(req.user, lake);
 
-    // Org owner/manager (or platform admin) only - not the lake creator (see the handler note).
-    await verifyOrgAccess(req.user, lake.organizationId);
-
-    // Gated AFTER verifyOrgAccess so the status is not readable by a non-member, and before the
+    // Gated AFTER the authorization so the status is not readable by a non-member, and before the
     // credential capture so a refused connect costs no Drive calls. Without this the connect door
     // would hand an archived lake an `enabled: true` connection - the poll would enqueue it forever
     // (dropped every time by the ingest guard) and the UI would toast a sync that never happens.
@@ -99,8 +96,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       throw new BadRequestError(`Cannot connect a Drive folder to a data lake in '${lake.status}' status`);
     }
 
-    // Same placement rationale as the status gate above: after verifyOrgAccess so a non-member
-    // cannot probe a lake's origin, and before captureOrgCredential so a refused connect costs no
+    // Same placement rationale as the status gate above: after the authorization so a non-member
+    // cannot probe a lake's origin, and before readUserDriveCredential so a refused connect costs no
     // Drive calls. Binding does NOT flip origin - an automatic flip would walk straight through the
     // guard it exists to trip, so the owner declares the lake connector-fed first and that
     // declaration is the consent.
@@ -110,10 +107,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       );
     }
 
-    const oauthRefreshToken = await captureOrgCredential(req.user.id);
+    const userCredential = await readUserDriveCredential(req.user.id);
+    const oauthRefreshToken = owner.kind === 'organization' ? userCredential : null;
 
     // Verify the connecting user can actually READ the folder before claiming it. The claim is GLOBAL
-    // (one folder -> one lake, ever), so without this any org owner/manager could squat a folder id
+    // (one folder -> one lake, ever), so without this any user could squat a folder id
     // they don't own - ids appear in shared Drive URLs - and permanently lock out its real owner. Drive
     // 404s a folder the caller can't see, so a successful read IS the ownership proof (uses the user's
     // own credential, not the org copy).
@@ -159,13 +157,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       // connectedBy so ingest runs as a still-present user even if the original connector was deleted.
       const updated = await orgGoogleDriveConnectionRepository.updateCredential(
         byFolder.id,
-        lake.organizationId,
+        owner,
         oauthRefreshToken,
         req.user.id
       );
       if (!updated) {
-        // Org-scoped update matched nothing: the folder's existing connection belongs to another org
-        // (findByDriveFolderId is global). Don't 202 a success that changed nothing.
+        // Owner-scoped update matched nothing: the folder's existing connection belongs to another
+        // tenant (findByDriveFolderId is global). Don't 202 a success that changed nothing.
         return res.status(409).json({ error: 'This Drive folder is already connected to another data lake' });
       }
       connectionId = byFolder.id;
@@ -179,12 +177,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       await assertLakeConnectorFree(lake.id, { except: 'googleDrive' });
       try {
         const created = await orgGoogleDriveConnectionRepository.create({
-          organizationId: lake.organizationId,
+          ...(owner.kind === 'organization' && {
+            organizationId: owner.organizationId,
+            oauthRefreshToken: userCredential,
+          }),
           authMode: 'oauth',
           driveFolderId,
           folderName,
           targetDataLakeId: dataLakeId,
-          oauthRefreshToken,
           connectedBy: req.user.id,
           enabled: true,
           status: 'connected',
@@ -214,7 +214,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     } catch (e) {
       // The connection row is what holds the GLOBAL driveFolderId claim, so an enqueue that fails
       // after we created it (SQS unavailable/throttled, an IAM denial, an unregistered queue) would
-      // take the folder out of circulation for EVERY org until someone deleted the row by hand -
+      // take the folder out of circulation for EVERY tenant until someone deleted the row by hand -
       // disabling it does not help, a disabled row still populates the unique index. Release the
       // claim and fail, so the folder stays re-claimable and the UI never reads Connected for a
       // folder whose ingest was never accepted.
@@ -224,9 +224,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       // worse than the missed ingest (the resync poll re-enqueues it anyway).
       let released = false;
       if (claimedByThisRequest) {
-        released = await orgGoogleDriveConnectionRepository
-          .release(connectionId, lake.organizationId)
-          .catch(() => false);
+        released = await orgGoogleDriveConnectionRepository.release(connectionId, owner).catch(() => false);
       }
       // The raw error is log-only: an SQS/IAM failure message carries queue urls and account ids.
       req.logger.error('Google Drive ingest enqueue failed', {
