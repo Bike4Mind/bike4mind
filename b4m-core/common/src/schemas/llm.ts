@@ -145,6 +145,8 @@ export const FallbackInfoSchema = z.object({
    */
   primaryModelBackend: z.string().optional(),
   fallbackModelBackend: z.string().optional(),
+  /** The error that forced the first hop, PII-scrubbed and length-capped by sanitizeTelemetryError. */
+  reason: z.string().optional(),
   timestamp: z.number(),
 });
 

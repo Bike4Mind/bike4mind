@@ -89,8 +89,10 @@ export const chatContract = defineEndpoint({
           'overload - have NO `errorCode`; its absence does not mean success, only that the ' +
           'failure is unclassified. A recovered stuck quest that still has renderable content is ' +
           'not a failure at all: it keeps `type: "message"` even though it did not finish, so a ' +
-          'caller gets the content rather than an error. The poll body carries further fields not ' +
-          'modelled here, including `images`, ' +
+          'caller gets the content rather than an error. `fallbackInfo` is present only when the ' +
+          'requested model failed and another model produced the reply: `fallbackModel` answered, ' +
+          '`primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. ' +
+          'The poll body carries further fields not modelled here, including `images`, ' +
           '`files`, `toolPayloads`, `promptMeta`, and the attachment report ' +
           '(`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.',
         example: {

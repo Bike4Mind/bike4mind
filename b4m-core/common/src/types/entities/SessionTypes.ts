@@ -311,7 +311,8 @@ export interface IChatHistoryItem {
   };
 
   /**
-   * Fallback model information when a fallback occurred during generation
+   * Fallback model information when a fallback occurred during generation. `null` clears a value
+   * persisted by an earlier attempt: repository updates are a `$set`, which drops `undefined`.
    */
   fallbackInfo?: {
     sessionId: string;
@@ -322,8 +323,9 @@ export interface IChatHistoryItem {
     /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
     primaryModelBackend?: string;
     fallbackModelBackend?: string;
+    reason?: string;
     timestamp: number;
-  };
+  } | null;
 
   /**
    * Prompt enhancement information for image generation

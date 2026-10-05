@@ -422,8 +422,9 @@ export const StreamedChatCompletionAction = z.object({
           endTime: z.number().optional(),
         })
         .optional(),
-      // Add fallback info to support backend fallback mechanism
-      fallbackInfo: FallbackInfoSchema.optional(),
+      // Add fallback info to support backend fallback mechanism. Nullish: a whole-quest payload
+      // carries the null that clears a stale value (see IChatHistoryItem.fallbackInfo).
+      fallbackInfo: FallbackInfoSchema.nullish(),
       // MCP confirmation action awaiting user approval (confirm/cancel buttons)
       pendingAction: z
         .object({
