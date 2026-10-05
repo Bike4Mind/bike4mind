@@ -25,4 +25,5 @@ export {
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
 export { generateVideoContract } from './contracts/videoGeneration.contract';
+export { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './contracts/voice.contract';
 export { CONTRACTS } from './contracts';
