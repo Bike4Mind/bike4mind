@@ -44,14 +44,16 @@ const CONNECTOR_KINDS = Object.keys(CONNECTORS) as LakeConnectorKind[];
  *
  * `except` skips the caller's own kind, which withLakeConnectorClaim passes because the claim and the
  * kind's own per-lake unique index already refuse a same-kind second row. `includeClaim` also refuses
- * a live claim (see isClaimLive), for a check run before the claim is attempted.
+ * a live claim of any kind (see isClaimLive), for a check run before the claim is attempted; the two
+ * options are exclusive because the claim check does not honor `except`.
  */
 export async function assertLakeConnectorFree(
   lakeId: string,
-  options: { except?: LakeConnectorKind; includeClaim?: boolean } = {}
+  options: { except: LakeConnectorKind } | { includeClaim: true } | Record<string, never> = {}
 ): Promise<void> {
+  const except = 'except' in options ? options.except : undefined;
   const checked = await Promise.all(
-    CONNECTOR_KINDS.filter(kind => kind !== options.except).map(async kind => ({
+    CONNECTOR_KINDS.filter(kind => kind !== except).map(async kind => ({
       kind,
       bound: Boolean(await CONNECTORS[kind].findByDataLakeIdAny(lakeId)),
     }))
@@ -60,7 +62,7 @@ export async function assertLakeConnectorFree(
   if (conflict) {
     throw new ConflictError(CONNECTORS[conflict.kind].conflictMessage);
   }
-  if (options.includeClaim) {
+  if ('includeClaim' in options) {
     const holder = await lakeConnectorClaimRepository.findByLakeId(lakeId);
     if (holder && (await isClaimLive(holder))) {
       throw new ConflictError(CONNECTORS[holder.kind].conflictMessage);
