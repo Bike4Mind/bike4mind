@@ -77,14 +77,17 @@ function infoDescription(): string {
     ...Object.keys(RATE_LIMIT_HEADER_SPEC).map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
-      'that long before retrying. `GET /api/v1/me` and the poll endpoints listed under Async jobs are exempt ' +
-      'from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A ' +
+      'that long before retrying. `GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
+      'limit applies. A ' +
       'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
       'no rate-limit headers.',
     '',
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
-      "caller's personal ledger). A synchronous call that cannot be paid for fails with `422` and " +
+      "caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, " +
+      'which accepts `ai:chat` and `ai:generate` too. A synchronous call that cannot be paid for fails with ' +
+      '`422` and ' +
       '`errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead ' +
       '(see Async jobs), so check both places.',
     '',

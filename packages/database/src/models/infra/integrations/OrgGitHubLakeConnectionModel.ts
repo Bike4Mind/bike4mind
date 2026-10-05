@@ -113,6 +113,13 @@ class OrgGitHubLakeConnectionRepository
     return this.find({ installationId });
   }
 
+  async findByRepositoryIds(
+    repositoryIds: readonly number[]
+  ): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
+    if (repositoryIds.length === 0) return [];
+    return this.find({ repositoryId: { $in: [...repositoryIds] } });
+  }
+
   /** Hard delete: a soft-deleted row would keep the unique repositoryId / targetDataLakeId claims. */
   async release(id: string, organizationId: string): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
