@@ -227,18 +227,32 @@ describe('DataLakeAccessModal', () => {
 
   it('truncates an unresolved API key id in the Reader cell instead of letting it overflow the next column', () => {
     const keyId = '6650f1c2a9b3e4d5f6071829';
+    const ownerId = '6650f1c2a9b3e4d5f607182c';
     viewState = loaded({
       ...fullView,
-      history: [{ ...fullView.history[0]!, principalKind: 'apiKey', principalId: keyId, principalName: undefined }],
+      history: [
+        {
+          ...fullView.history[0]!,
+          principalKind: 'apiKey',
+          principalId: keyId,
+          principalName: undefined,
+          onBehalfOfUserId: ownerId,
+        },
+      ],
     });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
-    const reader = screen.getByTestId('datalake-access-history-reader');
-    expect(reader).toHaveTextContent(keyId);
-    expect(reader).toHaveAttribute('title', keyId);
-    const style = getComputedStyle(reader);
-    expect(style.whiteSpace).toBe('nowrap');
-    expect(style.overflow).toBe('hidden');
-    expect(style.textOverflow).toBe('ellipsis');
+    const kindLine = `apiKey (for ${ownerId})`;
+    for (const [line, text] of [
+      [screen.getByTestId('datalake-access-history-reader'), keyId],
+      [screen.getByText(kindLine), kindLine],
+    ] as const) {
+      expect(line).toHaveTextContent(text);
+      expect(line).toHaveAttribute('title', text);
+      const style = getComputedStyle(line);
+      expect(style.whiteSpace).toBe('nowrap');
+      expect(style.overflow).toBe('hidden');
+      expect(style.textOverflow).toBe('ellipsis');
+    }
   });
 
   it('truncates unresolved principal and granter ids in the grants table', () => {
