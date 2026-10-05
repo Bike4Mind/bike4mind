@@ -6,6 +6,7 @@ import { logEventSafe } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@server/utils/errors';
+import { notifyApiKeyRotationReown } from '@server/utils/apiKeyRotationNotifier';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
@@ -46,6 +47,10 @@ const handler = baseApi().post(
       { ability: req.ability },
       req.logger
     );
+
+    if (rotatedKey.previousOwnerUserId) {
+      await notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name);
+    }
 
     return res.status(200).json(rotatedKey);
   })
