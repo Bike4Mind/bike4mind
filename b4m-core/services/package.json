@@ -70,6 +70,16 @@
         "default": "./dist/generationJobs/index.cjs"
       }
     },
+    "./videoJobs": {
+      "import": {
+        "types": "./dist/videoJobs/index.d.mts",
+        "default": "./dist/videoJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/videoJobs/index.d.cts",
+        "default": "./dist/videoJobs/index.cjs"
+      }
+    },
     "./agentProactiveMessagingService": {
       "import": {
         "types": "./dist/agentProactiveMessagingService/index.d.mts",
