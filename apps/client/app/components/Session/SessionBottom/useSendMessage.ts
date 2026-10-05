@@ -30,6 +30,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
+import { resolveDispatchAgent } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
@@ -907,17 +908,20 @@ export function useSendMessage({
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
     //     (preserves the earlier `@specific-agent` UX). A briefcase
     //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
-    //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
-    //     the executor build a synthetic profile from admin defaults.
+    //   - Without (toggle ON or `@agent` literal): run as the first agent
+    //     attached with the Agents picker, or dispatch agentless when none is
+    //     attached and let the executor build a synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
       try {
-        // Prefer the dispatched agent's own text model - the orchestration
-        // agent when present, else the first plain @mentioned agent - so a
-        // personality-only agent runs on its `preferredModel` rather than the
-        // caller's current selection. Mirrors the `agentId` and
-        // `preferredImageModel` resolution above (#agent-mode-persona). Falls
-        // back to the caller's `model` when neither agent pins one.
-        const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
+        // Prefer the dispatched agent's own text model (see `resolveDispatchAgent`)
+        // so a personality-only agent runs on its `preferredModel` rather than the
+        // caller's current selection. Mirrors the `agentId` resolution below
+        // (#agent-mode-persona). Falls back to the caller's `model` when the
+        // agent pins none.
+        // Same set the composer's Agents badge shows (SessionBottom `displayAgents`).
+        const pickerAgents = currentSessionId ? sessionAgents : workBenchAgents;
+        const dispatchAgent = resolveDispatchAgent(orchestrationAgent, mentionedAgent, pickerAgents);
+        const dispatchModel = dispatchAgent?.preferredModel ?? (model as string);
         // `currentSessionId` is a stale render-closure value on `/new` (still null even
         // after the Data Lake seam above just created + set the session), so fall back to
         // the locally-created id to avoid minting a second, ungrounded session here.
@@ -1006,14 +1010,12 @@ export function useSendMessage({
           query: prompt,
           model: dispatchModel,
           organizationId: organizationId ?? undefined,
-          // Forward the @mentioned agent's id so the executor injects its
-          // persona and runs as that agent. Prefer the orchestration-configured
-          // agent (carries tool whitelist + iteration caps); otherwise fall back
-          // to the first plain @mentioned agent so a personality-only agent is
-          // still run-as rather than ignored in favor of the synthetic default
-          // (#agent-mode-persona / @-tag-enables-agent). Absent (no mention)
+          // The executor injects this agent's persona and runs as it, so its own
+          // tool policy applies (#agent-mode-persona / @-tag-enables-agent).
+          // Orchestration @mention, then plain @mention, then the first
+          // picker-attached agent; absent only when none of those exist, which
           // triggers the synthetic-profile path on the executor.
-          agentId: orchestrationAgent?.id ?? mentionedAgent?.id,
+          agentId: dispatchAgent?.id,
           enabledTools,
           enabledToolsAreAmbient,
           maxIterations: maxIters,
