@@ -46,7 +46,9 @@ export const generateImageContract = defineEndpoint({
     'image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is ' +
     '`"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. ' +
     'The prompt is resolved against the session history first, so a follow-up such as "make it darker" ' +
-    'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. ' +
+    'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send ' +
+    '`prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart ' +
+    "from truncation to the model's prompt limit). " +
     '`referenceImageFabFileIds` passes up to 4 already-uploaded images as style anchors, after the input ' +
     'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
     'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +

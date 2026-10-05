@@ -273,6 +273,62 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     );
   });
 
+  describe('prompt_resolution', () => {
+    const LITERAL_PROMPT = 'a different variant';
+    const REWRITTEN_PROMPT = 'a red bicycle on a white background, different variant';
+
+    beforeEach(() => {
+      mockGetRecentHistory.mockResolvedValue([{ id: 'prior-quest', images: ['prior.png'] }]);
+      mockResolveImagePrompt.mockResolvedValue({ rewrittenPrompt: REWRITTEN_PROMPT, intent: 'continuation' });
+    });
+
+    it.each([undefined, 'auto'] as const)('rewrites a continuation when prompt_resolution is %s', async mode => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', ...(mode ? { prompt_resolution: mode } : {}) },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ promptWasEnhanced: true, intent: 'continuation' });
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ prompt: REWRITTEN_PROMPT }) })
+      );
+    });
+
+    it('sends a literal prompt unchanged and skips the history resolver', async () => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'literal' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        enhancedPrompt: LITERAL_PROMPT,
+        promptWasEnhanced: false,
+        intent: 'fresh',
+      });
+      expect(mockGetRecentHistory).not.toHaveBeenCalled();
+      expect(mockResolveImagePrompt).not.toHaveBeenCalled();
+      const invokedBody = mockInvoke.mock.calls[0][0].body;
+      expect(invokedBody).toMatchObject({
+        prompt: LITERAL_PROMPT,
+        intent: 'fresh',
+        promptEnhancement: { originalPrompt: LITERAL_PROMPT, enhancedPrompt: LITERAL_PROMPT, promptWasEnhanced: false },
+      });
+      expect(invokedBody).not.toHaveProperty('prompt_resolution');
+    });
+
+    it('rejects an unknown prompt_resolution (422) before enqueuing generation', async () => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'verbatim' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+  });
+
   it('serves the legacy /api/ai/generate-image path with the same handler', () => {
     expect(legacyHandler).toBe(handler);
   });
