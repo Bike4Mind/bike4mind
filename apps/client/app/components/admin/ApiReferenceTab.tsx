@@ -2,8 +2,8 @@ import { Alert, Box, Button, Divider, Link, Sheet, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
-import { API_REFERENCE_CONTENT } from './content/apiReferenceContent';
-import { QUICKSTART_CONTENT } from './content/quickstartContent';
+import { getApiReferenceContent } from './content/apiReferenceContent';
+import { getQuickstartContent } from './content/quickstartContent';
 
 const markdownStyles = {
   '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
@@ -141,7 +141,9 @@ const ApiReferenceTab = () => {
       )}
       <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {view === 'full' ? API_REFERENCE_CONTENT : QUICKSTART_CONTENT}
+          {view === 'full'
+            ? getApiReferenceContent(window.location.origin)
+            : getQuickstartContent(window.location.origin)}
         </ReactMarkdown>
       </Sheet>
     </Box>

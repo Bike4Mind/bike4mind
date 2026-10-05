@@ -10,10 +10,11 @@ export const renderScopeTableRows = (): string =>
     scope => `| \`${scope.value}\` | ${scope.description.replaceAll('|', '\\|')} |`
   ).join('\n');
 
-export const API_REFERENCE_CONTENT = `
+/** `baseUrl` is the deployment's origin, so the examples are runnable as copied. */
+export const getApiReferenceContent = (baseUrl: string): string => `
 # ${getBrandName()} API Reference
 
-Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`https://your-deployment.example.com\` (production) or \`https://staging.your-deployment.example.com\` (staging).
+Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`${baseUrl}\`.
 
 ---
 
@@ -48,17 +49,13 @@ flows) get the refresh token in the response body and send it back the same way.
 
 ### API Key Authentication
 
-API keys use the \`b4m_live_\` prefix and can be passed via either header:
+API keys use the \`b4m_live_\` prefix. Send one as a bearer token:
 
 \`\`\`
-X-API-Key: b4m_live_xxxxx
+Authorization: Bearer b4m_live_xxxxx
 \`\`\`
 
-or
-
-\`\`\`
-Authorization: ApiKey b4m_live_xxxxx
-\`\`\`
+The legacy \`X-API-Key: b4m_live_xxxxx\` and \`Authorization: ApiKey b4m_live_xxxxx\` forms are still accepted.
 
 **Managing API keys:**
 
@@ -1531,7 +1528,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
     \`\`\`bash
     # Send a correlation ID and read it back from the response headers
-    curl -i -X POST https://your-deployment.example.com/api/chat \\
+    curl -i -X POST ${baseUrl}/api/chat \\
       -H "Authorization: Bearer $TOKEN" \\
       -H "Content-Type: application/json" \\
       -H "X-Request-ID: my-trace-001" \\
