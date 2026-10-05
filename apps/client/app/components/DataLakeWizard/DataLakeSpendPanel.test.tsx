@@ -169,6 +169,48 @@ describe('DataLakeSpendPanel', () => {
     expect(progress).toHaveTextContent('140%');
   });
 
+  // The per-lake budget gate reads the embedding meter only, so a lake at $80 embeddings + $40
+  // research against a $100 budget is at 80%, not 120% - the bar must match the gate, not the
+  // combined spend total.
+  it('measures the per-lake budget bar against embedding spend only, excluding research', () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 80_000_000,
+        researchLifetimeUsd: 40,
+        perLakeBudgetMicroUsd: 100_000_000,
+      }),
+    });
+    const progress = screen.getByTestId('datalake-spend-lake-progress');
+    expect(progress).toHaveTextContent('80%');
+    expect(progress).toHaveTextContent('$80.00');
+    expect(progress).not.toHaveTextContent('120%');
+  });
+
+  it('shows research spend on its own line, labelled as not capped by the per-lake budget', () => {
+    renderPanel({
+      summary: baseSummary({
+        embeddingSpendMicroUsd: 80_000_000,
+        researchLifetimeUsd: 40,
+        perLakeBudgetMicroUsd: 100_000_000,
+      }),
+    });
+    const research = screen.getByTestId('datalake-spend-research-lifetime');
+    expect(research).toHaveTextContent('$40.00');
+    expect(research).toHaveTextContent(/not capped by the per-lake budget/i);
+  });
+
+  it('keeps the combined lifetime chip across ingestion and research spend', () => {
+    renderPanel({
+      summary: baseSummary({ embeddingSpendMicroUsd: 80_000_000, researchLifetimeUsd: 40 }),
+    });
+    expect(screen.getByTestId('datalake-spend-lifetime')).toHaveTextContent('$120.00');
+  });
+
+  it('hides the research line when there is no research spend', () => {
+    renderPanel({ summary: baseSummary({ embeddingSpendMicroUsd: 80_000_000, researchLifetimeUsd: 0 }) });
+    expect(screen.queryByTestId('datalake-spend-research-lifetime')).not.toBeInTheDocument();
+  });
+
   it('formats a sub-cent lifetime total via the shared formatUsd floor, not as $0.00', () => {
     renderPanel({
       summary: baseSummary({

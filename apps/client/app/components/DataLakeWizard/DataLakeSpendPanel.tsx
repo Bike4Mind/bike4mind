@@ -92,9 +92,12 @@ export function DataLakeSpendPanel({
   const lakeBudgetUsd = microToUsd(summary.perLakeBudgetMicroUsd);
   const periodBudgetUsd = microToUsd(summary.perPeriodBudgetMicroUsd);
   const runBudgetUsd = microToUsd(summary.perRunBudgetMicroUsd);
+  // The per-lake budget caps INGESTION only, so the bar reads the embedding meter only - the same
+  // number `enforceEmbeddingSpendGate` compares against (must stay in sync). Research is not part of
+  // this percentage; it gets its own line below, labelled as uncapped by this budget.
   const lakePct =
     summary.perLakeBudgetMicroUsd > 0 && ingestionLifetimeUsd !== null
-      ? ((ingestionLifetimeUsd + researchLifetimeUsd) / lakeBudgetUsd) * 100
+      ? (ingestionLifetimeUsd / lakeBudgetUsd) * 100
       : null;
 
   // A lake with no ledger rows yet is either brand-new (lifetime meter also 0) or predates this
@@ -152,7 +155,8 @@ export function DataLakeSpendPanel({
           {summary.perLakeBudgetMicroUsd > 0 && lakePct !== null ? (
             <Box data-testid="datalake-spend-lake-progress">
               <Typography level="body-sm">
-                Per-lake budget: {formatUsd(lifetimeUsd ?? 0)} of {formatUsd(lakeBudgetUsd)} ({Math.round(lakePct)}%)
+                Per-lake ingestion budget: {formatUsd(ingestionLifetimeUsd ?? 0)} of {formatUsd(lakeBudgetUsd)} (
+                {Math.round(lakePct)}%)
               </Typography>
               <LinearProgress
                 determinate
@@ -164,6 +168,12 @@ export function DataLakeSpendPanel({
           ) : (
             <Typography level="body-sm" data-testid="datalake-spend-lake-uncapped">
               Per-lake budget: uncapped
+            </Typography>
+          )}
+          {researchLifetimeUsd > 0 && (
+            <Typography level="body-sm" data-testid="datalake-spend-research-lifetime">
+              Research: {formatUsd(researchLifetimeUsd)} lifetime (not capped by the per-lake budget; each research run
+              has its own cost ceiling)
             </Typography>
           )}
           <Typography level="body-sm" data-testid="datalake-spend-perrun-cap">
