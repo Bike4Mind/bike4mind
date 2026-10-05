@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { PROMPT_TEXT_MAX, ttsRequestSchema, type TTSRequest } from '@bike4mind/common';
+import { DEFAULT_TTS_PROVIDER, PROMPT_TEXT_MAX, ttsRequestSchema, type TTSRequest } from '@bike4mind/common';
 import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -292,15 +292,19 @@ function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
 export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 'encoding'>): Promise<CallToolResult> {
   const response = await client.synthesizeSpeech(args);
   if (response.kind === 'saved-too-large') {
+    // Too large to inline, so the FabFile is the only way back to the audio; it is
+    // reported even without a signed URL so the agent can still name the file.
+    const { provider, fabFileId, fileUrl } = response.data;
     return toResult({
       saved: true,
-      provider: response.data.provider,
-      file: { id: response.data.fabFileId, fileUrl: response.data.fileUrl },
+      provider,
+      ...(response.fallbackFrom ? { fallbackFrom: response.fallbackFrom } : {}),
+      file: { id: fabFileId, ...(fileUrl ? { fileUrl } : {}) },
     });
   }
 
   const result = response.data;
-  const provider = result.provider ?? args.provider ?? 'openai';
+  const provider = result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER;
   const metadata = {
     provider,
     ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom } : {}),
@@ -313,7 +317,16 @@ export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 
     return toResult({ ...metadata, saved: true, file: { id: result.fabFileId, fileUrl: result.fileUrl } });
   }
 
-  const inlineMetadata = { ...metadata, saved: false };
+  // No usable URL: inline the billed audio, but still report a saved copy by id,
+  // and why a copy was skipped (quota vs. preference) when the route says.
+  const inlineMetadata =
+    result.saved && result.fabFileId
+      ? { ...metadata, saved: true, file: { id: result.fabFileId } }
+      : {
+          ...metadata,
+          saved: false,
+          ...(result.saveSkippedReason ? { saveSkippedReason: result.saveSkippedReason } : {}),
+        };
   return {
     content: [
       { type: 'text', text: JSON.stringify(inlineMetadata, null, 2) },

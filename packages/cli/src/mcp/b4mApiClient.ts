@@ -4,6 +4,8 @@ import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
   ttsBase64ResponseSchema,
   ttsResponseTooLargeSchema,
+  supportedVoiceGenerationVendor,
+  type ApiErrorCode,
   type ChatHistoryItemType,
   type QuestErrorCode,
   type TTSRequest,
@@ -276,9 +278,18 @@ export class B4mApiClient {
       return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(response) };
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 413) {
+        // The billed audio is only reachable through its FabFile, so keep the id even
+        // when no signed URL was minted. A substitution rides only the header here.
         const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
-        if (oversized.success && oversized.data.saved && oversized.data.fabFileId && oversized.data.fileUrl) {
-          return { kind: 'saved-too-large' as const, data: oversized.data };
+        if (oversized.success && oversized.data.saved && oversized.data.fabFileId) {
+          const fallbackFrom = supportedVoiceGenerationVendor.safeParse(
+            error.response.headers?.['x-b4m-tts-provider-fallback-from']
+          );
+          return {
+            kind: 'saved-too-large' as const,
+            data: { ...oversized.data, fabFileId: oversized.data.fabFileId },
+            ...(fallbackFrom.success ? { fallbackFrom: fallbackFrom.data } : {}),
+          };
         }
       }
       throw error;
@@ -347,6 +358,10 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
   if (isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 401) {
+      // A provider-key failure also wears a 401 (e.g. /api/ai/tts); re-authenticating
+      // to Bike4Mind would not fix it, so surface the server's message instead.
+      const providerKeyMessage = providerKeyFailureMessage(error.response?.data);
+      if (providerKeyMessage) return providerKeyMessage;
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
@@ -426,6 +441,19 @@ function parseRetryAfterSeconds(value: unknown): number | undefined {
 }
 
 /** Pull a human-readable message out of a JSON error body (`error` or `message` field). */
+const PROVIDER_KEY_ERROR_CODES: ReadonlySet<string> = new Set([
+  'provider_not_configured',
+  'provider_rejected',
+] satisfies ApiErrorCode[]);
+
+function providerKeyFailureMessage(data: unknown): string | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const { errorCode } = data as Record<string, unknown>;
+  if (typeof errorCode !== 'string' || !PROVIDER_KEY_ERROR_CODES.has(errorCode)) return undefined;
+  const base = extractServerMessage(data) ?? 'the AI provider could not be used';
+  return `${base} (configure or fix the provider API key in Bike4Mind; this is not a Bike4Mind login problem)`;
+}
+
 function extractServerMessage(data: unknown): string | undefined {
   if (data && typeof data === 'object') {
     const record = data as Record<string, unknown>;

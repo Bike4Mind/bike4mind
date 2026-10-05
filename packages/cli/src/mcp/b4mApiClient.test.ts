@@ -298,6 +298,36 @@ describe('B4mApiClient', () => {
     await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ response: { status: 413 } });
   });
 
+  it('keeps the saved file id and fallback provider from an oversized TTS response without a URL', async () => {
+    mockPost.mockRejectedValue(
+      axiosError(413, {
+        data: { error: 'Response too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab1' },
+        headers: { 'x-b4m-tts-provider-fallback-from': 'openai' },
+      })
+    );
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toEqual({
+      kind: 'saved-too-large',
+      data: { error: 'Response too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab1' },
+      fallbackFrom: 'openai',
+    });
+  });
+
+  it('rethrows an oversized TTS error whose body does not match the 413 schema', async () => {
+    mockPost.mockRejectedValue(
+      axiosError(413, { data: { error: 'Response too large', saved: true, fabFileId: 'fab1' } })
+    );
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ response: { status: 413 } });
+  });
+
+  it('rethrows a non-413 TTS failure unchanged', async () => {
+    const failure = axiosError(500, { data: { error: 'Failed to generate speech' } });
+    mockPost.mockRejectedValue(failure);
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toBe(failure);
+  });
+
   it('lists projects with nested pagination and normalizes the envelope', async () => {
     mockGet.mockResolvedValue({ data: [{ id: 'p1', name: 'Proj' }], hasMore: true, total: 5 });
 
@@ -386,6 +416,16 @@ describe('mapApiError', () => {
 
   it('maps 401 to a re-auth hint', () => {
     expect(mapApiError(axiosError(401), 'http://x')).toContain('authentication failed');
+  });
+
+  it.each([
+    ['provider_not_configured', 'No TTS provider is configured'],
+    ['provider_rejected', 'TTS request rejected by the openai provider'],
+  ])('maps a 401 %s to the server message with a provider-key hint, not a re-auth hint', (errorCode, error) => {
+    const msg = mapApiError(axiosError(401, { data: { error, errorCode } }), 'http://x');
+    expect(msg).toContain(error);
+    expect(msg).toContain('provider API key');
+    expect(msg).not.toContain('b4m login');
   });
 
   it('maps NotAuthenticatedError to a no-credential message naming both fixes', () => {

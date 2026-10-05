@@ -269,7 +269,7 @@ describe('tool handlers', () => {
     expect(result.content.some(item => item.type === 'audio')).toBe(false);
   });
 
-  it('text_to_speech returns inline audio if a saved copy has no URL', async () => {
+  it('text_to_speech inlines the audio but reports the saved file id if a saved copy has no URL', async () => {
     const client = mockClient({
       synthesizeSpeech: vi.fn().mockResolvedValue({
         kind: 'audio',
@@ -280,7 +280,51 @@ describe('tool handlers', () => {
     const result = await textToSpeech(client, { text: 'Hello' });
 
     expect(result.content).toContainEqual({ type: 'audio', data: 'YWJj', mimeType: 'audio/mpeg' });
-    expect(result.structuredContent).toMatchObject({ saved: false, provider: 'openai', byteLength: 3 });
+    expect(result.structuredContent).toMatchObject({
+      saved: true,
+      provider: 'openai',
+      byteLength: 3,
+      file: { id: 'fab1' },
+    });
+  });
+
+  it('text_to_speech forwards why a saved copy was skipped', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: {
+          audio: 'YWJj',
+          format: 'mp3',
+          contentType: 'audio/mpeg',
+          saved: false,
+          saveSkippedReason: 'storage_limit',
+        },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.content).toContainEqual({ type: 'audio', data: 'YWJj', mimeType: 'audio/mpeg' });
+    expect(result.structuredContent).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+  });
+
+  it('text_to_speech reports a too-large saved file by id when it has no URL', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'saved-too-large',
+        data: { provider: 'elevenlabs', fabFileId: 'fab1' },
+        fallbackFrom: 'openai',
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.structuredContent).toEqual({
+      saved: true,
+      provider: 'elevenlabs',
+      fallbackFrom: 'openai',
+      file: { id: 'fab1' },
+    });
   });
 
   it('text_to_speech returns a saved URL when the billed response is too large', async () => {
@@ -443,5 +487,41 @@ describe('registerTools', () => {
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
     });
+  });
+
+  const ttsFailure = (status: number, data: Record<string, unknown>) =>
+    new AxiosError('request failed', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status,
+      statusText: '',
+      data,
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+
+  it.each(['provider_not_configured', 'provider_rejected'])(
+    'text_to_speech maps a 401 %s to a provider-key hint rather than b4m login',
+    async errorCode => {
+      const failure = ttsFailure(401, { error: 'No usable TTS provider', errorCode });
+      const tools = collectTools(mockClient({ synthesizeSpeech: vi.fn().mockRejectedValue(failure) }));
+
+      const result = await tools.get('text_to_speech')!({ text: 'Hello' });
+
+      expect(result.isError).toBe(true);
+      const [first] = result.content;
+      const text = first.type === 'text' ? first.text : '';
+      expect(text).toContain('No usable TTS provider');
+      expect(text).toContain('provider API key');
+      expect(text).not.toContain('b4m login');
+    }
+  );
+
+  it('text_to_speech surfaces the server message for insufficient credits', async () => {
+    const failure = ttsFailure(422, { error: 'Not enough credits for TTS', errorCode: 'insufficient_credits' });
+    const tools = collectTools(mockClient({ synthesizeSpeech: vi.fn().mockRejectedValue(failure) }));
+
+    const result = await tools.get('text_to_speech')!({ text: 'Hello' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: 'Not enough credits for TTS' });
   });
 });
