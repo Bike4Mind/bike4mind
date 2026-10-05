@@ -1967,15 +1967,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "all lakes" figure sits above those per-lake rows, so the two describe one population.
    */
   countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
-  /**
-   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
-   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
-   * which judge each lake on its own and so both double-count and over-count.
-   */
-  countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
