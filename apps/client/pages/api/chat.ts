@@ -359,7 +359,9 @@ async function resolveChatSessionId(req: Request, request: SimplifiedChatRequest
         logger: req.logger,
       }
     );
-    req.logger.info(`POST /api/chat created notebook ${session.id} for ${isApiKeyAuth(req) ? 'API key' : 'new conversation'}`);
+    req.logger.info(
+      `POST /api/chat created notebook ${session.id} for ${isApiKeyAuth(req) ? 'API key' : 'new conversation'}`
+    );
     return session.id;
   }
 
