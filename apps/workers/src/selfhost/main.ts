@@ -29,6 +29,7 @@ import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
+import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
@@ -95,6 +96,7 @@ async function main() {
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
+  registerGenerationJobSweep(worker);
   registerLakeHealthSweep(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);

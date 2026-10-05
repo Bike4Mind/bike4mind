@@ -98,6 +98,18 @@ const buildProviders = (): VideoProvider[] => {
   return providers;
 };
 
+// Direct links (worker, sweep cron) win; API Lambdas only carry the sourceQueueUrls Linkable. sst's Resource
+// proxy throws on an unlinked key, hence the try.
+const resolveGenerationJobQueueUrl = (): string => {
+  try {
+    const directUrl = (Resource as unknown as { generationJobQueue?: { url?: string } }).generationJobQueue?.url;
+    if (directUrl) return directUrl;
+  } catch {
+    // Not linked directly in this Lambda; fall through to the registry.
+  }
+  return getSourceQueueUrl('generationJobQueue');
+};
+
 // The engine skips a delivery that arrives early, so delaySeconds must reach SQS unchanged.
 export const enqueueGenerationJob = async (jobId: string, delaySeconds: number): Promise<void> => {
   if (process.env.BYPASS_QUEUE === 'true') {
@@ -109,7 +121,7 @@ export const enqueueGenerationJob = async (jobId: string, delaySeconds: number):
     }, delaySeconds * 1000);
     return;
   }
-  await sendToQueue(getSourceQueueUrl('generationJobQueue'), { jobId }, delaySeconds);
+  await sendToQueue(resolveGenerationJobQueueUrl(), { jobId }, delaySeconds);
 };
 
 const resolveApiKey: VideoJobDeps['resolveApiKey'] = async (providerId, userId) => {
