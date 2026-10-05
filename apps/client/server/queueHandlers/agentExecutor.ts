@@ -176,7 +176,7 @@ import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
-  pickEffectiveEnabledTools,
+  resolveInvocationEnabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
 import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
@@ -1791,14 +1791,18 @@ async function processExecution(
     // default `enabledTools` when the payload doesn't pin them - that's how
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
-    const profileEnabledTools = orchestrationProfile
-      ? pickEffectiveEnabledTools(
-          startPayload?.enabledTools,
-          orchestrationProfile,
-          startPayload?.enabledToolsAreAmbient,
-          !!execution.connectionId && !isHeadlessConnection(execution.connectionId)
-        )
-      : (startPayload?.enabledTools ?? []);
+    const profileEnabledTools = resolveInvocationEnabledTools({
+      isNewExecution,
+      persistedEnabledTools: execution.resolvedEnabledTools,
+      persistedProfileDeniedTools: execution.profileDeniedTools,
+      payloadEnabledTools: startPayload?.enabledTools,
+      payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
+      profile: orchestrationProfile,
+      hasApprover: !!execution.connectionId && !isHeadlessConnection(execution.connectionId),
+    });
+    if (isNewExecution) {
+      await agentExecutionRepository.persistResolvedEnabledTools(executionId, profileEnabledTools);
+    }
 
     // Lattice parity with chat_completion. Mirrors
     // `ChatCompletionProcess`'s `enableLattice` consumption: append the Lattice
@@ -1874,7 +1878,7 @@ async function processExecution(
     const resolvedToolNames = applySessionToolPolicy({
       toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
       session,
-      profileDeniedTools: orchestrationProfile?.deniedTools,
+      profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
       hasAttachments: runHasAttachments(execution, session.knowledgeIds),
       scopeDeniedTools: execution.scopeDeniedTools,
       logger,
@@ -1890,7 +1894,10 @@ async function processExecution(
       // them to `toolNames`, which MCP tools never pass through, so a profile that denies
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
-      sessionDisabledTools: [...(session.disabledTools ?? []), ...(orchestrationProfile?.deniedTools ?? [])],
+      sessionDisabledTools: [
+        ...(session.disabledTools ?? []),
+        ...(orchestrationProfile?.deniedTools ?? execution.profileDeniedTools ?? []),
+      ],
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,

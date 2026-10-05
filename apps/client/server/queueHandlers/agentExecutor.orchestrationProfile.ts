@@ -226,6 +226,32 @@ export function pickEffectiveEnabledTools(
   return pairDataLakeTools(permitted, { withCreate: hasApprover }).filter(t => !denied.has(t));
 }
 
+/**
+ * This invocation's toolbelt names before the session policy. A new run resolves them from the
+ * profile and start payload; a continuation has no start payload (the ambient Smart Tools and
+ * their paired companions ride only on it), so it replays `persistedEnabledTools` - the set the
+ * first invocation resolved - minus the profile denials, re-applied as a backstop.
+ * A legacy row with nothing persisted keeps the recompute.
+ */
+export function resolveInvocationEnabledTools(input: {
+  isNewExecution: boolean;
+  persistedEnabledTools: readonly string[] | undefined;
+  persistedProfileDeniedTools: readonly string[] | undefined;
+  payloadEnabledTools: string[] | undefined;
+  payloadIsAmbient: boolean | undefined;
+  profile: ResolvedOrchestrationProfile | undefined;
+  hasApprover: boolean;
+}): string[] {
+  const { profile } = input;
+  if (!input.isNewExecution && input.persistedEnabledTools) {
+    const denied = new Set(profile?.deniedTools ?? input.persistedProfileDeniedTools ?? []);
+    return input.persistedEnabledTools.filter(t => !denied.has(t));
+  }
+  return profile
+    ? pickEffectiveEnabledTools(input.payloadEnabledTools, profile, input.payloadIsAmbient, input.hasApprover)
+    : (input.payloadEnabledTools ?? []);
+}
+
 /** True when the belt is the admin default (optionally unioned with ambient picks), not an explicit selection. */
 function lakeToolsPairable(
   payloadEnabledTools: string[] | undefined,
