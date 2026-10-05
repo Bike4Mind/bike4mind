@@ -267,6 +267,10 @@ const CliConfigSchema = z.object({
     enableRemoteSkills: z.boolean().optional().prefault(true),
     enableDynamicAgentCreation: z.boolean().optional().prefault(false),
     enableCoordinatorMode: z.boolean().optional().prefault(false),
+    // Deliberately absent from the project/local schemas: checking runs the
+    // repo's own tsc/eslint (and eslint configs are executable JS), so a cloned
+    // repo must not be able to switch it on for whoever opens it.
+    postEditDiagnostics: z.boolean().optional().prefault(false),
     /**
      * System-prompt variant. 'current' uses the elaborate behavioral-scaffolding
      * prompt; 'minimal' uses a pi-style short prompt. See packages/cli/src/core/prompts.ts.
@@ -424,6 +428,7 @@ const DEFAULT_CONFIG: CliConfig = {
     enableRemoteSkills: true,
     enableDynamicAgentCreation: false,
     enableCoordinatorMode: false,
+    postEditDiagnostics: false,
     promptVariant: 'current',
   },
   tools: {
