@@ -1,4 +1,10 @@
-import { SessionEvents, redactSessionForClient, sessionUpdateContract } from '@bike4mind/common';
+import {
+  SessionEvents,
+  redactSessionForClient,
+  sessionDeleteContract,
+  sessionGetContract,
+  sessionUpdateContract,
+} from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
 import {
   projectRepository,
@@ -9,71 +15,51 @@ import {
   sessionAgentConfigRepository,
   withTransaction,
 } from '@bike4mind/database';
-import { baseApi } from '@server/middlewares/baseApi';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { NotFoundError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
-import { Request } from 'express';
 import { getFilesStorage } from '@server/utils/storage';
 
-// baseApi() here and nextRouteForContract(sessionUpdateContract) below build two
-// independent router instances (see the dispatcher at the bottom of this file) - both
-// currently use default auth/rate-limit options, so keep them that way in lockstep;
-// a future option change to one (maxBodySize, exemptReadsFromDailyRateLimit, ...)
-// needs the same change made deliberately to the other, not assumed to apply.
-const getAndDeleteHandler = baseApi()
-  /**
-   * Get a session by its ID
-   */
-  .get(async (req: Request<{}, {}, {}, { id: string }>, res) => {
-    const sessionId = req.query.id!;
+const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res) => {
+  const session = await sessionService.getSession(
+    req.user!.id,
+    { id: req.validatedParams.id },
+    { db: { sessions: sessionRepository, users: userRepository } }
+  );
 
-    const session = await sessionService.getSession(
-      req.user!.id,
-      { id: sessionId },
-      { db: { sessions: sessionRepository, users: userRepository } }
-    );
+  return res.json(redactSessionForClient(session));
+});
 
-    return res.json(redactSessionForClient(session));
-  })
-  /**
-   * Delete a session
-   */
-  .delete(async (req: Request<{}, { newLastNotebookId: string | null }, unknown, { id?: string }>, res) => {
-    if (!req.query.id) throw new NotFoundError('Session not found');
+const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (req, res) => {
+  const { id } = req.validatedParams;
+  const userId = req.user!.id;
+  // deleteSession rewrites grant rows across every file this session touched before it tombstones
+  // anything, and takes a version-guarded write on each. Without a transaction a
+  // ConcurrencyConflictError partway through leaves some files rewritten and some not, with the
+  // session still live. Matches the revokeSharing route, which wraps the sibling cascade for the
+  // same reason; the service's own ordering comment already assumes a retry sees an all-or-nothing
+  // state. That all-or-nothing is what sessionDeleteContract's 409 promises.
+  const newLastNotebook = await withTransaction(() =>
+    sessionService.deleteSession(
+      userId,
+      { id },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          users: userRepository,
+          sessionAgentConfigs: sessionAgentConfigRepository,
+        },
+        logger: req.logger,
+      }
+    )
+  );
 
-    const userId = req.user?.id;
-    // deleteSession rewrites grant rows across every file this session touched before it tombstones
-    // anything, and takes a version-guarded write on each. Without a transaction a
-    // ConcurrencyConflictError partway through leaves some files rewritten and some not, with the
-    // session still live. Matches the revokeSharing route, which wraps the sibling cascade for the
-    // same reason; the service's own ordering comment already assumes a retry sees an all-or-nothing
-    // state.
-    const newLastNotebook = await withTransaction(() =>
-      sessionService.deleteSession(
-        userId,
-        { id: req.query.id as string },
-        {
-          db: {
-            sessions: sessionRepository,
-            projects: projectRepository,
-            fabFiles: fabFileRepository,
-            users: userRepository,
-            sessionAgentConfigs: sessionAgentConfigRepository,
-          },
-          logger: req.logger,
-        }
-      )
-    );
+  await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 
-    await logEvent(
-      { userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: req.query.id } },
-      { ability: req.ability }
-    );
-
-    return res.json({ newLastNotebookId: newLastNotebook?.id || null });
-  });
+  return res.json({ newLastNotebookId: newLastNotebook?.id || null });
+});
 
 // Auth mode, required scope, and request/path-param validation come from sessionUpdateContract
 // (the single source of truth also driving the OpenAPI spec). `req.validated` /
@@ -129,10 +115,9 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
   return res.json(redactSessionForClient(updatedSession));
 });
 
-// sessionUpdateContract only declares PUT, and nextRouteForContract's router rejects any other
-// verb registered on it - so GET/DELETE stay on their own plain baseApi() router, and any other
-// verb gets the path-level 405 the contract documents (see dispatchByMethod).
-export default dispatchByMethod({ GET: getAndDeleteHandler, PUT: putHandler, DELETE: getAndDeleteHandler });
+// nextRouteForContract refuses any verb its contract does not declare, so each verb has its own
+// router; any other verb gets the path-level 405 the contracts document (see dispatchByMethod).
+export default dispatchByMethod({ GET: getHandler, PUT: putHandler, DELETE: deleteHandler });
 
 export const config = {
   api: {

@@ -320,7 +320,6 @@ export const KNOWN_UNPOSTURED = new Set<string>([
   'sessions/[id]/clone.ts',
   'sessions/[id]/favorite.ts',
   'sessions/[id]/files.ts',
-  'sessions/[id]/index.ts',
   'sessions/[id]/questmaster-plans/index.ts',
   'sessions/[id]/summary.ts',
   'sessions/[id]/tag.ts',
