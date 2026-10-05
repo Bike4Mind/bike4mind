@@ -364,6 +364,12 @@ export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
   sessionId: z.string().optional(),
   /** Notebook session name */
   sessionName: z.string().optional(),
+  /**
+   * Agents to stamp on a session this request creates (the composer's Agents panel on `/new`).
+   * Session-creation input, not a completion parameter, so it is applied only when `sessionId`
+   * is absent; ignored when an existing session is resolved.
+   */
+  agentIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 
