@@ -3464,7 +3464,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async listLakeSupersededIds(fabFileIds: string[], dataLakeId: string): Promise<string[]> {
     if (fabFileIds.length === 0) return [];
     const docs = await this.fabFileModel
-      .find({ _id: { $in: fabFileIds }, 'supersededInLakes.dataLakeId': dataLakeId })
+      .find({
+        _id: { $in: usableObjectIds(fabFileIds, 'FabFileModel.listLakeSupersededIds') },
+        'supersededInLakes.dataLakeId': dataLakeId,
+      })
       .select('_id')
       .lean();
     return docs.map(doc => String(doc._id));
