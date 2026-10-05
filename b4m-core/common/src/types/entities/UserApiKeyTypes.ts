@@ -19,8 +19,9 @@ export enum ApiKeyScope {
    * Read the key owner's OWN commercial state - tier, credit balance, entitlement
    * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
    * to generate text has no business enumerating what its owner has paid for. It
-   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
-   * suffix that puts it in the New-Key modal's read-only preset.
+   * reaches only `GET /api/v1/me` and its balance-only subset `GET /api/v1/credits`
+   * (which the AI scopes also open, since spend needs a pre-flight check), so it
+   * carries the `:read` suffix that puts it in the New-Key modal's read-only preset.
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
@@ -310,6 +311,15 @@ export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Or
 
 export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
 
+/**
+ * Which per-user active-key cap a key counts against. Federated-exchange keys
+ * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
+ * and minted by a relying party rather than the user, so they get their own pool
+ * instead of eating the user's dashboard/admin key slots. Caps live in
+ * b4m-core/services/src/userApiKeyService/create.ts.
+ */
+export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
@@ -332,8 +342,11 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
-  /** Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot. */
-  countActiveByUserId: (userId: string) => Promise<number>;
+  /**
+   * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.
+   * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
+   */
+  countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;

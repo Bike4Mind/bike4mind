@@ -1,5 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
-import type { DataLakeOrigin, DataLakeStatus } from '../types/entities/DataLakeTypes';
+import type { DataLakeOrigin, DataLakePendingConnector, DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -541,6 +541,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * its EFFECT via the create-time resolver, never the setting itself).
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * The connector this lake still waits on (see IDataLake.pendingConnector). EDITOR-ONLY, same gate
+   * as the fields above: only a manager can finish the connect it names. Absent when the caller
+   * can't manage the lake, the lake was never created for a connector, or a connection has bound.
+   */
+  pendingConnector?: DataLakePendingConnector;
   /**
    * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
    * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present

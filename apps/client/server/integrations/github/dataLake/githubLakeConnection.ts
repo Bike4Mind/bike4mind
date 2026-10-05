@@ -9,6 +9,11 @@ import {
   acceptsConnectorContent,
   isGitHubDisconnectStalled,
   isLakeIngestable,
+  requireEnv,
+  type GitHubLakeInstallationChoice,
+  type GitHubLakeInstallationPolicyViolation,
+  type GitHubLakeRepositoryChoice,
+  type GitHubLakeRepositoryChoicesResponse,
   type IDataLakeDocument,
   type IOrgGitHubLakeConnectionDocument,
   type IOrgGitHubLakeConnectionResponse,
@@ -31,23 +36,27 @@ import {
   ForbiddenError,
   InternalServerError,
   NotFoundError,
-  UnauthorizedError,
 } from '@server/utils/errors';
 import { Resource } from 'sst';
+import {
+  consumeGitHubLakeAuthGrant,
+  GRANT_EXPIRED_MESSAGE,
+  readGitHubLakeUserToken,
+  requireGitHubLakeFlowNonce,
+  storeGitHubLakeAuthGrant,
+} from './githubLakeAuthGrant';
 import {
   deleteInstallation,
   exchangeInstallerCode,
   getGitHubLakeAppConfig,
   getInstallation,
+  gitHubErrorStatus,
   listInstallerVisibleRepositories,
-  revokeInstallerToken,
+  listUserInstallations,
   type GitHubLakeAppConfig,
+  type GitHubLakeUserInstallation,
 } from './lakeAppClient';
-import {
-  findInstallationPolicyViolation,
-  pickRepositoryToBind,
-  type InstallationPolicyViolation,
-} from './lakeAppPolicy';
+import { findInstallationPolicyViolation } from './lakeAppPolicy';
 
 export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state', expiresIn: '10m' } as const;
 
@@ -61,13 +70,16 @@ type GitHubLakeStatePayload = BaseStatePayload & { userId: string; dataLakeId: s
 
 type LakeUser = { id: string; isAdmin: boolean };
 
-const POLICY_MESSAGES: Record<InstallationPolicyViolation, string> = {
+/** Where GitHub returns the browser; must match the client's GITHUB_LAKE_CALLBACK_PATH and a Callback URL registered on the App. */
+const GITHUB_LAKE_CALLBACK_PATH = '/data-lakes/github/callback';
+
+const POLICY_MESSAGES: Record<GitHubLakeInstallationPolicyViolation, string> = {
   all_repositories:
-    'The GitHub App was installed on all repositories. Change it to "Only select repositories" and pick the one to connect.',
+    'The GitHub App is installed on all repositories. Change it to "Only select repositories" in the installation settings, then refresh.',
   excess_permissions:
-    'The GitHub App installation grants more than read-only repository contents. Review and reduce its permissions on GitHub, then connect again.',
+    'The GitHub App installation grants more than read-only repository contents. Reduce its permissions in the installation settings, then refresh.',
   missing_contents_read:
-    'The GitHub App installation cannot read repository contents. Accept its requested permissions on GitHub, then connect again.',
+    'The GitHub App installation cannot read repository contents. Accept its requested permissions in the installation settings, then refresh.',
 };
 
 /** Model defaults (enabled true, status 'connected') are applied here too, for rows that predate them. */
@@ -103,8 +115,8 @@ export function requireGitHubLakeAppConfig(config: GitHubLakeAppConfig | null): 
 
 /**
  * The org lake a user may bind a repository to right now, or a thrown HTTP error saying why not.
- * Runs at install start AND again at completion: the install round-trip can take minutes, during
- * which the lake can be archived, re-originated, or connected by someone else.
+ * Runs at every step of the connect (start, authorize return, picker, completion): the flow can take
+ * minutes, during which the lake can be archived, re-originated, or connected by someone else.
  */
 export async function resolveConnectableLake(user: LakeUser, dataLakeId: string) {
   const lake = await dataLakeRepository.findById(dataLakeId);
@@ -131,111 +143,256 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
   return { lakeId: lake.id, organizationId: lake.organizationId };
 }
 
-export type GitHubLakeConnectUrls = { installUrl: string; authorizeUrl: string };
-
 /**
- * The two GitHub URLs a lake connect can need, sharing one signed `state` (user + lake) and one
- * per-flow browser-binding nonce cookie set on `res`.
- *
- * installUrl picks the repository. On a fresh install GitHub returns `installation_id` AND `code`
- * (the App requests user authorization on install). When the App is already installed on the
- * account - the second lake fed from the same GitHub org - GitHub shows the existing installation's
- * configure page and returns `installation_id` with no `code`; the callback page then sends the
- * browser through authorizeUrl (silent for a user who already authorized the App) to get the `code`
- * that proves who is completing it, and relays both to POST /api/data-lakes/github-callback.
+ * Starts a lake connect: the App's OAuth authorize URL, carrying a signed `state` (user + lake) and
+ * setting the flow's browser-binding nonce cookie on `res`. Authorize comes first because any GitHub
+ * user can approve it, where only an account owner can submit the install page; the user then picks
+ * the repository in the app (listGitHubLakeRepositoryChoices). `redirect_uri` returns the browser to
+ * this deployment, which only works when its callback URL is registered on the App.
  */
-export function buildGitHubLakeConnectUrls(
+export function buildGitHubLakeAuthorizeUrl(
   res: Response,
   config: GitHubLakeAppConfig,
   params: { userId: string; dataLakeId: string }
-): GitHubLakeConnectUrls {
+): string {
   const nonceHash = issueStateNonce(res, NONCE_SLOT.githubLakeConnect);
-  const state = createStateToken(GITHUB_LAKE_STATE_OPTIONS, params, nonceHash);
-  const installQuery = new URLSearchParams({ state });
-  const authorizeQuery = new URLSearchParams({ client_id: config.clientId, state, allow_signup: 'false' });
-  return {
-    installUrl: `https://github.com/apps/${encodeURIComponent(config.slug)}/installations/new?${installQuery.toString()}`,
-    authorizeUrl: `https://github.com/login/oauth/authorize?${authorizeQuery.toString()}`,
-  };
+  const query = new URLSearchParams({
+    client_id: config.clientId,
+    state: createStateToken(GITHUB_LAKE_STATE_OPTIONS, params, nonceHash),
+    redirect_uri: `${requireEnv('APP_URL', process.env.APP_URL)}${GITHUB_LAKE_CALLBACK_PATH}`,
+    allow_signup: 'false',
+  });
+  return `https://github.com/login/oauth/authorize?${query.toString()}`;
 }
 
-/** The lake id signed into `state`, once the token, its browser binding and its user all check out. */
+/**
+ * The install fallback, signed into the same flow (nonce) so its return completes like an authorize.
+ * The install page takes no return URL: GitHub sends it to the App's FIRST callback URL.
+ *
+ * With `targetAccountId` it is the "add repositories" link for that account's existing installation:
+ * GitHub's targeted install page sends an account owner to that installation's repository access and
+ * lets any other org member request the change, which GitHub forwards to every owner (returning
+ * `setup_action=request`). The installation's settingsUrl, by contrast, 404s for a non-owner.
+ */
+function buildGitHubLakeInstallUrl(
+  config: GitHubLakeAppConfig,
+  nonceHash: string,
+  params: { userId: string; dataLakeId: string },
+  targetAccountId?: number
+): string {
+  const query = new URLSearchParams({ state: createStateToken(GITHUB_LAKE_STATE_OPTIONS, params, nonceHash) });
+  const base = `https://github.com/apps/${encodeURIComponent(config.slug)}/installations/new`;
+  if (targetAccountId === undefined) return `${base}?${query.toString()}`;
+  query.set('target_id', String(targetAccountId));
+  return `${base}/permissions?${query.toString()}`;
+}
+
+/**
+ * The lake id signed into `state`, once the token, its browser binding and its user all check out.
+ * 403, not 401: the client answers a 401 with a session refresh and, failing that, a sign-out.
+ */
 export function verifyGitHubLakeState(state: string, nonceHash: string | null, userId: string): string {
   const result = verifyStateToken<GitHubLakeStatePayload>(state, GITHUB_LAKE_STATE_OPTIONS, nonceHash);
   if (!result.valid) {
-    throw new UnauthorizedError(result.message);
+    throw new ForbiddenError(result.message);
   }
   // The completion must be authed as the user who started the flow, not whoever holds the session now.
   if (result.payload.userId !== userId || typeof result.payload.dataLakeId !== 'string') {
-    throw new UnauthorizedError('Invalid authorization state.');
+    throw new ForbiddenError('Invalid authorization state.');
   }
   return result.payload.dataLakeId;
 }
 
-/** The installation's repositories the installer can see; the user token is revoked either way. */
-async function listReposVisibleToInstaller(config: GitHubLakeAppConfig, code: string, installationId: number) {
+/**
+ * The authorize callback (and the install fallback's return): exchanges GitHub's `code` for the
+ * user's token and holds it server-side for the repository pick. Returns the lake signed into
+ * `state`, so the client can reopen it. Nothing is bound yet.
+ */
+export async function authorizeGitHubLakeConnection(params: {
+  config: GitHubLakeAppConfig;
+  user: LakeUser;
+  state: string;
+  code: string;
+  nonceHash: string | null;
+}): Promise<{ dataLakeId: string }> {
+  const { config, user, state, code } = params;
+  const dataLakeId = verifyGitHubLakeState(state, params.nonceHash, user.id);
+  const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
+  // Before the exchange, so a lake that cannot take a connection fails without minting a token.
+  const { lakeId } = await resolveConnectableLake(user, dataLakeId);
+
   let userToken: string;
   try {
     userToken = await exchangeInstallerCode(config, code);
   } catch (error) {
     // serializeError, never the raw error: octokit's HttpError carries the request body, which holds
     // the App's client_secret and the OAuth code.
-    Logger.warn('GitHub lake install: authorization code exchange failed', { error: serializeError(error) });
-    throw new BadRequestError('The GitHub authorization expired or was already used. Connect the repository again.');
+    Logger.warn('GitHub lake connect: authorization code exchange failed', { error: serializeError(error) });
+    throw new BadRequestError('The GitHub authorization expired or was already used. Connect GitHub again.');
   }
+  await storeGitHubLakeAuthGrant(config, { nonceHash, userId: user.id, dataLakeId: lakeId, userToken });
+  return { dataLakeId: lakeId };
+}
+
+/**
+ * Runs a GitHub call made with the flow's held user token. A 401 means that token is dead - the user
+ * revoked the App's authorization at github.com/settings/applications, or a later authorize in the
+ * same flow superseded it - so it is reported as 403, never let through as-is: errorHandler copies a
+ * numeric error.status onto the response, and the client's session interceptor treats a 401 as a dead
+ * session, signing the user out. The now-useless grant is best-effort released alongside it.
+ */
+async function withGitHubLakeUserToken<T>(
+  config: GitHubLakeAppConfig,
+  nonceHash: string,
+  fn: () => Promise<T>
+): Promise<T> {
   try {
-    return await listInstallerVisibleRepositories(userToken, installationId);
-  } finally {
-    await revokeInstallerToken(config, userToken).catch((error: unknown) => {
-      // Not fatal: the token was minted for this check alone and expires on its own (8h).
-      Logger.warn('GitHub lake install: could not revoke the verification user token', {
-        error: serializeError(error),
-      });
-    });
+    return await fn();
+  } catch (error) {
+    if (gitHubErrorStatus(error) !== 401) throw error;
+    await consumeGitHubLakeAuthGrant(config, nonceHash).catch((consumeError: unknown) =>
+      Logger.warn('GitHub lake connect: could not consume the grant for a revoked token', {
+        error: serializeError(consumeError),
+      })
+    );
+    throw new ForbiddenError(GRANT_EXPIRED_MESSAGE);
   }
 }
 
 /**
- * Binds the repository chosen during the App install to the lake signed into the flow's state.
- *
- * `installationId` and `code` arrive from the browser, so neither is trusted: the code proves which
- * GitHub user completed the install, and only an installation that user can see is accepted. The
- * live installation must be selected-repositories and read-only, and exactly one of its visible
- * repositories must still be unbound.
+ * What the repository picker offers: every installation of the App the user's token can see, its
+ * visible repositories annotated with any lake already bound to them, and the install fallback.
+ * An installation that breaks the App policy is listed with the reason instead of its repositories.
+ */
+export async function listGitHubLakeRepositoryChoices(params: {
+  config: GitHubLakeAppConfig;
+  user: LakeUser;
+  dataLakeId: string;
+  nonceHash: string | null;
+}): Promise<GitHubLakeRepositoryChoicesResponse> {
+  const { config, user } = params;
+  const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
+  const { lakeId, organizationId } = await resolveConnectableLake(user, params.dataLakeId);
+  const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
+
+  const installations = await withGitHubLakeUserToken(config, nonceHash, () => listUserInstallations(userToken));
+  const stateParams = { userId: user.id, dataLakeId: lakeId };
+  const installUrl = buildGitHubLakeInstallUrl(config, nonceHash, stateParams);
+  const choices = await Promise.all(
+    installations.map(installation =>
+      toInstallationChoice(config, nonceHash, userToken, installation, organizationId, {
+        // Without an account id there is nothing to target; the plain install page still lets the
+        // user pick the account there.
+        addRepositoriesUrl:
+          installation.accountId === null
+            ? installUrl
+            : buildGitHubLakeInstallUrl(config, nonceHash, stateParams, installation.accountId),
+      })
+    )
+  );
+  return { installations: choices, installUrl };
+}
+
+async function toInstallationChoice(
+  config: GitHubLakeAppConfig,
+  nonceHash: string,
+  userToken: string,
+  installation: GitHubLakeUserInstallation,
+  organizationId: string,
+  links: { addRepositoriesUrl: string }
+): Promise<GitHubLakeInstallationChoice> {
+  const { id, accountLogin, accountType, settingsUrl } = installation;
+  const { addRepositoriesUrl } = links;
+  const violation = findInstallationPolicyViolation(installation);
+  if (violation) {
+    return {
+      id,
+      accountLogin,
+      accountType,
+      settingsUrl,
+      addRepositoriesUrl,
+      violation: { code: violation, message: POLICY_MESSAGES[violation] },
+      repositories: [],
+    };
+  }
+  // Null only if the installation vanished between the two calls; it then offers nothing.
+  const repositories =
+    (await withGitHubLakeUserToken(config, nonceHash, () => listInstallerVisibleRepositories(userToken, id))) ?? [];
+  const boundTo = await resolveRepositoryBindings(
+    repositories.map(repo => repo.id),
+    organizationId
+  );
+  return {
+    id,
+    accountLogin,
+    accountType,
+    settingsUrl,
+    addRepositoriesUrl,
+    violation: null,
+    repositories: repositories.map((repo): GitHubLakeRepositoryChoice => ({
+      ...repo,
+      boundTo: boundTo.get(repo.id) ?? null,
+    })),
+  };
+}
+
+/**
+ * The lake each already-bound repository feeds, named only when that lake is in the caller's org:
+ * the binding is global (a repository feeds one lake platform-wide), its lake's name is not.
+ */
+async function resolveRepositoryBindings(
+  repositoryIds: number[],
+  organizationId: string
+): Promise<Map<number, NonNullable<GitHubLakeRepositoryChoice['boundTo']>>> {
+  const bindings = await orgGitHubLakeConnectionRepository.findByRepositoryIds(repositoryIds);
+  const sameOrgLakeIds = [
+    ...new Set(bindings.filter(b => b.organizationId === organizationId).map(b => b.targetDataLakeId)),
+  ];
+  const lakes = await Promise.all(sameOrgLakeIds.map(lakeId => dataLakeRepository.findById(lakeId)));
+  const lakeNames = new Map(lakes.flatMap(lake => (lake ? [[lake.id, lake.name] as const] : [])));
+  return new Map(
+    bindings.map(binding => [
+      binding.repositoryId,
+      {
+        dataLakeName:
+          binding.organizationId === organizationId ? (lakeNames.get(binding.targetDataLakeId) ?? null) : null,
+      },
+    ])
+  );
+}
+
+/**
+ * Binds the repository the user picked to the lake. `installationId` and `repositoryId` come from
+ * the browser, so neither is trusted: the repository must be one the flow's user token can see
+ * through that installation, which is the ownership proof. The live installation must also be
+ * selected-repositories and read-only. On success the flow's grant is consumed and its token revoked.
  */
 export async function completeGitHubLakeConnection(params: {
   config: GitHubLakeAppConfig;
   user: LakeUser;
   dataLakeId: string;
+  nonceHash: string | null;
   installationId: number;
-  code: string;
+  repositoryId: number;
   logger: Pick<Logger, 'warn'>;
 }): Promise<IOrgGitHubLakeConnectionDocument> {
-  const { config, user, dataLakeId, installationId, code, logger } = params;
-  const { lakeId, organizationId } = await resolveConnectableLake(user, dataLakeId);
+  const { config, user, installationId, repositoryId, logger } = params;
+  const nonceHash = requireGitHubLakeFlowNonce(params.nonceHash);
+  const { lakeId, organizationId } = await resolveConnectableLake(user, params.dataLakeId);
+  const userToken = await readGitHubLakeUserToken(nonceHash, user, lakeId);
 
-  const visibleRepositories = await listReposVisibleToInstaller(config, code, installationId);
-  if (!visibleRepositories) {
-    throw new ForbiddenError('You do not have access to that GitHub App installation.');
+  const visibleRepositories = await withGitHubLakeUserToken(config, nonceHash, () =>
+    listInstallerVisibleRepositories(userToken, installationId)
+  );
+  const repository = visibleRepositories?.find(repo => repo.id === repositoryId);
+  if (!repository) {
+    throw new ForbiddenError('Your GitHub account cannot access that repository through the data-lake GitHub App.');
   }
 
   const installation = await getInstallation(config, installationId);
   const violation = findInstallationPolicyViolation(installation);
   if (violation) {
     throw new BadRequestError(POLICY_MESSAGES[violation]);
-  }
-
-  const bound = await orgGitHubLakeConnectionRepository.findByInstallationId(installationId);
-  const pick = pickRepositoryToBind(visibleRepositories, new Set(bound.map(conn => conn.repositoryId)));
-  if (pick.kind === 'none_unbound') {
-    throw new BadRequestError(
-      'Every repository this GitHub App installation can read is already connected to a data lake. Add the repository to connect under the installation\'s "Only select repositories" on GitHub.'
-    );
-  }
-  if (pick.kind === 'ambiguous') {
-    throw new BadRequestError(
-      `The GitHub App installation can read ${pick.unboundCount} repositories that are not connected yet. Leave only the one to connect selected on GitHub, then connect again.`
-    );
   }
 
   let connection: IOrgGitHubLakeConnectionDocument;
@@ -245,21 +402,47 @@ export async function completeGitHubLakeConnection(params: {
       targetDataLakeId: lakeId,
       installationId,
       accountLogin: installation.accountLogin,
-      repositoryId: pick.repository.id,
-      repositoryFullName: pick.repository.fullName,
+      repositoryId: repository.id,
+      repositoryFullName: repository.fullName,
       connectedBy: user.id,
       connectedAt: new Date(),
     });
   } catch (error) {
-    // Unique repositoryId / targetDataLakeId: a concurrent connect won the claim after our checks.
+    // Unique repositoryId / targetDataLakeId: the repository already feeds a lake, or a concurrent
+    // connect won the claim after our checks.
     if (isDuplicateKeyError(error)) {
-      throw new ConflictError('That repository or data lake was just connected by another request');
+      throw new ConflictError('That repository or data lake is already connected. Refresh and pick another.');
     }
     throw error;
   }
 
-  // Best-effort: the binding is valid without it and a manual re-sync runs the same ingest. Inside the try
-  // because an unregistered Resource key throws on the property read, before sendToQueue is called.
+  // The binding stands without it: a stale intent only feeds the finish-connect banner, which also
+  // hides once a connection exists.
+  await dataLakeRepository.clearPendingConnector(lakeId).catch((error: unknown) =>
+    logger.warn('GitHub lake connect: could not clear the pending connector', {
+      connectionId: connection.id,
+      error: serializeError(error),
+    })
+  );
+  // The binding stands without it: an unconsumed grant expires on its own TTL.
+  await consumeGitHubLakeAuthGrant(config, nonceHash).catch((error: unknown) =>
+    logger.warn('GitHub lake connect: could not consume the authorization grant', {
+      connectionId: connection.id,
+      error: serializeError(error),
+    })
+  );
+  await queueFirstIngest(connection, logger);
+  return connection;
+}
+
+/**
+ * Best-effort: the binding is valid without it and a manual re-sync runs the same ingest. Inside the
+ * try because an unregistered Resource key throws on the property read, before sendToQueue is called.
+ */
+async function queueFirstIngest(
+  connection: IOrgGitHubLakeConnectionDocument,
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
   try {
     await sendToQueue(Resource.githubLakeIngestQueue.url, { connectionId: connection.id });
   } catch (error) {
@@ -276,7 +459,6 @@ export async function completeGitHubLakeConnection(params: {
         })
       );
   }
-  return connection;
 }
 
 /**

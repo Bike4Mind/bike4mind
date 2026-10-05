@@ -29,6 +29,9 @@ export interface ChatWaitResponse {
   id: string;
   status: string;
   model?: string;
+  // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
+  // caller sending `newConversation: true`) gets a freshly created notebook's id here.
+  sessionId?: string;
   // The wait path returns the reply in `responses`; the scalar `response` is null.
   response?: string | null;
   responses?: string[];
@@ -182,7 +185,10 @@ export class B4mApiClient {
     systemPrompt?: string;
   }): Promise<ChatWaitResponse> {
     return this.client.post<ChatWaitResponse>('/api/chat', {
-      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      // No notebookId means "start a fresh conversation": without newConversation a JWT caller
+      // would post into the user's last-opened notebook (the very context bleed this endpoint was
+      // fixed to remove for API keys). The new notebook's id comes back in the response.
+      ...(args.notebookId ? { sessionId: args.notebookId } : { newConversation: true }),
       message: args.message,
       ...(args.model ? { model: args.model } : {}),
       ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CreditBalanceSchema } from './creditBalance';
 
 /**
  * Public wire schema for `GET /api/v1/me` - the caller's own identity and
@@ -49,14 +50,7 @@ export const MeResponseSchema = z.object({
   name: z.string(),
   tier: z.enum(ME_TIERS),
   subscription: MeSubscriptionSchema.nullable(),
-  credits: z.object({
-    /**
-     * Spendable credits on the caller's PERSONAL ledger. Organization pools are not
-     * included - a call billed to an organization draws on a balance this number
-     * does not describe.
-     */
-    balance: z.number(),
-  }),
+  credits: CreditBalanceSchema,
   /** Entitlement keys the caller currently holds, e.g. `base`. */
   entitlements: z.array(z.string()),
 });

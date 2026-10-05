@@ -41,7 +41,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     })
   )
   .post(async (req: Request<unknown, unknown, LLMApiRequestBody>, res) => {
-    const { sessionId: reqSessionId, sessionName, ...invokeParams } = req.body;
+    const { sessionId: reqSessionId, sessionName, agentIds, ...invokeParams } = req.body;
 
     // This route spreads req.body straight into the invoke params rather than parsing it here, but
     // it is not unvalidated: the ChatCompletionInvokeParamsSchema.parse that opens invoke() caps
@@ -69,11 +69,21 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       });
     }
 
+    // Agent ids the composer wants stamped on a session this request creates. Validated here so a
+    // malformed value is rejected before getOrCreateSession writes a session, and destructured out
+    // of invokeParams above so a session-creation field never rides into the completion body.
+    if (agentIds !== undefined && !isStringArray(agentIds)) {
+      throw new UnprocessableEntityError('agentIds must be an array of strings.', {
+        code: 'AGENT_IDS_INVALID',
+      });
+    }
+
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
       sessionId: req.body.sessionId,
       sessionName: req.body.sessionName,
       projectId: req.body.projectId,
       fabFileIds: req.body.fabFileIds ?? [],
+      agentIds,
       user: req.user,
       ability: req.ability,
       logger: req.logger,

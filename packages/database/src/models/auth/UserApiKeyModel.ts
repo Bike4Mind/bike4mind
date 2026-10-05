@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
+  ApiKeyCapPool,
   ApiKeyStatus,
   ApiKeyScope,
   CreditHolderType,
@@ -136,13 +137,15 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  async countActiveByUserId(userId: string): Promise<number> {
+  async countActiveByUserId(userId: string, pool: ApiKeyCapPool = 'standard'): Promise<number> {
     // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
     // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
+    // `$ne` (not `$nin` on a list) so a legacy row with no metadata stays in the standard pool.
     return this.model.countDocuments({
       userId,
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
     });
   }
 

@@ -4,7 +4,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
-  buildGitHubLakeConnectUrls,
+  buildGitHubLakeAuthorizeUrl,
   requestGitHubLakeDisconnect,
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
@@ -29,9 +29,10 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
 
 /**
  * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null }
- * POST   /api/data-lakes/:id/github-connection -> { installUrl, authorizeUrl } (starts the connect; see
- *        buildGitHubLakeConnectUrls for when the callback page needs authorizeUrl. The page then
- *        completes the flow via POST /api/data-lakes/github-callback)
+ * POST   /api/data-lakes/:id/github-connection -> { authorizeUrl } (starts the connect, see
+ *        buildGitHubLakeAuthorizeUrl. The callback page relays GitHub's return to POST
+ *        /api/data-lakes/github-callback; the picker then lists .../repositories and binds via
+ *        .../complete)
  * DELETE /api/data-lakes/:id/github-connection -> 202 { success, queued } (disables the connection
  *        and queues the purge of what it ingested, 409 while a sync is live; the row stays, reading
  *        `disconnecting`, until the purge releases it - see requestGitHubLakeDisconnect), or 204
@@ -67,7 +68,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query as { id: string };
     const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
     const { lakeId } = await resolveConnectableLake(req.user, id);
-    return res.json(buildGitHubLakeConnectUrls(res, config, { userId: req.user.id, dataLakeId: lakeId }));
+    return res.json({
+      authorizeUrl: buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lakeId }),
+    });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);

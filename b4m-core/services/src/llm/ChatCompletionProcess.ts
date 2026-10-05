@@ -1914,6 +1914,10 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
+    let clearStaleFallbackInfoIfNoAnswer = () => {
+      quest.fallbackInfo = null;
+    };
 
     try {
       const abilityStartTime = Date.now();
@@ -4436,6 +4440,8 @@ export class ChatCompletionProcess {
       // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
       // so no hop re-selects a model that just failed.
       const triedModelIds = new Set<string>([modelInfo.id]);
+      // Why the REQUESTED model failed; later hops fail for their own reasons, which would misattribute.
+      let primaryFailureReason: string | undefined;
       let overloadRetryCount = 0;
       let overloadRetriesExhausted = false;
       let toolPairingRetried = false;
@@ -4457,6 +4463,30 @@ export class ChatCompletionProcess {
           .map(slot => visibleReplyText(slot))
           .join('')
           .trim().length;
+
+      const producedNonTextDeliverable = () =>
+        (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+        (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart);
+
+      // Re-snapshotted at each fallback hop: a deliverable the failed primary produced must not
+      // count as the fallback's answer.
+      let imageCountAtFallbackHop = imageCountAtTurnStart;
+      let pendingActionAtFallbackHop = pendingActionAtTurnStart;
+      const producedDeliverableSinceFallbackHop = () =>
+        (quest.images?.length ?? 0) > imageCountAtFallbackHop ||
+        (quest.pendingAction != null && quest.pendingAction !== pendingActionAtFallbackHop);
+
+      // A fallback hop can be selected (fallbackInfo set) and then end with nothing to show
+      // for it: the user stops it before it streams (an aborted backend resolves rather than
+      // throws, so this reaches the success path with status 'stopped'), or it runs to a
+      // 'done' status with only hidden output (unterminated <think>, or max_tokens cut before
+      // any prose). Gate on the absence of an answer, not on status, so a turn that answered
+      // nothing never reports "answered by <fallback>".
+      clearStaleFallbackInfoIfNoAnswer = () => {
+        if (countVisibleChars(quest.replies) === 0 && !producedDeliverableSinceFallbackHop()) {
+          quest.fallbackInfo = null;
+        }
+      };
 
       // Rapid reply handoff: initialize handoff variables outside streaming callback
       let handOff = false;
@@ -4933,6 +4963,7 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
 
@@ -4952,6 +4983,7 @@ export class ChatCompletionProcess {
                 // an Ollama pull on a self-hosted one.
                 primaryModelBackend: modelInfo.backend,
                 fallbackModelBackend: currentModel.backend,
+                reason: primaryFailureReason,
                 timestamp: Date.now(),
               };
 
@@ -4978,6 +5010,8 @@ export class ChatCompletionProcess {
 
               // Clear previous replies for retry
               resetStreamStateForRetry();
+              imageCountAtFallbackHop = quest.images?.length ?? 0;
+              pendingActionAtFallbackHop = quest.pendingAction;
               // Continue the loop with the new model
               continue;
             } catch (fallbackError) {
@@ -5001,6 +5035,7 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
         // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
         const replyChoicesOutcome = applyReplyChoices(quest);
         // The system-prompt budget can evict the guidance after it was requested (lowest priority in
@@ -5029,9 +5064,7 @@ export class ChatCompletionProcess {
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
-          producedNonTextDeliverable:
-            (quest.images?.length ?? 0) > imageCountAtTurnStart ||
-            (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart),
+          producedNonTextDeliverable: producedNonTextDeliverable(),
         });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
@@ -5804,6 +5837,7 @@ export class ChatCompletionProcess {
         }
 
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
@@ -6059,6 +6093,7 @@ export class ChatCompletionProcess {
         }
 
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
 
@@ -6164,6 +6199,7 @@ export class ChatCompletionProcess {
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
@@ -6215,6 +6251,8 @@ export class ChatCompletionProcess {
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
         quest.status = 'stopped';
+        // Same rule as the success path, so an abort that rejects and one that resolves persist alike.
+        clearStaleFallbackInfoIfNoAnswer();
         finalQuest = await saveQuest(quest);
         return;
       }
@@ -6232,6 +6270,8 @@ export class ChatCompletionProcess {
       setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
+      // A turn can switch models and still fail; no model answered it, so it must not claim one did.
+      quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.

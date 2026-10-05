@@ -418,8 +418,10 @@ export default function ManagerNav({
                             <ListItemButton
                               onClick={() => selectLake(lake)}
                               data-testid={`datalake-manager-lake-${lake.id}`}
-                              // pr aligns the count chip with the section headers' chevrons.
-                              sx={{ ...treeRowSx(hoverBg), pr: '12px' }}
+                              // pr aligns the count chip with the section headers' chevrons. The
+                              // chips are flexShrink: 0, so they wrap onto a second line instead of
+                              // squeezing the name down to a few characters.
+                              sx={{ ...treeRowSx(hoverBg), pr: '12px', flexWrap: 'wrap', rowGap: '2px', py: '2px' }}
                             >
                               <FolderOutlinedIcon
                                 sx={{
@@ -428,10 +430,20 @@ export default function ManagerNav({
                                   flexShrink: 0,
                                 }}
                               />
-                              <ListItemContent>
-                                <Typography noWrap sx={rowTypographySx}>
-                                  {lake.name}
-                                </Typography>
+                              <ListItemContent
+                                // 24px = the 16px folder icon + the 8px treeRowSx gap; keep in sync with both, or a
+                                // long name fills the line and wraps the icon above it.
+                                sx={{ flex: '1 1 auto', maxWidth: 'calc(100% - 24px)' }}
+                              >
+                                <Tooltip title={lake.name} size="sm" placement="top-start">
+                                  <Typography
+                                    noWrap
+                                    sx={rowTypographySx}
+                                    data-testid={`datalake-manager-lake-name-${lake.id}`}
+                                  >
+                                    {lake.name}
+                                  </Typography>
+                                </Tooltip>
                               </ListItemContent>
                               {isDraftLake(lake) && <LakeDraftChip testId={`datalake-manager-draft-chip-${lake.id}`} />}
                               {/* Owner marker in the LIST itself, not just the detail pane: the

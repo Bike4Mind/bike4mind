@@ -92,6 +92,16 @@ describe('B4mApiClient', () => {
     });
   });
 
+  it('starts a new conversation when no notebookId is supplied', async () => {
+    mockPost.mockResolvedValue({ id: 'q1', status: 'complete', sessionId: 'fresh-nb' });
+    await client.sendChat({ message: 'hi' });
+    expect(mockPost).toHaveBeenCalledWith('/api/chat', {
+      newConversation: true,
+      message: 'hi',
+      wait: true,
+    });
+  });
+
   it('forwards a supplied systemPrompt in the chat body', async () => {
     mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi', systemPrompt: 'Reply only in haiku.' });
@@ -102,7 +112,6 @@ describe('B4mApiClient', () => {
       wait: true,
     });
   });
-
   it('omits systemPrompt entirely from the body when not supplied', async () => {
     mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi' });

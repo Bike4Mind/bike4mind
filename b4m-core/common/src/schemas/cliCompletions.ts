@@ -2,6 +2,17 @@ import { z } from 'zod';
 // Specific file, not the `../types` barrel - this module is imported by
 // completions.contract.ts, which must stay off the barrel (see the note there).
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import type { ReasoningEffort } from '../types/common';
+
+const REASONING_EFFORT_VALUES = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+] as const satisfies readonly ReasoningEffort[];
+export const CompletionReasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
 
 /**
  * Tool schema matching ICompletionOptionTools.toolSchema. The Zod surface only
@@ -88,6 +99,7 @@ export const CompletionRequestSchema = z.object({
       stream: z.boolean().optional(),
       tools: z.array(CompletionToolSchema).optional(),
       response_format: ResponseFormatSchema.optional(),
+      reasoningEffort: CompletionReasoningEffortSchema.optional(),
     })
     .optional(),
 });
