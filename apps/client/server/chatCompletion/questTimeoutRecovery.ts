@@ -129,7 +129,15 @@ export function terminalRecoveryFor(quest: QuestContentView, run: DeadRunKind): 
   // fallbackInfo is cleared with the error: no model answered a turn that settles with nothing to show.
   if (!hasRenderableContent(quest)) return { status: 'done', type: 'error', reply: run.emptyReply, fallbackInfo: null };
   const deliveredMedia = Boolean(quest.images?.length || quest.videos?.length);
-  return { status: 'done', finishReason: run.finishReason, ...(deliveredMedia ? {} : withUnfinishedNotice(quest)) };
+  // Persisted rows cannot say whether surviving media came from the fallback hop or the failed primary,
+  // so without visible text the fallback claim is dropped rather than risk a false "answered by".
+  const hasVisibleText = Boolean(visibleReplyText(quest.reply) || quest.replies?.some(r => visibleReplyText(r)));
+  return {
+    status: 'done',
+    finishReason: run.finishReason,
+    ...(hasVisibleText ? {} : { fallbackInfo: null }),
+    ...(deliveredMedia ? {} : withUnfinishedNotice(quest)),
+  };
 }
 
 /**

@@ -47,6 +47,11 @@ describe('resolveQuestTimeoutRecovery', () => {
     expect(recovery).toEqual({ status: 'done', finishReason: 'timeout' });
   });
 
+  it('drops fallbackInfo when only media survived, since the failed primary may have produced it', () => {
+    const recovery = resolveQuestTimeoutRecovery(quest({ replies: [], images: ['primary.png'] }), NOW);
+    expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });
+  });
+
   // #3356: a run hard-killed mid tool call used to settle as a clean `done` / `message`, so a
   // polling caller could not tell the partial preamble from a finished answer.
   it('keeps partial reply slots, appends the unfinished notice, and stamps finishReason', () => {
@@ -74,6 +79,7 @@ describe('resolveQuestTimeoutRecovery', () => {
   it('marks tool-only content unfinished without discarding it', () => {
     expect(resolveQuestTimeoutRecovery(quest({ toolResults: [{ content: 'rows' }] as never }), NOW)).toEqual({
       status: 'done',
+      finishReason: 'timeout',
       finishReason: 'timeout',
       reply: `\n\n${UNFINISHED_REPLY_NOTICE}`,
     });
