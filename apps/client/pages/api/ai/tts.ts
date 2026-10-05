@@ -16,6 +16,8 @@ import {
   InsufficientTtsCreditsError,
 } from '@server/utils/deductTtsCredits';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { offloadTtsAudio } from '@server/utils/offloadTtsAudio';
+import type { Logger } from '@bike4mind/observability';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -23,7 +25,9 @@ import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
  * Body: { text, provider?, model?, voice?, format?, encoding?, stability?, similarityBoost?, languageCode? }
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
  * - encoding 'binary' (default) streams raw audio bytes with an audio/* Content-Type;
- *   'base64' returns JSON { audio, format, contentType }.
+ *   'base64' returns JSON { delivery: 'inline', audio, format, contentType }.
+ * - audio over the response ceiling is served by URL: a 303 for 'binary', and
+ *   { delivery: 'url', url, bytes, ... } for 'base64'.
  * - when the chosen provider has no usable key or rejects our credentials, another
  *   configured provider stands in (see synthesizeTts) and the response reports the
  *   substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
@@ -152,19 +156,30 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     }
 
     // Serverless response-size guard: a buffered audio body over ~4MB exceeds the
-    // Lambda/API Gateway payload cap and would fail as an opaque CloudFront 502.
-    // If a browsable copy was saved, the caller can still retrieve the audio from
-    // its FabFile url instead of hitting a dead end (partially addresses #745).
+    // Lambda/API Gateway payload cap and would fail as an opaque CloudFront 502,
+    // so oversized audio is handed back by URL instead.
     if (exceedsTtsResponseLimit(result.audio.length)) {
-      return res.status(413).json({
-        error: TTS_RESPONSE_TOO_LARGE_MESSAGE,
-        provider: usedVendor,
-        ...(saveInfo?.saved ? { saved: true, fabFileId: saveInfo.fabFileId, fileUrl: saveInfo.fileUrl } : {}),
-      });
+      const url = await oversizedAudioUrl(result, saveInfo, req.logger);
+      if (!url) {
+        return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE, provider: usedVendor });
+      }
+      if (encoding === 'base64') {
+        return res.json({
+          delivery: 'url',
+          url,
+          bytes: result.audio.length,
+          format: result.format,
+          contentType: result.contentType,
+          ...(saveInfo ?? {}),
+          ...(providerInfo ?? {}),
+        });
+      }
+      return res.redirect(303, url);
     }
 
     if (encoding === 'base64') {
       return res.json({
+        delivery: 'inline',
         audio: result.audio.toString('base64'),
         format: result.format,
         contentType: result.contentType,
@@ -203,6 +218,25 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
   }
 });
+
+/**
+ * Where a caller can fetch audio too large to return inline: the saved copy's
+ * URL when there is one, else a transient offloaded object. Undefined only when
+ * the offload upload itself failed.
+ */
+async function oversizedAudioUrl(
+  audio: { audio: Buffer; contentType: string; format: string },
+  saveInfo: { saved: boolean; fileUrl?: string } | undefined,
+  logger: Logger
+): Promise<string | undefined> {
+  if (saveInfo?.saved && saveInfo.fileUrl) return saveInfo.fileUrl;
+  try {
+    return await offloadTtsAudio(audio);
+  } catch (error) {
+    logger.error('Failed to offload oversized TTS audio', { error, bytes: audio.audio.length });
+    return undefined;
+  }
+}
 
 /**
  * Folds a provider 4xx onto a status tts.contract.ts documents, so a generated

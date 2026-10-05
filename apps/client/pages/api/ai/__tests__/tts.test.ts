@@ -16,6 +16,7 @@ const { mocks, InsufficientTtsCreditsError, TtsProviderNotConfiguredError, Unpro
         deductTtsCredits: vi.fn(),
         exceedsTtsResponseLimit: vi.fn(),
         persistGeneratedAudio: vi.fn(),
+        offloadTtsAudio: vi.fn(),
       },
     };
   }
@@ -72,6 +73,10 @@ vi.mock('@server/utils/persistGeneratedAudio', () => ({
   persistGeneratedAudio: (...a: unknown[]) => mocks.persistGeneratedAudio(...a),
 }));
 
+vi.mock('@server/utils/offloadTtsAudio', () => ({
+  offloadTtsAudio: (...a: unknown[]) => mocks.offloadTtsAudio(...a),
+}));
+
 import handler from '../tts';
 
 const run = (
@@ -80,9 +85,11 @@ const run = (
 ) => {
   const { req, res } = createMocks({ method: 'POST', body });
   (req as Record<string, unknown>).user = user;
-  (req as Record<string, unknown>).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  (req as Record<string, unknown>).logger = logger;
   return {
     res,
+    logger,
     promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res),
   };
 };
@@ -144,13 +151,48 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.synthesizeTts).not.toHaveBeenCalled();
   });
 
-  it('bills for the synthesis before the size guard, then returns 413 when the audio is too large', async () => {
-    mocks.exceedsTtsResponseLimit.mockReturnValue(true);
-    const { res, promise } = run({ text: 'hi' });
-    await promise;
-    expect(res._getStatusCode()).toBe(413);
-    // Provider cost is already incurred, so we must still charge on an oversized result.
-    expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+  describe('audio over the response limit', () => {
+    beforeEach(() => {
+      mocks.exceedsTtsResponseLimit.mockReturnValue(true);
+    });
+
+    it('serves the saved copy by URL for base64, without offloading, and still bills once', async () => {
+      const { res, promise } = run({ text: 'hi', encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        delivery: 'url',
+        url: 'https://s3/get',
+        bytes: 3,
+        saved: true,
+        fabFileId: 'fab-1',
+      });
+      expect(mocks.offloadTtsAudio).not.toHaveBeenCalled();
+      // Provider cost is already incurred, so we must still charge on an oversized result.
+      expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+    });
+
+    it('offloads an unsaved binary response and redirects with a 303', async () => {
+      mocks.offloadTtsAudio.mockResolvedValue('https://s3/offload');
+      const { res, promise } = run({ text: 'hi', preview: true });
+      await promise;
+      expect(mocks.persistGeneratedAudio).not.toHaveBeenCalled();
+      expect(mocks.offloadTtsAudio).toHaveBeenCalledWith(
+        expect.objectContaining({ audio: Buffer.from([1, 2, 3]), contentType: 'audio/mpeg', format: 'mp3' })
+      );
+      expect(res._getStatusCode()).toBe(303);
+      expect(res._getRedirectUrl()).toBe('https://s3/offload');
+    });
+
+    it('returns a bare 413 and logs when the offload fails', async () => {
+      mocks.offloadTtsAudio.mockRejectedValue(new Error('s3 down'));
+      const { res, logger, promise } = run({ text: 'hi', preview: true, encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(413);
+      expect(res._getJSONData()).toEqual({ error: 'too large', provider: 'openai' });
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('passes an upstream 429 through with a generic body, without leaking provider text', async () => {
@@ -224,6 +266,7 @@ describe('POST /api/ai/tts', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({
+      delivery: 'inline',
       audio: Buffer.from([1, 2, 3]).toString('base64'),
       format: 'mp3',
       contentType: 'audio/mpeg',

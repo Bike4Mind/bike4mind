@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { VOICE_VENDOR_LABELS, type VoiceGenerationVendor } from '@bike4mind/common';
+import { VOICE_VENDOR_LABELS, type AudioSaveSkippedReason, type TtsBase64Response } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 
 export interface AudioGenerationResult {
-  /** Playable URL: a blob: URL for generated audio, or a presigned file URL for large saved audio. */
+  /** Playable URL: a blob: URL for inline audio, or a signed storage URL for audio too large to inline. */
   url: string;
   /** True when `url` is an object URL that must be revoked on cleanup. */
   isObjectUrl: boolean;
@@ -18,20 +18,7 @@ export interface AudioGenerationResult {
   contentType: string;
 }
 
-interface TtsBase64Response {
-  audio: string;
-  format: string;
-  contentType: string;
-  saved?: boolean;
-  fabFileId?: string;
-  fileUrl?: string;
-  saveSkippedReason?: 'storage_limit' | 'file_too_large' | 'error';
-  /** Present only when the selected provider was unusable and another stood in. */
-  provider?: VoiceGenerationVendor;
-  fallbackFrom?: VoiceGenerationVendor;
-}
-
-const SAVE_SKIPPED_MESSAGES: Record<NonNullable<TtsBase64Response['saveSkippedReason']>, string> = {
+const SAVE_SKIPPED_MESSAGES: Record<AudioSaveSkippedReason, string> = {
   storage_limit: 'Audio generated, but your storage is full so it was not saved to Files.',
   file_too_large: 'Audio generated, but it was too large to save to Files.',
   error: 'Audio generated, but saving to Files failed.',
@@ -48,9 +35,6 @@ interface ParsedError {
    */
   bodyMessage?: string;
   errorCode?: string;
-  saved?: boolean;
-  fabFileId?: string;
-  fileUrl?: string;
 }
 
 // Normalizes an axios failure into a status + message, transparently parsing a
@@ -74,9 +58,6 @@ async function parseError(error: unknown): Promise<ParsedError> {
     message?: string;
     errorCode?: string;
     additionalInfo?: { errorCode?: string };
-    saved?: boolean;
-    fabFileId?: string;
-    fileUrl?: string;
   };
 
   const bodyMessage = body.error || body.message || undefined;
@@ -86,9 +67,6 @@ async function parseError(error: unknown): Promise<ParsedError> {
     message: bodyMessage ?? getErrorMessage(error),
     bodyMessage,
     errorCode: body.additionalInfo?.errorCode ?? body.errorCode,
-    saved: body.saved,
-    fabFileId: body.fabFileId,
-    fileUrl: body.fileUrl,
   };
 }
 
@@ -153,20 +131,21 @@ export function useGenerateAudio() {
           );
 
           const data = response.data;
-          // Play from a blob: URL, not a data: URL: the app CSP allows
-          // `media-src blob:` but not `data:`, so a data: source renders in the
-          // <audio> element but is blocked from actually playing. Mirrors the
-          // sound-effects path, and objectUrlRef handles revocation.
-          const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
-          const url = URL.createObjectURL(new Blob([bytes], { type: data.contentType }));
-          objectUrlRef.current = url;
-          setResult({
-            url,
-            isObjectUrl: true,
-            saved: data.saved === true,
-            fabFileId: data.fabFileId,
-            contentType: data.contentType,
-          });
+          const outcome = { saved: data.saved === true, fabFileId: data.fabFileId, contentType: data.contentType };
+          if (data.delivery === 'url') {
+            // Too large to inline, so the server offloaded it to storage and
+            // handed back a signed URL to play from directly.
+            setResult({ url: data.url, isObjectUrl: false, ...outcome });
+          } else {
+            // Play from a blob: URL, not a data: URL: the app CSP allows
+            // `media-src blob:` but not `data:`, so a data: source renders in the
+            // <audio> element but is blocked from actually playing. Mirrors the
+            // sound-effects path, and objectUrlRef handles revocation.
+            const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+            const url = URL.createObjectURL(new Blob([bytes], { type: data.contentType }));
+            objectUrlRef.current = url;
+            setResult({ url, isObjectUrl: true, ...outcome });
+          }
 
           // The server substituted a provider, so the voice will not be the one
           // selected. Say so before the outcome toast rather than letting an
@@ -220,23 +199,9 @@ export function useGenerateAudio() {
       } catch (error) {
         const parsed = await parseError(error);
 
-        // A too-large TTS body still persisted a browsable copy: surface the
-        // saved file rather than a dead end (see #745 / ttsResponseLimit).
-        if (parsed.status === 413 && parsed.saved && parsed.fileUrl) {
-          setResult({
-            url: parsed.fileUrl,
-            isObjectUrl: false,
-            saved: true,
-            fabFileId: parsed.fabFileId,
-            contentType: 'audio/mpeg',
-          });
-          refreshFiles();
-          toast.info('Audio was too large to preview here, but it was saved to your Files.');
-          return;
-        }
-
         if (parsed.status === 413) {
-          toast.error('The generated audio is too large to return. Try shorter text.');
+          // Oversized audio normally comes back as a URL; a 413 means storing it failed too.
+          toast.error('The generated audio was too large to return. Try again, or use shorter text.');
         } else if (parsed.errorCode === 'provider_rejected') {
           // A key is configured but the provider refused it, and no other
           // provider could cover for it: switching providers is the one thing

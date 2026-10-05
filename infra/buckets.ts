@@ -99,6 +99,21 @@ const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFil
         daysAfterInitiation: 1,
       },
     },
+    {
+      // Oversized TTS audio handed back as a 1h signed URL (offloadTtsAudio.ts); nothing else
+      // deletes it. Prefix must stay in sync with TTS_OFFLOAD_PREFIX there.
+      id: 'expire-tts-offload',
+      status: 'Enabled',
+      filter: {
+        prefix: 'tts-offload/',
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+    },
   ],
 });
 

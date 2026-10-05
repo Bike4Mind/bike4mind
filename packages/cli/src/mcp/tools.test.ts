@@ -363,6 +363,33 @@ describe('tool handlers', () => {
     expect(result.content.some(item => item.type === 'audio')).toBe(false);
   });
 
+  it('text_to_speech returns the offloaded URL and byte count for oversized audio, with no audio block', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: {
+          delivery: 'url',
+          url: 'https://signed.example/offload.mp3',
+          bytes: 5_000_000,
+          format: 'mp3',
+          contentType: 'audio/mpeg',
+        },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.structuredContent).toEqual({
+      provider: 'openai',
+      format: 'mp3',
+      contentType: 'audio/mpeg',
+      byteLength: 5_000_000,
+      url: 'https://signed.example/offload.mp3',
+      saved: false,
+    });
+    expect(result.content.some(item => item.type === 'audio')).toBe(false);
+  });
+
   it('text_to_speech inlines the audio but reports the saved file id if a saved copy has no URL', async () => {
     const client = mockClient({
       synthesizeSpeech: vi.fn().mockResolvedValue({

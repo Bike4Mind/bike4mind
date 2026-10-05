@@ -347,8 +347,9 @@ function inlineAudioResult(meta: Record<string, unknown>, audioBase64: string, m
 export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 'encoding'>): Promise<CallToolResult> {
   const response = await client.synthesizeSpeech(args);
   if (response.kind === 'saved-too-large') {
-    // Too large to inline, so the FabFile is the only way back to the audio; it is
-    // reported even without a signed URL so the agent can still name the file.
+    // A server predating the oversized-audio URL offload answers 413, leaving the
+    // FabFile as the only way back to the audio; it is reported even without a
+    // signed URL so the agent can still name the file.
     const { provider, fabFileId, fileUrl } = response.data;
     return toResult({
       saved: true,
@@ -360,13 +361,27 @@ export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 
 
   const result = response.data;
   const provider = result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER;
-  const metadata = {
+  const baseMetadata = {
     provider,
     ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom } : {}),
     format: result.format,
     contentType: result.contentType,
-    byteLength: Buffer.from(result.audio, 'base64').length,
   };
+
+  // Too large to inline: the route offloaded the audio and the signed URL is the
+  // only way to it (the saved copy's own URL, when one was saved).
+  if (result.delivery === 'url') {
+    return toResult({
+      ...baseMetadata,
+      byteLength: result.bytes,
+      url: result.url,
+      saved: result.saved === true,
+      ...(result.saved && result.fabFileId ? { file: { id: result.fabFileId } } : {}),
+      ...(result.saveSkippedReason ? { saveSkippedReason: result.saveSkippedReason } : {}),
+    });
+  }
+
+  const metadata = { ...baseMetadata, byteLength: Buffer.from(result.audio, 'base64').length };
 
   if (result.saved && result.fabFileId && result.fileUrl) {
     return toResult({ ...metadata, saved: true, file: { id: result.fabFileId, fileUrl: result.fileUrl } });

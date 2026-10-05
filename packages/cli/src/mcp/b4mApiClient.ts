@@ -311,8 +311,10 @@ export class B4mApiClient {
       return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(response) };
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 413) {
-        // The billed audio is only reachable through its FabFile, so keep the id even
-        // when no signed URL was minted. A substitution rides only the header here.
+        // Only a server predating the oversized-audio URL offload puts a saved copy
+        // on the 413. The billed audio is then only reachable through its FabFile, so
+        // keep the id even when no signed URL was minted. A substitution rides only
+        // the header here.
         const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
         if (oversized.success && oversized.data.saved && oversized.data.fabFileId) {
           const fallbackFrom = supportedVoiceGenerationVendor.safeParse(

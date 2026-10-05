@@ -110,6 +110,33 @@ describe('useGenerateAudio provider substitution', () => {
   });
 });
 
+describe('useGenerateAudio oversized audio', () => {
+  it('plays a url-delivery response straight from its URL without building a blob', async () => {
+    mocks.post.mockResolvedValue({
+      data: {
+        delivery: 'url',
+        url: 'https://s3/audio.mp3',
+        bytes: 5_000_000,
+        format: 'mp3',
+        contentType: 'audio/mpeg',
+        saved: true,
+        fabFileId: 'fab-1',
+      },
+    });
+
+    const result = await generate();
+
+    expect(result.current.result).toEqual({
+      url: 'https://s3/audio.mp3',
+      isObjectUrl: false,
+      saved: true,
+      fabFileId: 'fab-1',
+      contentType: 'audio/mpeg',
+    });
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * TTS reports "out of credits" as a 422 tagged `insufficient_credits`, the same as
  * every other credit-metered route. This branch keys off the CLASSIFIER, not the
