@@ -106,7 +106,7 @@ interface DataLakeExplorerProps {
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
 
-type LakeLabel = { name: string; datalakeTag: string };
+type LakeLabel = { id: string; name: string; datalakeTag: string };
 type LakePrefixSource = LakeLabel & { fileTagPrefix: string };
 
 /** Normalized prefix path ('acme:legal') -> the in-scope lake that owns it. Ambiguity is judged
@@ -121,7 +121,7 @@ export function buildLakePrefixLookup(
   for (const lake of lakes) {
     const key = prefixSegments(lake.fileTagPrefix).join(':');
     if (!key) continue;
-    byPath.set(key, byPath.has(key) ? null : { name: lake.name, datalakeTag: lake.datalakeTag });
+    byPath.set(key, byPath.has(key) ? null : { id: lake.id, name: lake.name, datalakeTag: lake.datalakeTag });
   }
   const scopedTags = new Set(inScope.map(l => l.datalakeTag));
   const keys = [...byPath.keys()];
@@ -431,69 +431,46 @@ export default function DataLakeExplorer({
   const currentNodes = useMemo(() => getNodesAtPath(tree, breadcrumb), [tree, breadcrumb]);
   const currentNode = useMemo(() => getNodeAtPath(tree, breadcrumb), [tree, breadcrumb]);
 
-  // The Uncategorized bucket: the members the prefix-keyed tree has no branch for, which the
-  // picker was counting while this pane could show none of them (#2031). It exists in BOTH scopes
-  // and means the same thing in each - "in a lake, reachable through no branch above" - but the
-  // population differs, so the count and the file list are sourced per scope:
-  //   scoped   - members with no tag under THIS lake's prefix (the lake's own bucket);
-  //   all-lakes- members categorized under NO accessible prefix, since a file categorized in any
-  //              one lake is already reachable under that lake's branch in the merged tree.
-  // Summing the per-lake counts would be wrong for the merged tree on both edges (double-counting
-  // a file loose in two lakes, and counting one that lake B already files), hence a distinct
-  // server-side figure rather than arithmetic here.
-  //
-  // Both counts ride the tag-counts payload the picker's number comes from, so bucket and chip
-  // account for the same files with no extra round trip; the file list is fetched only once the
-  // bucket is opened.
-  //
-  // A MULTI-lake scope has neither source: the per-lake route answers for one lake, the merged
-  // figure answers for every reachable lake, and summing the per-lake counts double-counts a file
-  // loose in two of the selected lakes - the same arithmetic the paragraph above rejects. So the
-  // bucket is offered in the two scopes that can source it honestly and withheld from a multi-lake
-  // one, where narrowing to a single lake still reaches those files. A genuine multi-lake bucket
-  // wants a lake-scope parameter on the cross-lake route.
+  // Each lake owns its Uncategorized bucket (members with no tag under its prefix): at the root
+  // when one lake is scoped, otherwise inside that lake's folder. The merged root has none, and a
+  // multi-lake scope offers none. Count and files come from the per-lake figure and route.
+  // A lake whose prefix is shared with another lake or nested under one resolves to no lake here, so its bucket is reached by selecting that lake in the picker.
   const isUncategorizedOpen = breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
-  const hasUncategorizedSource = selectedLakes.length <= 1;
-  const uncategorizedCount = soleSelectedLake
-    ? (tagCountsData?.uncategorizedFileCounts?.[soleSelectedLake.datalakeTag] ?? 0)
-    : (tagCountsData?.totalUncategorizedFileCount ?? 0);
-  // Two hooks, one live at a time: the cross-lake browse has no lake-scope parameter, so one
-  // lake's bucket has to come from that lake's own (access-gated, audited) route instead.
+  const folderPath = isUncategorizedOpen ? breadcrumb.slice(0, -1) : breadcrumb;
+  const bucketLake = soleSelectedLake ?? (selectedLakes.length === 0 ? lakeForPath(folderPath) : undefined) ?? null;
   const {
-    data: lakeBucketResult,
-    isLoading: lakeBucketLoading,
-    isError: lakeBucketError,
-  } = useGetDataLakeUncategorizedFiles(soleSelectedLake?.id ?? null, isUncategorizedOpen);
-  const {
-    data: mergedBucketResult,
-    isLoading: mergedBucketLoading,
-    isError: mergedBucketError,
-  } = useGetDataLakeArticles(
-    selectedLakes.length === 0 && isUncategorizedOpen ? { uncategorized: true, limit: 50 } : null,
-    source
-  );
-  const bucketResult = soleSelectedLake ? lakeBucketResult : mergedBucketResult;
-  const bucketLoading = soleSelectedLake ? lakeBucketLoading : mergedBucketLoading;
-  const bucketError = soleSelectedLake ? lakeBucketError : mergedBucketError;
+    data: bucketResult,
+    isLoading: bucketLoading,
+    isError: bucketError,
+  } = useGetDataLakeUncategorizedFiles(bucketLake?.id ?? null, isUncategorizedOpen);
+  // The fetched total wins while open, so the row cannot say 0 beside a listed file.
+  const fetchedTotal = isUncategorizedOpen ? bucketResult?.total : undefined;
+  const uncategorizedCount =
+    fetchedTotal ?? (bucketLake ? tagCountsData?.uncategorizedFileCounts?.[bucketLake.datalakeTag] : undefined) ?? 0;
+  const bucketBusy = isUncategorizedOpen && (bucketLoading || lakesLoading);
+  const bucketFailed = isUncategorizedOpen && (bucketError || lakesError);
   const uncategorized = useMemo(
     () =>
       // Kept while OPEN even at count 0 (the last file was just categorised elsewhere): dropping
       // the prop mid-browse would strand the breadcrumb on a key the tree no longer intercepts,
       // and "No articles found" is the honest answer for a bucket you are standing in.
-      //
-      // Withheld entirely in a multi-lake scope (see hasUncategorizedSource): both the count and
-      // the file list would be the ALL-lakes answer there, so the bucket would promise files from
-      // lakes the user has just narrowed away from.
-      hasUncategorizedSource && (uncategorizedCount > 0 || isUncategorizedOpen)
-        ? { files: isUncategorizedOpen ? (bucketResult?.data ?? []) : [], count: uncategorizedCount }
+      bucketLake && (uncategorizedCount > 0 || isUncategorizedOpen)
+        ? {
+            files: isUncategorizedOpen ? (bucketResult?.data ?? []) : [],
+            count: uncategorizedCount,
+            depth: soleSelectedLake ? undefined : folderPath.length,
+          }
         : undefined,
-    [hasUncategorizedSource, uncategorizedCount, isUncategorizedOpen, bucketResult]
+    [bucketLake, soleSelectedLake, folderPath.length, uncategorizedCount, isUncategorizedOpen, bucketResult]
   );
 
   // The bucket's key is synthetic, not a tag, so it must never become a leafTag: joining it would
   // fire an articles query for a tag no file carries and render its empty result as the bucket.
+  const bucketPinnedHere = uncategorized?.depth !== undefined && uncategorized.count > 0;
   const leafTag =
-    !isUncategorizedOpen && breadcrumb.length > 0 && (currentNodes.length === 0 || (currentNode?.ownFileCount ?? 0) > 0)
+    !isUncategorizedOpen &&
+    breadcrumb.length > 0 &&
+    ((currentNodes.length === 0 && !bucketPinnedHere) || (currentNode?.ownFileCount ?? 0) > 0)
       ? breadcrumb.join(':')
       : null;
 
@@ -680,14 +657,10 @@ export default function DataLakeExplorer({
           onViewFile={handleViewFile}
           canDeleteFile={canDeleteFile}
           onDeleteFile={handleDeleteFile}
-          isLoading={
-            tagCountsLoading ||
-            (!!leafTag && leafLoading && currentNodes.length === 0) ||
-            (isUncategorizedOpen && bucketLoading)
-          }
+          isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0) || bucketBusy}
           // A failed bucket read must not render as an empty bucket: the row the user just
           // clicked promised a count, so "No articles found" would read as "they are gone".
-          isError={tagCountsError || (isUncategorizedOpen && bucketError)}
+          isError={tagCountsError || bucketFailed}
           title={rootLabel ?? copy.rootLabel}
           onManage={onManage}
           onCreateLake={onCreateLake}

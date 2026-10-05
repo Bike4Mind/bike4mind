@@ -23,7 +23,7 @@ import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import { HEADER_ICON_BUTTON_SX } from '@client/app/components/Session/AISettings/headerIconButtonSx';
 import type { TagNode } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import FileIndexingAlert from './FileIndexingAlert';
-import DataLakeTreeView, { type DataLakeTreeChrome } from './DataLakeTreeView';
+import DataLakeTreeView, { type DataLakeTreeChrome, type DataLakeUncategorized } from './DataLakeTreeView';
 import TreeRowLabel from './TreeRowLabel';
 import LakeDraftChip from './LakeDraftChip';
 import { RowActionsMenu, RowMenuItem } from './rowActionsMenu';
@@ -54,13 +54,12 @@ interface DataLakeChatTreeProps {
   /** Threaded to DataLakeTreeView's cross-tree article search. */
   source?: DataLakeBrowseSource;
   /**
-   * The scoped lake's Uncategorized bucket: its members carrying no tag under the lake's own
-   * prefix, which the tag tree has no branch for. `count` comes from the same tag-counts payload
-   * as the picker's number, so the two account for the same files; `files` is fetched only once
-   * the bucket is opened and is empty until then. Omitted in the all-lakes scope, where there is
-   * no single prefix to be outside of.
+   * A lake's Uncategorized bucket: its members carrying no tag under the lake's own prefix, which
+   * the tag tree has no branch for. `depth` pins it inside that lake's folder when several lakes share the tree.
+   * `count` comes from the same tag-counts payload as the picker's number; `files` is fetched only
+   * once the bucket is opened and is empty until then.
    */
-  uncategorized?: { files: IFabFileDocument[]; count: number };
+  uncategorized?: Omit<DataLakeUncategorized, 'renderRow'>;
   selectedFileIds: ReadonlySet<string>;
   /**
    * Tag paths (`acme:legal`, no trailing colon) of the draft lakes in view. A folder whose FULL path

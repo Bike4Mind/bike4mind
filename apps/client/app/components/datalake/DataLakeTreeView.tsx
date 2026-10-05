@@ -104,8 +104,8 @@ export interface DataLakeTreeViewProps {
   chrome: DataLakeTreeChrome;
   /**
    * Optional root bucket for files that carry no prefix-matching tag (the Viewer), so every
-   * file stays reachable. TreeView owns the visibility rules (root only, hidden while
-   * searching) and the synthetic-breadcrumb interception; the chrome renders the row.
+   * file stays reachable. TreeView owns the visibility rules (root, or the `depth` folder; hidden
+   * while searching) and the synthetic-breadcrumb interception; the chrome renders the row.
    */
   uncategorized?: {
     files: IFabFileDocument[];
@@ -117,6 +117,13 @@ export interface DataLakeTreeViewProps {
      * to close. Drives the row's number and whether it renders at all.
      */
     count?: number;
+    /**
+     * Breadcrumb length of the folder that holds the row. Unset keeps the root bucket (at
+     * leafMinDepth). Set, the row is drawn at that depth; the host decides WHICH folder by
+     * passing the prop only where the row belongs (the chat tree passes it only at a lake's
+     * own folder).
+     */
+    depth?: number;
     renderRow: (count: number, onOpen: () => void) => ReactNode;
   };
   /** Slots above the toolbar / below the scroll pane (the chat tree's header and footer). */
@@ -169,6 +176,8 @@ export interface DataLakeTreeViewProps {
    */
   nodeDisplay?: (node: TagNode, depth: number) => { label: string; count: number } | undefined;
 }
+
+export type DataLakeUncategorized = NonNullable<DataLakeTreeViewProps['uncategorized']>;
 
 export default function DataLakeTreeView({
   tree,
@@ -246,19 +255,26 @@ export default function DataLakeTreeView({
       .map(({ node }) => node);
   }, [currentNodes, searchQuery, sortBy, nodeDisplay, breadcrumb.length]);
 
-  // The synthetic bucket intercepts before leaf-tag resolution: its key is not a real tag. It
-  // lives one level below the seeded root, and the depth bound is a ceiling rather than an
-  // equality so a host that renders a breadcrumb SHORTER than leafMinDepth (the manager's
-  // deep-link opens a lake at an empty path) still reaches its bucket.
-  const isUncategorized =
-    !!uncategorized && breadcrumb.length <= leafMinDepth + 1 && breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
+  // The bucket sits at leafMinDepth (a ceiling: the manager's deep-link opens a lake at an empty
+  // path), or exactly at `depth` when the host pins it to one lake's folder. `n` is levels below.
+  const atBucket = (n: number) =>
+    uncategorized?.depth === undefined
+      ? breadcrumb.length <= leafMinDepth + n
+      : breadcrumb.length === uncategorized.depth + n;
+  const inBucketKey = breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
+  // Intercepts before leaf-tag resolution: the key is synthetic, never part of a tag path.
+  const isUncategorized = !!uncategorized && atBucket(1) && inBucketKey;
+  const bucketCount = uncategorized ? (uncategorized.count ?? uncategorized.files.length) : 0;
+  // A folder holding the row renders as a folder even with no children (else the row never draws).
+  const bucketHere = !!uncategorized && atBucket(0) && bucketCount > 0;
 
   // At a leaf node (no children) below the seeded root, files are filtered locally by the leaf tag.
   const leafTag =
-    !isUncategorized && breadcrumb.length > leafMinDepth && currentNodes.length === 0 ? breadcrumb.join(':') : null;
+    !inBucketKey && !bucketHere && breadcrumb.length > leafMinDepth && currentNodes.length === 0
+      ? breadcrumb.join(':')
+      : null;
   const showFiles = isUncategorized || !!leafTag;
   const bucketFiles = uncategorized?.files;
-  const bucketCount = uncategorized ? (uncategorized.count ?? uncategorized.files.length) : 0;
   const files = useMemo(() => {
     const scoped = isUncategorized
       ? bucketFiles!
@@ -297,7 +313,7 @@ export default function DataLakeTreeView({
   // a deeper child tag. Render those as file rows mixed into the folder list below, so the view
   // reads like a normal file browser (folders + files together) instead of hiding them behind a
   // folder that only ever contains itself.
-  const ownTag = !isUncategorized && !leafTag && breadcrumb.length > leafMinDepth ? breadcrumb.join(':') : null;
+  const ownTag = !inBucketKey && !leafTag && breadcrumb.length > leafMinDepth ? breadcrumb.join(':') : null;
   const ownFiles = useMemo(() => {
     if (!ownTag || !currentNode?.ownFileCount) return [];
     return articles.filter(f => (f.tags ?? []).some(t => t.name === ownTag)).sort(compareByCategoryThenTitle);
@@ -306,9 +322,7 @@ export default function DataLakeTreeView({
   // not files, so a folder's own files are not "search results" either.
   const showOwnFiles = !searchQuery && ownFiles.length > 0;
 
-  // A ceiling, matching isUncategorized above: the bucket belongs at the seeded root, and a
-  // breadcrumb shallower than leafMinDepth is still that root as far as the host is concerned.
-  const showBucketRow = !!uncategorized && breadcrumb.length <= leafMinDepth && !searchQuery && bucketCount > 0;
+  const showBucketRow = bucketHere && !searchQuery;
   // The bucket / own-files rows standing in for an empty node list are still content, and a
   // pending/matched article search might still fill the pane - none of that should flash
   // "No categories"/"No matches" while it's about to be superseded.
