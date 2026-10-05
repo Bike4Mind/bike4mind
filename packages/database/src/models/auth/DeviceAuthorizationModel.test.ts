@@ -8,6 +8,7 @@ const base = (o: Record<string, unknown> = {}) =>
   ({
     deviceCode: digestDeviceCode('dc-default'),
     userCode: 'AAAA-2345',
+    clientId: 'b4m-cli',
     status: 'pending',
     userId: null,
     expiresAt: new Date(Date.now() + 600_000),

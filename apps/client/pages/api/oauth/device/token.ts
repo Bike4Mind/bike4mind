@@ -6,11 +6,12 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS } from '@server/utils/oauth/deviceAuthHelpers';
 import { BadRequestError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { LEGACY_DEVICE_CLIENT_ID, OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const TokenRequestSchema = z.object({
   grant_type: z.literal('urn:ietf:params:oauth:grant-type:device_code'),
   device_code: z.string(),
-  client_id: z.literal('b4m-cli'),
+  client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
 const TOKEN_GLOBAL_KEY = 'rate-limit:device-token-global';
@@ -24,7 +25,7 @@ const handler = baseApi({ auth: false })
     })
   )
   .post(async (req, res) => {
-    const { device_code } = TokenRequestSchema.parse(req.body);
+    const { device_code, client_id } = TokenRequestSchema.parse(req.body);
 
     // Keyed on nothing caller-controlled: IP headers and device_code are both rotatable.
     // Answered with slow_down rather than 429 so the CLI backs off instead of aborting the login.
@@ -49,6 +50,18 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({
         error: 'invalid_grant',
         error_description: 'Invalid device code',
+      });
+    }
+
+    // RFC 8628 s3.4: the code may only be redeemed by the client it was issued to. Consent is
+    // given for one app, so letting another redeem the code would spend it on something the user
+    // did not approve. Checked before any poll bookkeeping so a mismatched client advances no state.
+    // NOTE: /verify returns client_name for the approval screen, but activate.tsx does not yet show
+    // it before the approve step - until it does, the user is consenting without seeing which app.
+    if ((authorization.clientId ?? LEGACY_DEVICE_CLIENT_ID) !== client_id) {
+      return res.status(400).json({
+        error: 'invalid_grant',
+        error_description: 'Device code was issued to a different client',
       });
     }
 
