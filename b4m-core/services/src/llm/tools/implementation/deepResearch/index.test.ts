@@ -121,6 +121,32 @@ describe('performDeepResearch discovery precedence', () => {
     expect(plainFetchScrape).toHaveBeenCalledWith('https://backup.example');
   });
 
+  it('logs a search error and still finishes when both providers fail and Firecrawl is absent', async () => {
+    const failing = (name: 'serpapi' | 'searxng') => ({
+      name,
+      search: vi.fn(async () => {
+        throw new Error(`${name} is down`);
+      }),
+    });
+    const lead = failing('serpapi');
+    const backup = failing('searxng');
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProviders.mockResolvedValue([lead, backup]);
+    const context = makeContext();
+
+    const result = await performDeepResearch(context, { topic: 'quantum computing' }, { maxDepth: 1, duration: 1 });
+
+    expect(result.success).toBe(true);
+    expect(lead.search).toHaveBeenCalled();
+    expect(backup.search).toHaveBeenCalled();
+    const [[{ deepResearchState }]] = vi.mocked(context.statusUpdate).mock.calls as unknown as [
+      [{ deepResearchState: { activities: { type: string; status: string; message: string }[] } }],
+    ];
+    expect(deepResearchState.activities).toContainEqual(
+      expect.objectContaining({ type: 'search', status: 'error', message: expect.stringMatching(/both providers/) })
+    );
+  });
+
   it('uses the web-search provider for discovery when Firecrawl is absent', async () => {
     const provider = searchProvider();
     createFirecrawlApp.mockReturnValue(null);
@@ -133,7 +159,7 @@ describe('performDeepResearch discovery precedence', () => {
     );
 
     expect(result.success).toBe(true);
-    expect(provider.search).toHaveBeenCalled();
+    expect(provider.search).toHaveBeenCalledWith(expect.any(String), 3, undefined);
     // Extraction falls back to the keyless plain-fetch reader when Firecrawl is absent.
     expect(plainFetchScrape).toHaveBeenCalled();
   });

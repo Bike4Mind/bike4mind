@@ -456,6 +456,22 @@ describe('runLakeResearch', () => {
       expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
     });
 
+    it('maps lead hits to candidates when no backup is configured', async () => {
+      const lead = {
+        name: 'searxng',
+        search: vi.fn(async () => [
+          { title: 'Lead', url: 'https://lead.example', snippet: 's', thumbnail: 'https://lead.example/t.png' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(lead.search).toHaveBeenCalledWith('q', 5, { recencyDays: 30 });
+      expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
+    });
+
     it('fails the run naming both providers when both fail', async () => {
       const backup = {
         name: 'searxng',

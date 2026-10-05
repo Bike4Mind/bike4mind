@@ -236,8 +236,8 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
  * first non-empty answer wins; the loser runs on to its own timeout and is ignored. An empty lead
  * answer also starts the backup, since a throttled SearXNG answers 200 with no results. With no
  * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
- * provider that answered so the image/place calls go to a live provider. When both come back empty
- * it returns the empty answer; when both fail it throws, so the backend records the call as failed.
+ * provider that answered so follow-up calls (images, places) go to a live provider. Results are
+ * empty only when both providers came back empty; it throws only when both failed.
  */
 export async function searchWithHedge(
   lead: WebSearchProvider,
@@ -300,17 +300,14 @@ export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams,
   imageUrlSigningSecret = '',
-  resolvedProvider?: Promise<WebSearchProvider | null>,
-  resolvedBackup?: Promise<WebSearchProvider | null>
+  resolvedProviders?: Promise<[WebSearchProvider | null, WebSearchProvider | null]>
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
   // Surface a clear "not configured" message instead of silently returning
   // "No results found", which reads to the model (and user) as if the web
   // genuinely had nothing - the exact confusion this tool's gating fixes.
-  const [provider, defaultBackup] = resolvedProvider
-    ? [await resolvedProvider, null]
-    : await resolveWebSearchProviders(adapters);
+  const [provider, backup] = await (resolvedProviders ?? resolveWebSearchProviders(adapters));
   if (!provider) {
     Logger.globalInstance.error('❌ WebSearch Tool: No web-search provider configured. Skipping search.');
     return { formattedResults: WEB_SEARCH_NOT_CONFIGURED_MSG, citables: [] };
@@ -328,7 +325,6 @@ export async function performWebSearch(
       Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      const backup = (await resolvedBackup) ?? defaultBackup;
       ({ results, servedBy } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }
@@ -447,15 +443,13 @@ export const webSearchTool: ToolDefinition = {
           throw error;
         });
         const startedAt = Date.now();
-        const [lead, backup] = await providersPromise;
         // A failure throws on purpose: the backend hands the error text to the model as the tool
         // result AND records the call as failed, which is what the answer diagnosis reads.
         const { formattedResults, citables } = await performWebSearch(
           { db: context.db },
           params,
           config?.imageUrlSigningSecret,
-          Promise.resolve(lead),
-          Promise.resolve(backup)
+          providersPromise
         );
         context.logger.log('🔍 WebSearch Tool: search timing', {
           callNumber,
