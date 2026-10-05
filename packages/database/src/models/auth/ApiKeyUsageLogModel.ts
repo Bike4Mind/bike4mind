@@ -53,6 +53,7 @@ ApiKeyUsageLogSchema.index({ userId: 1, keyId: 1, timestamp: -1 });
 ApiKeyUsageLogSchema.index({ userId: 1, timestamp: -1 });
 ApiKeyUsageLogSchema.index({ keyId: 1, timestamp: -1 });
 // Platform endpoint rollup filtered by source and/or ownerType (platformEndpointUsage).
+// An ownerType-only filter has no source prefix, so it range-scans the timestamp TTL index instead.
 ApiKeyUsageLogSchema.index({ source: 1, ownerType: 1, timestamp: -1 });
 
 // TTL index to auto-delete logs older than 90 days
