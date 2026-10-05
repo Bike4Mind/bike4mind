@@ -201,6 +201,30 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  describe('referenceImageFabFileIds', () => {
+    const REFS = ['ref-1', 'ref-2'];
+
+    it('accepts reference images for a gpt-image model (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { referenceImageFabFileIds: REFS } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
+      );
+    });
+
+    it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { model: 'flux-pro-1.1', referenceImageFabFileIds: REFS } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/referenceImageFabFileIds.*flux-pro-1\.1/);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a body that fails the contract schema (422) before enqueuing the edit', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire({ body: { image: undefined } });
