@@ -191,7 +191,10 @@ export const fileRead: ToolDefinition = {
       'need, or when the file is too large to read at once. Lines longer than ' +
       `${MAX_READ_LINE_CHARS} characters are cut. Each line is prefixed with its line number and ` +
       'a tab; those prefixes are not part of the file, so never copy them into an edit or a patch. When ' +
-      'the output stops before the end of the file, it says the offset to continue from.',
+      'the output stops before the end of the file, it says the offset to continue from. Avoid ' +
+      'repeated small slices (around 30 lines): when you need more context, read a larger window in ' +
+      'one call. ' +
+      'Independent calls placed in one reply run in parallel, so batch them instead of issuing one per turn.',
     parameters: {
       type: 'object',
       properties: {
@@ -276,7 +279,8 @@ export const globFiles: ToolDefinition = {
       'List files matching a glob pattern, newest-modified first, with their sizes. Skips files ' +
       'ignored by .gitignore and dependency folders. "*" lists the top level of a folder, ' +
       'including its subfolders with file counts; "**/*.ts" matches at any depth. Use this to ' +
-      'explore a project or find files by name, or to find the largest or most recent files.',
+      'explore a project or find files by name, or to find the largest or most recent files. ' +
+      'Independent calls placed in one reply run in parallel, so batch them instead of issuing one per turn.',
     parameters: {
       type: 'object',
       properties: {
@@ -487,7 +491,8 @@ export const grepSearch: ToolDefinition = {
       '.gitignore, binary files and dependency folders. Returns matching lines grouped by file ' +
       'with line numbers, and says when there are more than it shows. Use outputMode "files" ' +
       'to see only which files match and how often, and "include" to limit it to some files. ' +
-      'Faster than grep through bash_execute, and it needs no approval.',
+      'Faster than grep through bash_execute, and it needs no approval. ' +
+      'Independent calls placed in one reply run in parallel, so batch them instead of issuing one per turn.',
     parameters: {
       type: 'object',
       properties: {
