@@ -120,6 +120,38 @@ describe('continuation toolbelt', () => {
     expect(loaded?.resolvedEnabledTools).toBeUndefined();
     expect(await continueRun(exec.id)).toEqual([]);
   });
+
+  // With a profile present (the optimizer surface resolves one on continuations too), absent
+  // must recompute while a persisted [] must replay as "no tools" rather than fall back.
+  it('treats a persisted empty belt as no tools, distinct from an absent one', async () => {
+    const resume = async (id: string) => {
+      const loaded = await agentExecutionRepository.findById(id);
+      return {
+        stored: loaded?.resolvedEnabledTools,
+        tools: resolveInvocationEnabledTools({
+          isNewExecution: false,
+          persistedEnabledTools: loaded?.resolvedEnabledTools,
+          persistedProfileDeniedTools: loaded?.profileDeniedTools,
+          payloadEnabledTools: undefined,
+          payloadIsAmbient: undefined,
+          profile,
+          hasApprover: true,
+        }),
+      };
+    };
+
+    const { id } = await startRun([SAVE]);
+    await agentExecutionRepository.persistResolvedEnabledTools(id, []);
+    expect(await resume(id)).toEqual({ stored: [], tools: [] });
+
+    const legacy = await startRun([SAVE]);
+    await mongoose.connection
+      .collection('agentexecutions')
+      .updateOne({ _id: new mongoose.Types.ObjectId(legacy.id) }, { $unset: { resolvedEnabledTools: '' } });
+    const recomputed = await resume(legacy.id);
+    expect(recomputed.stored).toBeUndefined();
+    expect(recomputed.tools).toEqual(['web_search']);
+  });
 });
 
 describe('agentExecutor continuation toolbelt wiring', () => {
