@@ -37,7 +37,8 @@ describe('resolveDispatchAgent', () => {
 describe('useSendMessage - agent-mode dispatch uses resolveDispatchAgent', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
   const start = source.indexOf('agentExecution.start({');
-  const dispatch = source.slice(start, source.indexOf('});', start));
+  const end = source.indexOf('});', start);
+  const dispatch = source.slice(start, end);
 
   it('resolves the agent from the same set the Agents badge shows', () => {
     expect(source).toMatch(/const pickerAgents = currentSessionId \? sessionAgents : workBenchAgents;/);
@@ -48,6 +49,7 @@ describe('useSendMessage - agent-mode dispatch uses resolveDispatchAgent', () =>
 
   it('forwards that agent as agentId and model on agentExecution.start', () => {
     expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
     expect(dispatch).toMatch(/^\s*agentId: dispatchAgent\?\.id,\s*$/m);
     expect(source).toMatch(/const dispatchModel = dispatchAgent\?\.preferredModel \?\? \(model as string\);/);
   });
