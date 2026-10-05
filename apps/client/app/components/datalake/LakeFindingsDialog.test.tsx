@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   rulePending: { value: false },
   access: vi.fn(),
   applyCorpus: vi.fn(),
+  applyPending: { value: false },
+  applyVariables: { value: undefined as unknown },
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -27,7 +29,11 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: (lakeId: string | null, enabled?: boolean) => h.access(lakeId, enabled),
   // The detail view's corpus controls (#3612) reach these; stubbed so this file tests the dialog's
   // wiring, not the mutation or the retag seed (FindingCorpusActions.test.tsx covers those).
-  useApplyCorpusAction: () => ({ mutate: h.applyCorpus, isPending: false }),
+  useApplyCorpusAction: () => ({
+    mutate: h.applyCorpus,
+    isPending: h.applyPending.value,
+    variables: h.applyVariables.value,
+  }),
   useLakeFileTags: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
@@ -44,13 +50,15 @@ vi.mock('./FindingSourcePane', () => ({
   default: ({
     source,
     superseded,
+    returning,
     onReturnToRanking,
   }: {
     source: { fabFileId: string };
     superseded?: boolean;
+    returning?: boolean;
     onReturnToRanking?: () => void;
   }) => (
-    <div data-testid={`finding-source-pane-${source.fabFileId}`}>
+    <div data-testid={`finding-source-pane-${source.fabFileId}`} data-returning={String(!!returning)}>
       {superseded && onReturnToRanking && (
         <button data-testid={`return-to-ranking-${source.fabFileId}`} onClick={onReturnToRanking} />
       )}
@@ -117,6 +125,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.scanPending.value = false;
   h.rulePending.value = false;
+  h.applyPending.value = false;
+  h.applyVariables.value = undefined;
   h.findings.mockReturnValue(listing([finding()]));
   h.health.mockReturnValue({ data: undefined });
   // No access view by default: the assignee picker stays hidden and the self-assign controls stand
@@ -210,6 +220,35 @@ describe('LakeFindingsDialog', () => {
       findingId: 'finding-1',
       body: { action: 'unsupersede', fabFileId: 'file-b' },
     });
+  });
+
+  it('spins only the file whose unsupersede is in flight', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-a', 'file-b'] })]));
+    h.applyPending.value = true;
+    h.applyVariables.value = {
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'unsupersede', fabFileId: 'file-b' },
+    };
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('finding-source-pane-file-b')).toHaveAttribute('data-returning', 'true');
+    expect(screen.getByTestId('finding-source-pane-file-a')).toHaveAttribute('data-returning', 'false');
+  });
+
+  it('does not spin a pane for a different corpus action in flight', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-b'] })]));
+    h.applyPending.value = true;
+    h.applyVariables.value = {
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'retag', fabFileId: 'file-b', tags: [] },
+    };
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('finding-source-pane-file-b')).toHaveAttribute('data-returning', 'false');
   });
 
   it('offers no return-to-ranking on a closed finding', () => {
