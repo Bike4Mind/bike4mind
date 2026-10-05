@@ -233,6 +233,32 @@ const NON_CONTENT_SELECTOR = [
 ].join(', ');
 
 /**
+ * Class/id words a page uses for promotional chrome - the offer card, the newsletter box, the
+ * sign-up band. The Readability "unlikely candidate" idea, cut down to words that never name an
+ * article's own content. Matched as whole tokens (`offer-card`, `header-offer`, `newsletter-form`),
+ * never substrings, so `coffee` or `offered` cannot match. Being HIDDEN is deliberately not a
+ * signal: a collapsed accordion answer is just as hidden as a script-revealed offer card.
+ */
+const PROMO_TOKENS = new Set(['cta', 'promo', 'promotion', 'offer', 'newsletter', 'subscribe', 'signup', 'upsell']);
+
+/** `btn`, `btn-primary`, `button`, `button-classic`: a link styled as a call-to-action button. */
+const BUTTON_CLASS_PATTERN = /^(btn|button)(-|$)/;
+
+/**
+ * Bootstrap's in-text link style, which matches `BUTTON_CLASS_PATTERN` but is not a button. Also the
+ * table cells and headings a button-styled link can be the whole of (a release table's version
+ * link, a heading's anchor) - places where removing it empties real content.
+ */
+const NOT_A_BUTTON_CLASS = 'btn-link';
+
+/**
+ * Most text a `PROMO_TOKENS` block may hold. An offer card or newsletter box is a heading, a line
+ * of pitch and a button; a promo word on anything bigger names a section of the page (an `#offer`
+ * holding the terms, a newsletter archive's issue body), not chrome.
+ */
+const MAX_PROMO_TEXT_CHARS = 300;
+
+/**
  * What counts as a control when judging a control strip. Broader than `NON_CONTENT_SELECTOR`,
  * because a link is content in prose but a control in a nav bar - `a[href]` is the only reason the
  * strip rule can see an unmarked `<div>` of nav links as chrome at all.
@@ -258,6 +284,9 @@ const STRIP_CONTAINER_SELECTOR = 'div, span, ul, ol, nav, header, footer, aside,
  * than anything the candidate's own subtree can show.
  */
 const PROSE_ANCESTOR_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, dt, dd, blockquote, figcaption, caption';
+
+/** See `NOT_A_BUTTON_CLASS`. */
+const BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR = `${PROSE_ANCESTOR_SELECTOR}, td, th`;
 
 /**
  * Minimum controls for a `<ul>`/`<ol>` candidate specifically - higher than the general
@@ -426,6 +455,65 @@ function isControlStrip($: CheerioAPI, element: DomNode): boolean {
   return strippedOutsideControls.length <= budget;
 }
 
+function hasButtonClass(element: DomNode): boolean {
+  const classes = ((element as { attribs?: Record<string, string> }).attribs?.class ?? '').split(/\s+/);
+  return !classes.includes(NOT_A_BUTTON_CLASS) && classes.some(token => BUTTON_CLASS_PATTERN.test(token));
+}
+
+/**
+ * True when the nearest non-whitespace sibling on either side is inline markup (`<em>`, a plain
+ * link) - running text the button would be cut out of. A neighbouring button link does not count:
+ * CTAs come in rows ("Create your free CSA" / "All downloads and formats").
+ */
+function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
+  type Sibling = { type?: string; data?: string; prev?: Sibling | null; next?: Sibling | null } | null | undefined;
+  const nearest = (start: Sibling, step: 'prev' | 'next'): Sibling => {
+    let current = start;
+    while (current && current.type === 'text' && !squash(current.data ?? '')) current = current[step];
+    return current;
+  };
+  const node = element as Sibling & object;
+  return [nearest(node.prev, 'prev'), nearest(node.next, 'next')].some(
+    sibling =>
+      !!sibling &&
+      sibling.type === 'tag' &&
+      $(sibling as DomNode).is(INLINE_SELECTOR) &&
+      !hasButtonClass(sibling as DomNode)
+  );
+}
+
+/**
+ * True when `element` is labelled as promotional chrome by its own class or id (`PROMO_TOKENS`).
+ * Declined for anything holding an `<h1>`-`<h3>`, a `<pre>`, an `<article>`/`<main>`, or more than
+ * `MAX_PROMO_TEXT_CHARS` of text: a promo word on a wrapper that big names a page section, not chrome.
+ */
+function isPromoBlock($: CheerioAPI, element: DomNode): boolean {
+  const attribs = (element as { attribs?: Record<string, string> }).attribs ?? {};
+  const tokens = `${attribs.class ?? ''} ${attribs.id ?? ''}`.toLowerCase().split(/[^a-z0-9]+/);
+  if (!tokens.some(token => PROMO_TOKENS.has(token))) return false;
+  const $element = $(element);
+  return (
+    !$element.is('html, body, main, article') &&
+    $element.find('h1, h2, h3, pre, main, article').length === 0 &&
+    squash($element.text()).length <= MAX_PROMO_TEXT_CHARS
+  );
+}
+
+/**
+ * True when `element` is a link styled as a standalone call-to-action button ("Try it free",
+ * "Create your free CSA") - a control by the page's own styling, even when it sits beside prose in
+ * a container `isControlStrip` rightly refuses to strip whole. Declined inside prose, a heading or a
+ * table cell (`BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR`), when running text or an inline element flanks
+ * it, and when its label reads like prose rather than a button.
+ */
+function isButtonLink($: CheerioAPI, element: DomNode): boolean {
+  if (!hasButtonClass(element)) return false;
+  if (hasAdjacentProseText(element) || hasAdjacentInlineElement($, element)) return false;
+  if ($(element).closest(BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR).length > 0) return false;
+  const label = squash($(element).text());
+  return label.length <= MAX_CONTROL_LABEL_CHARS && !/[.!?]\s/.test(label);
+}
+
 /**
  * Removes control strips and non-content elements from `scope`, together, with ONE rollback
  * covering both.
@@ -479,7 +567,19 @@ function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
     return placeholder;
   });
 
-  const nonContentEls = scope.find(NON_CONTENT_SELECTOR).toArray();
+  const nonContentEls = [
+    ...new Set([
+      ...scope.find(NON_CONTENT_SELECTOR).toArray(),
+      ...scope
+        .find('[class], [id]')
+        .toArray()
+        .filter(element => isPromoBlock($, element)),
+      ...scope
+        .find('a[href][class]')
+        .toArray()
+        .filter(element => isButtonLink($, element)),
+    ]),
+  ];
   const nonContentPlaceholders = nonContentEls.map(element => {
     const placeholder = $('<div></div>');
     $(element).replaceWith(placeholder);

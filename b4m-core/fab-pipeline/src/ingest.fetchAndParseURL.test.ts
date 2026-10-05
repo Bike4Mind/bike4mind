@@ -1062,4 +1062,97 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(textAt20).not.toContain('Docs');
     expect(textAt20).toContain(remnant20);
   });
+
+  it('drops button-styled CTA links and promo cards that sit beside the article inside <main>', async () => {
+    // Shaped after a Common Paper standard page: the hero's CTAs are siblings of the h1 and intro,
+    // and the offer card is hidden until a script reveals it, so neither rule above sees chrome.
+    const page =
+      '<html><body><main><article><section><div class="container">' +
+      '<h1>Cloud Service Agreement</h1>' +
+      '<p>A plain language agreement for buying and selling cloud services.</p>' +
+      '<a class="button-text button-set" href="/signup">Create your free CSA</a>' +
+      '<a class="btn btn-secondary" href="#formats">All downloads and formats</a>' +
+      '<div id="header-offer" class="row display-none"><div class="card offer-card">' +
+      '<h4>Streamline your full contract workflow</h4>' +
+      '<p>Templates -&gt; Proposals -&gt; Negotiations -&gt; Esignature</p>' +
+      '<a class="button-classic" href="/signup">Try it free</a>' +
+      '</div></div>' +
+      '</div></section>' +
+      '<h2>Using this agreement</h2><p>The agreement consists of a Cover Page plus the Standard Terms.</p>' +
+      '</article></main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const chrome of ['Create your free CSA', 'All downloads', 'Streamline', 'Templates', 'Try it free']) {
+      expect(text).not.toContain(chrome);
+    }
+    expect(text).toContain('Cloud Service Agreement');
+    expect(text).toContain('A plain language agreement for buying and selling cloud services.');
+    expect(text).toContain('The agreement consists of a Cover Page plus the Standard Terms.');
+  });
+
+  it('keeps content that is merely hidden, such as a collapsed accordion answer', async () => {
+    const page =
+      '<html><body><main><h2>FAQ</h2><button>Are there setup fees?</button>' +
+      '<section class="AccordionItem__content" style="display: none;">' +
+      '<p>There are no setup fees or monthly fees.</p></section></main></body></html>';
+
+    expect(await fetchText(page)).toContain('There are no setup fees or monthly fees.');
+  });
+
+  it('keeps a button-styled link that runs inside a sentence, or whose label is prose', async () => {
+    const page =
+      '<html><body><main>' +
+      '<p>Read the <a class="btn-link" href="/terms">Standard Terms</a> before signing.</p>' +
+      '<div><a class="button" href="/guide">Our guide covers this. It is worth a read.</a></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Read the Standard Terms before signing.');
+    expect(text).toContain('Our guide covers this. It is worth a read.');
+  });
+
+  it('keeps a button-styled link that is the whole of a heading, table cell or list item', async () => {
+    const page =
+      '<html><body><main><p>Release notes for every version of the toolkit below.</p>' +
+      '<h2><a class="btn-anchor" href="#install">Install</a></h2>' +
+      '<table><tr><td><a class="btn btn-sm" href="/v2.3.1.zip">v2.3.1</a></td></tr></table>' +
+      '<ul><li><a class="btn" href="/docs/a">Getting started</a></li></ul>' +
+      '<div>Read <em>the</em> <a class="btn" href="/terms">terms</a></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of ['Install', 'v2.3.1', 'Getting started', 'terms']) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('keeps a promo-named wrapper once it is a page section rather than a card', async () => {
+    const terms = 'The offer is valid for new customers only and renews at the standard rate. '.repeat(5);
+    const page =
+      '<html><body><main><h1>Spring offer</h1>' +
+      `<section id="offer"><p>${terms}</p></section>` +
+      '<div class="newsletter-issue"><h2>Issue 42</h2><p>This week in tooling.</p></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('renews at the standard rate.');
+    expect(text).toContain('Issue 42');
+    expect(text).toContain('This week in tooling.');
+  });
+
+  it('matches promo words as whole class tokens, and never on a wrapper holding the h1', async () => {
+    const page =
+      '<html><body><div class="cta-layout"><h1>Pricing</h1><p>Plans for teams of every size.</p></div>' +
+      '<div class="coffee-offered"><p>We offered coffee to every attendee.</p></div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Pricing');
+    expect(text).toContain('Plans for teams of every size.');
+    expect(text).toContain('We offered coffee to every attendee.');
+  });
 });
