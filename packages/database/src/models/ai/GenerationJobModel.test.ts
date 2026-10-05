@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
 import { setupMongoTest } from '../../__test__/utils';
@@ -106,5 +107,53 @@ describe('GenerationJobRepository', () => {
     expect((found as Record<string, unknown>).rawProviderError).toBeUndefined();
     const stored = await GenerationJobModel.findById(job.id).select('+rawProviderError');
     expect(stored?.rawProviderError).toEqual({ secret: 'provider payload' });
+  });
+
+  describe('findStalled for terminal jobs', () => {
+    const cutoff = plus(60_000);
+    const terminal = (overrides: Partial<IGenerationJob>) =>
+      generationJobRepository.createJob(newJob({ state: 'succeeded', terminalHandledAt: null, ...overrides }));
+    const setUpdatedAt = (id: string, updatedAt: Date) =>
+      GenerationJobModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { updatedAt } });
+
+    it('returns a job claimed before the cutoff and never handled', async () => {
+      const stuck = await terminal({ terminalHandlingClaimedAt: t0 });
+      expect((await generationJobRepository.findStalled(cutoff, 50)).map(j => j.id)).toEqual([stuck.id]);
+    });
+
+    it('skips claimed-after-cutoff, handled and recently updated unclaimed terminal jobs', async () => {
+      await terminal({ terminalHandlingClaimedAt: plus(120_000) });
+      await terminal({ terminalHandlingClaimedAt: t0, terminalHandledAt: t0 });
+      const fresh = await terminal({});
+      await setUpdatedAt(fresh.id, plus(120_000));
+      expect(await generationJobRepository.findStalled(cutoff, 50)).toEqual([]);
+    });
+
+    it('returns an unclaimed terminal job once it is older than the cutoff', async () => {
+      const old = await terminal({});
+      await setUpdatedAt(old.id, t0);
+      expect((await generationJobRepository.findStalled(cutoff, 50)).map(j => j.id)).toEqual([old.id]);
+    });
+  });
+
+  it('requestCancel on a terminal job returns null', async () => {
+    const job = await generationJobRepository.createJob(newJob({ state: 'succeeded' }));
+    expect(await generationJobRepository.requestCancel(job.id)).toBeNull();
+  });
+
+  it('concurrent acquireLease calls yield exactly one winner', async () => {
+    const job = await generationJobRepository.createJob(newJob());
+    const results = await Promise.all([
+      generationJobRepository.acquireLease(job.id, t0, plus(330_000)),
+      generationJobRepository.acquireLease(job.id, t0, plus(330_000)),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('findByIdempotencyKey round-trips', async () => {
+    const job = await generationJobRepository.createJob(newJob({ idempotencyKey: 'k9' }));
+    const found = await generationJobRepository.findByIdempotencyKey(CreditHolderType.User, 'u1', 'k9');
+    expect(found?.id).toBe(job.id);
+    expect(await generationJobRepository.findByIdempotencyKey(CreditHolderType.User, 'u1', 'nope')).toBeNull();
   });
 });

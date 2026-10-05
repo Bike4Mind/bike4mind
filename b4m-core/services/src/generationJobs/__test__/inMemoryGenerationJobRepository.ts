@@ -100,7 +100,10 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       return [...jobs.values()]
         .filter(job =>
           isTerminal(job)
-            ? !job.terminalHandledAt && !job.terminalHandlingClaimedAt && job.updatedAt < overdueBefore
+            ? !job.terminalHandledAt &&
+              (job.terminalHandlingClaimedAt
+                ? job.terminalHandlingClaimedAt < overdueBefore
+                : job.updatedAt < overdueBefore)
             : !!job.nextPollAt && job.nextPollAt < overdueBefore
         )
         .slice(0, limit)

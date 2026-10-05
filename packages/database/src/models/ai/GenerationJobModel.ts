@@ -81,6 +81,8 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
   }
 
   // Leasable: unleased (or lease expired) and either still in flight or terminal with handling not done.
+  // That includes claimed-but-unhandled terminal jobs: leasing them lets the engine alarm on them,
+  // but the claim stays held so settle/release are never re-run.
   async acquireLease(id: string, now: Date, leaseUntil: Date) {
     return toJob(
       await this.jobModel.findOneAndUpdate(
@@ -102,6 +104,8 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
   }
 
   // Every engine step ends here: one write that applies the step's result and releases the lease.
+  // Unfenced: safe only while the lease (330s) outlives the worker Lambda timeout (300s); keep in
+  // sync with infra/queues.ts generationJobQueue.
   async commit(id: string, update: GenerationJobCommit) {
     return toJob(
       await this.jobModel.findOneAndUpdate({ _id: id }, { $set: { ...update, leaseUntil: null } }, { new: true })
@@ -140,6 +144,14 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
             terminalHandledAt: null,
             terminalHandlingClaimedAt: null,
             updatedAt: { $lt: overdueBefore },
+          },
+          // Claimed long ago and never finished (worker died mid-handling). Re-enqueued only so the
+          // engine's stuck path alarms every sweep; onTerminal is never re-run because settle/release
+          // are non-idempotent $inc, so this is at-most-once plus an alarm, never a retry.
+          {
+            state: { $in: TERMINAL_GENERATION_JOB_STATES },
+            terminalHandledAt: null,
+            terminalHandlingClaimedAt: { $lt: overdueBefore },
           },
         ],
       })
