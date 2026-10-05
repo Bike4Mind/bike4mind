@@ -128,9 +128,11 @@ export const validateUserApiKey = async (
   // (fire and forget). Only heal a VALID key - matches the original ordering (gates
   // first) so an expired/disabled key isn't rewritten on every rejected request.
   // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
+  // Both heals pass the keyHash this request validated against, so a rotation that commits during
+  // the bcrypt compare above makes them no-ops instead of reviving the rotated-away key.
   if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
-    db.userApiKeys.update({ id: apiKey.id, keyPrefix }).catch(err => {
+    db.userApiKeys.healKeyPrefix(apiKey.id, keyPrefix, apiKey.keyHash).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
     });
   }
@@ -141,7 +143,7 @@ export const validateUserApiKey = async (
   if (!storedDigest && result.isValid) {
     const keyDigest = computeKeyDigest(key);
     apiKey.keyDigest = keyDigest;
-    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest).catch(err => {
+    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest, apiKey.keyHash).catch(err => {
       Logger.globalInstance.warn('Failed to backfill API key digest:', err);
     });
   }

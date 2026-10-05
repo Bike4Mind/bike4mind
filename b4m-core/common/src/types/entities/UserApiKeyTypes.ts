@@ -341,8 +341,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
-  /** Stores the fast-path digest for a key validated via the legacy bcrypt hash. */
-  setKeyDigest: (id: string, keyDigest: string) => Promise<void>;
+  /**
+   * Stores the fast-path digest for a key validated via the legacy bcrypt hash. A no-op unless
+   * `expectedKeyHash` is still the stored hash and no digest is set: a backfill that lands after a
+   * rotation must not write the old key's digest over the new one.
+   */
+  setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
+  /**
+   * Upgrades a legacy short prefix to the current length, under the same `expectedKeyHash` guard as
+   * setKeyDigest, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   */
+  healKeyPrefix: (id: string, keyPrefix: string, expectedKeyHash: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
