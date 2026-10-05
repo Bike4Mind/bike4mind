@@ -9,6 +9,8 @@ import {
   TOOL_OUTPUT_MARKER,
   stripToolOutputMarker,
   markToolEchoes,
+  isMermaidSyntax,
+  validateMermaidSyntax,
 } from './artifactParser';
 import { createToolEchoMatcher } from './toolEchoMatcher';
 
@@ -1325,8 +1327,327 @@ describe('markToolEchoes', () => {
     expect(promoted).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
   });
 
+  it('leaves a tool artifact untouched while marking an echoed fence', () => {
+    const tool = '<artifact identifier="d" type="text/html" title="D">\n<p>x</p>\n</artifact>';
+    const marked = markToolEchoes(`${tool}\n\n\`\`\`html\n${DOC}\n\`\`\`\n`, isToolEcho);
+    expect(marked.startsWith(tool)).toBe(true);
+    expect(marked).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+  });
+
   it('is idempotent on an already-marked reply', () => {
     const once = markToolEchoes(`\`\`\`html\n${DOC}\n\`\`\``, isToolEcho);
     expect(markToolEchoes(once, isToolEcho)).toBe(once);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
+  const FLOW =
+    'flowchart TD\n    A[Submitted] --> B[Triaged]\n    B --> C{Escalate?}\n    C -->|Yes| D[Tier 2]\n    C -->|No| E[Resolved]';
+  const toolFlow = `<artifact identifier="mermaid-1790933427990" type="application/vnd.ant.mermaid" title="Customer Support Ticket Flowchart">\n${FLOW}\n</artifact>`;
+
+  it('does not nest an artifact inside a tool artifact whose body starts with a diagram keyword', () => {
+    const input = `<artifact identifier="mermaid-1790933536293" type="application/vnd.ant.mermaid" title="One-Time Email Code Login">\nsequenceDiagram\n    participant User\n    participant App\n    User->>App: Request code\n    App-->>User: Code sent\n</artifact>Here is the flow.`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  const SEQ = 'sequenceDiagram\n    participant User\n    participant App\n    User->>App: request code';
+  const toolSeq = `<artifact identifier="mermaid-1790933536293" type="application/vnd.ant.mermaid" title="Login">\n${SEQ}\n</artifact>`;
+  const spacedFlow = FLOW.replace(/\n {4}/g, '\n  ').replace('A[Submitted] -->', 'A[Submitted]   -->');
+
+  it.each([
+    ['an identical flowchart body', toolFlow, FLOW],
+    ['a body differing only in whitespace', toolFlow, `${spacedFlow}\n`],
+    ['an identical sequence diagram body', toolSeq, SEQ],
+  ])('does not promote a mermaid fence repeating %s of a tool artifact', (_name, artifact, fenceBody) => {
+    const fence = `\`\`\`mermaid\n${fenceBody}\n\`\`\``;
+    const out = convertCodeBlocksToArtifacts(`${artifact}\n\n${fence}\n`);
+    expect(parseArtifacts(out).artifacts).toHaveLength(1);
+    expect(out).toContain(fence);
+  });
+
+  it('still promotes a different mermaid fence next to a tool artifact', () => {
+    const input = `${toolFlow}\n\n\`\`\`mermaid\ngraph TD\n    X --> Y\n\`\`\`\n`;
+    expect(parseArtifacts(convertCodeBlocksToArtifacts(input)).artifacts).toHaveLength(2);
+  });
+
+  it('still promotes a plain mermaid fence with no artifact in the reply', () => {
+    const input = `Intro\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n`;
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(out).toContain('<artifact identifier="mermaid-flowchart" type="application/vnd.ant.mermaid"');
+    expect(parseArtifacts(out).artifacts).toHaveLength(1);
+  });
+
+  it('still promotes a raw sequenceDiagram block outside any artifact', () => {
+    const input = 'Intro\nsequenceDiagram\n    participant User\n    User->>App: Request code\n';
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(out).toContain('<artifact identifier="mermaid-sequenceDiagram" type="application/vnd.ant.mermaid"');
+  });
+
+  describe('near-duplicate echoes ignore title and comment lines', () => {
+    const BODY = ['sequenceDiagram', '    participant User', '    participant App', '    User->>App: request code'];
+    const art = (lines: string[]) =>
+      `<artifact identifier="mermaid-1" type="application/vnd.ant.mermaid" title="Login">\n${lines.join('\n')}\n</artifact>`;
+    const fenceOf = (lines: string[]) => `\`\`\`mermaid\n${lines.join('\n')}\n\`\`\``;
+    const withLine = (line: string) => [BODY[0], line, ...BODY.slice(1)];
+
+    it.each([
+      ['a title only in the fence', BODY, withLine('    title Checkout')],
+      ['a title only in the artifact', withLine('    title Checkout'), BODY],
+      ['a comment line only in the fence', BODY, withLine('    %% note to self')],
+      ['an accTitle line only in the fence', BODY, withLine('    accTitle: Checkout')],
+      ['an accDescr line only in the fence', BODY, withLine('    accDescr: how checkout works')],
+    ])('does not promote a fence differing by %s', (_name, artifactLines, fenceLines) => {
+      const fence = fenceOf(fenceLines);
+      const out = convertCodeBlocksToArtifacts(`${art(artifactLines)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+      expect(out).toContain(fence);
+    });
+
+    it('still promotes a fence that differs by a real message line', () => {
+      const fence = fenceOf([...BODY, '    App-->>User: code sent']);
+      const out = convertCodeBlocksToArtifacts(`${art(BODY)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(2);
+    });
+
+    // Accepted tradeoff: diagrams differing only by ignored lines count as the same diagram.
+    it.each([
+      ['only their titles', withLine('    title One'), withLine('    title Two')],
+      [
+        'only an init directive',
+        ['%%{init: {"theme": "dark"}}%%', ...BODY],
+        ['%%{init: {"theme": "forest"}}%%', ...BODY],
+      ],
+    ])('does not promote a different diagram that differs by %s', (_name, artifactLines, fenceLines) => {
+      const fence = fenceOf(fenceLines);
+      const out = convertCodeBlocksToArtifacts(`${art(artifactLines)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+      expect(out).toContain(fence);
+    });
+  });
+
+  describe('sequence diagrams and stray openers', () => {
+    it('does not promote raw lines that repeat a sequence diagram artifact', () => {
+      const out = convertCodeBlocksToArtifacts(`${toolSeq}\n\nHere it is.\n${SEQ}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+    });
+
+    it('still promotes html and leaves a mermaid artifact alone when prose mentions an <artifact> tag', () => {
+      const html = '```html\n<div class="card"><p>hello</p></div>\n```';
+      const input = `Wrap output in an <artifact> tag.\n\n${html}\n\n${toolFlow}`;
+      const out = convertCodeBlocksToArtifacts(input);
+      expect(out).toContain('type="text/html"');
+      expect(out).not.toContain('```html');
+      expect(out).toContain(toolFlow);
+      expect(parseArtifacts(out).artifacts).toHaveLength(2);
+    });
+
+    it('protects an inner artifact when the outer span holds tool output', () => {
+      const input = `<artifact identifier="a" type="text/markdown" title="t">\n~~~ ${TOOL_OUTPUT_MARKER}\nx\n~~~\n<artifact identifier="m" type="application/vnd.ant.mermaid" title="M">\n${SEQ}\n</artifact>\n</artifact>`;
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    it('handles an unclosed stray opener before a real artifact and a duplicate fence', () => {
+      const input = `see <artifact docs\n${toolFlow}\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n`;
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    describe('opener acceptance', () => {
+      const FENCE = '```mermaid\nflowchart TD\n    A[Start] --> B[End]\n```';
+      const wrap = (open: string) => `${open}\n${FENCE}\n</artifact>`;
+
+      it.each([
+        ['a tab', '<artifact\tidentifier="x" type="text/plain" title="t">'],
+        ['a newline', '<artifact\nidentifier="x" type="text/plain" title="t">'],
+      ])('treats %s after <artifact as an artifact span', (_name, open) => {
+        const input = wrap(open);
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+      });
+
+      it('does not treat <artifactfoo as an artifact span', () => {
+        const out = convertCodeBlocksToArtifacts(wrap('<artifactfoo identifier="x" type="text/plain" title="t">'));
+        expect(out).not.toContain(FENCE);
+        expect(out).toContain('type="application/vnd.ant.mermaid"');
+      });
+
+      it('promotes a fence after an accepted opener that has no closer', () => {
+        const input = `<artifact identifier="a" type="text/plain" title="t">x\n\n${FENCE}\n`;
+        const out = convertCodeBlocksToArtifacts(input);
+        expect(out).not.toContain(FENCE);
+        expect(out).toContain('type="application/vnd.ant.mermaid"');
+      });
+    });
+  });
+
+  describe('linear time', () => {
+    it.each([
+      ['unclosed bare openers', (n: number) => '<artifact a="1">'.repeat(n)],
+      ['unclosed identified openers', (n: number) => '<artifact identifier="a" type="text/plain" title="t">'.repeat(n)],
+      [
+        'complete small artifacts',
+        (n: number) => '<artifact identifier="a" type="text/plain" title="t">x</artifact>'.repeat(n),
+      ],
+    ])('stays linear on %s', (_name, build) => {
+      assertLinearGrowth(build, 16000, (out, input) => expect(out).toBe(input), convertCodeBlocksToArtifacts, 150);
+    });
+  });
+});
+
+describe('sequence diagram syntax', () => {
+  const SEQ_LINES = [
+    'sequenceDiagram',
+    '    autonumber',
+    '    actor U as User',
+    '    participant A as App Server',
+    '    participant B',
+    '    box Purple Backend',
+    '    participant C',
+    '    end',
+    '    create participant D',
+    '    destroy D',
+    '    U->>+A: hi',
+    '    A-->>-U: ok',
+    '    U-xA: lost',
+    '    U--xA: lost async',
+    '    U-)A: async',
+    '    U--)A: async dotted',
+    '    A->B: plain',
+    '    A-->B: dotted',
+    '    A<<->>B: both',
+    '    A<<-->>B: both dotted',
+    '    activate A',
+    '    Note over A,B: shared',
+    '    Note right of A: right',
+    '    Note left of B: left',
+    '    loop every minute',
+    '    A->>B: ping',
+    '    end',
+    '    alt ok',
+    '    A->>B: yes',
+    '    else fail',
+    '    A->>B: no',
+    '    end',
+    '    opt maybe',
+    '    A->>B: x',
+    '    end',
+    '    par one',
+    '    A->>B: x',
+    '    and two',
+    '    A->>C: y',
+    '    end',
+    '    critical connect',
+    '    A->>B: x',
+    '    option timeout',
+    '    A->>B: y',
+    '    end',
+    '    break stop',
+    '    A->>B: z',
+    '    end',
+    '    rect rgb(0, 0, 0)',
+    '    A->>B: w',
+    '    end',
+    '    deactivate A',
+    '    link A: Docs @ https://example.com',
+  ];
+  const SEQ = SEQ_LINES.join('\n');
+
+  it('accepts every sequence diagram line', () => {
+    for (const line of SEQ_LINES.slice(1)) expect(isMermaidSyntax(line.trim(), true), line).toBe(true);
+  });
+
+  it.each([
+    'participant A as Alice',
+    'actor B',
+    'create participant C',
+    'destroy D',
+    'box Purple X',
+    'A-xB: x',
+    'A-)B: x',
+    'A<<->>B: x',
+    'Note over A,B: x',
+    'loop Every minute',
+    'alt ok',
+    'else fail',
+    'opt maybe',
+    'par x',
+    'and y',
+    'critical z',
+    'option w',
+    'break v',
+    'rect rgb(0,0,0)',
+    'activate A',
+    'deactivate A',
+    'link A: Docs @ https://x',
+    'links A: {"a":"b"}',
+    'title Login',
+    'accTitle: Login',
+    'accDescr: how login works',
+  ])('sequence-only line %j is syntax only in a sequence diagram', line => {
+    expect(isMermaidSyntax(line)).toBe(false);
+    expect(isMermaidSyntax(line, true)).toBe(true);
+  });
+
+  it('keeps lines after a title in a sequence diagram', () => {
+    const body = 'sequenceDiagram\n    title Login\n    A->>B: hi\n    B-->>A: ok';
+    expect(validateMermaidSyntax(body).cleanedContent).toBe(body);
+  });
+
+  it.each([
+    'App->>Email Service: x',
+    'Email Service-->>App: y',
+    'User Agent->>+Auth Server: z',
+    'User Agent-->>-Auth Server : done',
+  ])('accepts spaced participant names in %j', line => {
+    expect(isMermaidSyntax(line)).toBe(false);
+    expect(isMermaidSyntax(line, true)).toBe(true);
+  });
+
+  it('keeps a spaced-participant message when cleaning a sequence diagram', () => {
+    const body = 'sequenceDiagram\n    App->>Email Service: Request one-time code email';
+    expect(validateMermaidSyntax(body).cleanedContent).toBe(body);
+  });
+
+  it('still rejects prose that merely contains a colon', () => {
+    expect(isMermaidSyntax('Here is how it works: simple', true)).toBe(false);
+  });
+
+  it('stays linear on very long spaced lines', () => {
+    const run = (input: string) => String(isMermaidSyntax(input, true));
+    assertLinearGrowth(
+      n => 'A '.repeat(n),
+      50000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => `${'A '.repeat(n)}->> ${'B '.repeat(n)}`,
+      25000,
+      () => undefined,
+      run,
+      20
+    );
+  });
+
+  it('does not let sequence keywords keep prose in a flowchart', () => {
+    const input = '```mermaid\nflowchart TD\n    A-->B\noption two is better here\n```\n';
+    const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(input));
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].content).not.toContain('option two');
+  });
+
+  it('still rejects prose', () => {
+    expect(isMermaidSyntax('Here is the diagram:')).toBe(false);
+    expect(isMermaidSyntax('Note that this is prose')).toBe(false);
+  });
+
+  it('validateMermaidSyntax keeps the whole diagram', () => {
+    const { cleanedContent } = validateMermaidSyntax(`${SEQ}\n\nThis shows the flow.`);
+    expect(cleanedContent).toBe(SEQ.trim());
+  });
+
+  it('promotes a standalone mermaid fence holding a full sequence diagram', () => {
+    const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(`Intro\n\n\`\`\`mermaid\n${SEQ}\n\`\`\`\n`));
+    expect(artifacts).toHaveLength(1);
+    for (const line of SEQ_LINES) expect(artifacts[0].content).toContain(line.trim());
   });
 });
