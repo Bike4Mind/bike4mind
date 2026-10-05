@@ -134,4 +134,25 @@ describe('FabFileRepository lake supersession', () => {
     expect(await repo.getLakeSupersessionWinner!(fileId, 'lake-1')).toBeNull();
     expect(await repo.getLakeSupersessionWinner!('64b7f9c2d1e4a5b6c7d8e9f0', 'lake-1')).toBeNull();
   });
+
+  it('listLakeSupersededIds returns only the named files ruled in the named lake', async () => {
+    const other = await FabFile.create({
+      userId: 'owner-1',
+      fileName: 'other.md',
+      mimeType: 'text/markdown',
+      type: KnowledgeType.FILE,
+      filePath: 'other.md',
+    });
+    const otherId = other._id.toString();
+    await repo.setLakeSupersession(fileId, ruling());
+    await repo.setLakeSupersession(otherId, ruling({ dataLakeId: 'lake-2' }));
+
+    expect(await repo.listLakeSupersededIds!([fileId, otherId], 'lake-1')).toEqual([fileId]);
+    expect(await repo.listLakeSupersededIds!([fileId, otherId], 'lake-2')).toEqual([otherId]);
+    expect(await repo.listLakeSupersededIds!([fileId], 'lake-3')).toEqual([]);
+  });
+
+  it('listLakeSupersededIds is empty for no ids without querying', async () => {
+    expect(await repo.listLakeSupersededIds!([], 'lake-1')).toEqual([]);
+  });
 });
