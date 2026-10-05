@@ -220,8 +220,7 @@ describe('Lattice tools - failed writes report success: false', () => {
 
 /**
  * These tools delegate to `getModelForWrite`, so a same-org non-owner - who CAN read the model
- * over HTTP via `getModel` - is still rejected at the write gate (`isModelOwner`). The context
- * carries `user.organizationId` so the read gate admits the colleague; only the write gate rejects.
+ * over HTTP via `getModel` - is still rejected at the write gate (`isModelOwner`).
  */
 describe('Lattice tools - org sharing does not confer write authority', () => {
   beforeEach(() => vi.clearAllMocks());
