@@ -5,6 +5,7 @@ import {
   getVideoModelCapabilities,
   MAX_INLINE_PROVIDER_OUTPUT_BYTES,
   validateAgainstCapabilities,
+  videoFileExtension,
   type GenerationJobErrorCode,
   type IGenerationJobDocument,
   type ValidatedVideoRequest,
@@ -46,8 +47,7 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 const clampProgress = (progress: number | undefined): { progress?: number } =>
   progress !== undefined && Number.isFinite(progress) ? { progress: Math.min(1, Math.max(0, progress)) } : {};
 
-const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = { 'video/mp4': 'mp4', 'video/webm': 'webm' };
-const extensionFor = (contentType: string): string => EXTENSION_BY_CONTENT_TYPE[contentType] ?? 'bin';
+const extensionFor = (contentType: string): string => videoFileExtension(contentType) ?? 'bin';
 
 type PreparedSubmit = {
   provider: VideoProvider;

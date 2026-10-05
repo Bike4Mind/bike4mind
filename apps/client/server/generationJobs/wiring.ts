@@ -3,6 +3,7 @@ import { apiKeyService } from '@bike4mind/auth';
 import {
   isImageServeable,
   KnowledgeType,
+  videoFileExtension,
   type IGenerationJobDocument,
   type IGenerationJobUpdatedAction,
   type VideoProviderId,
@@ -155,12 +156,18 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
   });
   if (existing?.filePath) return { saved: true, fileId: existing.id, s3Key: existing.filePath };
 
+  const extension = videoFileExtension(contentType);
+  if (!extension) {
+    logger.error('provider returned a non-video content type', { jobId, contentType });
+    return { saved: false, reason: 'error' };
+  }
+
   try {
     const created = await fabFilesService.createFabFile(
       userId,
       {
         type: KnowledgeType.VIDEO,
-        fileName: `video-${jobId}.mp4`,
+        fileName: `video-${jobId}.${extension}`,
         mimeType: contentType,
         contentType,
         fileSize: bytes.length,
@@ -186,6 +193,9 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
           generateSignedUrl: (path, expireInSeconds, type) =>
             getFilesStorage().getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
         },
+        // The type is the provider's, narrowed to a supported video above; the extension map does not list video
+        // containers (user uploads stay closed), so an extension-first lookup would refuse every clip.
+        mimeTypePrecedence: 'claim-first',
       }
     );
     if (!created.filePath) {

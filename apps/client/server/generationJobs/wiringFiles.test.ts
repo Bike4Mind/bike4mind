@@ -79,6 +79,25 @@ describe('saveToFiles', () => {
     await expect(saveToFiles(params)).resolves.toEqual({ saved: true, fileId: 'f2', s3Key: 'generated-video/y.mp4' });
   });
 
+  // The FabFile extension map lists no video containers, so the provider's claimed type must outrank the name.
+  it('stores the clip under its own extension with the claimed type taking precedence', async () => {
+    mocks.findOne.mockResolvedValue(null);
+    mocks.createFabFile.mockResolvedValue({ id: 'f3', filePath: 'generated-video/z.webm' });
+    await saveToFiles({ ...params, contentType: 'video/webm' });
+    const [, input, adapters] = mocks.createFabFile.mock.calls[0];
+    expect(input).toMatchObject({ fileName: 'video-job1.webm', mimeType: 'video/webm' });
+    expect(adapters).toMatchObject({ mimeTypePrecedence: 'claim-first' });
+  });
+
+  it('refuses a non-video content type without creating a file', async () => {
+    mocks.findOne.mockResolvedValue(null);
+    await expect(saveToFiles({ ...params, contentType: 'text/html' })).resolves.toEqual({
+      saved: false,
+      reason: 'error',
+    });
+    expect(mocks.createFabFile).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['storage limit exceeded', 'storage_limit'],
     ['File size exceeds maximum file size', 'file_too_large'],

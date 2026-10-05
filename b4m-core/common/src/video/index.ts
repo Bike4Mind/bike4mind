@@ -5,3 +5,4 @@ export * from './validate';
 export * from './estimateCost';
 export * from './limits';
 export * from './enablement';
+export * from './fileType';
