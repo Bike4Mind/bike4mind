@@ -6,7 +6,15 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { QaRun, QaTestResult } from '@bike4mind/database';
 import type { QaRunInput } from '@bike4mind/common';
 import { ingestRun } from './ingestRun';
-import { getQaFacets, getQaOverview, getQaRunDetail, getQaTestHistory, listQaRuns, QA_SERIES_MAX_RUNS } from './reads';
+import {
+  getQaFacets,
+  getQaOverview,
+  getQaRunDetail,
+  getQaTestHistory,
+  listQaRuns,
+  QA_SERIES_MAX_RUNS,
+  QA_TEST_MEDIAN_LIMIT,
+} from './reads';
 import { failedTest, makeIngest, passedTest, TEST_A, TEST_B } from './testFixtures';
 import type { QaMediaStorage } from './storage';
 
@@ -197,6 +205,136 @@ describe('getQaRunDetail', () => {
     const detail = await getQaRunDetail(runId, { ...deps, storage: throwing });
     expect(detail?.failedTests[0].media.map(m => m.state)).toEqual(['expired', 'expired']);
     expect(detail?.report.state).toBe('expired');
+  });
+
+  it('returns every test without error bodies or media, which stay on the failed list', async () => {
+    const run = seq + 1;
+    const { runId } = await seed({
+      hours: 1,
+      failing: [TEST_B],
+      tests: [{ ...passedTest(TEST_A), durationMs: 2500 }, withMedia(run)],
+    });
+    const detail = await getQaRunDetail(runId, deps);
+    expect(detail?.tests.map(t => [t.testKey, t.status, t.durationMs, t.retries, t.media])).toEqual([
+      [TEST_A, 'passed', 2500, 0, []],
+      [TEST_B, 'failed', 1000, 2, []],
+    ]);
+    expect(detail?.tests.some(t => 'error' in t)).toBe(false);
+    expect(detail?.failedTests).toHaveLength(1);
+    expect(detail?.failedTests[0].error).toBeDefined();
+    expect(detail?.failedTests[0].media).toHaveLength(2);
+  });
+
+  describe('diff against the previous run', () => {
+    const GONE = 'notebook.spec.ts > Notebook > gone';
+    const NEW = 'notebook.spec.ts > Notebook > new';
+
+    it('fills newly failing, recovered, added and removed against the newest earlier run', async () => {
+      await seed({ hours: 30, tests: [passedTest(TEST_A), passedTest(TEST_B)] });
+      const previous = await seed({
+        hours: 10,
+        failing: [TEST_B],
+        tests: [passedTest(TEST_A), failedTest(TEST_B), passedTest(GONE)],
+      });
+      const current = await seed({
+        hours: 1,
+        failing: [TEST_A],
+        tests: [failedTest(TEST_A), passedTest(TEST_B), passedTest(NEW)],
+      });
+      const diff = (await getQaRunDetail(current.runId, deps))?.diff;
+      expect(diff).toEqual({
+        previousRunId: previous.runId,
+        previousStartedAt: hoursAgo(10),
+        newlyFailing: [{ testKey: TEST_A, title: 'Notebook > creates' }],
+        recovered: [{ testKey: TEST_B, title: 'Notebook > saves' }],
+        added: [{ testKey: NEW, title: 'Notebook > new' }],
+        removed: [{ testKey: GONE, title: 'Notebook > gone' }],
+      });
+    });
+
+    it('is null for the first run of a state, and ignores other states and later runs', async () => {
+      const first = await seed({ hours: 10 });
+      await seed({ hours: 20, env: 'production' });
+      await seed({ hours: 20, tenant: 'tenant-a' });
+      await seed({ hours: 5 });
+      expect((await getQaRunDetail(first.runId, deps))?.diff).toBeNull();
+    });
+
+    it('skips imported runs and runs where nothing ran, and is null when only those precede', async () => {
+      const imported = { source: 'slack-backfill' as const, tests: [] };
+      const nothingRan = { counts: { passed: 0, failed: 0, skipped: 0, notStarted: 2, ran: 0, total: 0 }, tests: [] };
+      const onlyImported = await seed({ hours: 10, ...imported });
+      expect((await getQaRunDetail(onlyImported.runId, deps))?.diff).toBeNull();
+
+      const ci = await seed({ hours: 30, failing: [TEST_B] });
+      await seed({ hours: 20, ...imported });
+      await seed({ hours: 15, ...nothingRan });
+      const current = await seed({ hours: 12 });
+      const diff = (await getQaRunDetail(current.runId, deps))?.diff;
+      expect(diff?.previousRunId).toBe(ci.runId);
+      expect(diff?.recovered.map(t => t.testKey)).toEqual([TEST_B]);
+    });
+
+    it('is null for an imported run, which also gets no tests or per-test medians', async () => {
+      await seed({ hours: 10 });
+      const imported = await seed({ hours: 1, source: 'slack-backfill', tests: [] });
+      const detail = await getQaRunDetail(imported.runId, deps);
+      expect(detail?.diff).toBeNull();
+      expect(detail?.tests).toEqual([]);
+    });
+  });
+
+  describe('duration baseline', () => {
+    it('is the median of the same state in the 7 days before the run, skipping zero durations', async () => {
+      await seed({ hours: 30, durationMs: 100_000 });
+      await seed({ hours: 20, durationMs: 200_000 });
+      await seed({ hours: 15, durationMs: 0 });
+      await seed({ hours: 24 * 8, durationMs: 900_000 });
+      await seed({ hours: 12, durationMs: 900_000, env: 'production' });
+      await seed({ hours: 0.5, durationMs: 5_000_000 });
+      const current = await seed({ hours: 1, durationMs: 999_999 });
+      expect((await getQaRunDetail(current.runId, deps))?.medianDurationMs).toBe(150_000);
+    });
+
+    it('averages the middle two of an even count and is null with no baseline', async () => {
+      await seed({ hours: 30, durationMs: 100_000 });
+      await seed({ hours: 20, durationMs: 101_000 });
+      const current = await seed({ hours: 1 });
+      const first = await seed({ hours: 24 * 9, env: 'staging-2' });
+      expect((await getQaRunDetail(current.runId, deps))?.medianDurationMs).toBe(100_500);
+      expect((await getQaRunDetail(first.runId, deps))?.medianDurationMs).toBeNull();
+    });
+
+    it('gives the slowest tests a median over passed, non-zero results of earlier runs', async () => {
+      const timed = (key: string, durationMs: number, status: 'passed' | 'failed' = 'passed') => ({
+        ...(status === 'failed' ? failedTest(key) : passedTest(key)),
+        durationMs,
+      });
+      await seed({ hours: 30, tests: [timed(TEST_A, 1000), timed(TEST_B, 400)] });
+      await seed({ hours: 20, tests: [timed(TEST_A, 3000), timed(TEST_B, 0)] });
+      await seed({ hours: 15, failing: [TEST_A], tests: [timed(TEST_A, 60_000, 'failed'), passedTest(TEST_B)] });
+      await seed({ hours: 12, env: 'production', tests: [timed(TEST_A, 90_000)] });
+      const current = await seed({ hours: 1, tests: [timed(TEST_A, 5000), timed(TEST_B, 500)] });
+      const detail = await getQaRunDetail(current.runId, deps);
+      expect(detail?.tests.map(t => [t.testKey, t.medianMs])).toEqual([
+        [TEST_A, 2000],
+        [TEST_B, 700],
+      ]);
+    });
+
+    it('computes per-test medians only for the slowest tests of the run', async () => {
+      const bulk = (durationMs: (i: number) => number) =>
+        Array.from({ length: QA_TEST_MEDIAN_LIMIT + 2 }, (_, i) => ({
+          ...passedTest(`bulk.spec.ts > Bulk > t${i}`),
+          durationMs: durationMs(i),
+        }));
+      await seed({ hours: 20, tests: bulk(() => 500) });
+      const current = await seed({ hours: 1, tests: bulk(i => 1000 + i) });
+      const detail = await getQaRunDetail(current.runId, deps);
+      const withMedian = detail?.tests.filter(t => t.medianMs !== undefined) ?? [];
+      expect(withMedian).toHaveLength(QA_TEST_MEDIAN_LIMIT);
+      expect(detail?.tests.filter(t => t.medianMs === undefined).map(t => t.title)).toEqual(['Bulk > t0', 'Bulk > t1']);
+    });
   });
 
   it('returns null for an unknown run', async () => {
