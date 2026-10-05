@@ -406,11 +406,14 @@ describe('MoonshotBedrockBackend live Bedrock shapes', () => {
 // mirrors base.ts's streaming accumulator so we prove the tokens become an EXECUTED
 // tool call, not leaked text.
 describe('MoonshotBedrockBackend native tool-call tokens', () => {
-  // Reproduce base.ts's streaming func[] accumulation over a sequence of frames.
+  // Reproduce base.ts's streaming loop over a sequence of frames: func[] accumulation, then the
+  // per-frame text emit. Must stay in sync with BaseBedrockBackend.complete's streaming branch.
   function drive(frames: Record<string, unknown>[]) {
     const be = new MoonshotBedrockBackend();
     be.getPayload(ChatModels.KIMI_K2_THINKING_BEDROCK, messages, {});
     const func: { name?: string; id?: string; parameters?: string }[] = [];
+    const isToolArgument = (c: { index: number; toolArguments?: boolean }) =>
+      Boolean(func[c.index]?.name) && (c.toolArguments ?? true);
     let text = '';
     for (const f of frames) {
       const { chunk } = be.translateStreamChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, f);
@@ -418,11 +421,14 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
         func[c.index] ||= {};
         func[c.index].name ||= c.tool?.name;
         func[c.index].id ||= c.tool?.id;
-        if (func[c.index].name && c.statusEndReason !== ChoiceEndReason.TOOL_USE) {
+        if (isToolArgument(c) && c.statusEndReason !== ChoiceEndReason.TOOL_USE) {
           func[c.index].parameters ??= '';
           func[c.index].parameters += c.chunkText || '';
         }
-        if (!func.some(x => x?.name)) text += c.chunkText || '';
+      }
+      const toolSeen = func.some(x => x?.name);
+      for (const c of chunk.choices) {
+        if (!toolSeen || !isToolArgument(c)) text += c.chunkText || '';
       }
     }
     return { func: func.filter(Boolean), text };
@@ -495,8 +501,8 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     expect(usage).toEqual({ input_tokens: 40, output_tokens: 12 });
   });
 
-  it('streaming: monologue sharing a frame with a whole native call never leaks into its args', () => {
-    const { func } = drive([
+  it('streaming: monologue sharing a frame with a whole native call stays out of its args and reaches the client', () => {
+    const { func, text } = drive([
       {
         choices: [
           {
@@ -510,6 +516,8 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
       },
     ]);
     expect(func).toEqual([{ name: 'get_weather', id: 'functions.get_weather:0', parameters: '{"city":"Paris"}' }]);
+    expect(text).toContain('Let me check.');
+    expect(text).not.toContain('<|');
   });
 
   it('non-streaming: a native tool section becomes a TOOL_USE end with full args', () => {
