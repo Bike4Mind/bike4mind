@@ -5,7 +5,12 @@ import {
   slackExportBucket,
   whatsNewDistributionBucket,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, SINGLE_RECORD_BATCH } from './constants';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  PRODUCTION_STAGES,
+  SINGLE_RECORD_BATCH,
+  TEST_VIDEO_PROVIDER_ENVIRONMENT,
+} from './constants';
 import { imageProcessor } from './imageProcessor';
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
@@ -1131,6 +1136,48 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Generation Job Queue
+// One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
+// needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
+// and the engine lease (apps/client/server/generationJobs/wiring.ts LEASE_MS) must stay ordered:
+// timeout (5 min) < lease (5.5 min) < visibility (6 min), so a running step is never redelivered or
+// overlapped by another worker.
+const generationJobDLQ = new sst.aws.Queue('generationJobDLQ', {});
+const generationJobQueue = new sst.aws.Queue('generationJobQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: generationJobDLQ.arn,
+    retry: 5,
+  },
+});
+const generationJobQueueSubscription = generationJobQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/generationJob.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    memory: '2048 MB',
+    vpc: lambdaVpc,
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      eventBus,
+      generationCallbackQueue,
+      generationJobQueue,
+    ],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // LiveOps Triage Queue (Multi-Config)
 // Handles triage jobs dispatched by liveopsTriageDispatcher.
 // Each message contains a configId for independent processing.
@@ -1691,6 +1738,7 @@ export {
   imageGenerationQueue,
   imageEditQueue,
   videoGenerationQueue,
+  generationJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
@@ -1727,6 +1775,7 @@ export {
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
+  generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -1764,6 +1813,7 @@ export {
   imageGenerationQueueSubscription,
   imageEditQueueSubscription,
   videoGenerationQueueSubscription,
+  generationJobQueueSubscription,
   fabFileBucketNotification,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,

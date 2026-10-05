@@ -15,6 +15,7 @@ import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/gith
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@server/queueHandlers/generationCallback';
+import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
@@ -38,6 +39,8 @@ import {
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
+  GENERATION_JOB_MAX_RECEIVE_COUNT,
+  GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
 } from '@server/queueHandlers/sqsDelivery';
 
 /**
@@ -157,6 +160,13 @@ async function main() {
   } else {
     bootLogger.warn('generationCallbackQueue not configured; generation completion callbacks will not be delivered');
   }
+
+  // Required in the manifest (unlike the callback queue above): a video job accepted with no consumer
+  // would hold credits until the sweeper fails it.
+  worker.registerQueueHandler('generationJobQueue', Resource.generationJobQueue.url, generationJobDispatch, {
+    visibilityTimeoutSec: GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
+    maxReceiveCount: GENERATION_JOB_MAX_RECEIVE_COUNT,
+  });
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
   // in the self-host manifest - a basic install that never set the env var simply never runs
