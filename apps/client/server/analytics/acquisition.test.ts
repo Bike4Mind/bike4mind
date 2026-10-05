@@ -66,6 +66,10 @@ describe('readConsentedAcquisitionTouches', () => {
     });
   });
 
+  it('returns nothing on a granted decision with no touch cookies', () => {
+    expect(readConsentedAcquisitionTouches({ headers: { cookie: 'b4m_consent=granted' } })).toEqual({});
+  });
+
   it.each([
     ['absent', undefined],
     ['denied', 'b4m_consent=denied'],

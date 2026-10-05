@@ -82,23 +82,32 @@ the server observes for itself, such as a referrer correlated at landing and
 signed so it cannot be forged.
 
 Signup attribution is gated server-side and fails closed. The gate reads
-`b4m_consent` first and the marketing site's `b4m-consent-decision` second,
-which is the browser's own precedence; only an explicit `granted` permits
-reading the campaign cookies. Denied, absent, empty, malformed, and unrecognised
-values all suppress at both levels, and a value that is not a recognised
-decision falls through to the next source rather than being read as a denial. A
-visitor who has opened neither banner carries no decision and is not attributed.
+`b4m_consent` first and the marketing site's `b4m-consent-decision` second; only
+an explicit `granted` permits reading the campaign cookies. Denied, absent,
+empty, malformed, and unrecognised values all suppress at both levels, and a
+value that is not a recognised decision falls through to the next source rather
+than being read as a denial. A visitor in the opt-in region who has made no
+decision is not attributed. A `row` visitor who never clicks is attributed,
+because the browser resolves the region default to `granted` and publishes it,
+the same answer checkout reaches.
 
 A suppressed signup sends nothing on this stream: with no touches there is no
 source product, so no event is emitted at all. The account itself is still
 recorded in the application's own registration log, which is a separate system.
 
-Reading the app cookie first is what keeps signup and checkout from disagreeing
-about the same visitor. A visitor who consents on the app rather than the
-marketing site is attributed, where a gate on the shared cookie alone would
-suppress every app-direct signup; and a visitor who declines on the app is not
-attributed off a surviving parent-domain `b4m-first-touch` even when the shared
-cookie still says granted.
+Reading the app cookie first brings signup close to checkout's answer for the
+same visitor. A visitor who consents on the app rather than the marketing site is
+attributed, where a gate on the shared cookie alone would suppress every
+app-direct signup; and a visitor who declines on the app is not attributed off a
+surviving parent-domain `b4m-first-touch` even when the shared cookie still says
+granted.
+
+The two can still disagree for a while. `b4m_consent` is a snapshot taken on the
+last app page load, and the server honours it ahead of the shared cookie. A
+visitor whose app snapshot says `granted` and who then declines on the marketing
+site is still attributed by signup until the app loads again and republishes,
+while checkout, which resolves consent in the browser at request time, would
+already see the denial.
 
 ## Troubleshooting missing attribution
 

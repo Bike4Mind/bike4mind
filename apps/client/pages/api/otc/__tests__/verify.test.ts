@@ -69,6 +69,8 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+import { authSessionService } from '@bike4mind/services';
+import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/otc/verify';
 
 // bike4mind.com is seeded as an internal-staff domain in vitest.setup.ts, so the real
@@ -130,6 +132,31 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
       touches: { firstTouch: { source: 'widgets' } },
       method: 'otc',
     });
+  });
+
+  // The account exists once registerViaOTC returns and a retry is a login, not a signup, so an
+  // emit placed after the session mint would be lost for good when the mint fails.
+  it('still sends the signup when minting the session fails', async () => {
+    vi.mocked(authSessionService.issueSession).mockRejectedValueOnce(new Error('session store down'));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await Promise.resolve(handler(req, res)).catch(() => {});
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
+  });
+
+  // The REGISTER log and the emit are separate statements; folding the emit into the log's
+  // error handling would drop a signup whenever the log write fails.
+  it('still sends the signup when the REGISTER log fails', async () => {
+    vi.mocked(logEvent).mockRejectedValueOnce(new Error('log store down'));
+    const { req, res } = makeReqRes(NON_DOMAIN_EMAIL);
+    (req as any).headers.cookie = `${firstTouch}; b4m-consent-decision=granted`;
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', method: 'otc' }));
   });
 
   // This cookie is the reason the gate has to exist. `b4m-first-touch` lives on the parent

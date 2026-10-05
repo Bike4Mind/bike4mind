@@ -44,6 +44,7 @@ vi.mock('@server/auth/issueSession', () => ({
 }));
 
 // Import after mocks are registered.
+import { logEvent } from '@server/utils/analyticsLog';
 import handler from '@pages/api/auth/[strategy]/callback';
 
 function makeReqRes(headers: Record<string, string> = {}) {
@@ -58,11 +59,15 @@ function makeReqRes(headers: Record<string, string> = {}) {
 
 /** Drive the handler as if passport's verify callback resolved with (err, user, info). */
 async function runCallback(err: unknown, user: unknown, info: unknown, headers?: Record<string, string>) {
-  mockAuthenticate.mockImplementation(
-    (_strategy: string, _opts: any, cb: any) => (req: any, res: any, next: any) => cb(err, user, info)
-  );
+  // The handler does not await passport's callback, so hold on to the promise it returns and wait
+  // for that: a fixed tick races any await added above the code under test.
+  let passportCallback: Promise<unknown> | undefined;
+  mockAuthenticate.mockImplementation((_strategy: string, _opts: any, cb: any) => () => {
+    passportCallback = cb(err, user, info);
+  });
   const { req, res } = makeReqRes(headers);
   await handler(req, res, vi.fn());
+  await passportCallback;
   return res;
 }
 
@@ -157,7 +162,6 @@ describe('[strategy]/callback - banned user gate', () => {
     const res = await runCallback(null, { id: 'u-ok', email: 'ok@example.com', isBanned: false }, undefined);
     // The handler does not await passport's callback, and the success path awaits more
     // than the refusal paths do, so let its remaining microtasks drain before asserting.
-    await new Promise(resolve => setImmediate(resolve));
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
@@ -185,7 +189,6 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
       cookie: touchCookie,
     });
-    await new Promise(resolve => setImmediate(resolve));
 
     expect(mockEmitSignup).toHaveBeenCalledWith({
       userId: 'u-new',
@@ -197,10 +200,22 @@ describe('[strategy]/callback - signup credited to the source product', () => {
 
   it('sends nothing for a returning user', async () => {
     await runCallback(null, { id: 'u-old', isBanned: false }, undefined, { cookie: touchCookie });
-    await new Promise(resolve => setImmediate(resolve));
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(mockEmitSignup).not.toHaveBeenCalled();
+  });
+
+  // The REGISTER log and the emit are separate statements; folding the emit into the log's
+  // try/catch would drop a signup whenever the log write fails.
+  it('still sends the signup when the REGISTER log fails', async () => {
+    vi.mocked(logEvent).mockRejectedValueOnce(new Error('log store down'));
+
+    const res = await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
+      cookie: touchCookie,
+    });
+
+    expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-new', method: 'github' }));
+    expect(res._getRedirectUrl()).toMatch(/isNewUser=1/);
   });
 
   // The account exists once verifyCallback returns, and a retry sees isNewUser false, so a
@@ -209,7 +224,6 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     mockIssueBrowserSession.mockRejectedValueOnce(new Error('session store down'));
 
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
-    await new Promise(resolve => setImmediate(resolve));
 
     expect(mockEmitSignup).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u-new', method: 'github' }));
   });
@@ -223,7 +237,6 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
       cookie: `${touch}; b4m_consent=granted`,
     });
-    await new Promise(resolve => setImmediate(resolve));
 
     expect(mockEmitSignup).toHaveBeenCalledWith({
       userId: 'u-new',
@@ -239,7 +252,6 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, {
       cookie: `${touch}; b4m_consent=denied; b4m-consent-decision=granted`,
     });
-    await new Promise(resolve => setImmediate(resolve));
 
     expect(mockEmitSignup).toHaveBeenCalledWith({ userId: 'u-new', touches: {}, method: 'github' });
   });
@@ -253,7 +265,6 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     ['unrecognised', `${touch}; b4m-consent-decision=yes`],
   ])('sends no touches when consent is %s', async (_label, cookie) => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie });
-    await new Promise(resolve => setImmediate(resolve));
 
     // The emitter is still CALLED, with no touches, so the consent gate is the only thing that
     // decided this and the signup path itself is unchanged. Nothing reaches Overwatch either

@@ -7,7 +7,9 @@ vi.mock('./emitActiveEvent', () => ({
   emitProductEvent: mockEmit,
   ingestKeyFor: mockKeyFor,
 }));
+vi.mock('@server/utils/config', () => ({ Config: { OVERWATCH_PSEUDONYM_SALT: 'test-salt' } }));
 
+import { pseudonymize } from './pseudonymize';
 import { emitSignupForSourceProducts, stableEventId } from './signupEvents';
 
 beforeEach(() => {
@@ -28,11 +30,19 @@ describe('emitSignupForSourceProducts', () => {
     expect(mockEmit).toHaveBeenCalledWith({
       productId: 'widgets',
       event: 'signup',
-      eventId: stableEventId('signup', 'widgets', 'u1'),
+      eventId: stableEventId('signup', 'widgets', pseudonymize('u1', 'test-salt')),
       userId: 'u1',
       utm: { source: 'widgets', medium: 'teaser' },
       metadata: { touch: 'both', attribution: 'self-reported', method: 'otc' },
     });
+  });
+
+  // The eventId reaches the credited product verbatim. An unsalted hash of the raw id would let it
+  // recover the host's user id (an ObjectId is a timestamp plus 5 random bytes), so the id must
+  // be built from the salted pseudonym it already receives as userId.
+  it('never builds the eventId from the raw user id', async () => {
+    await emitSignupForSourceProducts({ userId: 'u1', method: 'otc', touches: { lastTouch: { source: 'widgets' } } });
+    expect(mockEmit.mock.calls[0][0].eventId).not.toBe(stableEventId('signup', 'widgets', 'u1'));
   });
 
   it('sends to each of two distinct source products, marked with its own touch', async () => {

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { OverwatchUtm } from '@bike4mind/common';
 import type { AcquisitionTouches } from '@client/lib/subscriptions/acquisition';
 import { emitProductEvent, HOST_PRODUCT_ID, ingestKeyFor } from './emitActiveEvent';
+import { pseudonymizeUserId } from './pseudonymize';
 
 // Kept apart from acquisition.ts, which is pure: this is the one piece that sends, so importing
 // the touch helpers (checkout, the subscription write path) does not pull in the emitter and its
@@ -67,8 +68,8 @@ function sourceProducts(touches: AcquisitionTouches | undefined): Map<string, So
  * for why that matters before these counts are trusted.
  *
  * Called once, where an account is created with the new user's own request in hand (their cookies
- * carry the touches). The user id makes the eventId, since an account signs up once, so a retry
- * sends the same id and the receiver keeps one event. Awaited by the caller but never throws
+ * carry the touches). The user's pseudonym makes the eventId, since an account signs up once, so a
+ * retry sends the same id and the receiver keeps one event. Awaited by the caller but never throws
  * (emitProductEvent fails open and times out on its own), and resolves at once when no touch names
  * a product, which is most signups.
  *
@@ -83,12 +84,16 @@ export async function emitSignupForSourceProducts(opts: {
   method: string;
 }): Promise<string[]> {
   const byProduct = sourceProducts(opts.touches);
+  // The eventId is sent verbatim to the credited product, so it is keyed on the salted pseudonym
+  // that product already receives as userId, never the raw id: an unsalted hash of an ObjectId
+  // (timestamp + 5 random bytes) is brute-forceable back to the host's user id.
+  const pseudonym = pseudonymizeUserId(opts.userId);
   await Promise.all(
     [...byProduct.entries()].map(([productId, { touch, utm }]) =>
       emitProductEvent({
         productId,
         event: 'signup',
-        eventId: stableEventId('signup', productId, opts.userId),
+        eventId: stableEventId('signup', productId, pseudonym),
         userId: opts.userId,
         utm,
         metadata: { touch, attribution: ATTRIBUTION, method: opts.method },

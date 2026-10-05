@@ -126,6 +126,9 @@ describe('publishResolvedConsent', () => {
       expect(written).toContain('path=/');
       expect(written).toContain('SameSite=Lax');
       expect(written).not.toContain('SameSite=Strict');
+      // A decision is kept for 90 days and a withdrawal expires it now; without expires= either
+      // becomes a session cookie that disappears when the browser closes.
+      expect(written).toContain('expires=');
     } finally {
       setSpy.mockRestore();
     }
