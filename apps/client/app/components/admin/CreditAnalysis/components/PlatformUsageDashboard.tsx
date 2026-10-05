@@ -13,10 +13,8 @@ import {
   Table,
   ToggleButtonGroup,
   Typography,
-  useTheme,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
   COMPLETION_SOURCES,
   CreditHolderType,
@@ -29,6 +27,7 @@ import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { zeroFillDailySeries } from '../utils/dailySeries';
 import { usePlatformUsage } from '../hooks/usePlatformUsage';
+import { DailyAreaChart } from './DailyAreaChart';
 import ViewUserProfile from './ViewUserProfile';
 
 // The route accepts 1-365; endpoint data is further clamped server-side to its 90-day TTL.
@@ -47,43 +46,6 @@ const OWNER_TYPE_OPTIONS: { value: OwnerTypeFilter; label: string }[] = [
 
 const formatPercent = (fraction: number) => `${(fraction * 100).toFixed(1)}%`;
 const formatMs = (ms: number) => `${Math.round(ms).toLocaleString()} ms`;
-
-const DailyAreaChart: React.FC<{
-  data: { day: string; value: number }[];
-  valueLabel: string;
-  formatValue: (value: number) => string;
-  color: 'primary' | 'warning';
-  testid: string;
-}> = ({ data, valueLabel, formatValue, color, testid }) => {
-  const theme = useTheme();
-  return (
-    <Box data-testid={testid}>
-      <ResponsiveContainer width="100%" height={240}>
-        <AreaChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
-          <XAxis dataKey="day" tick={{ fontSize: 11 }} minTickGap={24} />
-          <YAxis tick={{ fontSize: 11 }} width={56} />
-          <Tooltip
-            formatter={value => [formatValue(Number(value) || 0), valueLabel]}
-            contentStyle={{
-              background: theme.palette.background.surface,
-              border: `1px solid ${theme.palette.divider}`,
-              borderRadius: 8,
-              fontSize: 12,
-            }}
-          />
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke={theme.palette[color][500]}
-            fill={theme.palette[color].softBg}
-            strokeWidth={2}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
-    </Box>
-  );
-};
 
 const ConsumerOwner: React.FC<{ consumer: NamedPlatformConsumerUsage }> = ({ consumer }) => {
   if (!consumer.ownerId) {
@@ -362,7 +324,7 @@ export const PlatformUsageDashboard: React.FC = () => {
       )}
 
       {isLoading ? (
-        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }} data-testid="platform-usage-loading">
           <CircularProgress />
         </Box>
       ) : (

@@ -12,16 +12,15 @@ import {
   Table,
   ToggleButtonGroup,
   Typography,
-  useTheme,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { CreditHolderType, UNCLASSIFIED_SOURCE, type UsageOwnerType } from '@bike4mind/common';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { useOwnerUsage } from '../hooks/useOwnerUsage';
 import { zeroFillDailySeries } from '../utils/dailySeries';
+import { DailyAreaChart } from './DailyAreaChart';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 
 const DAY_RANGES = [30, 60, 90] as const;
@@ -40,7 +39,6 @@ type OrgOption = { id: string; name: string };
  * A User owner is always pinned to `ownerId` (no picker).
  */
 export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: string }> = ({ ownerType, ownerId }) => {
-  const theme = useTheme();
   const isOrg = ownerType === CreditHolderType.Organization;
   const showOrgPicker = isOrg && !ownerId;
 
@@ -170,29 +168,13 @@ export const UsageDashboard: React.FC<{ ownerType: UsageOwnerType; ownerId?: str
                 No usage in this window.
               </Typography>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
-                  <XAxis dataKey="day" tick={{ fontSize: 11 }} minTickGap={24} />
-                  <YAxis tick={{ fontSize: 11 }} width={56} />
-                  <Tooltip
-                    formatter={value => [formatCredits(Number(value) || 0), 'Credits']}
-                    contentStyle={{
-                      background: theme.palette.background.surface,
-                      border: `1px solid ${theme.palette.divider}`,
-                      borderRadius: 8,
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="value"
-                    stroke={theme.palette.primary[500]}
-                    fill={theme.palette.primary.softBg}
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              <DailyAreaChart
+                data={chartData}
+                valueLabel="Credits"
+                formatValue={formatCredits}
+                color="primary"
+                height={260}
+              />
             )}
           </Box>
 

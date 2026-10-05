@@ -13,7 +13,7 @@ vi.mock('../hooks/usePlatformUsage', () => ({
 vi.mock('./ViewUserProfile', () => ({
   default: ({ userId }: { userId: string }) => <button data-testid={`view-profile-${userId}`}>View</button>,
 }));
-// ResponsiveContainer measures via ResizeObserver, which jsdom lacks.
+// ResponsiveContainer measures 0x0 in jsdom and renders no children, so the chart would be empty.
 vi.mock('recharts', async importOriginal => ({
   ...(await importOriginal<typeof import('recharts')>()),
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -195,5 +195,117 @@ describe('PlatformUsageDashboard endpoint section', () => {
     expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent(
       'Last 90 days (the log keeps 90 days of history)'
     );
+  });
+});
+
+describe('PlatformUsageDashboard credit sections', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows totals, the credits chart, and the feature and model breakdowns when there is usage', () => {
+    const today = new Date().toISOString().slice(0, 10);
+    setData({
+      totals: { requests: 1200, cogsUsd: 3.5, creditsCharged: 400 },
+      overTime: [{ day: today, requests: 1200, cogsUsd: 3.5, creditsCharged: 400 }],
+      byFeature: [{ feature: 'completion_api', requests: 1200, cogsUsd: 3.5, creditsCharged: 400 }],
+      byModel: [{ provider: 'openai', model: 'gpt-x', requests: 1200, cogsUsd: 3.5, creditsCharged: 400 }],
+    });
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-total-credits')).toHaveTextContent('400 credits');
+    expect(screen.getByTestId('platform-usage-total-cogs')).toHaveTextContent('$3.50 COGS');
+    expect(screen.getByTestId('platform-usage-total-requests')).toHaveTextContent('1,200 requests');
+    expect(screen.getByTestId('platform-usage-credits-chart')).toBeInTheDocument();
+    expect(within(screen.getByTestId('platform-usage-feature-table')).getByText('completion_api')).toBeInTheDocument();
+    expect(within(screen.getByTestId('platform-usage-model-table')).getByText('openai / gpt-x')).toBeInTheDocument();
+  });
+
+  it('replaces the chart with an empty message when there are no requests', () => {
+    setData();
+    renderDashboard();
+
+    expect(screen.queryByTestId('platform-usage-credits-chart')).not.toBeInTheDocument();
+    // The empty breakdown tables repeat this message, so more than one match is expected.
+    expect(screen.getAllByText('No usage in this window.').length).toBeGreaterThan(0);
+  });
+});
+
+describe('PlatformUsageDashboard error banner', () => {
+  const setError = (error: unknown) => {
+    mockUsePlatformUsage.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isFetching: false,
+      error,
+      refetch: vi.fn(),
+    });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the error message and no consumer table', () => {
+    setError(new Error('Admin access required'));
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-error')).toHaveTextContent('Admin access required');
+    expect(screen.queryByTestId('platform-usage-consumer-table')).not.toBeInTheDocument();
+  });
+
+  it('falls back to a generic message when the error carries none', () => {
+    setError({});
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-error')).toHaveTextContent('Failed to load platform usage');
+  });
+});
+
+describe('PlatformUsageDashboard loading and refresh', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows a spinner and no tables while loading', () => {
+    mockUsePlatformUsage.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isFetching: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('platform-usage-consumer-table')).not.toBeInTheDocument();
+  });
+
+  it('refetches when the refresh button is clicked', () => {
+    const refetch = vi.fn();
+    mockUsePlatformUsage.mockReturnValue({
+      data: responseWith({}),
+      isLoading: false,
+      isFetching: false,
+      error: null,
+      refetch,
+    });
+    renderDashboard();
+
+    fireEvent.click(screen.getByTestId('platform-usage-refresh-btn'));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the refresh button while fetching', () => {
+    mockUsePlatformUsage.mockReturnValue({
+      data: responseWith({}),
+      isLoading: false,
+      isFetching: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderDashboard();
+
+    expect(screen.getByTestId('platform-usage-refresh-btn')).toBeDisabled();
   });
 });
