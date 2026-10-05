@@ -1462,6 +1462,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
    */
   getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
+  /**
+   * Which of `fabFileIds` carry a curator supersede ruling for `dataLakeId`, as a subset of the
+   * input. The batched read behind the findings list's "Return to ranking"; `supersededInLakes` is
+   * `select: false`, so this opts in explicitly rather than leaning on a plain find.
+   */
+  listLakeSupersededIds?(fabFileIds: string[], dataLakeId: string): Promise<string[]>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the
