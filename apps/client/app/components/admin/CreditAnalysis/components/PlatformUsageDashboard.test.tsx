@@ -205,8 +205,13 @@ describe('PlatformUsageDashboard endpoint section', () => {
     unmount();
 
     setData({ source: undefined, ownerType: undefined });
-    renderDashboard();
+    const { unmount: unmountUnfiltered } = renderDashboard();
     expect(screen.getByTestId('platform-usage-endpoint-section')).not.toHaveTextContent(note);
+    unmountUnfiltered();
+
+    setData({ source: undefined, ownerType: CreditHolderType.Organization });
+    renderDashboard();
+    expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent(note);
   });
 });
 

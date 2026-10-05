@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveApiCompletionSource } from './analytics';
+import { COMPLETION_SOURCES, isApiKeyCompletionSource, resolveApiCompletionSource } from './analytics';
 
 describe('resolveApiCompletionSource', () => {
   it('returns "cli" for the b4m-cli User-Agent', () => {
@@ -36,5 +36,11 @@ describe('resolveApiCompletionSource', () => {
 
   it('rejects substrings that contain but do not start with the CLI prefix', () => {
     expect(resolveApiCompletionSource({ 'user-agent': 'wrapper b4m-cli/0.9.3' })).toBe('api');
+  });
+});
+
+describe('isApiKeyCompletionSource', () => {
+  it('is true only for api and cli', () => {
+    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource)).toEqual(['cli', 'api']);
   });
 });

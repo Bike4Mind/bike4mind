@@ -11,6 +11,7 @@ import {
   type NamedPlatformConsumerUsage,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
+import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -74,7 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const keyById = new Map(
     keys.map(k => {
       // Org-billed keys attribute to the org pool; personal keys to the user.
-      const billsOrg = k.billingOwnerType === CreditHolderType.Organization && !!k.organizationId;
+      const billsOrg = resolveApiKeyOwnerType(k) === CreditHolderType.Organization;
       return [
         String(k.id),
         {

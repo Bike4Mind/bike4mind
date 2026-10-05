@@ -258,5 +258,9 @@ describe('apiKeyAuth usage log stamping', () => {
     );
     vi.clearAllMocks();
     expect((await loggedUsage({})).ownerType).toBe(CreditHolderType.User);
+    vi.clearAllMocks();
+    expect(
+      (await loggedUsage({}, { billingOwnerType: CreditHolderType.User, organizationId: 'org-1' })).ownerType
+    ).toBe(CreditHolderType.User);
   });
 });
