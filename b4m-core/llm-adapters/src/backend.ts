@@ -32,6 +32,12 @@ interface IChoiceBase {
   chunkText?: string | null;
   /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
   channel?: StreamChannel;
+  /**
+   * Whether chunkText is a tool-call argument fragment. Adapters whose prose shares a choice index
+   * with a tool call must set this; left undefined, a chunk at an index whose tool name is already
+   * known is treated as an argument fragment.
+   */
+  toolArguments?: boolean;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
