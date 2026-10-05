@@ -177,6 +177,8 @@ import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
   resolveInvocationEnabledTools,
+  hasApprover,
+  mcpSessionDisabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
 import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
@@ -1285,6 +1287,7 @@ async function processExecution(
           // dispatch lineage and must never be read as a Quest id (#1867).
           linkedQuestId: execution.linkedQuestId,
           ...(execution.apiKeyId && { apiKeyId: execution.apiKeyId }),
+          ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
           query: info.task,
           model: info.model,
           approvedTools: [] as string[],
@@ -1527,6 +1530,7 @@ async function processExecution(
         // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
         linkedQuestId: execution.linkedQuestId,
         apiKeyId: execution.apiKeyId,
+        scopeDeniedTools: execution.scopeDeniedTools,
         spawnedByExecutionId: executionId,
         enableArtifacts: callerEnableArtifacts,
       },
@@ -1798,7 +1802,7 @@ async function processExecution(
       payloadEnabledTools: startPayload?.enabledTools,
       payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
       profile: orchestrationProfile,
-      hasApprover: !!execution.connectionId && !isHeadlessConnection(execution.connectionId),
+      hasApprover: hasApprover(execution.connectionId),
     });
     if (isNewExecution) {
       await agentExecutionRepository.persistResolvedEnabledTools(executionId, profileEnabledTools);
@@ -1894,10 +1898,11 @@ async function processExecution(
       // them to `toolNames`, which MCP tools never pass through, so a profile that denies
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
-      sessionDisabledTools: [
-        ...(session.disabledTools ?? []),
-        ...(orchestrationProfile?.deniedTools ?? execution.profileDeniedTools ?? []),
-      ],
+      sessionDisabledTools: mcpSessionDisabledTools(
+        session.disabledTools,
+        orchestrationProfile?.deniedTools,
+        execution.profileDeniedTools
+      ),
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
@@ -3560,7 +3565,7 @@ async function processSubagentDispatch(
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
-      sessionDisabledTools: session.disabledTools,
+      sessionDisabledTools: [...(session.disabledTools ?? []), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
       // tools are excluded from the return), and that return is passed as the

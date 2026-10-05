@@ -59,6 +59,16 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/nodeDefaults: \{[^}]*apiKeyId: execution\.apiKeyId,/);
   });
 
+  it('carries the scope denials to every child row and the child MCP denylist', () => {
+    expect(source).toMatch(
+      /const baseFields = \{[^}]*\.\.\.\(execution\.scopeDeniedTools\?\.length && \{ scopeDeniedTools: execution\.scopeDeniedTools \}\),/
+    );
+    expect(source).toMatch(/nodeDefaults: \{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
+    expect(source).toMatch(
+      /sessionDisabledTools: \[\.\.\.\(session\.disabledTools \?\? \[\]\), \.\.\.\(child\.scopeDeniedTools \?\? \[\]\)\]/
+    );
+  });
+
   it('subtracts the persisted scope denials in the final tool policy pass', () => {
     expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
   });

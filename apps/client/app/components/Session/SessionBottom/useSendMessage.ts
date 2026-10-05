@@ -30,7 +30,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
-import { resolveDispatchAgent } from './resolveDispatchAgent';
+import { pickerAttachedAgents, resolveDispatchAgent } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
@@ -915,7 +915,7 @@ export function useSendMessage({
     if (routeTarget === 'agent_executor') {
       try {
         // Same set the composer's Agents badge shows (SessionBottom `displayAgents`).
-        const pickerAgents = currentSessionId ? sessionAgents : workBenchAgents;
+        const pickerAgents = pickerAttachedAgents(currentSessionId, sessionAgents, workBenchAgents);
         const dispatchAgent = resolveDispatchAgent(orchestrationAgent, mentionedAgent, pickerAgents);
         // Only an @mentioned agent's `preferredModel` overrides the composer model
         // (#agent-mode-persona). A picker-attached agent sets `agentId` alone, so the
@@ -983,8 +983,8 @@ export function useSendMessage({
 
         // Iteration cap comes from the agent doc; left unset when agentless so
         // the executor fills it from admin defaults.
-        const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
-        const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
+        const thoroughness = dispatchAgent?.defaultThoroughness ?? 'medium';
+        const maxIters = dispatchAgent?.maxIterations?.[thoroughness];
         // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
         // drop the tools the prompt needs (see `resolveDispatchTools`). An agentless send
         // ships the user's Smart Tools marked ambient; the server unions them onto the
@@ -992,7 +992,7 @@ export function useSendMessage({
         const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
           options?.toolsOverride,
           effectiveTools,
-          orchestrationAgent?.allowedTools
+          dispatchAgent?.allowedTools
         );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first

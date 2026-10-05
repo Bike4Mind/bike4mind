@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import type { IAgent } from '@bike4mind/common';
-import { resolveDispatchAgent } from './resolveDispatchAgent';
+import { pickerAttachedAgents, resolveDispatchAgent } from './resolveDispatchAgent';
 
 const agent = (id: string, extra: Partial<IAgent> = {}) => ({ id, name: id, ...extra }) as IAgent;
 
@@ -41,7 +41,9 @@ describe('useSendMessage - agent-mode dispatch uses resolveDispatchAgent', () =>
   const dispatch = source.slice(start, end);
 
   it('resolves the agent from the same set the Agents badge shows', () => {
-    expect(source).toMatch(/const pickerAgents = currentSessionId \? sessionAgents : workBenchAgents;/);
+    expect(source).toMatch(
+      /const pickerAgents = pickerAttachedAgents\(currentSessionId, sessionAgents, workBenchAgents\);/
+    );
     expect(source).toMatch(
       /const dispatchAgent = resolveDispatchAgent\(orchestrationAgent, mentionedAgent, pickerAgents\);/
     );
@@ -59,5 +61,18 @@ describe('useSendMessage - agent-mode dispatch uses resolveDispatchAgent', () =>
   it('takes the model from an @mentioned agent only, never a picker-attached one', () => {
     const line = source.match(/^\s*const dispatchModel = (.*);$/m);
     expect(line?.[1]).toBe('(orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string)');
+  });
+});
+
+describe('pickerAttachedAgents', () => {
+  const sessionAgents = [agent('s1')];
+  const workBenchAgents = [agent('w1')];
+
+  it('uses the session agents once a session exists', () => {
+    expect(pickerAttachedAgents('sess-1', sessionAgents, workBenchAgents)).toBe(sessionAgents);
+  });
+
+  it('uses the workbench agents before a session exists', () => {
+    expect(pickerAttachedAgents(null, sessionAgents, workBenchAgents)).toBe(workBenchAgents);
   });
 });

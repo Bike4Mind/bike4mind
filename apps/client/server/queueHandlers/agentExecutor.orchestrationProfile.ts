@@ -23,6 +23,7 @@
 
 import { buildAgentPersonaPrompt, pairDataLakeTools, type IAgent, type OrchestrationDefaults } from '@bike4mind/common';
 import { buildDefaultOrchestrationProfile } from '@client/app/utils/agentOrchestration';
+import { isHeadlessConnection } from '@server/utils/headlessConnection';
 
 /**
  * Subset of the orchestration fields the executor actually consumes when
@@ -216,9 +217,9 @@ export function pickEffectiveMaxIterations(
 export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
   profile: ResolvedOrchestrationProfile,
-  payloadIsAmbient?: boolean,
-  hasApprover = false
+  opts: { payloadIsAmbient?: boolean; hasApprover?: boolean } = {}
 ): string[] {
+  const { payloadIsAmbient, hasApprover = false } = opts;
   const chosen = chooseToolbelt(payloadEnabledTools, profile, payloadIsAmbient);
   const denied = new Set(profile.deniedTools);
   const permitted = chosen.filter(t => !denied.has(t));
@@ -248,7 +249,10 @@ export function resolveInvocationEnabledTools(input: {
     return input.persistedEnabledTools.filter(t => !denied.has(t));
   }
   return profile
-    ? pickEffectiveEnabledTools(input.payloadEnabledTools, profile, input.payloadIsAmbient, input.hasApprover)
+    ? pickEffectiveEnabledTools(input.payloadEnabledTools, profile, {
+        payloadIsAmbient: input.payloadIsAmbient,
+        hasApprover: input.hasApprover,
+      })
     : (input.payloadEnabledTools ?? []);
 }
 
@@ -269,8 +273,25 @@ function chooseToolbelt(
   payloadIsAmbient: boolean | undefined
 ): string[] {
   if (!payloadEnabledTools?.length || profile.toolsetIsExclusive) return profile.allowedTools;
-  if (payloadIsAmbient && (profile.isSynthetic || profile.allowedToolsFromDefaults)) {
-    return [...new Set([...payloadEnabledTools, ...profile.allowedTools])];
+  if (payloadIsAmbient) {
+    if (profile.isSynthetic || profile.allowedToolsFromDefaults) {
+      return [...new Set([...payloadEnabledTools, ...profile.allowedTools])];
+    }
+    return profile.allowedTools;
   }
   return payloadEnabledTools;
+}
+
+/** A run has an approver only when it is attached to a live (non-headless) connection. */
+export function hasApprover(connectionId: string | undefined | null): boolean {
+  return !!connectionId && !isHeadlessConnection(connectionId);
+}
+
+/** MCP session-disabled tools: live profile denials win; a continuation without a profile replays the persisted ones. */
+export function mcpSessionDisabledTools(
+  sessionDisabled: readonly string[] | undefined,
+  profileDenied: readonly string[] | undefined,
+  persistedProfileDenied: readonly string[] | undefined
+): string[] {
+  return [...new Set([...(sessionDisabled ?? []), ...(profileDenied ?? persistedProfileDenied ?? [])])];
 }

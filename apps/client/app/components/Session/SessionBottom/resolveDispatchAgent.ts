@@ -14,3 +14,12 @@ export function resolveDispatchAgent(
 ): IAgent | null {
   return orchestrationAgent ?? mentionedAgent ?? attachedAgents[0] ?? null;
 }
+
+/** The agents the composer's Agents badge shows: the session's once it exists, else the workbench's. */
+export function pickerAttachedAgents(
+  currentSessionId: string | null | undefined,
+  sessionAgents: readonly IAgent[],
+  workBenchAgents: readonly IAgent[]
+): readonly IAgent[] {
+  return currentSessionId ? sessionAgents : workBenchAgents;
+}
