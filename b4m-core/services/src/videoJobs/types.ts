@@ -11,6 +11,7 @@ import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
 
+// Stamped on the job as deadlineAt at create; the engine fails a pending or running job past it.
 export const VIDEO_JOB_MAX_WALL_CLOCK_MS = 20 * 60_000;
 
 export type VideoJobDeps = {

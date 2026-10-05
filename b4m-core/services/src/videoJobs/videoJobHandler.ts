@@ -21,7 +21,7 @@ import {
 import { releaseCreditHold, settleCreditHold, type CreditLedgerEntry } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
-import { VIDEO_JOB_MAX_WALL_CLOCK_MS, type VideoJobDeps } from './types';
+import type { VideoJobDeps } from './types';
 
 const FEATURE_LABEL = 'video generation';
 
@@ -109,7 +109,6 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
   return {
     kind: 'video',
-    maxWallClockMs: VIDEO_JOB_MAX_WALL_CLOCK_MS,
 
     async submit(job, context) {
       const ctx = await contextFor(job, context);

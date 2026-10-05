@@ -180,7 +180,8 @@ export class GenerationJobEngine {
       case 'poll_again': {
         const pollCount = job.pollCount + 1;
         const progress = result.progress === undefined ? {} : { progress: result.progress };
-        return this.advance(job, lease, { pollCount, ...progress }, pollDelaySeconds(pollCount));
+        // A healthy poll ends a failure streak: MAX_STEP_ATTEMPTS caps consecutive failures, not a long job's total.
+        return this.advance(job, lease, { pollCount, attempts: 0, ...progress }, pollDelaySeconds(pollCount));
       }
       case 'retry': {
         const attempts = job.attempts + 1;

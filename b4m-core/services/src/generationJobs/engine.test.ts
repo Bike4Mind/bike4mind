@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
+import { MAX_STEP_ATTEMPTS } from './backoff';
 import { GenerationJobEngine } from './engine';
 import type { GenerationJobHandler, StepResult } from './types';
 
@@ -34,7 +35,6 @@ const setup = () => {
   };
   const handler: GenerationJobHandler = {
     kind: 'video',
-    maxWallClockMs: 20 * 60_000,
     submit: vi.fn(take('submit')),
     poll: vi.fn(take('poll')),
     store: vi.fn(take('store')),
@@ -215,6 +215,20 @@ describe('GenerationJobEngine', () => {
     t.results.poll.push({ next: 'retry', reason: 'HTTP 503' });
     expect(await t.engine.step(job.id)).toBe('terminal');
     expect(t.repository.jobs.get(job.id)!.error?.code).toBe('provider_error');
+  });
+
+  it('caps consecutive failures only: transient poll failures between healthy polls never fail the job', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    for (let i = 0; i < MAX_STEP_ATTEMPTS; i++) {
+      t.results.poll.push({ next: 'retry', reason: 'HTTP 503' }, { next: 'poll_again' });
+    }
+    for (let i = 0; i < MAX_STEP_ATTEMPTS * 2; i++) {
+      t.advance(60_000);
+      expect(await t.engine.step(job.id)).toBe('advanced');
+    }
+    expect(t.repository.jobs.get(job.id)).toMatchObject({ state: 'running', attempts: 0 });
+    expect(t.handler.poll).toHaveBeenCalledTimes(MAX_STEP_ATTEMPTS * 2);
   });
 
   it('an unexpected throw in poll is treated as a transient retry', async () => {

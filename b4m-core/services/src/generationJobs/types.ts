@@ -24,7 +24,6 @@ export type GenerationJobStepContext = { signal: AbortSignal };
 
 export type GenerationJobHandler = {
   kind: GenerationJobKind;
-  maxWallClockMs: number;
   /**
    * Throwing means the outcome is unknown (the provider may have created a job), so the engine fails it as
    * orphaned_submit. Return `{ next: 'retry' }` only for a definitive rejection that created nothing; it is resubmitted.
