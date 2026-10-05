@@ -25,6 +25,7 @@ import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
+import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -93,6 +94,7 @@ async function main() {
   registerLakeHealthSweep(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);
+  registerLakeInconsistencySweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
