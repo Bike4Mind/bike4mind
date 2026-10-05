@@ -58,7 +58,22 @@ const graduated = (modelId: string): IModelCatalogRowInput => ({
   note: 'discovery:absence@2026-08-01T00:00:00.000Z',
 });
 
+/**
+ * A seed row: the tier that owns `lifecycle` once the repair stops claiming it.
+ * Its identity/limits values differ from the graduation row's, so the retention
+ * assertion below can tell the repair row's values from seed's.
+ */
+const seedRow = (modelId: string, lifecycle: ModelRecord['lifecycle']): IModelCatalogRowInput => ({
+  modelId,
+  source: 'seed',
+  patch: { ...bedrockRecord(modelId, lifecycle), name: `seed ${modelId}`, contextWindow: 100_000 },
+  ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle'],
+  effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+});
+
 const seed = async () => {
+  // The seed belief the repair cedes lifecycle back to: active, undated.
+  await modelCatalogRepository.append(seedRow('global.anthropic.claude-sonnet-4-6', { status: 'active' }));
   await modelCatalogRepository.append(graduated('global.anthropic.claude-sonnet-4-6'));
   // A bare Bedrock id graduated by absence: real, but not a profile id.
   await modelCatalogRepository.append(graduated('anthropic.claude-3-haiku-20240307-v1:0'));
@@ -108,6 +123,12 @@ describe('repairBedrockProfileAbsence', () => {
     // Active AND undated, or isModelDeprecated would still hide it from /api/models.
     expect(lifecycleOf(rows, 'global.anthropic.claude-sonnet-4-6')).toMatchObject({ status: 'active' });
     expect(lifecycleOf(rows, 'global.anthropic.claude-sonnet-4-6')?.deprecationDate).toBeUndefined();
+    // The repair row still owns the graduation row's non-lifecycle groups, so
+    // identity/limits/dispatch keep the graduation values instead of falling
+    // back to seed's (contextWindow 200_000 here, 100_000 on the seed row).
+    const repaired = resolveCatalogRecords(rows).get('global.anthropic.claude-sonnet-4-6');
+    expect(repaired?.ownedGroups).toEqual(expect.arrayContaining(['identity', 'limits', 'dispatch', 'lifecycle']));
+    expect(repaired?.record.contextWindow).toBe(200_000);
     // Selective: the bare graduated id and the operator row keep their status.
     expect(lifecycleOf(rows, 'anthropic.claude-3-haiku-20240307-v1:0')?.status).toBe('deprecated');
     expect(lifecycleOf(rows, 'us.anthropic.claude-opus-4-1-20250805-v1:0')?.status).toBe('deprecated');
@@ -121,5 +142,17 @@ describe('repairBedrockProfileAbsence', () => {
     const second = await repairBedrockProfileAbsence({ apply: true, log: silent });
     expect(second.repaired).toBe(0);
     expect(await ModelCatalog.countDocuments({})).toBe(rowsAfterFirst);
+  });
+
+  it('leaves a profile id seed already deprecates deprecated', async () => {
+    const modelId = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
+    await modelCatalogRepository.append(seedRow(modelId, { status: 'deprecated', deprecationDate: '2026-02-19' }));
+    await modelCatalogRepository.append(graduated(modelId));
+
+    const result = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    expect(result.candidates.map(candidate => candidate.modelId)).toEqual([modelId]);
+
+    const rows = await modelCatalogRepository.rowsInForce(new Date());
+    expect(lifecycleOf(rows, modelId)).toMatchObject({ status: 'deprecated', deprecationDate: '2026-02-19' });
   });
 });

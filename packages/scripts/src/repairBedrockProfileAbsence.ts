@@ -1,8 +1,9 @@
 import {
   bedrockFoundationIdOf,
+  isFieldGroup,
   ModelRecordWrite,
+  type FieldGroup,
   type IModelCatalogRowInput,
-  type ModelRecord,
 } from '@bike4mind/common';
 import { modelCatalogRepository, modelDiscoveryStateRepository } from '@bike4mind/database';
 import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
@@ -48,10 +49,12 @@ const graduatedAt = (note: string): string | undefined => {
 /**
  * One-off repair for Bedrock inference-profile ids that the absence protocol
  * graduated to `deprecated` before discovery learned to sight a profile through
- * its foundation id. Appends a discovery row that owns `lifecycle` and restores
- * `active`, so the newer row outranks the graduation row on the read path
- * without deleting history. Operator rows are never part of the selector and are
- * never written.
+ * its foundation id. Appends a discovery row that supersedes the graduation row
+ * (rowsInForce keeps the newest non-operator row per (modelId, source)) and
+ * cedes `lifecycle` back to seed, so a seeded-active id serves again while a
+ * seed-deprecated one stays deprecated. The row still owns the graduation row's
+ * other groups, so their identity/limits/dispatch do not fall back to seed.
+ * Operator rows are never part of the selector and are never written.
  *
  * Idempotent: the appended row becomes the discovery row in force, its note no
  * longer matches the graduation prefix, and a second run finds nothing.
@@ -87,14 +90,17 @@ export async function repairBedrockProfileAbsence(
       continue;
     }
 
-    const { deprecationDate: _dropped, ...lifecycle } = parsed.data.lifecycle ?? {};
-    const patch: ModelRecord = { ...parsed.data, lifecycle: { ...lifecycle, status: 'active' } };
+    // Deliberately do NOT claim `lifecycle`: this row supersedes the graduation
+    // row, so claiming it would pin the id in whatever state seed held at repair
+    // time and outrank a later seed retirement. Letting seed keep it restores a
+    // seeded-active id and leaves a seed-deprecated one deprecated.
+    const { lifecycle: _lifecycle, ...patch } = parsed.data;
     candidates.push({ modelId: row.modelId, foundationId, graduatedAt: graduatedAt(row.note) });
     planned.push({
       modelId: row.modelId,
       source: 'discovery',
       patch,
-      ownedGroups: ['lifecycle'],
+      ownedGroups: row.ownedGroups.filter((group): group is FieldGroup => isFieldGroup(group) && group !== 'lifecycle'),
       effectiveFrom: now,
       note: `discovery:absence-repair@${now.toISOString()}`,
     });
