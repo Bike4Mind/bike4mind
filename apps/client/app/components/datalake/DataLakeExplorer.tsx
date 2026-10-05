@@ -377,8 +377,8 @@ export default function DataLakeExplorer({
     [tagCountsData, selectedLakes]
   );
 
-  // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
-  // overcount multi-tagged articles ~2x). Follows the lake scope so it describes what is on screen.
+  // Distinct lake members, which unlike the tree also counts files carrying no taxonomy tag.
+  // Follows the lake scope so it describes what is on screen.
   // Sums across a multi-lake scope, which overcounts a file that sits in two of them. It feeds
   // only isScopeEmpty below - a zero/non-zero test that an overcount cannot flip - and is never
   // shown, unlike the picker's trigger count, which withholds itself for exactly this reason.

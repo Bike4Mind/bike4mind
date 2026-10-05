@@ -2124,8 +2124,7 @@ export interface DataLakeTagCountsResponse {
   /**
    * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
    * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
-   * counts a multi-tagged file once. `tagCounts` above still drives the tag
-   * tree's branches.
+   * counts a multi-tagged file once. `tagCounts` above still drives the tag tree's branches.
    */
   lakeFileCounts: Record<string, number>;
   /**

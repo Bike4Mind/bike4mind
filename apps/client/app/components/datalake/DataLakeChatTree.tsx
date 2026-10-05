@@ -99,10 +99,9 @@ interface DataLakeChatTreeProps {
   /** Resolves a node's full path to the lake whose tag prefix it is, so the row shows the lake's
    *  own name. Must return undefined for a prefix more than one lake holds. */
   lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
-  /** Distinct members per `datalakeTag`; a lake-root row shows this instead of the tag-occurrence
-   *  sum in `node.fileCount`, which counts a file once per prefix tag it carries. It can differ
-   *  from the children's chips: those still count tag occurrences, and meta-tag-only members
-   *  sit under Uncategorized. */
+  /** Distinct members per `datalakeTag`; a lake-root row shows this instead of `node.fileCount`,
+   *  which sees only taxonomy-tagged files and, in a single-lake scope (where the rows above each
+   *  lake are scoped away), sums its children. Meta-tag-only members sit under Uncategorized. */
   lakeFileCounts?: Record<string, number>;
 }
 

@@ -1,16 +1,25 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import ManagerNav from './ManagerNav';
 import type { ManagerLake } from './shared';
 
+// The active lake's member files, set per test; undefined is the "no lake open" default.
+const lakeFiles = vi.hoisted(() => ({ current: undefined as unknown[] | undefined }));
+
 // ManagerNav's root view reaches these hooks directly (lifecycle lists + in-lake files) -
 // stub them so the render doesn't need a QueryClientProvider.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useCleanupDataLake: () => ({ mutate: vi.fn(), isPending: false }),
-  useDataLakeFiles: () => ({ data: undefined, isLoading: false, isError: false }),
+  useDataLakeFiles: () => ({
+    data: lakeFiles.current ? { data: lakeFiles.current } : undefined,
+    isLoading: false,
+    isError: false,
+  }),
   useGetArchivedDataLakes: () => ({ data: undefined }),
+  // The in-lake tree's cross-tree search; idle with no query.
+  useGetDataLakeArticles: () => ({ data: undefined, isLoading: false }),
   useGetDeletedDataLakes: () => ({ data: undefined }),
   useGetTransitionalDataLakes: () => ({ data: undefined }),
   usePermanentDeleteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
@@ -113,5 +122,30 @@ describe('ManagerNav draft chip', () => {
     );
     expect(screen.getByTestId('datalake-manager-draft-chip-lake-1')).toHaveTextContent('Draft');
     expect(screen.queryByTestId('datalake-manager-draft-chip-lake-2')).toBeNull();
+  });
+});
+
+describe('ManagerNav lake tree counts', () => {
+  afterEach(() => {
+    lakeFiles.current = undefined;
+  });
+
+  it('counts a branch over multi-tagged files once per file', () => {
+    const leaves = ['acme:legal:a', 'acme:legal:b', 'acme:legal:c', 'acme:legal:d'];
+    lakeFiles.current = ['f1', 'f2', 'f3'].map(id => ({
+      id,
+      fileName: `${id}.md`,
+      tags: [{ name: 'datalake:lake-1' }, ...leaves.map(name => ({ name }))],
+    }));
+    const lake = makeLake({ fileTagPrefix: 'acme:' });
+
+    render(
+      <TestWrapper>
+        <ManagerNav {...baseProps} lakes={[lake]} activeLake={lake} path={['acme']} />
+      </TestWrapper>
+    );
+
+    // Summing the four leaves read 12.
+    expect(screen.getByTestId('datalake-manager-node-legal')).toHaveTextContent('3');
   });
 });

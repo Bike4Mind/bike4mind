@@ -27,6 +27,17 @@ describe('scopeTagCountsToLakes', () => {
     ]);
   });
 
+  it('carries the distinct per-path file count through scoping', () => {
+    const withDistinct: TagCount[] = [
+      { tag: 'legal', count: 0, fileCount: 4 },
+      { tag: 'legal:contracts', count: 3, fileCount: 3 },
+    ];
+
+    expect(scopeTagCountsToLakes(withDistinct, [{ fileTagPrefix: 'legal:' }])).toEqual([
+      { tag: 'legal:contracts', count: 3, fileCount: 3 },
+    ]);
+  });
+
   it('yields nothing for a lake with no tagged content, rather than falling back to everything', () => {
     // The empty-vs-unscoped distinction is load-bearing: returning all tags here would make an
     // empty lake look like it contained every other lake's content.

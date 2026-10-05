@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTagTree, getNodeAtPath, getNodesAtPath, TagNode } from '../parseTagNamespace';
+import { buildTagTree, countTagPaths, getNodeAtPath, getNodesAtPath, TagNode } from '../parseTagNamespace';
 
 describe('buildTagTree', () => {
   it('returns empty array for empty input', () => {
@@ -175,5 +175,75 @@ describe('getNodeAtPath', () => {
     expect(b!.fileCount).toBe(9);
     expect(b!.ownFileCount).toBe(2);
     expect(b!.children).toHaveLength(1);
+  });
+});
+
+describe('buildTagTree with distinct per-path counts', () => {
+  // 3 files, each tagged acme:legal:{a,b,c,d}: summing the leaves gave the branch 12.
+  const multiTagged = [
+    { tag: 'acme', count: 0, fileCount: 3 },
+    { tag: 'acme:legal', count: 0, fileCount: 3 },
+    ...['a', 'b', 'c', 'd'].map(leaf => ({ tag: `acme:legal:${leaf}`, count: 3, fileCount: 3 })),
+  ];
+
+  it('takes a branch count from its row instead of summing the leaves', () => {
+    const tree = buildTagTree(multiTagged);
+
+    expect(getNodeAtPath(tree, ['acme'])?.fileCount).toBe(3);
+    expect(getNodeAtPath(tree, ['acme', 'legal'])?.fileCount).toBe(3);
+    expect(getNodeAtPath(tree, ['acme', 'legal', 'a'])?.fileCount).toBe(3);
+  });
+
+  it('gives an ancestor-only row no files of its own', () => {
+    const legal = getNodeAtPath(buildTagTree(multiTagged), ['acme', 'legal']);
+
+    expect(legal?.ownFileCount).toBe(0);
+    expect(legal?.children).toHaveLength(4);
+  });
+
+  it('falls back to the sum for a path no row counted distinctly', () => {
+    // A single-lake scope drops the rows above the lake root, as here for `acme`.
+    const tree = buildTagTree(multiTagged.filter(row => row.tag.startsWith('acme:')));
+
+    expect(getNodeAtPath(tree, ['acme'])?.fileCount).toBe(3);
+    expect(getNodeAtPath(tree, ['acme', 'legal'])?.fileCount).toBe(3);
+  });
+
+  it('builds the same tree from the rows countTagPaths emits', () => {
+    const leaves = ['acme:legal:a', 'acme:legal:b', 'acme:legal:c', 'acme:legal:d'];
+    const tree = buildTagTree(countTagPaths([leaves, leaves, leaves]));
+
+    expect(getNodeAtPath(tree, ['acme', 'legal'])?.fileCount).toBe(3);
+  });
+});
+
+describe('countTagPaths', () => {
+  const byTag = (rows: ReturnType<typeof countTagPaths>) => Object.fromEntries(rows.map(r => [r.tag, r]));
+
+  it('emits every ancestor path with distinct file counts', () => {
+    const rows = byTag(countTagPaths([['acme:legal:a', 'acme:legal:b'], ['acme:legal:a'], ['acme:hr']]));
+
+    expect(rows['acme']).toEqual({ tag: 'acme', count: 0, fileCount: 3 });
+    expect(rows['acme:legal']).toEqual({ tag: 'acme:legal', count: 0, fileCount: 2 });
+    expect(rows['acme:legal:a']).toEqual({ tag: 'acme:legal:a', count: 2, fileCount: 2 });
+    expect(rows['acme:legal:b']).toEqual({ tag: 'acme:legal:b', count: 1, fileCount: 1 });
+    expect(rows['acme:hr']).toEqual({ tag: 'acme:hr', count: 1, fileCount: 1 });
+  });
+
+  it('counts a tag repeated on one file once', () => {
+    expect(countTagPaths([['acme:a', 'acme:a']])).toEqual([
+      { tag: 'acme', count: 0, fileCount: 1 },
+      { tag: 'acme:a', count: 1, fileCount: 1 },
+    ]);
+  });
+
+  it('counts a file tagged with a branch and a tag under it once at the branch', () => {
+    const rows = byTag(countTagPaths([['acme:legal', 'acme:legal:a']]));
+
+    expect(rows['acme:legal']).toEqual({ tag: 'acme:legal', count: 1, fileCount: 1 });
+  });
+
+  it('returns nothing for files with no tags', () => {
+    expect(countTagPaths([[], []])).toEqual([]);
   });
 });

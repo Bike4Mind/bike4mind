@@ -20,7 +20,7 @@ import ChatIcon from '@mui/icons-material/Chat';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
-import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import { buildTagTree, countTagPaths } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useDataLakeFiles, useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
@@ -85,16 +85,15 @@ export default function DataLakeViewer({
     // drift between the two surfaces. `|| ':'` keeps an empty prefix matching nothing - every tag
     // startsWith(''), which would pull unrelated tags into this lake's tree.
     const prefix = submittedTagPrefix(tagPrefix) || ':';
-    const tagCountMap = new Map<string, number>();
-    for (const file of articles) {
-      for (const tag of file.tags ?? []) {
-        if (tag.name.startsWith(prefix) && !tag.name.startsWith('datalake:')) {
-          tagCountMap.set(tag.name, (tagCountMap.get(tag.name) ?? 0) + 1);
-        }
-      }
-    }
-    const tagCounts = Array.from(tagCountMap.entries()).map(([tag, count]) => ({ tag, count }));
-    return buildTagTree(tagCounts);
+    return buildTagTree(
+      countTagPaths(
+        articles.map(file =>
+          (file.tags ?? [])
+            .map(tag => tag.name)
+            .filter(name => name.startsWith(prefix) && !name.startsWith('datalake:'))
+        )
+      )
+    );
   }, [articles, tagPrefix]);
 
   const handleNavigate = useCallback((newBreadcrumb: string[]) => {

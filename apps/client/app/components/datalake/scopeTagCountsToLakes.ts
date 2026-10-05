@@ -1,9 +1,11 @@
+import type { TagPathCount } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+
 /** A lake, reduced to what scoping needs. */
 export interface TagScopeLake {
   fileTagPrefix: string;
 }
 
-export type TagCount = { tag: string; count: number };
+export type TagCount = TagPathCount;
 
 /**
  * Narrows the browse surface's tag counts to the selected lakes, which is what makes the surface's

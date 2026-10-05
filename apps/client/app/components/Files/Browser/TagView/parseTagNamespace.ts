@@ -1,7 +1,11 @@
 export interface TagNode {
   segment: string;
   fullPath: string;
-  /** This node's own count plus every descendant's - what the folder row's chip shows. */
+  /**
+   * What the folder row's chip shows: distinct files at or under this node when the input supplied
+   * a `fileCount` for this path, else this node's own count plus every descendant's (which counts
+   * a file once per tag it carries under this node).
+   */
   fileCount: number;
   /**
    * Files tagged with this node's exact fullPath, as opposed to a deeper child tag. A node can
@@ -14,15 +18,27 @@ export interface TagNode {
 }
 
 /**
+ * One input row per tag-tree path. `count` is files tagged with exactly `tag`; `fileCount`, when
+ * known, is distinct files tagged with `tag` or anything under it (see countTagPaths, and the
+ * server's countDataLakeTagsByPrefix, which return both).
+ */
+export interface TagPathCount {
+  tag: string;
+  count: number;
+  fileCount?: number;
+}
+
+/**
  * Builds a hierarchical tree from flat colon-separated tag strings.
  *
  * Input:  [{ tag: "opti:family:scheduling", count: 12 }, { tag: "opti:family:budgeting", count: 8 }]
  * Output: tree of TagNodes grouped by colon-separated segments
  */
-export function buildTagTree(tagCounts: { tag: string; count: number }[]): TagNode[] {
+export function buildTagTree(tagCounts: TagPathCount[]): TagNode[] {
   const rootChildren: TagNode[] = [];
+  const distinctCounts = new Map<TagNode, number>();
 
-  for (const { tag, count } of tagCounts) {
+  for (const { tag, count, fileCount } of tagCounts) {
     const segments = tag.split(':');
     let currentLevel = rootChildren;
 
@@ -39,17 +55,18 @@ export function buildTagTree(tagCounts: { tag: string; count: number }[]): TagNo
 
       if (isLeaf) {
         existing.ownFileCount += count;
+        if (fileCount !== undefined) distinctCounts.set(existing, fileCount);
       }
 
       currentLevel = existing.children;
     }
   }
 
-  // fileCount = this node's own count plus every descendant's, computed bottom-up.
+  // Bottom-up. The sum is only a fallback for a path no row counted distinctly.
   function sumCounts(nodes: TagNode[]): number {
     for (const node of nodes) {
       const childSum = node.children.length > 0 ? sumCounts(node.children) : 0;
-      node.fileCount = node.ownFileCount + childSum;
+      node.fileCount = distinctCounts.get(node) ?? node.ownFileCount + childSum;
     }
     return nodes.reduce((sum, n) => sum + n.fileCount, 0);
   }
@@ -65,6 +82,34 @@ export function buildTagTree(tagCounts: { tag: string; count: number }[]): TagNo
   sortLevel(rootChildren);
 
   return rootChildren;
+}
+
+/**
+ * Rows for buildTagTree from each file's tag names (one inner array per file), counting distinct
+ * files per path: a file with four tags under `a:b` adds one to `a:b`, not four. Emits every
+ * ancestor path too. The client-side mirror of countDataLakeTagsByPrefix - keep the two agreeing.
+ */
+export function countTagPaths(tagLists: string[][]): Required<TagPathCount>[] {
+  const rows = new Map<string, Required<TagPathCount>>();
+  const rowFor = (tag: string) => {
+    let row = rows.get(tag);
+    if (!row) {
+      row = { tag, count: 0, fileCount: 0 };
+      rows.set(tag, row);
+    }
+    return row;
+  };
+  for (const tags of tagLists) {
+    const own = new Set(tags);
+    const paths = new Set<string>();
+    for (const tag of own) {
+      const segments = tag.split(':');
+      for (let i = 1; i <= segments.length; i++) paths.add(segments.slice(0, i).join(':'));
+    }
+    for (const path of paths) rowFor(path).fileCount++;
+    for (const tag of own) rowFor(tag).count++;
+  }
+  return Array.from(rows.values());
 }
 
 /**
