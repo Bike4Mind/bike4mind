@@ -6,7 +6,13 @@ import type { Logger } from '@bike4mind/observability';
 import { KnowledgeType } from '@bike4mind/common';
 import { S3Storage, createS3Client } from '@bike4mind/fab-pipeline';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
-import { dataLakeRepository, FabFile, FabFileChunk, fabFileChunkRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  FabFile,
+  FabFileChunk,
+  fabFileRepository,
+  fabFileChunkRepository,
+} from '@bike4mind/database';
 import {
   createMongoReplSet,
   MONGO_TEST_TIMEOUT_MS,
@@ -62,6 +68,7 @@ describe.skipIf(!endpoint || !bucket)('cleanup handler with replica-set Mongo an
       name: tag,
       slug: randomUUID(),
       datalakeTag: tag,
+      fileTagPrefix: tag,
       createdByUserId: 'owner',
       status: 'deleted',
     });
@@ -78,7 +85,7 @@ describe.skipIf(!endpoint || !bucket)('cleanup handler with replica-set Mongo an
       type: KnowledgeType.FILE,
       fileSize: 17,
       status: 'complete',
-      metaTags: [tag],
+      tags: [{ name: tag }],
       deletedAt: new Date(),
     });
     const other = await FabFile.create({
@@ -89,13 +96,22 @@ describe.skipIf(!endpoint || !bucket)('cleanup handler with replica-set Mongo an
       type: KnowledgeType.FILE,
       fileSize: 16,
       status: 'complete',
-      metaTags: [`datalake:${randomUUID()}`],
+      tags: [{ name: `datalake:${randomUUID()}` }],
       deletedAt: new Date(),
     });
     await FabFileChunk.create({ fabFileId: file.id, text: 'purged chunk', tokenCount: 2 });
     await FabFileChunk.create({ fabFileId: other.id, text: 'other chunk', tokenCount: 2 });
     const claim = randomUUID();
-    await dataLakeRepository.claimPurging(lake.id, claim);
+    expect(await dataLakeRepository.claimPurging(lake.id, claim)).toBe(true);
+    expect((await dataLakeRepository.findById(lake.id))?.purgeClaimId).toBe(claim);
+    expect(
+      await fabFileRepository.findIdsByDataLakeTag({
+        kind: 'owned',
+        datalakeTag: tag,
+        fileTagPrefix: tag,
+        creatorUserId: 'owner',
+      })
+    ).toEqual([file.id]);
     const event = {
       Records: [
         {
