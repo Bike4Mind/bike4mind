@@ -38,6 +38,16 @@ describe('DataLakeRepository slug lookups skip deleted and purging lakes', () =>
     expect((await dataLakeRepository.findById(orgless.id))?.id).toBe(orgless.id);
   });
 
+  it.each(UNRESOLVABLE)('a %s lake in one org does not shadow an active same-slug lake elsewhere', async status => {
+    await dataLakeRepository.create(lake('shared', status, 'org-a'));
+    const activeInOrgB = await dataLakeRepository.create(lake('shared', 'active', 'org-b'));
+    expect((await dataLakeRepository.findBySlug('shared', ['org-a', 'org-b']))?.id).toBe(activeInOrgB.id);
+
+    const dead = await dataLakeRepository.create(lake('granted', status, 'org-c'));
+    const active = await dataLakeRepository.create(lake('granted', 'active', 'org-d'));
+    expect((await dataLakeRepository.findBySlugAmongIds('granted', [dead.id, active.id]))?.id).toBe(active.id);
+  });
+
   it.each(RESOLVABLE)('a %s lake still resolves by every slug arm', async status => {
     const own = await dataLakeRepository.create(lake('own', status, ORG));
     const orgless = await dataLakeRepository.create(lake('orgless', status));
