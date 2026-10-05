@@ -2,8 +2,11 @@ import { Box, Button, Typography } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
+import { useState } from 'react';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
+import type { LakeSourceKind, LakeSourceLake } from '@client/app/components/datalake/lakeSources';
 import ConnectSourceMenu from './ConnectSourceMenu';
+import LakeSourceConnectModal from './LakeSourceConnectModal';
 import type { DataLakeEmptyVariant } from './resolveEmptyVariant';
 
 interface DataLakeTreeEmptyStateProps {
@@ -14,8 +17,8 @@ interface DataLakeTreeEmptyStateProps {
   onRetryLakes?: () => void;
   /** Add files to the scoped lake - offered only in `lake-empty`. */
   onAddFiles?: () => void;
-  /** The scoped lake's org scope, which decides the sources it can hold. Offered only with `onAddFiles`. */
-  sourceLake?: { organizationId?: string | null; isCreator: boolean };
+  /** The scoped lake, which decides the sources it can take. Offered only with `onAddFiles`. */
+  sourceLake?: LakeSourceLake & { id: string };
 }
 
 /**
@@ -41,6 +44,14 @@ export default function DataLakeTreeEmptyState({
   sourceLake,
 }: DataLakeTreeEmptyStateProps) {
   const { copy } = useDataLakeSurface();
+  const [connectingKind, setConnectingKind] = useState<LakeSourceKind | null>(null);
+
+  // Drive connects from the wizard's source step, beside its what-it-can-read disclosure, so it
+  // routes through the same wizard Add files opens. Every other source opens its own panel directly.
+  const connectSource = (kind: LakeSourceKind) => {
+    if (kind === 'googleDrive') onAddFiles?.();
+    else setConnectingKind(kind);
+  };
 
   const { title, hint } = {
     'no-lakes': { title: copy.zeroTitle, hint: copy.zeroHint },
@@ -96,10 +107,11 @@ export default function DataLakeTreeEmptyState({
           Add files
         </Button>
       )}
-      {/* Drive and GitHub are connected from the wizard's source step, which carries each one's
-          what-it-can-read disclosure, so connecting routes through the same wizard Add files opens. */}
       {variant === 'lake-empty' && onAddFiles && sourceLake && (
-        <ConnectSourceMenu lake={sourceLake} onConnectDrive={onAddFiles} onConnectGitHub={onAddFiles} />
+        <>
+          <ConnectSourceMenu lake={sourceLake} onConnect={connectSource} />
+          <LakeSourceConnectModal lake={sourceLake} kind={connectingKind} onClose={() => setConnectingKind(null)} />
+        </>
       )}
     </Box>
   );
