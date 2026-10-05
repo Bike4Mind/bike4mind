@@ -9,6 +9,7 @@ export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
 export { getMeContract } from './contracts/me.contract';
+export { getCreditBalanceContract } from './contracts/credits.contract';
 export { generateImageContract } from './contracts/imageGeneration.contract';
 export { editImageContract } from './contracts/imageEdit.contract';
 export { createFileUploadContract, getFileContract } from './contracts/files.contract';
