@@ -99,6 +99,7 @@ describe('isPlaceholderTitle', () => {
     ['- YouTube', 'https://www.youtube.com/watch?v=abc'],
     ['', 'https://example.com/a'],
     ['   ', 'https://example.com/a'],
+    [';jsessionid=ABC123', 'https://ieeexplore.ieee.org/document/277252/;jsessionid=ABC123'],
   ])('flags %j as a placeholder for %s', (title, url) => {
     expect(isPlaceholderTitle(title, url)).toBe(true);
   });

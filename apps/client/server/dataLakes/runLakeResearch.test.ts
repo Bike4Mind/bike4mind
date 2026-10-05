@@ -580,6 +580,17 @@ describe('runLakeResearch', () => {
       });
     });
 
+    it('passes the post-redirect url through for the title check', async () => {
+      expect(
+        await fetchVia({
+          title: 'A page',
+          textContent: 'body',
+          mimeType: 'text/plain',
+          finalUrl: 'https://example.com/final',
+        })
+      ).toEqual({ title: 'A page', text: 'body', finalUrl: 'https://example.com/final' });
+    });
+
     // For a PDF, textContent is the raw buffer and the chunker extracts with a PDF parser - hashing
     // what we hold would fingerprint bytes the door will never produce.
     it('sends no text for a PDF, leaving source-keyed dedup to do the work', async () => {

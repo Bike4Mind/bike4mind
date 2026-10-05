@@ -35,6 +35,8 @@ export interface ResearchCandidate {
 /** What a fetch produced, honoring the queue's extraction contract. See `fetchSource` below. */
 export interface FetchedSource {
   title: string;
+  /** The url after redirects, which the title was derived from; may differ from the hit url. */
+  finalUrl: string;
   /**
    * The extracted text, or undefined when the door cannot produce text comparable with what the
    * INGESTION door would extract from the same URL. Undefined is a real answer, not a failure: the
@@ -171,7 +173,7 @@ export async function executeResearchRun(
       // The page's own title beats the search hit's (the same words a reviewer sees on the page),
       // unless it is a placeholder (empty, domain label, or last path segment) and the hit has one.
       title:
-        isPlaceholderTitle(fetched.title, candidate.url) && candidate.title.trim() ? candidate.title : fetched.title,
+        isPlaceholderTitle(fetched.title, fetched.finalUrl) && candidate.title.trim() ? candidate.title : fetched.title,
       text: fetched.text,
       proposedTags: levers.proposedTags,
       // Advisory display only. Recorded because a reviewer weighing an unfamiliar source has

@@ -31,6 +31,8 @@ interface ParsedContent {
   textContent: Buffer | string;
   mimeType: string;
   ext: string | null;
+  /** The url actually fetched after redirects; fallback titles and site-name cleanup use it. */
+  finalUrl: string;
 }
 
 // Default timeout for URL fetching (10 seconds)
@@ -725,7 +727,13 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     } else {
       logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
     }
-    return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
+    return {
+      title,
+      textContent: urlContent,
+      mimeType: urlMimeType,
+      ext: mime.extension(urlMimeType) || null,
+      finalUrl: currentUrl,
+    };
   } catch (error) {
     // Redacted for the same reason as the success log: this metadata is attached to the log record, and
     // a failure is exactly when a malformed credentialed URL is most likely to be the input.
