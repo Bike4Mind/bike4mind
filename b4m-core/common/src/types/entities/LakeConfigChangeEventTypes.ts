@@ -229,6 +229,8 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   inconsistencyComputedAt: 'excluded',
   // Run bookkeeping, not an operator choice - the same class as lakeMemoryExtractionAt above.
   modelInconsistencyRunAt: 'excluded',
+  // Connect-flow bookkeeping the server sets and clears, never an operator edit.
+  pendingConnector: 'excluded',
 } as const satisfies Record<keyof IDataLake, 'audited' | 'excluded'>;
 
 /** The audited keys as a precise literal union, derived from the map so the two cannot drift. */

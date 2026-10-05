@@ -3804,3 +3804,46 @@ describe('origin', () => {
     ).rejects.toThrow();
   });
 });
+
+describe('DataLakeRepository - pendingConnector', () => {
+  setupMongoTest();
+
+  it.each(['github', 'googleDrive'] as const)('round-trips %s', async connector => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: `pending-${connector}`, pendingConnector: connector })
+    );
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.pendingConnector).toBe(connector);
+  });
+
+  it('rejects a value outside the connector enum', async () => {
+    await expect(
+      DataLakeModel.create({
+        name: 'Bad',
+        slug: 'bad-pending-connector',
+        fileTagPrefix: 'bad:',
+        datalakeTag: 'datalake:bad-pending-connector',
+        createdByUserId: 'user-1',
+        pendingConnector: 'dropbox',
+      })
+    ).rejects.toThrow();
+  });
+
+  it('reads back undefined on a lake created without it, and clearing it is a no-op', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'no-pending-connector' }));
+    expect((await dataLakeRepository.findById(created.id))?.pendingConnector).toBeUndefined();
+
+    await expect(dataLakeRepository.clearPendingConnector(created.id)).resolves.toBeUndefined();
+    expect((await dataLakeRepository.findById(created.id))?.pendingConnector).toBeUndefined();
+  });
+
+  it('clearPendingConnector removes the key rather than writing null', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'clear-pending', pendingConnector: 'github' }));
+
+    await dataLakeRepository.clearPendingConnector(created.id);
+
+    const raw = await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(created.id) });
+    expect(raw).not.toBeNull();
+    expect(raw).not.toHaveProperty('pendingConnector');
+  });
+});

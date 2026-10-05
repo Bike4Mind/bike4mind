@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   getGitHubLakeAppConfig: vi.fn(),
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
+  dlClearPendingConnector: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   ghConnFindByInstallationId: vi.fn(),
   ghConnFindById: vi.fn(),
@@ -72,7 +73,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
     ...actual,
-    dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
+    dataLakeRepository: {
+      ...actual.dataLakeRepository,
+      findById: h.dlFindById,
+      clearPendingConnector: h.dlClearPendingConnector,
+    },
     orgGitHubLakeConnectionRepository: {
       ...actual.orgGitHubLakeConnectionRepository,
       findByDataLakeIdAny: h.ghConnFindByDataLakeIdAny,
@@ -533,6 +538,7 @@ describe('completeGitHubLakeConnection', () => {
     h.getInstallation.mockResolvedValue(INSTALLATION);
     h.ghConnCreate.mockResolvedValue({ id: 'conn1', repositoryId: REPO.id, repositoryFullName: REPO.fullName });
     h.consumeGitHubLakeAuthGrant.mockResolvedValue(undefined);
+    h.dlClearPendingConnector.mockResolvedValue(undefined);
   });
 
   it('creates the connection with the picked repo, installation account, and connecting user', async () => {
@@ -598,6 +604,26 @@ describe('completeGitHubLakeConnection', () => {
   it('409s when create races another connect (duplicate key)', async () => {
     h.ghConnCreate.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
     await expect(completeGitHubLakeConnection(params())).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it('clears the lake pending connector once the connection is created', async () => {
+    await completeGitHubLakeConnection(params());
+    expect(h.dlClearPendingConnector).toHaveBeenCalledWith('lake1');
+  });
+
+  it('keeps the pending connector when create loses a duplicate-key race', async () => {
+    h.ghConnCreate.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
+    await expect(completeGitHubLakeConnection(params())).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.dlClearPendingConnector).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the connect when clearing the pending connector rejects (best-effort, logged)', async () => {
+    h.dlClearPendingConnector.mockRejectedValue(new Error('clear failed'));
+    await expect(completeGitHubLakeConnection(params())).resolves.toMatchObject({ id: 'conn1' });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'GitHub lake connect: could not clear the pending connector',
+      expect.anything()
+    );
   });
 
   it('does not fail the connect when consuming the flow grant rejects (best-effort, logged)', async () => {
