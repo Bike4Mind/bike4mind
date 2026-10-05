@@ -11,9 +11,11 @@ const CREDITS_MODELS = MONITORED_MODELS;
 const RUNS_PER_MODEL = 2;
 const CREDITS_PROMPT = 'What is the capital of France?';
 
-function buildCreditsSummary(
-  runs: Array<{ model: string; duration: number; credits: number | null }>
-): ModelCreditsData[] {
+// `fallback` is the fallback-note text when another model answered; its credits are kept out of
+// the average, so `credits` is null on those runs.
+type CreditsRun = { model: string; duration: number; credits: number | null; fallback: string | null };
+
+function buildCreditsSummary(runs: CreditsRun[]): ModelCreditsData[] {
   return CREDITS_MODELS.map(model => {
     const modelRuns = runs.filter(r => r.model === model);
     const successful = modelRuns.filter(r => r.duration > 0);
@@ -40,7 +42,7 @@ function buildCreditsSummary(
 test.describe.configure({ mode: 'serial' });
 
 test.describe('Notebook - AI Credits and Timing', () => {
-  const allRuns: Array<{ model: string; duration: number; credits: number | null }> = [];
+  const allRuns: CreditsRun[] = [];
 
   for (const model of CREDITS_MODELS) {
     test.describe(`Model: ${model}`, () => {
@@ -51,14 +53,17 @@ test.describe('Notebook - AI Credits and Timing', () => {
           await basePage.dismissModals();
           await modelSelector.selectTextModel(model);
 
-          const { durationSecs, credits } = await chatPage.sendMessageAndMeasure(CREDITS_PROMPT);
-          allRuns.push({ model, duration: durationSecs, credits });
+          const { durationSecs, credits, fallback } = await chatPage.sendMessageAndMeasure(CREDITS_PROMPT);
+          if (fallback) console.warn(`[${model}] Run ${run}: credits excluded, ${fallback}`);
+          allRuns.push({ model, duration: durationSecs, credits: fallback ? null : credits, fallback });
 
           // Write after every run so credits.json exists even if afterAll is skipped
           // (e.g. when Playwright's globalTimeout fires and kills the worker mid-suite).
           writeCreditsData(buildCreditsSummary(allRuns));
 
-          console.log(`[${model}] Run ${run}: ${durationSecs.toFixed(2)}s, credits: ${credits ?? 'n/a'}`);
+          console.log(
+            `[${model}] Run ${run}: ${durationSecs.toFixed(2)}s, credits: ${fallback ? 'n/a' : (credits ?? 'n/a')}`
+          );
           // Per-run Slack alerts intentionally removed - a single consolidated credits
           // report is sent once after the whole suite completes (see global-teardown.ts).
         });
@@ -68,7 +73,12 @@ test.describe('Notebook - AI Credits and Timing', () => {
 
   test.afterAll(async () => {
     for (const entry of buildCreditsSummary(allRuns)) {
-      expect.soft(entry.avgCredits, `Used Credit chip is missing for ${entry.model}!`).not.toBeNull();
+      const fallbackRuns = allRuns.filter(r => r.model === entry.model && r.fallback);
+      const message =
+        fallbackRuns.length > 0
+          ? `No credits for ${entry.model}: ${fallbackRuns.length}/${RUNS_PER_MODEL} run(s) answered by a fallback model (${fallbackRuns[0].fallback})`
+          : `Used Credit chip is missing for ${entry.model}!`;
+      expect.soft(entry.avgCredits, message).not.toBeNull();
     }
   });
 });

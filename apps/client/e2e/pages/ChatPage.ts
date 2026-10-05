@@ -216,18 +216,39 @@ export class ChatPage extends BasePage {
   }
 
   /**
+   * Text of the newest AI reply's fallback note ("Answered by X - Y was unavailable"), or null
+   * when the primary model answered. Same `aiMessage.last()` anchor as {@link getCreditsUsed}.
+   *
+   * Does not wait: the server sets `fallbackInfo` when it hops, before the reply streams, so the
+   * note is already mounted once the reply is complete. A wait here would add seconds to every
+   * run that never falls back.
+   */
+  async getFallbackNote(): Promise<string | null> {
+    try {
+      const note = this.aiMessage.last().getByTestId('fallback-model-note-chip');
+      if ((await note.count()) === 0) return null;
+      return (await note.first().innerText({ timeout: TIMEOUTS.ELEMENT_STATE })).trim();
+    } catch (err) {
+      console.debug('[getFallbackNote] could not read fallback note:', (err as Error).message);
+      return null;
+    }
+  }
+
+  /**
    * Send a message, wait for the AI response, and return timing + credits.
-   * Timer starts just before the message is sent.
+   * Timer starts just before the message is sent. `fallback` is the fallback note text when
+   * another model answered (its credits are not the requested model's), else null.
    */
   async sendMessageAndMeasure(
     text: string,
     timeout: number = TIMEOUTS.AI_RESPONSE
-  ): Promise<{ responseText: string; durationSecs: number; credits: number | null }> {
+  ): Promise<{ responseText: string; durationSecs: number; credits: number | null; fallback: string | null }> {
     const startMs = Date.now();
     const responseText = await this.sendMessageAndWaitForResponse(text, timeout);
     const durationSecs = (Date.now() - startMs) / 1000;
     const credits = await this.getCreditsUsed();
-    return { responseText, durationSecs, credits };
+    const fallback = await this.getFallbackNote();
+    return { responseText, durationSecs, credits, fallback };
   }
 
   /**
