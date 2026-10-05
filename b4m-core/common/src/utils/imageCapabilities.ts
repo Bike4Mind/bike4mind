@@ -16,9 +16,9 @@ import {
   isGPTImageModel,
   isGeminiImageModel,
   isKontextModel,
-  rejectsTransparentBackground,
   requiresImageInput,
   supportsImageEdit,
+  supportsTransparentBackground,
   usesDiscreteImageDimensions,
 } from './modelHelpers';
 
@@ -125,7 +125,7 @@ export function getImageModelCapabilities(model: ImageModels): ImageModelCapabil
   return {
     sizing: resolveSizing(model),
     supports: {
-      transparentBackground: isGPTImageModel(model) && !rejectsTransparentBackground(model),
+      transparentBackground: supportsTransparentBackground(model),
       // OpenAIImageService forwards a seed, but OpenAI's image API documents none to honour it.
       seed: isBflImageModel(model),
       qualities: resolveQualities(model),
