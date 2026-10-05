@@ -8,7 +8,7 @@
  * extractFilename('https://example.com/path/to/file.txt') // Returns: 'file.txt'
  * extractFilename('https://example.com/path/to/file.txt?query=1#hash') // Returns: 'file.txt'
  * extractFilename('file.txt') // Returns: 'file.txt'
- * extractFilename('https://example.com/path/') // Returns: ''
+ * extractFilename('https://example.com/path/') // Returns: 'path' (the last directory segment)
  */
 export function extractFilename(input: string): string {
   if (!input) {
