@@ -1,4 +1,5 @@
 import {
+  getMemberCreditPeriodStart,
   IOrganizationDocument,
   IOrganizationRepository,
   IUserShare,
@@ -116,6 +117,16 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
         },
         lastCreditUsedAt: {
           type: Date,
+          default: null,
+        },
+        // Start of the UTC month `usedCredits` belongs to; missing/older reads as 0 spent.
+        periodStart: {
+          type: Date,
+          default: null,
+        },
+        // Per-member monthly cap overriding the org's `maxCreditsPerMember`; null inherits it.
+        maxCredits: {
+          type: Number,
           default: null,
         },
       },
@@ -535,44 +546,65 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Update a user's usage details within an organization.
-   * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt
-   * to avoid race conditions with concurrent requests.
+   * Record spend against a member's monthly budget within an organization.
    *
-   * The caller must ensure a `userDetails` row exists first (see `ensureUserDetails`): the positional
-   * `$` operator here updates an existing element and cannot create one, so a missing row makes this
-   * a no-op (logged below).
+   * The per-member cap is a UTC calendar-month budget: a row whose `periodStart` is missing or
+   * earlier than the current month is stale, so this write resets its `usedCredits` to the new
+   * delta and stamps `periodStart` in the same atomic pipeline update - concurrent settlements
+   * cannot lose a reset or an increment. The read side (`getPeriodUsedCredits`) shares the same
+   * boundary via `getMemberCreditPeriodStart`.
+   *
+   * The caller must ensure a `userDetails` row exists first (see `ensureUserDetails`): this updates
+   * an existing element and cannot create one, so a missing row makes this a no-op (logged below).
    *
    * @param organizationId - The ID of the organization
    * @param userId - The ID of the user within the organization
-   * @param updates - creditsDelta uses $inc for atomicity, lastCreditUsedAt uses $set
+   * @param updates - creditsDelta is added to the current period's usage; lastCreditUsedAt is set
    */
   async updateUserDetails(
     organizationId: string,
     userId: string,
-    updates: { creditsDelta?: number; lastCreditUsedAt?: Date }
+    updates: { creditsDelta?: number; lastCreditUsedAt?: Date },
+    now: Date = new Date()
   ): Promise<void> {
-    const updateOps: Record<string, Record<string, unknown>> = {};
+    if (updates.creditsDelta === undefined && updates.lastCreditUsedAt === undefined) return;
 
-    if (updates.creditsDelta !== undefined) {
-      updateOps.$inc = { 'userDetails.$.usedCredits': updates.creditsDelta };
-    }
+    const periodStart = getMemberCreditPeriodStart(now);
+    const isCurrentPeriod = { $gte: [{ $ifNull: ['$$this.periodStart', new Date(0)] }, periodStart] };
+    const currentUsage = { $cond: [isCurrentPeriod, { $ifNull: ['$$this.usedCredits', 0] }, 0] };
+    const changes: Record<string, unknown> = {
+      usedCredits: { $add: [currentUsage, updates.creditsDelta ?? 0] },
+      periodStart: { $cond: [isCurrentPeriod, '$$this.periodStart', periodStart] },
+    };
     if (updates.lastCreditUsedAt !== undefined) {
-      updateOps.$set = { 'userDetails.$.lastCreditUsedAt': updates.lastCreditUsedAt };
+      changes.lastCreditUsedAt = updates.lastCreditUsedAt;
     }
 
-    if (Object.keys(updateOps).length > 0) {
-      const result = await this.organizationModel.updateOne(
-        { _id: organizationId, 'userDetails.id': userId },
-        updateOps
-      );
+    // Pipelines skip Mongoose casting, so ids compare via `$toString` (as in `removeMember`).
+    const result = await this.organizationModel.updateOne({ _id: organizationId, 'userDetails.id': userId }, [
+      {
+        $set: {
+          userDetails: {
+            $map: {
+              input: '$userDetails',
+              in: {
+                $cond: [
+                  { $eq: [{ $toString: '$$this.id' }, userId] },
+                  { $mergeObjects: ['$$this', changes] },
+                  '$$this',
+                ],
+              },
+            },
+          },
+        },
+      },
+    ]);
 
-      if (result.matchedCount === 0) {
-        console.warn(
-          `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
-            'Credits were deducted from the org but usage was not tracked for this user.'
-        );
-      }
+    if (result.matchedCount === 0) {
+      console.warn(
+        `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
+          'Credits were deducted from the org but usage was not tracked for this user.'
+      );
     }
   }
 }

@@ -1056,7 +1056,7 @@ async function processExecution(
     if (organization && !isAggregationOnlyWake && creditService.isMemberAtOrOverCap(organization, execution.userId)) {
       logger.warn('[Credits] Member credit cap reached; refusing to start execution', {
         used: creditService.getMemberUsedCredits(organization, execution.userId),
-        cap: organization.maxCreditsPerMember,
+        cap: creditService.getMemberCreditCap(organization, execution.userId),
       });
       await agentExecutionRepository.markFailed(executionId, {
         message: creditService.MEMBER_CREDIT_CAP_MESSAGE,
@@ -3298,7 +3298,7 @@ async function processSubagentDispatch(
     if (organization && creditService.isMemberAtOrOverCap(organization, child.userId)) {
       logger.warn('[Credits] Member credit cap reached; refusing to start subagent', {
         used: creditService.getMemberUsedCredits(organization, child.userId),
-        cap: organization.maxCreditsPerMember,
+        cap: creditService.getMemberCreditCap(organization, child.userId),
       });
       await agentExecutionRepository.markFailed(childExecutionId, {
         message: creditService.MEMBER_CREDIT_CAP_MESSAGE,

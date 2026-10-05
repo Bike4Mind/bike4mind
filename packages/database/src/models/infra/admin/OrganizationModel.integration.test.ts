@@ -133,3 +133,83 @@ describe('OrganizationModel - ensureUserDetails (#1460)', () => {
     expect(reloaded?.userDetails?.[0]).toMatchObject({ id: 'member-1', usedCredits: 10 });
   });
 });
+
+describe('OrganizationModel - updateUserDetails monthly budget period', () => {
+  const october = new Date('2026-10-15T12:00:00Z');
+  const octoberStart = new Date('2026-10-01T00:00:00Z');
+  const member = (extra: Record<string, unknown>) => ({
+    id: 'member-1',
+    email: 'm@example.com',
+    name: 'M',
+    lastCreditUsedAt: null,
+    ...extra,
+  });
+  const reloadRow = async (orgId: string, userId = 'member-1') =>
+    (await Organization.findById(orgId))?.userDetails?.find(d => d.id === userId);
+
+  it('accumulates within the current month without touching periodStart', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [member({ usedCredits: 30, periodStart: octoberStart })],
+    });
+
+    await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 5 }, october);
+
+    expect(await reloadRow(org.id)).toMatchObject({ usedCredits: 35, periodStart: octoberStart });
+  });
+
+  it('resets usage from an earlier month to the new delta and stamps the current period', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [member({ usedCredits: 900, periodStart: new Date('2026-09-01T00:00:00Z') })],
+    });
+
+    const usedAt = new Date('2026-10-15T12:00:00Z');
+    await organizationRepository.updateUserDetails(
+      org.id,
+      'member-1',
+      { creditsDelta: 5, lastCreditUsedAt: usedAt },
+      october
+    );
+
+    expect(await reloadRow(org.id)).toMatchObject({
+      usedCredits: 5,
+      periodStart: octoberStart,
+      lastCreditUsedAt: usedAt,
+    });
+  });
+
+  it('treats a legacy row with no periodStart as a stale lifetime counter and resets it', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [member({ usedCredits: 900 })],
+    });
+
+    await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 5 }, october);
+
+    expect(await reloadRow(org.id)).toMatchObject({ usedCredits: 5, periodStart: octoberStart });
+  });
+
+  it('touches only the target member and preserves their per-member override', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [
+        member({ usedCredits: 10, periodStart: octoberStart, maxCredits: 50 }),
+        member({ id: 'member-2', usedCredits: 20, periodStart: octoberStart }),
+      ],
+    });
+
+    await organizationRepository.updateUserDetails(org.id, 'member-1', { creditsDelta: 5 }, october);
+
+    expect(await reloadRow(org.id)).toMatchObject({ usedCredits: 15, maxCredits: 50 });
+    expect(await reloadRow(org.id, 'member-2')).toMatchObject({ usedCredits: 20 });
+  });
+});
