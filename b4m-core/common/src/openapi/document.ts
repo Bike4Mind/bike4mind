@@ -350,6 +350,10 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
     { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Voice',
+      description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
+    },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
     {
       name: 'Data Lakes',

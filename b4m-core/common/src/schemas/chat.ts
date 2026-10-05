@@ -294,6 +294,11 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
   errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
 });
 
+/** 503 when this deployment has no usable key for a provider the request needs (data-lake search, voice). */
+export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
+});
+
 /**
  * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
  * throws when an API key lacks a route's scopes. It names what the ROUTE requires,
