@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  bedrockFoundationIdOf,
   DEFAULT_MAX_OUTPUT_TOKENS,
   inferVendor,
   isPromptMetaModelType,
@@ -175,6 +176,20 @@ describe('inferVendor', () => {
     );
     expect(inferVendor({ id: 'us.meta.llama4-scout-17b-instruct-v1:0', backend: ModelBackend.Bedrock })).toBe('meta');
     expect(inferVendor({ id: 'global.anthropic.claude-opus-4-6-v1', backend: ModelBackend.Bedrock })).toBe('anthropic');
+  });
+});
+
+describe('bedrockFoundationIdOf', () => {
+  it('strips a cross-region inference-profile prefix', () => {
+    expect(bedrockFoundationIdOf('global.anthropic.claude-opus-4-8')).toBe('anthropic.claude-opus-4-8');
+    expect(bedrockFoundationIdOf('us.anthropic.claude-sonnet-4-6')).toBe('anthropic.claude-sonnet-4-6');
+    expect(bedrockFoundationIdOf('eu.anthropic.claude-haiku-4-5')).toBe('anthropic.claude-haiku-4-5');
+    expect(bedrockFoundationIdOf('apac.anthropic.claude-sonnet-4-6')).toBe('anthropic.claude-sonnet-4-6');
+  });
+
+  it('returns null for an id with no profile prefix', () => {
+    expect(bedrockFoundationIdOf('anthropic.claude-sonnet-4-6')).toBeNull();
+    expect(bedrockFoundationIdOf('deepseek.v3-v1:0')).toBeNull();
   });
 });
 
