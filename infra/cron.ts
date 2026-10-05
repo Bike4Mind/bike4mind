@@ -741,7 +741,8 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
  * Re-enqueues generation jobs whose SQS message was lost or whose worker died mid-step.
  *
  * Schedule: every 5 minutes
- * Enabled: production + dev
+ * Enabled: every stage, so previews and staging (where the test provider runs) get recovery too; it is a
+ * no-op when nothing is stalled.
  * Self-host: apps/workers/src/selfhost/generationJobSweep.ts
  */
 const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
@@ -759,7 +760,6 @@ const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
   },
-  enabled: ['production', 'dev'].includes($app.stage),
 });
 
 /**
