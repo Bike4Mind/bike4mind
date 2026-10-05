@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { notifyApiKeyReowned, renderApiKeyReownedEmail } from '../notifyApiKeyReowned';
 
 const makeDb = (emailRows: { id: string; email: string }[] = [{ id: 'user-1', email: 'owner@example.test' }]) => ({
@@ -36,6 +36,9 @@ describe('notifyApiKeyReowned', () => {
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it('sends email to the previous owner on the happy path', async () => {
     const db = makeDb();
@@ -55,7 +58,10 @@ describe('notifyApiKeyReowned', () => {
       notifyApiKeyReowned({ previousOwnerUserId: 'user-1', keyName: 'My Key' }, { db, mailer })
     ).resolves.toBeUndefined();
     expect(mailer.sendEmail).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no active email'),
+      expect.objectContaining({ previousOwnerUserId: 'user-1' })
+    );
   });
 
   it('resolves without throwing when the mailer returns false', async () => {
@@ -64,7 +70,10 @@ describe('notifyApiKeyReowned', () => {
     await expect(
       notifyApiKeyReowned({ previousOwnerUserId: 'user-1', keyName: 'My Key' }, { db, mailer })
     ).resolves.toBeUndefined();
-    expect(console.warn).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed to send'),
+      expect.objectContaining({ previousOwnerUserId: 'user-1' })
+    );
   });
 
   it('resolves without throwing when the mailer rejects', async () => {
@@ -85,7 +94,22 @@ describe('notifyApiKeyReowned', () => {
     await expect(
       notifyApiKeyReowned({ previousOwnerUserId: 'user-1', keyName: 'My Key' }, { db, mailer })
     ).resolves.toBeUndefined();
-    expect(console.warn).toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('failed'),
+      expect.objectContaining({ error: expect.stringContaining('DB') })
+    );
     expect(mailer.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('uses deps.logger.warn instead of console.warn when a logger is supplied', async () => {
+    const db = makeDb([]);
+    const mailer = makeMailer();
+    const logger = { warn: vi.fn() };
+    await notifyApiKeyReowned({ previousOwnerUserId: 'user-1', keyName: 'My Key' }, { db, mailer, logger });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no active email'),
+      expect.objectContaining({ previousOwnerUserId: 'user-1' })
+    );
+    expect(console.warn).not.toHaveBeenCalled();
   });
 });

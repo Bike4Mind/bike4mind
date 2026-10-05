@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 /**
@@ -134,6 +134,23 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
     await mockRefs.rotateHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(notifyApiKeyRotationReown).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 with the credential when the notifier does not settle within 5s', async () => {
+    rotateUserApiKey.mockResolvedValueOnce({
+      id: 'key-1', name: 'k', keyPrefix: 'b4m_live_x',
+      key: 'b4m_live_secret', previousOwnerUserId: 'minter',
+    });
+    // Never-settling notifier simulates a stalled SMTP host.
+    notifyApiKeyRotationReown.mockReturnValueOnce(new Promise(() => {}));
+    vi.useFakeTimers();
+    const { req, res } = post('key-1');
+    const handlerP = mockRefs.rotateHandler!(req, res) as Promise<unknown>;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await handlerP;
+    vi.useRealTimers();
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.parse(res._getData()).key).toBe('b4m_live_secret');
   });
 });
 

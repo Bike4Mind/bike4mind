@@ -49,10 +49,20 @@ const handler = baseApi().post(
     );
 
     if (rotatedKey.previousOwnerUserId) {
-      // Cap the wait so a stalled SMTP host cannot delay the show-once credential response.
+      const REOWN_NOTIFY_TIMEOUT_MS = 5_000;
+      let timeoutId: NodeJS.Timeout;
+      const timeoutP = new Promise<void>(resolve => {
+        timeoutId = setTimeout(() => {
+          req.logger.warn('[userApiKey] re-own notification timed out; credential returned without send confirmation', {
+            previousOwnerUserId: rotatedKey.previousOwnerUserId,
+          });
+          resolve();
+        }, REOWN_NOTIFY_TIMEOUT_MS);
+      });
       await Promise.race([
-        notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name, req.logger),
-        new Promise<void>(resolve => setTimeout(resolve, 5_000)),
+        notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name, req.logger)
+          .finally(() => clearTimeout(timeoutId)),
+        timeoutP,
       ]);
     }
 
