@@ -37,9 +37,9 @@ export function clampLakeConfigHistoryLimit(requested?: number): number {
  * Whether an id can be handed to `userRepository.findByIds` or an `_id: { $in }` query at all. The
  * former converts ids through `convertIds`, whose `new ObjectId(id)` THROWS on anything not 24-hex,
  * and the latter throws a CastError - either would turn one unresolvable principal into a 500 for
- * the entire history. Config events legitimately carry
- * non-ObjectId principal ids: `recordLakeConfigChange` writes `principalId: 'system'` for a write no
- * principal drove, and an API-key principal carries a key id.
+ * the entire history. Config events legitimately carry non-ObjectId principal ids:
+ * `recordLakeConfigChange` writes `principalId: 'system'` for a write no principal drove, and an
+ * API-key principal carries a key id.
  *
  * Kept as a local regex rather than importing mongoose (this package must not depend on the DB
  * driver). #1672's `findByIds` hardening makes the same guard redundant at the repository, but this
