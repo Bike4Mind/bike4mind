@@ -19,6 +19,7 @@ export {
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
+  resolveLakeManageRung,
   type LakeGrant,
 } from './manageRule';
 export * from './authorizeLakeManage';
@@ -81,6 +82,8 @@ export * from './applyTaxonomySuggestions';
 export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './narrowLakeAccessToSession';
+export * from './sessionLakeAdmission';
+export * from './vetPreauthorizedLakeIds';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
 export * from './supersession';

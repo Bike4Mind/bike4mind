@@ -352,6 +352,11 @@ export interface IAgentExecution {
    * invocation, since the tool list is rebuilt per Lambda.
    */
   scopeDeniedTools?: string[];
+  /**
+   * The `b4m_live_` key that started the run, when one did. Server-derived (`req.apiKeyInfo`);
+   * forwarded to ToolContext.apiKeyId so a tool-driven lake write is audited under the key.
+   */
+  apiKeyId?: string;
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -738,6 +743,7 @@ const AgentExecutionSchema = new mongoose.Schema(
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
     scopeDeniedTools: { type: [String], default: undefined },
+    apiKeyId: { type: String },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed

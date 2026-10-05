@@ -40,7 +40,10 @@ describe('sharingService - refuseInvite (expiry)', () => {
 
     await refuseInvite(userId, { id: inviteId }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalled();
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0]).toStrictEqual([
+      { id: inviteId, recipients: { pending: [], accepted: [], refused: ['me@example.com'] }, remaining: 0 },
+    ]);
   });
 
   it('allows redemption of an invite with no expiresAt set', async () => {
@@ -49,6 +52,9 @@ describe('sharingService - refuseInvite (expiry)', () => {
 
     await refuseInvite(userId, { id: inviteId }, { db } as any);
 
-    expect(db.invites.update).toHaveBeenCalled();
+    expect(db.invites.update).toHaveBeenCalledTimes(1);
+    expect(db.invites.update.mock.calls[0]).toStrictEqual([
+      { id: inviteId, recipients: { pending: [], accepted: [], refused: ['me@example.com'] }, remaining: 0 },
+    ]);
   });
 });

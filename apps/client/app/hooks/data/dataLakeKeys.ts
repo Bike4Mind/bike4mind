@@ -20,6 +20,12 @@ export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
   /**
+   * The lake list with the opt-in `retrievable` label, optionally for one session (GET
+   * /api/data-lakes?includeRetrievability=true&sessionId=). Distinct from `list` so an unlabeled
+   * response never answers a labeled read; under the `data-lakes` prefix so list invalidations reach it.
+   */
+  listWithRetrievability: (sessionId: string | null) => ['data-lakes', 'retrievability', sessionId] as const,
+  /**
    * The lake list as it applies to ANOTHER user - same rows, but `canPreauthorize` resolved
    * against `userId` rather than the caller (GET /api/data-lakes?preauthorizableFor=, #2945).
    *

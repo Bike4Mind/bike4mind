@@ -234,6 +234,19 @@ describe('POST /api/v1/agent-executions', () => {
     expect(mockStart.mock.calls.map(c => c[0].scopeDeniedTools)).toEqual([[], []]);
   });
 
+  it('forwards the authenticating key id from apiKeyInfo, never from the body', async () => {
+    const keyed = post({ session_id: 's1', message: 'go', apiKeyId: 'spoofed' });
+    Object.assign(keyed.req, { apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT] } });
+    const session = post({ session_id: 's1', message: 'go' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(keyed.req, keyed.res);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (startHandler as any)(session.req, session.res);
+
+    expect(mockStart.mock.calls.map(c => c[0].apiKeyId)).toEqual(['key-1', undefined]);
+  });
+
   it('rejects a body with no message before dispatching anything', async () => {
     const { req, res } = post({ session_id: 's1' });
 

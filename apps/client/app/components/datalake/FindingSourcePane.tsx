@@ -49,10 +49,12 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
           {title}
         </Typography>
         {/* The citation, and a working one: the `?article=` deep link is the shareable form the
-            router keeps alive for exactly this. New tab, because losing the comparison to follow
-            one side of it defeats the surface. */}
+            router keeps alive for exactly this. Carry the passage anchor so the viewer highlights
+            it. New tab to preserve the side-by-side comparison. */}
         <Link
-          href={`/data-lakes?article=${encodeURIComponent(source.fabFileId)}`}
+          href={`/data-lakes?article=${encodeURIComponent(source.fabFileId)}&passage=${encodeURIComponent(
+            source.excerpt
+          )}`}
           target="_blank"
           rel="noopener noreferrer"
           level="body-xs"
@@ -73,7 +75,7 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} citedPassage={source.excerpt} />
+          <MarkdownViewer content={content} citedPassage={source.excerpt} stripFrontmatter />
         ) : (
           // The document could not be read - deleted since detection, or unreadable to this curator.
           // The quoted passage is still shown: it is the evidence the finding rests on, and a pane

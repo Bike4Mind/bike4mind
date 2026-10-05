@@ -69,10 +69,10 @@ export interface PendingMessageFile {
  * cited text rather than the top of the document (#3038).
  *
  * `passage` is the text as SERVED - trimmed, clipped, defanged - not the stored chunk, so the
- * reader is shown exactly what grounded the claim. It rides the store rather than the URL because
- * a passage does not belong in a query string and there is no endpoint that resolves `chunkId`
- * back to its text; a shared or reloaded link therefore lands on the whole document, as it does
- * today. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
+ * reader is shown exactly what grounded the claim. Chip clicks set it in the store, since there is
+ * no endpoint that resolves `chunkId` back to its text. Finding deep links
+ * (`/data-lakes?article=&passage=`) carry the excerpt in the URL instead, so a reload of one of
+ * those re-highlights. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
  *
  * The shape itself is declared on the React-free primitive (components/Knowledge/citedPassage) and
  * re-exported here for the existing importers: the store depends on the primitive, not the reverse.

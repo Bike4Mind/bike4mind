@@ -103,6 +103,8 @@ export type StartAgentExecutionInput = {
   enabledToolsAreAmbient?: boolean;
   /** Server-derived from the caller's credential scopes; agentExecutor subtracts these from the run's resolved toolbelt. */
   scopeDeniedTools?: string[];
+  /** Server-derived from `req.apiKeyInfo`, never a request body; see `IAgentExecution.apiKeyId`. */
+  apiKeyId?: string;
   maxIterations?: number;
   messageFileIds?: string[];
   sessionFabFileIds?: string[];
@@ -291,6 +293,7 @@ export async function startAgentExecution(
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
     deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
     ...(input.scopeDeniedTools?.length ? { scopeDeniedTools: input.scopeDeniedTools } : {}),
+    ...(input.apiKeyId ? { apiKeyId: input.apiKeyId } : {}),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,

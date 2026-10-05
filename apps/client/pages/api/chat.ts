@@ -165,6 +165,8 @@ const handler = nextRouteForContract(chatContract, {
   const quest = await invokeService.invoke({
     body: internalRequest,
     userId: req.user.id,
+    // Attributes a lake write a tool drives this turn to the key rather than its owner.
+    apiKeyId: req.apiKeyInfo?.keyId,
   });
 
   if (!quest) throw new NotFoundError('Failed to create quest');

@@ -2,6 +2,11 @@
 **/dist
 **/.turbo
 .env*
+# The builder loads this template as placeholder runtime env for the built-API-route probe
+# (check-api-routes-cjs-require.mjs): without it the resource shim throws at load for most
+# routes and the probe is blind behind that throw. Builder stage only - never copied into the
+# runner image.
+!.env.selfhost.example
 
 # sst
 .sst

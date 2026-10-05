@@ -20,6 +20,9 @@ import {
   getCurrentPathFromContext,
   getViewSummaryForLLM,
   isNavigableFeaturePath,
+  applyReplyChoices,
+  REPLY_CHOICES_GUIDANCE,
+  stripChoicesFromReplies,
   ReasoningEffort,
   ICacheStrategy,
   generateAnonymousSessionId,
@@ -181,7 +184,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
-import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
   unionPreauthorizedLakeAccess,
@@ -1996,6 +1999,12 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      // Whether REPLY_CHOICES_GUIDANCE ships this turn. Decided here, ahead of the history fetch,
+      // because history re-attaches stored choices only when the guidance is offered (see
+      // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
+      // Research Mode is excluded because its early return never reaches applyReplyChoices.
+      const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
       const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
@@ -2651,6 +2660,7 @@ export class ChatCompletionProcess {
         // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
         // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
         model: modelInfo.id,
+        includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
@@ -2903,6 +2913,7 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
@@ -3073,7 +3084,6 @@ export class ChatCompletionProcess {
 
       // Research Mode runs its configurations in parallel over one tool list, so a shared budget
       // would let one configuration's searches cap another's.
-      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
       const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
       if (allTools && !isResearchMode) {
         allTools = webSearchBudget.apply(allTools);
@@ -3446,6 +3456,9 @@ export class ChatCompletionProcess {
               },
             ]
           : [],
+        // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
+        // withheld with the other auto-offers - see replyChoicesOffered.
+        replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
         toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
@@ -4987,6 +5000,28 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
+        // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
+        const replyChoicesOutcome = applyReplyChoices(quest);
+        // The system-prompt budget can evict the guidance after it was requested (lowest priority in
+        // systemPromptSources.ts), so `offered` reads what was actually delivered.
+        const replyChoicesDelivered =
+          quest.promptMeta?.context?.systemPromptDetails?.some(
+            detail => detail.name === 'reply_choices' && detail.wasIncluded
+          ) ?? false;
+        if (quest.promptMeta) {
+          quest.promptMeta.replyChoices = {
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            ...replyChoicesOutcome,
+          };
+        }
+        if (replyChoicesOutcome.status === 'invalid') {
+          logger.warn('[ReplyChoices] Choices block failed validation; no buttons shown', {
+            questId,
+            model: currentModel.id,
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            reason: replyChoicesOutcome.reason,
+          });
+        }
 
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: quest.status === 'stopped',
@@ -6183,9 +6218,12 @@ export class ChatCompletionProcess {
         return;
       }
       const setErrorReply = (message: string) => {
-        const visiblePartial = (streamedRepliesBeforeError ?? [])
-          .map(r => visibleReplyText(r))
-          .filter(text => text.length > 0);
+        // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
+        // slot with no separator - otherwise an unterminated block swallows the appended error as
+        // "part of the block", and once the error is the last slot the client no longer reads the
+        // earlier slot's block at all, leaking the raw JSON.
+        const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
+        const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
         quest.replies = combined;
         quest.reply = combined.join('');

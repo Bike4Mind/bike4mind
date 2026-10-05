@@ -44,6 +44,8 @@ const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnecti
   lastSyncedAt: null,
   syncStale: false,
   fileCount: 3,
+  disconnecting: false,
+  disconnectStalled: false,
   ...over,
 });
 
@@ -241,7 +243,43 @@ describe('GitHubConnectAction', () => {
       options.onSuccess();
     });
 
-    expect(h.toastSuccess).toHaveBeenCalledWith('Disconnected acme/docs.');
+    expect(h.toastSuccess).toHaveBeenCalledWith(
+      'Disconnecting acme/docs. Its files are being removed in the background.'
+    );
     expect(screen.queryByTestId('github-disconnect-warning')).toBeNull();
+  });
+
+  it('reads Disconnecting while the queued purge runs, with no Re-sync and no retry yet', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 7 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Disconnecting');
+    expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Removing 7 remaining files');
+    expect(screen.queryByTestId('github-resync-btn')).toBeNull();
+    // A retry now would only start a second purge chain over the same files.
+    const button = screen.getByTestId('github-disconnect-btn');
+    expect(button).toHaveTextContent('Disconnecting');
+    expect(button).toBeDisabled();
+  });
+
+  it('says it is finishing up rather than removing 0 files', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 0 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Finishing disconnect...');
+  });
+
+  it('uses singular wording for exactly one remaining file in the disconnecting note', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 1 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Removing 1 remaining file in');
+  });
+
+  it('offers Retry disconnect once the purge looks stalled, so it can be re-queued', () => {
+    h.connection.current = connected({ disconnecting: true, disconnectStalled: true });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    const button = screen.getByTestId('github-disconnect-btn');
+    expect(button).toHaveTextContent('Retry disconnect');
+    expect(button).not.toBeDisabled();
   });
 });

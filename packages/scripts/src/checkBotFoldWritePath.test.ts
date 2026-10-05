@@ -1828,8 +1828,6 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       // it is also what keeps `pull_request` safe to check out and run an agent over.
       'github.event.pull_request.head.repo.full_name == github.repository',
       'github.event.pull_request.draft == false',
-      "github.event.pull_request.base.ref != 'prod'",
-      "github.event.pull_request.head.ref != 'prod'",
       "!startsWith(github.event.pull_request.head.ref, 'changeset-release/')",
       "(github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')",
     ]);

@@ -308,6 +308,14 @@ describe('startAgentExecution', () => {
     expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
   });
 
+  it('persists the authenticating key so the executor can attribute lake writes to it', async () => {
+    await startAgentExecution(input({ userId: 'keyed', apiKeyId: 'key-1' }), logger);
+    await startAgentExecution(input({ userId: 'session' }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].apiKeyId).toBe('key-1');
+    expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
+  });
+
   it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {
     await startAgentExecution(
       input({ userId: 'interactive-run', connectionId: 'real-ws-conn', enabledTools: ['web_search'] }),

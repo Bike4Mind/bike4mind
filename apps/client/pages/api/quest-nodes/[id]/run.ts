@@ -61,6 +61,7 @@ const handler = baseApi()
       logger,
       // An API key reaches this door too; same lake-tool scope gate as /api/v1/agent-executions.
       scopeDeniedTools: dataLakeToolsDeniedFor(req),
+      apiKeyId: req.apiKeyInfo?.keyId,
     });
 
     respond(

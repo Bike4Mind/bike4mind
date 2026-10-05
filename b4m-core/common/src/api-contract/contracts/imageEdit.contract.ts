@@ -30,6 +30,7 @@ export const editImageContract = defineEndpoint({
     '`image` takes a URL rather than an id, so a source uploaded the same way is passed as its ' +
     '`download_url`, which must still be unexpired when the render runs. The edited image is not a file ' +
     'id: read it from `files[].url` on the polled quest, not from `GET /api/v1/files/{id}`. ' +
+    '`seed` makes an edit reproducible on BFL (FLUX) models only; gpt-image and Gemini models ignore it. ' +
     'Credits are checked when ' +
     'the render runs, so insufficient credits arrive on the polled quest rather than as a 422. ' +
     '`POST /api/ai/edit-image` is a legacy alias of this endpoint. Authenticate with an API key ' +

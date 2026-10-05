@@ -606,3 +606,189 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     ]);
   });
 });
+
+describe('MoonshotBedrockBackend reasoning-only final turn', () => {
+  const MODEL = ChatModels.KIMI_K2_THINKING_BEDROCK;
+  const render = (be: MoonshotBedrockBackend, frames: Record<string, unknown>[], streaming = true) =>
+    frames
+      .map(f => (streaming ? be.translateStreamChunk(MODEL, f) : be.translateChunk(MODEL, f)))
+      .flatMap(({ chunk }) => chunk.choices.map(c => ('chunkText' in c ? c.chunkText : '')))
+      .join('');
+  const fresh = () => {
+    const be = new MoonshotBedrockBackend();
+    be.getPayload(MODEL, messages, {});
+    return be;
+  };
+
+  it('promotes the last reasoning paragraph to visible text when a stop turn has no prose', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>Let me check.\n\nThe product of 12 and 15 is 180.</reasoning>' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe(
+      '<think>Let me check.\n\nThe product of 12 and 15 is 180.</think>The product of 12 and 15 is 180.'
+    );
+  });
+
+  it('promotes when the stop reason rides the same frame as the reasoning', () => {
+    const out = render(fresh(), [
+      {
+        choices: [
+          { delta: { content: '<reasoning>12 multiplied by 15 equals 180.</reasoning>' }, finish_reason: 'stop' },
+        ],
+      },
+    ]);
+    expect(out).toBe('<think>12 multiplied by 15 equals 180.</think>12 multiplied by 15 equals 180.');
+  });
+
+  it('closes an open reasoning_content block before the promoted text', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { reasoning_content: 'first\n\nanswer is 180.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe('<think>first\n\nanswer is 180.</think>answer is 180.');
+  });
+
+  it('does not promote when prose was already written', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>thinking</reasoning>' } }] },
+      { choices: [{ delta: { content: 'It is 180.' }, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe('<think>thinking</think>It is 180.');
+  });
+
+  it('does not promote when the turn called a tool', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>use the tool</reasoning>' } }] },
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, id: 't1', function: { name: 'math_evaluate', arguments: '{}' } }] } },
+        ],
+      },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).toBe('<think>use the tool</think>{}');
+  });
+
+  it('does not promote a turn cut off by the output budget', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>still thinking about 180</reasoning>' }, finish_reason: 'length' }] },
+    ]);
+    expect(out).toBe('<think>still thinking about 180</think>');
+  });
+
+  it('promotes for a non-streaming reasoning-only message', () => {
+    const out = render(
+      fresh(),
+      [{ choices: [{ message: { content: '<reasoning>hm\n\nIt is 180.</reasoning>' }, finish_reason: 'stop' }] }],
+      false
+    );
+    expect(out).toBe('<think>hm\n\nIt is 180.</think>It is 180.');
+  });
+
+  it('does not promote after a native tool marker that never parsed into a call', () => {
+    const streamed = render(fresh(), [
+      { choices: [{ delta: { content: '<reasoning>so it is 180.\n\n<|tool_calls_section_begin|> <|tool_call_beg' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(streamed).not.toMatch(/<\/think>.+/);
+
+    const whole = render(
+      fresh(),
+      [
+        {
+          choices: [
+            {
+              message: { content: '<reasoning>so it is 180.\n\n<|tool_call_begin|> broken</reasoning>' },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      ],
+      false
+    );
+    expect(whole).not.toMatch(/<\/think>.+/);
+  });
+
+  it('escapes think markers inside the promoted tail', () => {
+    const zw = '\u200b';
+    const streamed = render(fresh(), [
+      { choices: [{ delta: { reasoning_content: 'a\n\nWrap it in <think> tags.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(streamed).toBe(`<think>a\n\nWrap it in <${zw}think> tags.</think>Wrap it in <${zw}think> tags.`);
+
+    const whole = render(
+      fresh(),
+      [
+        {
+          choices: [{ message: { content: '<reasoning>a\n\nUse </think> here.</reasoning>' }, finish_reason: 'stop' }],
+        },
+      ],
+      false
+    );
+    expect(whole.slice(whole.lastIndexOf('</think>') + '</think>'.length)).toBe(`Use <${zw}/think> here.`);
+  });
+
+  it('does not promote after a native tool marker in streamed reasoning_content', () => {
+    const out = render(fresh(), [
+      { choices: [{ delta: { reasoning_content: 'x <|tool_calls_section_begin|> y\n\nClean last paragraph.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]);
+    expect(out).not.toContain('</think>Clean last paragraph.');
+  });
+
+  it('does not carry a promoted answer or flags into the next request', () => {
+    const be = fresh();
+    render(be, [{ choices: [{ delta: { content: '<reasoning>a</reasoning>' }, finish_reason: 'stop' }] }]);
+    be.getPayload(MODEL, messages, {});
+    const out = render(be, [{ choices: [{ delta: { content: '<reasoning>b</reasoning>' }, finish_reason: 'stop' }] }]);
+    expect(out).toBe('<think>b</think>b');
+  });
+});
+
+describe('MoonshotBedrockBackend tools-unavailable continuation', () => {
+  const MODEL = ChatModels.KIMI_K2_THINKING_BEDROCK;
+  const toolHistory = (): IMessage[] => {
+    const history: IMessage[] = [{ role: 'user', content: 'compute 12*15' } as IMessage];
+    new MoonshotBedrockBackend().pushToolMessages(
+      history,
+      { id: 't1', name: 'math_evaluate', parameters: '{"expression":"12*15"}' },
+      '180'
+    );
+    return history;
+  };
+  const lastOf = (history: IMessage[], options = {}) => {
+    const body = JSON.parse(new MoonshotBedrockBackend().getPayload(MODEL, history, options).body);
+    return body.messages[body.messages.length - 1] as { role: string; content: string };
+  };
+
+  it('appends an answer-now instruction when continuing after a tool result with no tools', () => {
+    const last = lastOf(toolHistory());
+    expect(last.role).toBe('user');
+    expect(last.content).toContain('Tools are no longer available');
+  });
+
+  it('does not append it while tools are still offered', () => {
+    const tools = [{ toolSchema: { name: 'math_evaluate', description: 'd', parameters: {} } }];
+    expect(lastOf(toolHistory(), { tools }).role).toBe('tool');
+  });
+
+  it('does not append it when the conversation does not end on a tool result', () => {
+    expect(lastOf([...toolHistory(), { role: 'user', content: 'thanks' } as IMessage]).content).toBe('thanks');
+  });
+
+  it('never promotes a reasoning tail that is raw tool-call text', () => {
+    const be = new MoonshotBedrockBackend();
+    be.getPayload(MODEL, messages, {});
+    const out = [
+      '<reasoning>use it\n\n<function=math_evaluate> {"expression": "12*15"} </function></reasoning>',
+      '<reasoning>go\n\n<function_calls><invoke name="math_evaluate"></invoke></function_calls></reasoning>',
+    ].map(content => {
+      be.getPayload(MODEL, messages, {});
+      const { chunk } = be.translateStreamChunk(MODEL, { choices: [{ delta: { content }, finish_reason: 'stop' }] });
+      return chunk.choices.map(c => ('chunkText' in c ? c.chunkText : '')).join('');
+    });
+    for (const rendered of out) expect(rendered.endsWith('</think>')).toBe(true);
+  });
+});

@@ -6,6 +6,8 @@ Background work that used to live under `apps/client/server`, moved here one cat
 |---|---|---|
 | `src/events/` | EventBridge event handlers (session naming, summarization, tagging, spider, Slack alarm forwarders, Stripe events) | Lambdas declared in `infra/*.ts` by handler path |
 | `src/cron/` | Scheduled handlers (sweeps, reconcilers, reports), the LiveOps/SecOps triage SQS workers, and the Lambda warmer | Lambdas declared in `infra/cron.ts`, `infra/queues.ts` and `infra/warmer.ts`; some sweeps also run as self-host scheduled tasks |
+| `src/jobs/` | DataSyncer: seeds a preview stage with staging config on its first deploy | Lambda declared in `infra/dataSyncer.ts` |
+| `src/emailIngestion/` | Inbound email parser and analyzer SQS consumers | Lambdas declared in `infra/emailIngestion.ts` |
 | `src/selfhost/` | Self-host worker runner: SQS long-poll loop, scheduler, and event dispatch | The `worker` service in `compose.selfhost.yaml` |
 
 ## Interim bridge into apps/client

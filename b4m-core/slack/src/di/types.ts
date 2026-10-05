@@ -12,6 +12,7 @@ import type {
   IFabFileRepository,
   IMcpServerDocument,
   ISession,
+  ISessionOrigin,
 } from '@bike4mind/common';
 import type { ITokenizer } from '@bike4mind/utils';
 import { ILogger } from '@bike4mind/observability';
@@ -61,6 +62,7 @@ export interface GetOrCreateSessionParams {
   ability?: unknown;
   logger: ILogger;
   fabFileIds?: string[];
+  origin?: ISessionOrigin;
 }
 
 export interface GetOrCreateSessionResult {

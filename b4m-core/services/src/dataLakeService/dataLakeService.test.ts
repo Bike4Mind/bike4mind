@@ -4951,7 +4951,10 @@ describe('reconcileStuckBatches - guarded read-time reconciliation', () => {
 
   const makeDb = () => ({
     dataLakes: { findById: vi.fn().mockResolvedValue(lake()), setStats: vi.fn(), activateIfDraft: vi.fn() },
-    batches: { markTerminalIfActive: vi.fn().mockResolvedValue(batch({ status: 'completed_with_errors' })) },
+    batches: {
+      markTerminalIfActive: vi.fn().mockResolvedValue(batch({ status: 'completed_with_errors' })),
+      claimUploadHistory: vi.fn().mockResolvedValue(true),
+    },
     fabFiles: {
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     },
@@ -4959,6 +4962,29 @@ describe('reconcileStuckBatches - guarded read-time reconciliation', () => {
   let db: ReturnType<typeof makeDb>;
   beforeEach(() => {
     db = makeDb();
+  });
+
+  it('records an upload stopped History row for the uploader of a forced batch', async () => {
+    const record = vi.fn().mockResolvedValue({});
+    db.batches.markTerminalIfActive = vi
+      .fn()
+      .mockResolvedValue(
+        batch({ status: 'completed_with_errors', userId: 'u1', vectorizedFiles: 3, failedFiles: 0, skippedFiles: 0 })
+      );
+    await reconcileStuckBatches(
+      [batch()],
+      DEFAULT_STUCK_BATCH_TIMEOUT_MS,
+      { db: { ...db, lakeConfigChangeEvents: { record } } },
+      DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000
+    );
+    expect(db.batches.claimUploadHistory).toHaveBeenCalledWith('b1');
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'upload-files',
+        principalId: 'u1',
+        changes: [expect.objectContaining({ after: 'Upload stopped: 3 files added' })],
+      })
+    );
   });
 
   it('is at least the worst-case chunk-queue SQS retry window (2 full visibility waits + the final Lambda run), so a legitimately-retrying batch is never forced terminal mid-retry (#1412)', () => {

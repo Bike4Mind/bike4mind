@@ -56,6 +56,8 @@ describe('gitHubConnectionPollInterval', () => {
     lastSyncedAt: null,
     syncStale: false,
     fileCount: 0,
+    disconnecting: false,
+    disconnectStalled: false,
     ...overrides,
   });
 
@@ -80,6 +82,12 @@ describe('gitHubConnectionPollInterval', () => {
 
   it('polls at an idle cadence on error, since a stalled sync is not actively in flight', () => {
     expect(gitHubConnectionPollInterval(connection({ status: 'error' }))).toBe(GITHUB_CONNECTION_IDLE_POLL_MS);
+  });
+
+  it('polls fast while a disconnect is pending, even though the connection reads as connected', () => {
+    expect(gitHubConnectionPollInterval(connection({ status: 'connected', disconnecting: true }))).toBe(
+      GITHUB_CONNECTION_ACTIVE_POLL_MS
+    );
   });
 });
 

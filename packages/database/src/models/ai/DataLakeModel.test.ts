@@ -482,6 +482,44 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
       ).toBe(2);
     });
 
+    it('counts a named org lake for a non-member who administers that org, and still not for a stranger', async () => {
+      const orgLake = await dataLakeRepository.create(
+        baseLake({ slug: 'org-x-private', organizationId: 'orgX', createdByUserId: 'alice', requiredUserTag: 'tag' })
+      );
+      const restrictToTags = [orgLake.datalakeTag];
+
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: ['orgX'],
+        })
+      ).toBe(1);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: ['orgY'],
+        })
+      ).toBe(0);
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+          restrictToTags,
+          administeredOrgIds: [],
+        })
+      ).toBe(0);
+    });
+
+    it('does not let an administered org widen reach: a gateless org lake still counts for a non-member admin', async () => {
+      const gateless = await dataLakeRepository.create(
+        baseLake({ slug: 'org-x-gateless', organizationId: 'orgX', createdByUserId: 'alice' })
+      );
+      expect(
+        await dataLakeRepository.countGateExcludedLakes([], [], [], 'bob', {
+          restrictToTags: [gateless.datalakeTag],
+          administeredOrgIds: ['orgX'],
+        })
+      ).toBe(1);
+    });
+
     it('never counts a named lake the caller could not already see exist (guessed tag), unless they may see all', async () => {
       const hidden = await dataLakeRepository.create(
         baseLake({ slug: 'hidden-private', organizationId: 'orgB', createdByUserId: 'alice', requiredUserTag: 'tag' })
@@ -1700,6 +1738,29 @@ describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', ()
     const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
     expect(finalized?.status).toBe('completed');
     expect(finalized?.completionReason).toBeUndefined();
+  });
+});
+
+describe('DataLakeBatchRepository.claimUploadHistory - one upload History row per batch', () => {
+  setupMongoTest();
+
+  it('lets exactly one caller claim, and a reopen does not release the claim', async () => {
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt', status: 'failed', error: 'enqueue: boom' }],
+    });
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(true);
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
+
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, {
+      fabFileId: 'f1',
+      errorPrefix: 'enqueue:',
+    });
+    expect(reopened?.status).toBe('processing');
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
   });
 });
 

@@ -5,7 +5,7 @@ import type { ISessionDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { updateAllQueryData } from '@client/app/utils/react-query';
+import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 
 /**
@@ -53,7 +53,7 @@ export default function useCreateDataLakeSession() {
       );
       const created = res.data;
       queryClient.setQueryData(['sessions', created.id], created);
-      updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
+      updateSessionsQueryData(queryClient, 'write', created);
       setCurrentSession(created);
       setCurrentSessionId(created.id);
       // Consumed: the session now owns the scope, and leaving it set would apply it to the next

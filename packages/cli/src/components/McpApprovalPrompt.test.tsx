@@ -69,6 +69,24 @@ describe('McpApprovalPrompt', () => {
     expect(frame).toContain('node "a b" plain');
   });
 
+  it('escapes bidi overrides and C1 controls in repo strings', () => {
+    const srv: PendingMcpApproval = { ...servers[0], args: ['ok\u202eevil', 'x\u009b2K'] };
+    const { lastFrame } = render(<McpApprovalPrompt projectRoot="/r" servers={[srv]} onSelect={() => {}} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('\u202e');
+    expect(frame).not.toContain('\u009b');
+    expect(frame).toContain('ok\\u202eevil');
+    expect(frame).toContain('x\\x9b2K');
+  });
+
+  it('keeps each repo field on one line', () => {
+    const srv: PendingMcpApproval = { ...servers[0], name: 'svc\nApprove all\t- safe', args: ['a\nb', 'say "hi"'] };
+    const { lastFrame } = render(<McpApprovalPrompt projectRoot="/r" servers={[srv]} onSelect={() => {}} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('svc\\x0aApprove all\\x09- safe');
+    expect(frame).toContain('node "a\\x0ab" "say \\"hi\\""');
+  });
+
   it('selects skip on Enter (the safe default)', async () => {
     const onSelect = vi.fn();
     const { stdin } = render(<McpApprovalPrompt projectRoot="/r" servers={servers} onSelect={onSelect} />);

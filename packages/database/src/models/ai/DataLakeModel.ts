@@ -33,6 +33,7 @@ import {
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
+  LAKE_MANAGE_RUNGS,
 } from '@bike4mind/common';
 
 // --- Data Lake Schema ---
@@ -554,6 +555,7 @@ export const buildAccessibleQuery = (
  */
 const callerVisibilityArms = (params: {
   organizationIds: string[] | undefined;
+  administeredOrgIds?: string[];
   userId?: string;
   publicArm?: Record<string, unknown>;
 }): Record<string, unknown>[] => {
@@ -561,6 +563,11 @@ const callerVisibilityArms = (params: {
   if (params.publicArm) arms.push(params.publicArm);
   if (params.organizationIds && params.organizationIds.length > 0) {
     arms.push({ organizationId: { $in: params.organizationIds } });
+  }
+  // Browse lists a non-member org admin's org lakes (the org-admin arm), so the count must treat
+  // them as already visible. Visibility only: retrieval's reach arms deliberately omit this.
+  if (params.administeredOrgIds && params.administeredOrgIds.length > 0) {
+    arms.push({ organizationId: { $in: params.administeredOrgIds } });
   }
   if (params.userId) arms.push({ createdByUserId: params.userId });
   return arms;
@@ -832,7 +839,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     entitlementKeys: string[],
     organizationIds: string[] | undefined,
     userId: string | undefined,
-    opts?: ReachArmsOpts & { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
+    opts?: ReachArmsOpts & {
+      restrictToTags?: string[];
+      callerMaySeeAllLakes?: boolean;
+      administeredOrgIds?: string[];
+    }
   ): Promise<number> {
     if (opts?.restrictToTags && opts.restrictToTags.length > 0) {
       const reachArms = this.buildReachArms(
@@ -846,7 +857,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       // The count is shown to the caller, so a lake they could not already know exists must not
       // move it: restrictToTags is client-influenced, and a nonzero count for a guessed tag would
       // confirm that lake exists. Only a caller who may see every lake skips the prerequisite.
-      const visibleToCaller = opts.callerMaySeeAllLakes ? undefined : callerVisibilityArms({ organizationIds, userId });
+      const visibleToCaller = opts.callerMaySeeAllLakes
+        ? undefined
+        : callerVisibilityArms({ organizationIds, administeredOrgIds: opts.administeredOrgIds, userId });
       if (visibleToCaller?.length === 0) return 0;
       return this.dataLakeModel.countDocuments({
         status: 'active',
@@ -1481,6 +1494,11 @@ const DataLakeBatchSchema = new mongoose.Schema(
     completedAt: { type: Date },
     // Set only on a non-normal terminal transition (e.g. 'reconciler'); absent on normal completion.
     completionReason: { type: String, enum: ['reconciler'] },
+    // Resolved at the batch-create gate and stamped onto the upload History row - see
+    // IDataLakeBatch.uploaderManageRung.
+    uploaderManageRung: { type: String, enum: LAKE_MANAGE_RUNGS },
+    // One-shot claim for the upload History row - see claimUploadHistory.
+    uploadHistoryRecordedAt: { type: Date },
     // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
     // comment for why it isn't layered onto the ingest status instead).
     wantsTaxonomy: { type: Boolean, default: false },
@@ -1708,6 +1726,14 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { _id: batchId, 'files.fabFileId': fabFileId },
       { $set: { 'files.$.failureCounted': counted } }
     );
+  }
+
+  async claimUploadHistory(batchId: string): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, uploadHistoryRecordedAt: { $exists: false } },
+      { $set: { uploadHistoryRecordedAt: new Date() } }
+    );
+    return res.modifiedCount === 1;
   }
 
   /**

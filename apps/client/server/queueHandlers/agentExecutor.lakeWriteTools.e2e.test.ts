@@ -50,6 +50,15 @@ describe('agentExecutor toolDeps wiring', () => {
     expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*organizationId: child\.organizationId,/);
   });
 
+  it('forwards the run API key to both toolDeps and to every child it spawns', () => {
+    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*apiKeyId: execution\.apiKeyId,/);
+    expect(source).toMatch(/const toolDeps: ToolBuilderDeps = \{[^}]*apiKeyId: child\.apiKeyId,/);
+    expect(source).toMatch(
+      /const baseFields = \{[^}]*\.\.\.\(execution\.apiKeyId && \{ apiKeyId: execution\.apiKeyId \}\),/
+    );
+    expect(source).toMatch(/nodeDefaults: \{[^}]*apiKeyId: execution\.apiKeyId,/);
+  });
+
   it('subtracts the persisted scope denials in the final tool policy pass', () => {
     expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
   });
@@ -101,11 +110,12 @@ const createUser = async (name: string) => {
   })) as unknown as IUserDocument;
 };
 
-const lakeTools = (user: IUserDocument, organizationId?: string) => {
+const lakeTools = (user: IUserDocument, organizationId?: string, apiKeyId?: string) => {
   const deps = makeToolBuilderDeps({
     userId: user.id,
     user,
     organizationId,
+    apiKeyId,
     storage: storage as never,
     db: {
       ...makeToolBuilderDeps().db,
@@ -155,6 +165,16 @@ describe('agent lake write tools on real repositories', () => {
     expect(reply).toContain('personal');
     const lake = await DataLakeModel.findById(lakeIdFrom(reply)).lean();
     expect(lake?.organizationId ?? null).toBeNull();
+  });
+
+  it('audits a key-started run under the key, on behalf of its owner', async () => {
+    const user = await createUser('keyed');
+    const lakeId = lakeIdFrom(await lakeTools(user, undefined, 'key-1').create('Keyed Notes'));
+
+    const rows = await LakeConfigChangeEventModel.find({ dataLakeId: lakeId }).lean();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every(r => r.principalKind === 'apiKey' && r.principalId === 'key-1')).toBe(true);
+    expect(rows.every(r => r.onBehalfOfUserId === user.id)).toBe(true);
   });
 
   it('refuses an organization the user is not a member of and creates nothing', async () => {

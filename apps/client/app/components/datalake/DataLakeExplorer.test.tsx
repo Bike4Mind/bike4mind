@@ -31,7 +31,9 @@ const {
   lakesState,
   workBenchState,
   mockFileOwnerId,
+  lakesHookSessionIds,
 } = vi.hoisted(() => ({
+  lakesHookSessionIds: [] as Array<string | null | undefined>,
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
@@ -94,8 +96,13 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   // The real helper writes through the module's own setSessionLayout, which this spy cannot see;
   // forwarding to the spy keeps the exact payload assertions below. The helper itself is covered
   // in useSessionLayout.test.ts.
-  openFileInChatViewer: (file: { id: string }) =>
-    setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id }),
+  openFileInChatViewer: (file: { id: string }, citedPassage?: unknown) =>
+    setSessionLayout({
+      layout: 'vertical',
+      previewFile: file,
+      selectedArtifactId: file.id,
+      ...(citedPassage !== undefined && { citedPassage }),
+    }),
 }));
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
@@ -153,6 +160,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     };
   },
   useGetDataLakes: () => ({ data: lakesState.value }),
+  useGetDataLakesWithRetrievability: (sessionId: string | null | undefined) => {
+    lakesHookSessionIds.push(sessionId);
+    return { data: lakesState.value };
+  },
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
     return { mutate: removeFileMutate, isPending: false };
@@ -350,6 +361,26 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
     // a close request is an actual transition rather than a no-op write.
     useSessionLayoutStore.setState({ layout: 'dockRight' });
+  });
+
+  it('asks for the lake labels of the current session and surfaces a server false on the header', () => {
+    lakesHookSessionIds.length = 0;
+    lakesState.value = [
+      {
+        id: 'lake-1',
+        name: 'Lake A',
+        datalakeTag: 'datalake:lake-a',
+        fileTagPrefix: 'lakea',
+        canManage: true,
+        status: 'active',
+        retrievable: false,
+      },
+    ];
+    sessionState.current = { id: 'sess-1', retrievalTags: ['datalake:lake-a'], lakeScopeExplicit: false };
+    renderExplorer();
+
+    expect(lakesHookSessionIds).toContain('sess-1');
+    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
   });
 
   it('renders chatSlot in the right pane', () => {
@@ -573,6 +604,34 @@ describe('DataLakeExplorer chat-first surface', () => {
       });
     });
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
+  });
+
+  it('deep-linked article with a passage hands the cited excerpt to the viewer', async () => {
+    renderExplorer({ articleId: 'deep-1', articlePassage: 'cited text' });
+    await vi.waitFor(() =>
+      expect(setSessionLayout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          selectedArtifactId: 'deep-1',
+          citedPassage: { fileId: 'deep-1', chunkId: 'unknown', passage: 'cited text' },
+        })
+      )
+    );
+  });
+
+  it('deep-linked article with a blank passage opens the document without a cited passage', async () => {
+    renderExplorer({ articleId: 'deep-1', articlePassage: '   ' });
+    await vi.waitFor(() =>
+      expect(setSessionLayout).toHaveBeenCalledWith(expect.objectContaining({ selectedArtifactId: 'deep-1' }))
+    );
+    expect(setSessionLayout.mock.calls.every(([arg]) => !('citedPassage' in (arg as object)))).toBe(true);
+  });
+
+  it('deep-linked article with a passage never writes a layout on an overlay host', async () => {
+    renderExplorer({ chatEmbedded: false, articleId: 'deep-1', articlePassage: 'cited text' });
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.anything() as unknown as string })
+    );
   });
 
   it('delete is offered only for a uniquely-resolved manageable lake', () => {

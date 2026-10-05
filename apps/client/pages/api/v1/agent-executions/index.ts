@@ -77,6 +77,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       // Same scope gate as the chat doors: a key without the datalake scopes gets no lake tools,
       // whatever the agent's profile or the pairing would otherwise add.
       scopeDeniedTools: dataLakeToolsDeniedFor(req),
+      apiKeyId: req.apiKeyInfo?.keyId,
       maxIterations: body.max_iterations,
       messageFileIds: body.file_ids,
       sessionFabFileIds: body.session_file_ids,

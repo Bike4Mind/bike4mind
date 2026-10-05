@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
+import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -781,12 +782,11 @@ export const RetrievalSummarySchema = z.object({
    * an archived or quota-limited lake) adds an enum value here rather than a description.
    *
    * 'access' is the only reason today: the caller could see the lake exists (their org membership,
-   * the lake's public listing, or having created it; an admin may see any lake) but they hold
-   * neither its own gate/entitlement nor an ownership or grant exception for it. A lake the caller
-   * could not see is never counted, so the count cannot confirm that a guessed lake tag exists.
-   * Known limitation: a non-member who administers the lake's org sees it in the lake picker through
-   * the org-admin arm, but the identity count only knows membership and creator, so it stays silent
-   * for them.
+   * the lake's public listing, or having created it; for a lake named by identity, also administering
+   * its org; an admin may see any lake) but they hold neither its own gate/entitlement nor an
+   * ownership or grant exception for it. A lake the caller could not see is never counted, so the
+   * count cannot confirm that a guessed lake tag exists. The account-wide count still bounds on
+   * membership only.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
@@ -891,6 +891,21 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Why reply-choice buttons did or did not appear: `offered` is whether REPLY_CHOICES_GUIDANCE
+   * actually reached the model this turn - requested AND not evicted by the system-prompt budget
+   * (see SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) - `status`/`reason` the
+   * finalize outcome (see ReplyChoicesOutcome in ../utils/replyChoices.ts). Written once at
+   * finalize; absent on Research Mode turns (which skip finalize entirely) and any other turn that
+   * never finalized.
+   */
+  replyChoices: z
+    .object({
+      offered: z.boolean(),
+      status: z.enum(['parsed', 'absent', 'invalid']),
+      reason: z.enum(REPLY_CHOICES_INVALID_REASONS).optional(),
+    })
+    .optional(),
   /**
    * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
    * place of real code, or calls into functions that were never defined. The complement to

@@ -455,7 +455,7 @@ function ArticlePanel({
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} />
+          <MarkdownViewer content={content} stripFrontmatter />
         ) : (
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             Unable to load file content.

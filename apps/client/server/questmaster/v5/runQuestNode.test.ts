@@ -146,6 +146,14 @@ describe('runQuestNode memory gating', () => {
     await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger, scopeDeniedTools: [] });
     expect(create.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
   });
+
+  it('persists the authenticating key, and omits it for a session caller', async () => {
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger, apiKeyId: 'key-1' });
+    expect(create.mock.calls[0][0].apiKeyId).toBe('key-1');
+
+    await runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+    expect(create.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
+  });
 });
 
 describe('runQuestNode stale sweep', () => {

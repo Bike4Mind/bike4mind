@@ -165,6 +165,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
   // ImageEditBodySchema's own (narrower) field.
   output_format: ImageOutputFormatSchema.nullable().optional(),
+  // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
+  seed: z.number().nullable().optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 
@@ -285,6 +287,12 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * knowledge at all also needs a session with no attachments and forced retrieval off.
    */
   skipAutoOffers: z.boolean().optional(),
+  /**
+   * Withhold only the reply-choices guidance, for a caller with no button UI (voice speaks the
+   * raw reply stream, so a choices block would be read aloud). Narrower than `skipAutoOffers`,
+   * which also withholds knowledge and MCP offers such a caller may still need.
+   */
+  skipReplyChoices: z.boolean().optional(),
   /**
    * Tools to withhold on this turn, unioned with `session.disabledTools` and applied at every
    * denylist site including the final pass after buildTools. A client may send it, but it can only add:
