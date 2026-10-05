@@ -2618,6 +2618,32 @@ describe('useApplyCorpusAction', () => {
     });
   });
 
+  it('toasts the returned-to-ranking name when a mutation un-supersedes a file', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'unsupersede',
+          findingId: 'finding-1',
+          targets: [{ fabFileId: 'b', fileName: 'b.md', role: 'restored' }],
+          detail: { returnedToRanking: 'b' },
+        },
+      },
+    });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'unsupersede', fabFileId: 'b' },
+      });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('"b.md" returned to ranking.');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+  });
+
   it('surfaces the server refusal text on a closed finding rather than axios status line', async () => {
     apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This finding has already been ruled on'));
     const { result } = mount();
