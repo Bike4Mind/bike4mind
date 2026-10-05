@@ -418,6 +418,10 @@ declare module "sst" {
       "name": string
       "type": "sst.aws.Function"
     }
+    "dataLakeCleanupQueue": {
+      "type": "sst.aws.Queue"
+      "url": string
+    }
     "dataLakeResearchQueue": {
       "type": "sst.aws.Queue"
       "url": string

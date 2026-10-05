@@ -123,6 +123,14 @@ export interface IDataLakeFinding {
 export type IDataLakeFindingDocument = IDataLakeFinding & IMongoDocument;
 
 /**
+ * A finding row as GET /findings returns it: the stored row plus which of its cited documents a
+ * curator has ruled superseded in THIS lake. Derived at read time from the file rows
+ * (`IFabFile.supersededInLakes`), never stored on the finding, so it cannot drift from the ruling.
+ * Populated for OPEN findings only (the one place a ruling is actionable); always `[]` on a closed row.
+ */
+export type ILakeFindingListItem = IDataLakeFindingDocument & { supersededFabFileIds: string[] };
+
+/**
  * What a detection run reports for one problem. The server owns status, both timestamps and every
  * curator field; a detector supplies only what it observed.
  */

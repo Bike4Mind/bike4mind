@@ -23,8 +23,9 @@ export const editImageContract = defineEndpoint({
     'Queues an edit of an existing image and returns the quest that will carry the result, before the ' +
     'render runs. Poll `GET /api/v1/quests/{id}` until `status` is `"done"` (see the `editImage200PollResult` ' +
     'schema). `image` is the URL of the source image; `fabFileIds` must name at least one file, and the ' +
-    'first is the inpainting mask. `referenceImageFabFileIds` (gpt-image models only) adds up to 4 style ' +
-    'anchors after the source image, so the mask always applies to the source. Both id fields take ids ' +
+    'first is the inpainting mask. `referenceImageFabFileIds` adds up to 4 style anchors after the ' +
+    'source image, so the mask always applies to the source; only gpt-image models accept them, and sending ' +
+    'any with another model is rejected with a 400 rather than ignored. Both id fields take ids ' +
     'from `POST /api/v1/files`: upload each file, poll `GET /api/v1/files/{id}` until `moderation_status` ' +
     'is `clean`, then pass its `id`. An id that is not yet `clean` fails the edit on the polled quest. ' +
     '`image` takes a URL rather than an id, so a source uploaded the same way is passed as its ' +
@@ -56,7 +57,9 @@ export const editImageContract = defineEndpoint({
       pollResult: imageQuestPollResult,
     },
     400: {
-      description: `\`fabFileIds\` is empty, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`,
+      description:
+        `\`fabFileIds\` is empty, \`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ` +
+        GENERATION_CALLBACK_REJECTED_DESCRIPTION,
       schema: ApiErrorSchema,
     },
     404: {

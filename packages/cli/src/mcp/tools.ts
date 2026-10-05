@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { PROMPT_TEXT_MAX } from '@bike4mind/common';
+import { DEFAULT_TTS_PROVIDER, PROMPT_TEXT_MAX, ttsRequestSchema, type TTSRequest } from '@bike4mind/common';
 import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -57,6 +57,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Generate sound effect',
     description:
       'Generate a sound effect from a text description. Returns the saved audio file (with a signed download URL) when the caller keeps generated audio, otherwise the audio inline.',
+    scope: 'ai:generate',
+  },
+  {
+    name: 'text_to_speech',
+    title: 'Text to speech',
+    description:
+      'Synthesize speech from text. Returns a saved audio file with a signed download URL when available, otherwise audio inline.',
     scope: 'ai:generate',
   },
 ];
@@ -128,6 +135,13 @@ const generateSoundEffectShape = {
     .optional()
     .describe('How strictly to follow the prompt (0 = loose, 1 = strict)'),
   format: z.string().optional().describe('Provider output encoding token, e.g. mp3_44100_128'),
+};
+
+const textToSpeechShape = {
+  ...ttsRequestSchema.omit({ encoding: true }).shape,
+  text: ttsRequestSchema.shape.text.describe('Text to speak'),
+  provider: ttsRequestSchema.shape.provider.describe(`Speech provider; defaults to ${DEFAULT_TTS_PROVIDER}`),
+  preview: ttsRequestSchema.shape.preview.describe('Skip saving a copy to the file browser'),
 };
 
 function notebookSummary(n: RawNotebook) {
@@ -266,13 +280,62 @@ function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
     });
   }
   const { audioBase64, ...meta } = outcome;
+  return inlineAudioResult(meta, audioBase64, outcome.contentType);
+}
+
+/**
+ * Metadata as JSON text plus the audio as an MCP `audio` block. The base64 stays
+ * out of structuredContent so a potentially large payload is not duplicated.
+ */
+function inlineAudioResult(meta: Record<string, unknown>, audioBase64: string, mimeType: string): CallToolResult {
   return {
     content: [
       { type: 'text', text: JSON.stringify(meta, null, 2) },
-      { type: 'audio', data: audioBase64, mimeType: outcome.contentType },
+      { type: 'audio', data: audioBase64, mimeType },
     ],
     structuredContent: meta,
   };
+}
+
+export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 'encoding'>): Promise<CallToolResult> {
+  const response = await client.synthesizeSpeech(args);
+  if (response.kind === 'saved-too-large') {
+    // Too large to inline, so the FabFile is the only way back to the audio; it is
+    // reported even without a signed URL so the agent can still name the file.
+    const { provider, fabFileId, fileUrl } = response.data;
+    return toResult({
+      saved: true,
+      provider,
+      ...(response.fallbackFrom ? { fallbackFrom: response.fallbackFrom } : {}),
+      file: { id: fabFileId, ...(fileUrl ? { fileUrl } : {}) },
+    });
+  }
+
+  const result = response.data;
+  const provider = result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER;
+  const metadata = {
+    provider,
+    ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom } : {}),
+    format: result.format,
+    contentType: result.contentType,
+    byteLength: Buffer.from(result.audio, 'base64').length,
+  };
+
+  if (result.saved && result.fabFileId && result.fileUrl) {
+    return toResult({ ...metadata, saved: true, file: { id: result.fabFileId, fileUrl: result.fileUrl } });
+  }
+
+  // No usable URL: inline the billed audio, but still report a saved copy by id,
+  // and why a copy was skipped (quota vs. preference) when the route says.
+  const inlineMetadata =
+    result.saved && result.fabFileId
+      ? { ...metadata, saved: true, file: { id: result.fabFileId } }
+      : {
+          ...metadata,
+          saved: false,
+          ...(result.saveSkippedReason ? { saveSkippedReason: result.saveSkippedReason } : {}),
+        };
+  return inlineAudioResult(inlineMetadata, result.audio, result.contentType);
 }
 
 /**
@@ -356,6 +419,22 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     async args => {
       try {
         return soundEffectResult(await generateSoundEffect(client, args));
+      } catch (err) {
+        return errorResult(mapApiError(err, baseURL, 'ai:generate'));
+      }
+    }
+  );
+
+  server.registerTool(
+    'text_to_speech',
+    {
+      title: meta('text_to_speech').title,
+      description: meta('text_to_speech').description,
+      inputSchema: textToSpeechShape,
+    },
+    async args => {
+      try {
+        return await textToSpeech(client, args);
       } catch (err) {
         return errorResult(mapApiError(err, baseURL, 'ai:generate'));
       }

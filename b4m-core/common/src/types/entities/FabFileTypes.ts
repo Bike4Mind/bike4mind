@@ -1165,6 +1165,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Mixed `sourceMetadata` included) to answer a question about existence.
    */
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
+  /**
+   * As `findExistingIdsByIds`, but a soft-deleted row counts as existing. The two answer different
+   * questions and a caller must pick deliberately: this one is "is there a row at all", which is the
+   * only safe basis for destroying a reference to it, because a soft delete is recoverable (a lake
+   * teardown soft-deletes its files and `restoreDeletedDataLake` revives them). Use the filtered
+   * sibling when the question is reachability - whether the document can be read right now.
+   */
+  findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
   /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
@@ -1462,6 +1470,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
    */
   getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
+  /**
+   * Which of `fabFileIds` carry a curator supersede ruling for `dataLakeId`, as a subset of the
+   * input. The batched read behind the findings list's "Return to ranking"; `supersededInLakes` is
+   * `select: false`, so this opts in explicitly rather than leaning on a plain find.
+   */
+  listLakeSupersededIds?(fabFileIds: string[], dataLakeId: string): Promise<string[]>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the

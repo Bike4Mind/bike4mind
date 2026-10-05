@@ -3103,7 +3103,7 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id, 'claim-a')).toBe(true);
     const released = await DataLakeModel.findById(created.id).lean();
     expect(released?.status).toBe('deleted');
-    expect(released).not.toHaveProperty('purgeClaimId');
+    expect(released?.purgeClaimId).toBe('claim-a');
   });
 
   it('releases nothing when the lake is not purging, so it can never resurrect another transition', async () => {

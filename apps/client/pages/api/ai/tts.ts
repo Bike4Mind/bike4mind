@@ -4,7 +4,7 @@ import {
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
-  VoiceGenerationVendor,
+  DEFAULT_TTS_PROVIDER,
   type ApiErrorCode,
 } from '@bike4mind/common';
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
@@ -16,8 +16,6 @@ import {
   InsufficientTtsCreditsError,
 } from '@server/utils/deductTtsCredits';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
-
-const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
@@ -42,7 +40,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
     req.validated;
 
-  const vendor = provider ?? DEFAULT_PROVIDER;
+  const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
   const maxChars = TTS_MAX_INPUT_CHARS[vendor];
   if (text.length > maxChars) {

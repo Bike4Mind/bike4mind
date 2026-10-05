@@ -43,6 +43,7 @@ import {
   isEarlyStop,
   visibleReplyText,
   tokenEstimateMultiplier,
+  pairDataLakeTools,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -111,6 +112,7 @@ import { buildToolEchoSources } from './toolEchoSources';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
+import { scrubMissingKnowledgeIds } from '../sessionService/scrubMissingKnowledgeIds';
 import { LATTICE_TOOL_NAMES } from './tools';
 import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import {
@@ -201,6 +203,8 @@ import {
   deductCreditsWithOrgSupport,
   subtractCredits,
   getMemberUsedCredits,
+  getMemberCreditCap,
+  getMemberCreditPeriodEnd,
   isMemberCreditCapExceeded,
 } from '../creditService';
 import {
@@ -696,10 +700,8 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
   paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
-  // The Smart Tools toggle exposes only the save tool; it cannot name a target lake without the
-  // list, or make one without the create.
-  paired = addPairedTool(paired, 'save_content_to_data_lake', 'list_my_data_lakes');
-  paired = addPairedTool(paired, 'save_content_to_data_lake', 'create_data_lake');
+  // The Smart Tools toggle exposes only the save tool.
+  paired = pairDataLakeTools(paired);
   return paired.filter(tool => !denied.has(tool));
 }
 
@@ -2888,6 +2890,23 @@ export class ChatCompletionProcess {
         attachmentDelivery,
       } = dataSources;
 
+      // A pinned document that no longer exists would otherwise re-attach, re-fail and re-cost a
+      // turn on every subsequent prompt - the "ghost files" report. Detach it once, here, where the
+      // turn has just established it did not resolve. Deliberately NOT driven by
+      // `attachmentDelivery.droppedIds`: that set also holds live files this turn merely could not
+      // inline (audio, an image on a vision-less model, a held or oversized image), and detaching
+      // those would destroy notebook contents as a side effect of an ordinary prompt. The helper
+      // re-checks both halves; see its docstring for the two gates.
+      const scrubbed = await scrubMissingKnowledgeIds(session.knowledgeIds ?? [], dataSources.fileNotices, {
+        db: { fabFiles: this.db.fabfiles, sessions: this.db.sessions },
+        logger: this.logger,
+      });
+      if (scrubbed.length > 0) {
+        // Keep the in-memory copy in step so later reads in this run see the cleaned set.
+        const removed = new Set(scrubbed);
+        session.knowledgeIds = (session.knowledgeIds ?? []).filter((id: string) => !removed.has(id));
+      }
+
       // Persisted before the completion runs: an attachment that failed to arrive is worth showing
       // even on a turn that later errors out, and this is the only durable record the user sees.
       // The delivery report goes with it and is written even when nothing failed - a turn whose
@@ -4054,7 +4073,9 @@ export class ChatCompletionProcess {
             throw new InsufficientCreditsError(
               buildMemberCreditCapMessage({
                 used: getMemberUsedCredits(organization, this.user.id),
-                cap: organization.maxCreditsPerMember!,
+                // Non-null: isMemberCreditCapExceeded is false whenever no cap applies.
+                cap: getMemberCreditCap(organization, this.user.id)!,
+                resetsAt: getMemberCreditPeriodEnd(),
                 organizationName: organization.name,
               }),
               'insufficient_credits'
@@ -6817,6 +6838,11 @@ When using tools that require file IDs (like edit_image), use the ID shown above
      *  in a system message inside `fabMessages`. Stored on the quest so the transcript says the same
      *  thing - an attachment must never fail silently (#2228). */
     attachmentNotices: string[];
+    /** The same notices before they were flattened to prose. Carries `band`, which is the only thing
+     *  separating "this id resolved to no document" from "this live file could not be inlined this
+     *  turn" - a distinction `attachmentNotices` and `attachmentDelivery.droppedIds` both lose, and
+     *  which `scrubMissingKnowledgeIds` must have before it detaches anything. */
+    fileNotices: FabFileNotice[];
     /** Affirmative delivery report - the counts behind the notices, and the only record of a turn
      *  whose attachments ALL arrived (which produces no notices at all). `undefined` when the turn
      *  carried no attachments, so a caller can tell "none sent" from "none arrived". */
@@ -7011,6 +7037,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       actuallyInlinedKnowledgeIds,
       fullyInlinedAttachmentIds,
       attachmentNotices: toAttachmentNoticeStrings(fileNotices),
+      fileNotices,
       attachmentDelivery,
     };
   }

@@ -575,9 +575,11 @@ export interface IDataLake {
   filesArchivedAt?: Date | null;
   /**
    * Which accept request holds the `purging` claim - see `claimPurging`. Set with the claim and
-   * unset on release; meaningless on any other status.
+   * retained on failed enqueue; restore rotates it to fence delayed messages.
    */
   purgeClaimId?: string;
+  /** Durable fence: started cleanup cannot be released for restore. */
+  purgeStartedAt?: Date;
   /**
    * Per-lake opt-in to lake memory: gates BOTH extraction-on-ingest and recall injection for
    * this lake specifically. `EnableLakeMemory` (the platform setting) gates whether the option is
@@ -1006,6 +1008,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Without it, only a claim that has no id (taken before ids were stored), for queue messages enqueued before the id rode along.
    */
   releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean>;
+  /** Admit only the queued lifecycle generation; same-generation replay remains valid. */
+  beginPurgeExecution(id: string, claimId?: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
