@@ -84,4 +84,11 @@ describe('PUT /api/organizations/[id]/member-credit-budget', () => {
     await expect(run()).rejects.toThrow();
     expect(setMemberCreditDefault).not.toHaveBeenCalled();
   });
+
+  it('propagates a service refusal and writes no audit record', async () => {
+    setMemberCreditDefault.mockRejectedValue(new Error('Organization not found'));
+    const { run } = put({ maxCreditsPerMember: 500 });
+    await expect(run()).rejects.toThrow('Organization not found');
+    expect(logAuditEvent).not.toHaveBeenCalled();
+  });
 });

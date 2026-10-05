@@ -145,6 +145,7 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
     <Dropdown>
       <MenuButton
         className="organization-user-card-menu-button"
+        data-testid="org-user-card-menu-btn"
         slots={{ root: IconButton }}
         slotProps={{ root: { variant: 'outlined', size: 'sm' } }}
       >

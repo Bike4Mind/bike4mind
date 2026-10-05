@@ -24,7 +24,7 @@ import {
 } from './groupMembership';
 import { resolveGroupTypesForUser } from './resolveGroupTypesForUser';
 import type { GroupTypeResolutionOverride } from './resolveGroupTypesForUser';
-import { canAdministerOrganization, canManageMemberCreditBudgets, isCurrentOrgMember } from './orgAuthority';
+import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
 import { setMemberCreditDefault, setMemberCreditOverride } from './memberCreditBudget';
 import { resolveCapabilitiesForUser, userHasCapability } from './resolveCapabilitiesForUser';
 import type { GroupTypeCapabilityMap } from './resolveCapabilitiesForUser';
@@ -35,7 +35,6 @@ export {
   get,
   addMember,
   canAdministerOrganization,
-  canManageMemberCreditBudgets,
   isCurrentOrgMember,
   setMemberCreditDefault,
   setMemberCreditOverride,

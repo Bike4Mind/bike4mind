@@ -31,7 +31,11 @@ const member = (id: string, creditUsage: MemberCreditUsage | null, status: 'acce
     creditUsage: MemberCreditUsage | null;
   };
 
-const renderCard = (user: ReturnType<typeof member>, canManageCreditBudgets: boolean) =>
+const renderCard = (
+  user: ReturnType<typeof member>,
+  canManageCreditBudgets: boolean,
+  userPermissions: Permission[] = [Permission.read]
+) =>
   render(
     ((children: ReactNode) => (
       <QueryClientProvider client={new QueryClient()}>
@@ -41,13 +45,13 @@ const renderCard = (user: ReturnType<typeof member>, canManageCreditBudgets: boo
       <OrganizationUserCard
         organization={org}
         user={user}
-        userPermissions={[Permission.read]}
+        userPermissions={userPermissions}
         canManageCreditBudgets={canManageCreditBudgets}
       />
     )
   );
 
-const openMenu = () => fireEvent.click(document.querySelector('.organization-user-card-menu-button')!);
+const openMenu = () => fireEvent.click(screen.getByTestId('org-user-card-menu-btn'));
 
 describe('OrganizationUserCard credit usage', () => {
   beforeEach(() => setOverride.mockReset().mockResolvedValue({}));
@@ -65,7 +69,7 @@ describe('OrganizationUserCard credit usage', () => {
   it('shows a dash for a pending invite and offers no limit control', () => {
     renderCard(member('a', null, 'pending'), true);
     expect(screen.getByTestId('organization-user-card-credit-usage').textContent).toBe('-');
-    expect(document.querySelector('.organization-user-card-menu-button')).toBeNull();
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 });
 
@@ -74,15 +78,17 @@ describe('OrganizationUserCard monthly limit control', () => {
 
   it('is hidden from a viewer who cannot manage budgets', () => {
     renderCard(member('a', { tracked: true, used: 0, cap: 500, isOverride: false }), false);
-    expect(document.querySelector('.organization-user-card-menu-button')).toBeNull();
+    expect(screen.queryByTestId('org-user-card-menu-btn')).toBeNull();
   });
 
   // The owner row hides every roster action, but the owner's own spend is capped like anyone's.
   it('is offered on the owner row, which has no roster actions', async () => {
-    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true);
+    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
     openMenu();
+    expect(await screen.findByText('Set monthly limit')).toBeTruthy();
     expect(screen.queryByText('Revoke Access')).toBeNull();
-    fireEvent.click(await screen.findByTestId('organization-user-card-set-limit'));
+    expect(screen.queryByText('Cancel Invite')).toBeNull();
+    fireEvent.click(screen.getByTestId('organization-user-card-set-limit'));
     expect(screen.getByTestId('credit-limit-modal')).toBeTruthy();
   });
 

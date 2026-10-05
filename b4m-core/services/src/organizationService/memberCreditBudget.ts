@@ -1,7 +1,13 @@
-import { IOrganizationDocument, IOrganizationRepository, IUserDocument, IUserRepository } from '@bike4mind/common';
+import {
+  IOrganizationDocument,
+  IOrganizationRepository,
+  IUserDocument,
+  IUserRepository,
+  canManageMemberCreditBudgets,
+} from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
-import { canManageMemberCreditBudgets, isCurrentOrgMember } from './orgAuthority';
+import { isCurrentOrgMember } from './orgAuthority';
 
 /**
  * Writes for the org's monthly per-member credit budget (see `creditService/memberCreditCap.ts`
@@ -14,14 +20,14 @@ const setDefaultSchema = z.object({
   organizationId: z.string().min(1),
   // null clears the default (uncapped). Positive, like the existing org update field: a 0 default
   // would silently freeze every member, which a per-member override of 0 can do deliberately.
-  maxCreditsPerMember: z.number().positive().finite().nullable(),
+  maxCreditsPerMember: z.number().int().positive().nullable(),
 });
 
 const setOverrideSchema = z.object({
   organizationId: z.string().min(1),
   userId: z.string().min(1),
   // null inherits the org default; 0 blocks this member's spend from the pool.
-  maxCredits: z.number().nonnegative().finite().nullable(),
+  maxCredits: z.number().int().nonnegative().nullable(),
 });
 
 type CreditBudgetChange = {
@@ -87,7 +93,7 @@ export async function setMemberCreditOverride(
   }
 
   if (!(await organizations.setMemberMaxCredits(organizationId, userId, maxCredits))) {
-    // Only reachable if the row vanished between the seed and this write (a concurrent removal).
+    // The member was removed (or their row vanished) between the membership check and this write.
     throw new NotFoundError('Member not found');
   }
 

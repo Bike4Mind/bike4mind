@@ -22,7 +22,8 @@ export type MemberCreditUsage = {
 /** Share of the cap at which a member is warned before the server's hard block. */
 export const MEMBER_CREDIT_WARNING_RATIO = 0.8;
 
-export const formatMemberCredits = (credits: number) => Math.round(credits).toLocaleString();
+// Pinned to en-US like formatMemberCreditReset, so grouping does not depend on the host locale.
+export const formatMemberCredits = (credits: number) => Math.round(credits).toLocaleString('en-US');
 
 export function getMemberCreditUsage(organization: BudgetOrg, userId: string, now = new Date()): MemberCreditUsage {
   const details = organization.userDetails?.find(row => row.id === userId);

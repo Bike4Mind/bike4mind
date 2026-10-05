@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canAdministerOrganization, canManageMemberCreditBudgets, isCurrentOrgMember } from './orgAuthority';
+import { canAdministerOrganization, isCurrentOrgMember } from './orgAuthority';
 
 describe('canAdministerOrganization', () => {
   const org = { userId: 'owner-id', managerId: 'manager-id' };
@@ -77,31 +77,5 @@ describe('isCurrentOrgMember', () => {
   // admin's involvement must not change whose credit pool an org-billed key spends.
   it('does not count a platform admin who is not on the roster', () => {
     expect(isCurrentOrgMember(org, 'platform-admin-id')).toBe(false);
-  });
-});
-
-describe('canManageMemberCreditBudgets', () => {
-  const org = { userId: 'owner-id', adminUserIds: ['org-admin-id'] };
-
-  it('admits the billing owner', () => {
-    expect(canManageMemberCreditBudgets({ id: 'owner-id' }, org)).toBe(true);
-  });
-
-  it('admits an appointed org admin', () => {
-    expect(canManageMemberCreditBudgets({ id: 'org-admin-id' }, org)).toBe(true);
-  });
-
-  it('admits a platform admin who is neither', () => {
-    expect(canManageMemberCreditBudgets({ id: 'someone-else', isAdmin: true }, org)).toBe(true);
-  });
-
-  // A spending limit on the owner's pool is a billing decision, like billingContact.
-  it('refuses a manager who is not also an appointed admin', () => {
-    expect(canManageMemberCreditBudgets({ id: 'manager-id' }, { ...org, managerId: 'manager-id' })).toBe(false);
-  });
-
-  it('refuses a plain member, and tolerates a missing adminUserIds', () => {
-    expect(canManageMemberCreditBudgets({ id: 'member-id' }, org)).toBe(false);
-    expect(canManageMemberCreditBudgets({ id: 'member-id' }, { userId: 'owner-id', adminUserIds: null })).toBe(false);
   });
 });

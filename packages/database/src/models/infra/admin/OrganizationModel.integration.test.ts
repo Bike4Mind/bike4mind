@@ -220,6 +220,10 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
       name: 'Acme',
       userId: 'owner-1',
       personal: false,
+      users: [
+        { userId: 'member-1', permissions: ['read'] },
+        { userId: 'member-2', permissions: ['read'] },
+      ],
       userDetails: [
         { id: 'member-1', email: 'a@example.com', name: 'A', usedCredits: 7, lastCreditUsedAt: null },
         { id: 'member-2', email: 'b@example.com', name: 'B', usedCredits: 9, lastCreditUsedAt: null, maxCredits: 3 },
@@ -239,5 +243,34 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
   it('reports false for a member with no row', async () => {
     const org = await Organization.create({ name: 'Acme', userId: 'owner-1', personal: false, userDetails: [] });
     expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', 40)).toBe(false);
+  });
+
+  it('reports false and writes nothing for a userDetails row whose user is no longer owner, manager or a member', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      managerId: 'manager-1',
+      personal: false,
+      users: [{ userId: 'member-1', permissions: ['read'] }],
+      userDetails: [{ id: 'removed-1', email: 'r@example.com', name: 'R', usedCredits: 4, lastCreditUsedAt: null }],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'removed-1', 40)).toBe(false);
+    const reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits ?? null).toBeNull();
+  });
+
+  it('still sets an override for the owner, who has no users[] row', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      users: [],
+      userDetails: [{ id: 'owner-1', email: 'o@example.com', name: 'O', usedCredits: 0, lastCreditUsedAt: null }],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'owner-1', 40)).toBe(true);
+    const reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits).toBe(40);
   });
 });

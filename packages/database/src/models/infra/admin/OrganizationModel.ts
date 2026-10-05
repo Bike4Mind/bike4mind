@@ -545,10 +545,19 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     );
   }
 
-  /** Set one member's monthly credit budget override; false when they have no `userDetails` row. */
+  /**
+   * Set one member's monthly credit budget override; false when they have no `userDetails` row or
+   * are no longer a member. The membership arm (owner, manager, or a `users[]` row - the same tiers
+   * as the services `isCurrentOrgMember`) stops a removal racing the caller's membership check from
+   * having a limit written onto the departed member's row.
+   */
   async setMemberMaxCredits(organizationId: string, userId: string, maxCredits: number | null): Promise<boolean> {
     const result = await this.organizationModel.updateOne(
-      { _id: organizationId, 'userDetails.id': userId },
+      {
+        _id: organizationId,
+        'userDetails.id': userId,
+        $or: [{ userId }, { managerId: userId }, { 'users.userId': userId }],
+      },
       { $set: { 'userDetails.$.maxCredits': maxCredits } }
     );
     return result.matchedCount > 0;

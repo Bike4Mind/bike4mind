@@ -4,6 +4,7 @@ import {
   IOrganizationRepository,
   IUserDocument,
   IUserRepository,
+  isOrgOwnerOrCurrentAdmin,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
 
@@ -55,15 +56,8 @@ type OrgLike = { userId: string; adminUserIds?: string[]; users: Array<{ userId:
  * appointed org admin (`adminUserIds`). A plain member has no group-management authority.
  */
 export const assertCanManageOrgGroups = (actingUser: IUserDocument, organization: OrgLike): void => {
-  const isPlatformAdmin = actingUser.isAdmin === true;
-  const isBillingOwner = organization.userId === actingUser.id;
-  // An appointed org admin must ALSO still be a current member. Defence in depth: if a purge of
-  // adminUserIds on removal ever misses (or a row predates that fix), this stops a removed admin
-  // from retaining group-management authority. The billing owner is checked separately above.
-  const isOrgAdmin =
-    (organization.adminUserIds ?? []).includes(actingUser.id) &&
-    organization.users.some(member => member.userId === actingUser.id);
-  if (!isPlatformAdmin && !isBillingOwner && !isOrgAdmin) {
+  // An appointed org admin must ALSO still be a current member - see isOrgOwnerOrCurrentAdmin.
+  if (!isOrgOwnerOrCurrentAdmin(actingUser, organization)) {
     throw new ForbiddenError("Not authorized to manage this organization's groups");
   }
 };

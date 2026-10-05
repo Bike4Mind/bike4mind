@@ -55,7 +55,7 @@ export function MemberCreditBudgetNote() {
         <Typography data-testid="member-credit-budget-note-text" sx={{ fontSize: '12px', color: 'text.secondary' }}>
           {notice.exhausted
             ? `You've used your monthly limit of ${cap} credits in ${organization!.name}. It resets on ${notice.resetsOn}.`
-            : `You've used ${used} of your ${cap} monthly credits in ${organization!.name}. It resets on ${notice.resetsOn}.`}
+            : `You've used ${used} of your ${cap} monthly credits in ${organization!.name}. Requests that would go over it are blocked until it resets on ${notice.resetsOn}.`}
         </Typography>
       </Box>
       <IconButton

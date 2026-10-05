@@ -27,9 +27,6 @@ export function canAdministerOrganization(actor: OrgAuthorityActor, organization
   return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
 }
 
-// Lives in @bike4mind/common so the client gates its controls on the same rule the routes enforce.
-export { canManageMemberCreditBudgets } from '@bike4mind/common';
-
 /** The organization slice a membership decision needs: the roster plus its privileged principals. */
 export type OrgMembershipRoster = AdministrableOrg & { users?: { userId: string }[] };
 

@@ -41,22 +41,3 @@ export function resolveMemberCreditCap(
 ): number | null {
   return details?.maxCredits ?? orgDefault ?? null;
 }
-
-/**
- * May this actor set the org's per-member credit budgets - the default `maxCreditsPerMember` and
- * each member's `userDetails[].maxCredits` override?
- *
- * Billing owner, appointed org admin (`adminUserIds`), or platform admin. Deliberately excludes a
- * manager who is not also an appointed admin: a spending limit on the owner's pool is a billing
- * decision, the same line `organizationService/update.ts` draws for `billingContact`. Appointed
- * admins hold only a read row in `users[]` and so cannot pass `shareable.findUpdateAccessById` -
- * server callers must fetch with `findById`. The budget routes enforce it; the client uses the same
- * predicate only to decide which controls to show.
- */
-export function canManageMemberCreditBudgets(
-  actor: { id: string; isAdmin?: boolean | null },
-  organization: { userId: string; adminUserIds?: string[] | null }
-): boolean {
-  if (actor.isAdmin) return true;
-  return organization.userId === actor.id || (organization.adminUserIds ?? []).includes(actor.id);
-}

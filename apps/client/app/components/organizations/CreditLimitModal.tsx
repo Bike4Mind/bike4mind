@@ -47,7 +47,8 @@ const CreditLimitModal: FC<CreditLimitModalProps> = ({
   }, [open, currentValue]);
 
   const parsed = draft.trim() === '' ? null : Number(draft);
-  const isValid = parsed != null && Number.isFinite(parsed) && (allowZero ? parsed >= 0 : parsed > 0);
+  // Whole credits only, matching the API schemas (`.int()`) and the input's step.
+  const isValid = parsed != null && Number.isInteger(parsed) && (allowZero ? parsed >= 0 : parsed > 0);
 
   const save = async (value: number | null) => {
     try {
