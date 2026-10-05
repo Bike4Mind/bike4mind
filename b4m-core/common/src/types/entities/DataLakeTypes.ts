@@ -2,6 +2,7 @@ import type { LakeInconsistencyScanSummary } from '../../constants/corpusInconsi
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
+import type { LakeManageRung } from './LakeConfigChangeEventTypes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -79,6 +80,11 @@ export const DATA_LAKE_ORIGINS = ['curated', 'connector-fed'] as const;
  * constant, so a value added here reaches the schema by construction.
  */
 export type DataLakeOrigin = (typeof DATA_LAKE_ORIGINS)[number];
+
+/** The connectors a lake can be created for (see IDataLake.pendingConnector). */
+export const DATA_LAKE_PENDING_CONNECTORS = ['github', 'googleDrive'] as const;
+
+export type DataLakePendingConnector = (typeof DATA_LAKE_PENDING_CONNECTORS)[number];
 
 export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
 
@@ -561,9 +567,11 @@ export interface IDataLake {
   filesArchivedAt?: Date | null;
   /**
    * Which accept request holds the `purging` claim - see `claimPurging`. Set with the claim and
-   * unset on release; meaningless on any other status.
+   * retained on failed enqueue; restore rotates it to fence delayed messages.
    */
   purgeClaimId?: string;
+  /** Durable fence: started cleanup cannot be released for restore. */
+  purgeStartedAt?: Date;
   /**
    * Per-lake opt-in to lake memory: gates BOTH extraction-on-ingest and recall injection for
    * this lake specifically. `EnableLakeMemory` (the platform setting) gates whether the option is
@@ -612,6 +620,13 @@ export interface IDataLake {
    * wizard does when a Drive folder was already picked.
    */
   origin: DataLakeOrigin;
+  /**
+   * The connector this lake was created to be fed by, recorded at create time and cleared when a
+   * connection of either kind binds. Lets recovery UI name the right source for an abandoned
+   * connect. Server-set only, never request input. Absent on lakes that predate the field or were
+   * never created for a connector - both read as "unknown", so no migration is needed.
+   */
+  pendingConnector?: DataLakePendingConnector;
   /**
    * Model-driven inconsistency detection (#3057) bookkeeping - server-managed, never client input.
    *
@@ -879,6 +894,11 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   activateIfDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
   /**
+   * Drops `pendingConnector` once a connection binds - either kind, since any bound source answers
+   * the lake's intent. Idempotent; a no-op on a lake without the field.
+   */
+  clearPendingConnector(id: string): Promise<void>;
+  /**
    * The reverse of `activateIfDraft`: active -> draft, guarded the same way (conditional in the
    * query, so a stale caller cannot demote a lake some other transition already moved on). The
    * only caller is `demoteDataLake`. Draft is excluded from grounding at query time (`status ===
@@ -979,6 +999,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Without it, only a claim that has no id (taken before ids were stored), for queue messages enqueued before the id rode along.
    */
   releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean>;
+  /** Admit only the queued lifecycle generation; same-generation replay remains valid. */
+  beginPurgeExecution(id: string, claimId?: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
@@ -1183,6 +1205,21 @@ export interface IDataLakeBatch {
   /** Set only when a terminal status was reached by something other than normal completion (e.g. 'reconciler'). */
   completionReason?: BatchCompletionReason;
 
+  /**
+   * The manage rung that let the uploader open this batch, resolved at the create gate where the
+   * full access context (platform admin, administered orgs) is known. The upload History row is
+   * written later from a queue handler that only has the uploader's id, so without this an org or
+   * platform admin's upload would record as `system`. Absent on batches created before it existed
+   * and on server-created batches (Drive, GitHub); those fall back to a grant-resolved rung.
+   */
+  uploaderManageRung?: LakeManageRung;
+  /**
+   * Set once, by the first caller to write this batch's `upload-files` History row. A
+   * `completed_with_errors` batch can be reopened and finalized again (`reopenFinalizedWithErrors`),
+   * and History rows are never rewritten, so this is what keeps it to one row per batch.
+   */
+  uploadHistoryRecordedAt?: Date;
+
   /** Opted into background AI tag suggestion at batch-create time. Never true in append mode. */
   wantsTaxonomy?: boolean;
   /** Background AI-tagging phase; see `TaxonomyStatus`. */
@@ -1289,6 +1326,12 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Advisory: updateFileStatus already stamped `false` with the status, so a lost write here only
    * leaves the entry uncounted. Call after a guarded incrementCounters that returned a batch. */
   markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void>;
+  /**
+   * Claim the right to write this batch's `upload-files` History row: stamps
+   * `uploadHistoryRecordedAt` only if it is still absent. True for the single winner; false once a
+   * row has been claimed, which is what stops a reopened and re-finalized batch writing a second one.
+   */
+  claimUploadHistory(batchId: string): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /**
    * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and

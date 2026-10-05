@@ -1,16 +1,9 @@
 import { DECISION_COOKIE, REGION_COOKIE } from '@client/lib/consentCookies';
 import { CONSENT_KEY } from './consentRegion';
 
-declare global {
-  interface Window {
-    /**
-     * The analytics_storage state GA had when it recorded this page: set by the inline tag
-     * before the landing page_view, and moved to 'granted' once a later grant has recorded
-     * the page again (see CookieConsentBanner).
-     */
-    __b4mGaConsentDefault?: 'granted' | 'denied';
-  }
-}
+// Window.__b4mGaConsentDefault is declared in types/gaConsent.d.ts, not here: this module
+// isn't imported by every file that reads/writes the global (see CookieConsentBanner), so the
+// augmentation needs to be ambient rather than tied to this module's own compilation.
 
 /**
  * The inline GA tag for the root layout.

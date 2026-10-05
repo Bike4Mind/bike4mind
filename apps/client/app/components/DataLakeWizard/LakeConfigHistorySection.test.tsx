@@ -149,6 +149,35 @@ describe('describeLakeConfigChange', () => {
       'Published -> frozen'
     );
   });
+
+  it('renders origin and grounding mode with the labels the settings modal uses', () => {
+    expect(describeLakeConfigChange({ field: 'origin', kind: 'literal', after: 'curated' })).toBe('set to Curated');
+    expect(
+      describeLakeConfigChange({ field: 'origin', kind: 'literal', before: 'curated', after: 'connector-fed' })
+    ).toBe('Curated -> Connector-fed');
+    expect(describeLakeConfigChange({ field: 'groundingMode', kind: 'literal', after: 'retrieve' })).toBe(
+      'set to Retrieve'
+    );
+    expect(
+      describeLakeConfigChange({ field: 'groundingMode', kind: 'literal', before: 'inline', after: 'auto-by-size' })
+    ).toBe('Inline into the prompt -> Auto (decide by size)');
+  });
+
+  it('never resolves a stored value to a prototype member of a label map', () => {
+    expect(describeLakeConfigChange({ field: 'status', kind: 'literal', after: 'constructor' })).toBe(
+      'set to constructor'
+    );
+    expect(describeLakeConfigChange({ field: 'origin', kind: 'literal', after: 'toString' })).toBe('set to toString');
+  });
+
+  it('renders an access grant as set and cleared, with the grant spelled out', () => {
+    expect(describeLakeConfigChange({ field: 'accessGrant', kind: 'literal', after: 'user:u1=reader' })).toBe(
+      'set to user:u1=reader'
+    );
+    expect(describeLakeConfigChange({ field: 'accessGrant', kind: 'literal', before: 'user:u1=curator' })).toBe(
+      'cleared (was user:u1=curator)'
+    );
+  });
 });
 
 describe('identity values in describeLakeConfigChange', () => {
@@ -194,6 +223,16 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getAllByTestId('datalake-config-history-row')).toHaveLength(2);
   });
 
+  it('prints the time zone with the timestamp, so it is not lined up against UTC-day surfaces wrongly', () => {
+    const changedAt = new Date('2026-08-17T10:30:00Z');
+    renderSection({ view: view({ entries: [entry({ changedAt })] }) });
+    const zone = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+      .formatToParts(changedAt)
+      .find(part => part.type === 'timeZoneName')?.value;
+    expect(zone).toBeTruthy();
+    expect(screen.getByTestId('datalake-config-history-row')).toHaveTextContent(zone!);
+  });
+
   it('shows who changed it, by name, with the authorizing rung', () => {
     renderSection();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
@@ -226,6 +265,30 @@ describe('LakeConfigHistorySection', () => {
       }),
     });
     expect(screen.getByText(/for Grace Hopper/)).toBeInTheDocument();
+  });
+
+  it('truncates an unresolved API key id in the Who cell instead of letting it overflow the next column', () => {
+    const keyId = '6650f1c2a9b3e4d5f6071829';
+    const ownerId = '6650f1c2a9b3e4d5f607182c';
+    renderSection({
+      view: view({
+        entries: [
+          entry({ principalKind: 'apiKey', principalId: keyId, principalName: undefined, onBehalfOfUserId: ownerId }),
+        ],
+      }),
+    });
+    const kindLine = `apiKey (for ${ownerId})`;
+    for (const [line, text] of [
+      [screen.getByTestId('datalake-config-history-who'), keyId],
+      [screen.getByText(kindLine), kindLine],
+    ] as const) {
+      expect(line).toHaveTextContent(text);
+      expect(line).toHaveAttribute('title', text);
+      const style = getComputedStyle(line);
+      expect(style.whiteSpace).toBe('nowrap');
+      expect(style.overflow).toBe('hidden');
+      expect(style.textOverflow).toBe('ellipsis');
+    }
   });
 
   it('renders a long system prompt in the fingerprint form and NEVER the prompt text', () => {

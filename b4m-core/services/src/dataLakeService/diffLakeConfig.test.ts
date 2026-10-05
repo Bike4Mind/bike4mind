@@ -266,12 +266,18 @@ describe('grantChange', () => {
 });
 
 describe('proposalReviewChange', () => {
-  it('names the proposal by its title', () => {
+  it('names the proposal by its title, keeping the source url that identifies it', () => {
     expect(proposalReviewChange({ title: 'Quarterly report', sourceUrl: 'https://x.test/r' }, 'declined')).toEqual({
       field: 'proposalReview',
       kind: 'literal',
-      after: 'declined: Quarterly report',
+      after: 'declined: Quarterly report (https://x.test/r)',
     });
+  });
+
+  it('tells apart two proposals that share a title', () => {
+    const a = proposalReviewChange({ title: 'Home', sourceUrl: 'https://a.test/' }, 'approved');
+    const b = proposalReviewChange({ title: 'Home', sourceUrl: 'https://b.test/' }, 'approved');
+    expect(a.after).not.toBe(b.after);
   });
 
   it('falls back to the source url for a blank title', () => {
@@ -302,5 +308,12 @@ describe('uploadBatchChange', () => {
     expect(
       uploadBatchChange(batch({ vectorizedFiles: 9, failedFiles: 2, skippedFiles: 1, deferredFiles: 3 })).after
     ).toBe('9 files added (2 failed, 1 skipped, 3 not finished)');
+  });
+
+  it('leads with the outcome when the batch did not finish normally', () => {
+    expect(uploadBatchChange(batch({ vectorizedFiles: 2 }), 'cancelled').after).toBe('Upload cancelled: 2 files added');
+    expect(uploadBatchChange(batch({ vectorizedFiles: 2, failedFiles: 1 }), 'stopped').after).toBe(
+      'Upload stopped: 2 files added (1 failed)'
+    );
   });
 });

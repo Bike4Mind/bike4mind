@@ -8,12 +8,11 @@ import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
   useResyncLakeGitHub,
-  useStartLakeGitHubConnect,
   type LakeGitHubConnection,
 } from '@client/app/hooks/data/githubLake';
+import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
-import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnectHandoff';
 
 /**
  * Why re-sync is off right now, or undefined when it can run. Mirrors sync.ts's 409s, including its
@@ -28,37 +27,19 @@ function resyncBlockedReason(connection: LakeGitHubConnection): string | undefin
 
 /**
  * Connect a GitHub repository to an EXISTING org data lake, then show its sync status, re-sync and
- * disconnect. Connecting leaves the app for GitHub's install page; the GitHubLakeCallbackPage
- * route finishes it. Create mode has no lake id to sign into the flow, so it is not offered there.
+ * disconnect. Connecting leaves the app for GitHub's OAuth authorize page; the
+ * GitHubLakeCallbackPage route exchanges the return and opens the repository picker to finish it.
+ * Create mode has no lake id to sign into the flow, so it is not offered there.
  *
  * Callers gate this on EnableDataLakeGitHub and canConnectLakeDrive (org + manage), as for Drive.
  */
 export default function GitHubConnectAction({ lake }: { lake: { id: string } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const [redirecting, setRedirecting] = useState(false);
 
   const { data: connection, isLoading, isError } = useLakeGitHubConnection(lake.id);
-  const startConnect = useStartLakeGitHubConnect();
+  const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
-
-  const beginConnect = () =>
-    startConnect.mutate(lake.id, {
-      onSuccess: ({ installUrl, authorizeUrl }) => {
-        try {
-          saveGitHubLakeConnectHandoff({ dataLakeId: lake.id, authorizeUrl });
-        } catch {
-          // Without the handoff the callback cannot finish an already-installed account's connect.
-          toast.error('Could not start the GitHub connection: this browser blocked session storage.');
-          return;
-        }
-        setRedirecting(true);
-        window.location.assign(installUrl);
-      },
-      // e.g. "is curated, change its origin", "already connected to a Google Drive folder".
-      onError: (e: unknown) =>
-        toast.error(getServerErrorField(e) || 'Could not start the GitHub connection. Please try again.'),
-    });
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;
@@ -91,14 +72,14 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
           variant="outlined"
           color="neutral"
           startDecorator={<GitHubIcon />}
-          loading={startConnect.isPending || redirecting}
+          loading={connecting}
           onClick={beginConnect}
           sx={{ alignSelf: 'flex-start' }}
         >
           Connect GitHub
         </Button>
         <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="github-access-disclosure">
-          Read-only access to one repository. On GitHub, choose &quot;Only select repositories&quot; and pick it.
+          Read-only access. You&apos;ll approve the GitHub App, then pick the repository here.
         </Typography>
       </Stack>
     );
@@ -117,28 +98,38 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
       <Chip size="sm" variant="soft" color={color} data-testid="github-connection-status-chip">
         {label}
       </Chip>
-      <Tooltip title={blockedReason ?? ''} disableHoverListener={!blockedReason}>
-        <span>
-          <Button
-            data-testid="github-resync-btn"
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            startDecorator={<SyncIcon />}
-            loading={resync.isPending}
-            disabled={!!blockedReason}
-            onClick={() =>
-              resync.mutate(lake.id, {
-                onSuccess: () => toast.success(`Re-syncing ${connection.repositoryFullName}...`),
-                onError: (e: unknown) =>
-                  toast.error(getServerErrorField(e) || 'Could not start a re-sync. Please try again.'),
-              })
-            }
-          >
-            Re-sync
-          </Button>
-        </span>
-      </Tooltip>
+      {/* A pending disconnect is disabled too, so the archive-pause tooltip would misread it. */}
+      {!connection.disconnecting && (
+        <Tooltip title={blockedReason ?? ''} disableHoverListener={!blockedReason}>
+          <span>
+            <Button
+              data-testid="github-resync-btn"
+              size="sm"
+              variant="outlined"
+              color="neutral"
+              startDecorator={<SyncIcon />}
+              loading={resync.isPending}
+              disabled={!!blockedReason}
+              onClick={() =>
+                resync.mutate(lake.id, {
+                  onSuccess: () => toast.success(`Re-syncing ${connection.repositoryFullName}...`),
+                  onError: (e: unknown) =>
+                    toast.error(getServerErrorField(e) || 'Could not start a re-sync. Please try again.'),
+                })
+              }
+            >
+              Re-sync
+            </Button>
+          </span>
+        </Tooltip>
+      )}
+      {connection.disconnecting && (
+        <Typography level="body-xs" data-testid="github-disconnecting-note" sx={{ flexBasis: '100%' }}>
+          {connection.fileCount === 0
+            ? 'Finishing disconnect...'
+            : `Removing ${connection.fileCount} remaining file${connection.fileCount === 1 ? '' : 's'} in the background.`}
+        </Typography>
+      )}
       {confirmingDisconnect ? (
         <>
           <Typography level="body-xs" color="danger" data-testid="github-disconnect-warning" sx={{ flexBasis: '100%' }}>
@@ -156,7 +147,9 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
               disconnect.mutate(lake.id, {
                 onSuccess: () => {
                   setConfirmingDisconnect(false);
-                  toast.success(`Disconnected ${connection.repositoryFullName}.`);
+                  toast.success(
+                    `Disconnecting ${connection.repositoryFullName}. Its files are being removed in the background.`
+                  );
                 },
                 // Surfaces the 409 "a sync is in progress" so the user knows to retry later.
                 onError: (e: unknown) =>
@@ -184,9 +177,16 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
           variant="plain"
           color="danger"
           startDecorator={<LinkOffIcon />}
+          // The route declines to re-queue a purge that is still progressing, so only offer a retry
+          // once it looks stalled.
+          disabled={connection.disconnecting && !connection.disconnectStalled}
           onClick={() => setConfirmingDisconnect(true)}
         >
-          Disconnect
+          {!connection.disconnecting
+            ? 'Disconnect'
+            : connection.disconnectStalled
+              ? 'Retry disconnect'
+              : 'Disconnecting'}
         </Button>
       )}
       {connection.lastError && (

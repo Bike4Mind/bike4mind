@@ -159,9 +159,12 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'create',
   /**
-   * An upload batch finished processing (see `uploadBatchChange`). One row per BATCH, never per
-   * file: per-file moves live in LakeMembershipChangeEvent, whose volume this history is not built
-   * to carry. Recorded from the guarded batch finalize, attributed to the batch's uploader.
+   * An upload batch settled (see `uploadBatchChange`). One row per BATCH, never per file: per-file
+   * moves live in LakeMembershipChangeEvent, whose volume this history is not built to carry.
+   * Recorded from the guarded batch finalize, the cancel route and the stuck-batch reconciler, at
+   * most once per batch (`claimUploadHistory`), attributed to the batch's uploader. Not recorded:
+   * a batch the client marks `failed` (nothing landed) and batches cancelled by a lake archive or
+   * delete cascade (the archive/delete row covers those).
    */
   'upload-files',
 ] as const;
@@ -215,6 +218,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
   purgeClaimId: 'excluded',
+  purgeStartedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
   lakeMemoryCursor: 'excluded',
   // The purge itself is audited as its own event (LAKE_MEMORY_PURGED); a config row for the fence
@@ -226,6 +230,8 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   inconsistencyComputedAt: 'excluded',
   // Run bookkeeping, not an operator choice - the same class as lakeMemoryExtractionAt above.
   modelInconsistencyRunAt: 'excluded',
+  // Connect-flow bookkeeping the server sets and clears, never an operator edit.
+  pendingConnector: 'excluded',
 } as const satisfies Record<keyof IDataLake, 'audited' | 'excluded'>;
 
 /** The audited keys as a precise literal union, derived from the map so the two cannot drift. */

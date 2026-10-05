@@ -3,6 +3,7 @@ import {
   IOrgGitHubLakeConnectionDocument,
   IOrgGitHubLakeConnectionRepository,
   IMongoDocument,
+  GITHUB_DISCONNECT_STALL_MS,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -32,6 +33,15 @@ function staleSyncClaimClauses() {
   ];
 }
 
+// The negation of isGitHubLakeSyncClaimLive, as one atomic match so a claimForSync cannot land in between.
+function noLiveSyncClaimFilter(id: string, organizationId: string) {
+  return {
+    _id: id,
+    organizationId,
+    $or: [{ status: { $ne: 'syncing' } }, { syncClaimedAt: { $in: [null] } }, ...staleSyncClaimClauses()],
+  };
+}
+
 // Once disableIfNoLiveSyncClaim wins, a queued message must not start or extend an ingest past the purge.
 const NOT_DISABLED = { enabled: { $ne: false } };
 
@@ -59,6 +69,7 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     syncClaimedAt: { type: Date },
     activeIngestBatchId: { type: String },
     ingestClaimToken: { type: String },
+    disconnectRequestedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -101,6 +112,13 @@ class OrgGitHubLakeConnectionRepository
     return this.find({ installationId });
   }
 
+  async findByRepositoryIds(
+    repositoryIds: readonly number[]
+  ): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
+    if (repositoryIds.length === 0) return [];
+    return this.find({ repositoryId: { $in: [...repositoryIds] } });
+  }
+
   /** Hard delete: a soft-deleted row would keep the unique repositoryId / targetDataLakeId claims. */
   async release(id: string, organizationId: string): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
@@ -128,16 +146,51 @@ class OrgGitHubLakeConnectionRepository
   }
 
   async disableIfNoLiveSyncClaim(id: string, organizationId: string): Promise<{ wasEnabled: boolean } | null> {
-    // The negation of isGitHubLakeSyncClaimLive, as one atomic match so a claimForSync cannot land in between.
-    const disabled = await this.model.findOneAndUpdate(
-      {
-        _id: id,
-        organizationId,
-        $or: [{ status: { $ne: 'syncing' } }, { syncClaimedAt: { $in: [null] } }, ...staleSyncClaimClauses()],
-      },
-      { $set: { enabled: false } }
-    );
+    const disabled = await this.model.findOneAndUpdate(noLiveSyncClaimFilter(id, organizationId), {
+      $set: { enabled: false },
+    });
     return disabled ? { wasEnabled: disabled.enabled !== false } : null;
+  }
+
+  async markDisconnecting(
+    id: string,
+    organizationId: string
+  ): Promise<{ stamp: Date; created: boolean; previousEnabled: boolean } | null> {
+    const stamp = new Date();
+    // The pre-update document is what tells a creator apart from a re-stamp.
+    // $and, not $or: the base filter's top-level $or is the live-sync guard.
+    const previous = await this.model.findOneAndUpdate(
+      {
+        ...noLiveSyncClaimFilter(id, organizationId),
+        $and: [
+          {
+            $or: [
+              { disconnectRequestedAt: { $in: [null] } },
+              { disconnectRequestedAt: { $lte: new Date(stamp.getTime() - GITHUB_DISCONNECT_STALL_MS) } },
+            ],
+          },
+        ],
+      },
+      { $set: { enabled: false, disconnectRequestedAt: stamp } }
+    );
+    if (!previous) return null;
+    return { stamp, created: !previous.disconnectRequestedAt, previousEnabled: previous.enabled !== false };
+  }
+
+  async cancelDisconnect(id: string, organizationId: string, stamp: Date, enabled: boolean): Promise<boolean> {
+    const res = await this.model.updateOne(
+      { _id: id, organizationId, disconnectRequestedAt: stamp },
+      { $set: { enabled }, $unset: { disconnectRequestedAt: '' } }
+    );
+    return res.matchedCount > 0;
+  }
+
+  async touchDisconnect(id: string): Promise<boolean> {
+    const res = await this.model.updateOne(
+      { _id: id, disconnectRequestedAt: { $ne: null } },
+      { $set: { disconnectRequestedAt: new Date() } }
+    );
+    return res.matchedCount > 0;
   }
 
   async adoptSyncClaim(
@@ -207,7 +260,9 @@ class OrgGitHubLakeConnectionRepository
   }
 
   async setEnabledForLake(targetDataLakeId: string, enabled: boolean): Promise<boolean> {
-    const res = await this.model.updateOne({ targetDataLakeId }, { $set: { enabled } });
+    // An unarchive must not revive a connection whose disconnect purge is still running.
+    const filter = enabled ? { targetDataLakeId, disconnectRequestedAt: null } : { targetDataLakeId };
+    const res = await this.model.updateOne(filter, { $set: { enabled } });
     return res.matchedCount > 0;
   }
 

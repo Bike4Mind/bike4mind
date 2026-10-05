@@ -70,6 +70,11 @@ export interface GetOrCreateSessionParams {
   logger: Logger;
   /** Fab file IDs if session should be associated with fab files */
   fabFileIds?: string[];
+  /**
+   * Agents to attach to a newly created session only; ignored for an existing one. Authorized in
+   * `sessionService.createSession`, which drops ids the caller cannot access.
+   */
+  agentIds?: string[];
   /** Stamped on a newly created session only (see resolveSessionOrigin); ignored for an existing one. */
   origin?: ISessionOrigin;
 }
@@ -108,7 +113,17 @@ export interface GetOrCreateSessionResult {
  * ```
  */
 export async function getOrCreateSession(params: GetOrCreateSessionParams): Promise<GetOrCreateSessionResult> {
-  const { sessionId: reqSessionId, sessionName, projectId, user, ability, logger, fabFileIds, origin } = params;
+  const {
+    sessionId: reqSessionId,
+    sessionName,
+    projectId,
+    user,
+    ability,
+    logger,
+    fabFileIds,
+    agentIds,
+    origin,
+  } = params;
   const userId = user.id;
 
   const asyncPromises: Promise<unknown>[] = [];
@@ -137,6 +152,7 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
       {
         name: sessionName ?? 'New Notebook',
         knowledgeIds: fabFileIds ?? [],
+        agentIds: agentIds ?? [],
         projectId,
       },
       {

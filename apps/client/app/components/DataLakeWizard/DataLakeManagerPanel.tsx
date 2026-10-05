@@ -25,6 +25,7 @@ import { prefixSegments } from './manager/shared';
 import { selectTaxonomyBatchByLakeId } from './manager/taxonomySlot';
 import ManagerNav from './manager/ManagerNav';
 import { LakeInfoPanel, ManagerOverview } from './manager/LakeInfoPanel';
+import GitHubRepositoryPickerModal from './manager/GitHubRepositoryPickerModal';
 
 /**
  * Data Lakes management surface: one persistent two-pane layout. The left sidebar navigates
@@ -270,6 +271,9 @@ export default function DataLakeManagerPanel() {
       <FallbackLakeSettingsModal lake={editingFallbackLake} onClose={() => setEditingFallbackLakeId(null)} />
 
       <DataLakeAccessModal lake={accessLake} onClose={() => setAccessLakeId(null)} />
+
+      {/* Mounted once here, store-driven: GitHubConnectAction can render in several places at once. */}
+      <GitHubRepositoryPickerModal />
 
       {/* Review/apply the background AI tag suggestions for a batch */}
       {reviewingBatch && (

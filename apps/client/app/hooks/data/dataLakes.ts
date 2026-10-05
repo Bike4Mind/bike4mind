@@ -13,6 +13,7 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
+  ILakeFindingListItem,
   InconsistencyKind,
   LakeCorpusAction,
   LakeCorpusActionTarget,
@@ -77,7 +78,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
  * Declared here rather than beside its first caller so all of them can read it without a
  * forward reference.
  */
-function serverRefusalMessage(error: unknown): string | undefined {
+export function serverRefusalMessage(error: unknown): string | undefined {
   if (!isAxiosError(error)) return undefined;
   return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
@@ -1289,10 +1290,13 @@ export function invalidateLakeFileMembershipQueries(
   // A finding cites lake members, so the findings queue moves when membership does; the forward
   // corpus action and the supersede Undo already refresh it, and folding it in here gives the
   // merge Undo (which mutates only through `useAddFileToDataLake`) the same refresh.
-  queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+  const findingsRefetch = queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
   // The retag seed is read from membership too; a stale seed would under-report the file's current
   // tags and, under replace semantics, strip the ones it missed.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.lakeFileTagsOf(dataLakeId) });
+  // Only the findings refetch is returned, so a mutation returning it keeps `isPending` true until
+  // the list the UI reads has refreshed and a fast second click cannot act on stale rows.
+  return findingsRefetch;
 }
 
 /** How long the Undo toast stays visible - long enough to notice, short of feeling stuck open.
@@ -1301,6 +1305,8 @@ export function invalidateLakeFileMembershipQueries(
  *  removed" panel, so once it closes the restore is reachable only by calling the route directly.
  *  The non-owner confirmation copy says so, because for a non-owner there is no second way back. */
 const UNDO_TOAST_DURATION_MS = 15000;
+
+const returnedToRankingMessage = (name: string) => `"${name}" returned to ranking.`;
 
 /** `toastId` is presentation, not payload - the server reads nothing but the two ids from the
  *  route. It travels in the variables so `useAddFileToDataLake`'s callbacks can live at the
@@ -2422,7 +2428,7 @@ export function useDataLakeFindings(
     queryKey: dataLakeKeys.findings(dataLakeId, filters),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
-      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+      const { data } = await api.get<{ data: ILakeFindingListItem[]; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/findings`,
         { params: { ...filters, offset: pageParam } }
       );
@@ -2606,8 +2612,10 @@ export function useLakeFileTags(dataLakeId: string | null, fabFileId: string | n
 /**
  * The `POST .../findings/:findingId/corpus-action` request union. Re-declared here rather than
  * imported: the contract lives in the route (a zod discriminated union) and in
- * `@bike4mind/services`' internal type, neither of which the browser bundle may reach, and the
- * client additionally never sends `unsupersede` from a picker (only the supersede Undo does).
+ * `@bike4mind/services`' internal type, neither of which the browser bundle may reach. The client
+ * sends `unsupersede` from two places: the findings detail's "Return to ranking" button (only for a
+ * file the list reports in `supersededFabFileIds`) and the supersede Undo toast (which posts it
+ * directly, for a file the list has not reported yet).
  */
 export type CorpusActionBody =
   | { action: 'merge'; keepFabFileId: string; retireFabFileIds: string[]; note?: string }
@@ -2656,14 +2664,16 @@ export function useApplyCorpusAction() {
       const { data } = await api.post<{ data: ApplyCorpusActionSuccess }>(corpusActionUrl(dataLakeId, findingId), body);
       return data.data;
     },
+    // Returning the refresh keeps `isPending` true until the findings list has refetched, so the
+    // "Return to ranking" button cannot be clicked again against a row that still reads superseded.
     onSuccess: (result, { dataLakeId, findingId }) => {
-      refresh(dataLakeId);
+      const refreshed = refresh(dataLakeId);
 
       if (result.action === 'merge') {
         const removed = result.targets.filter(target => target.role === 'retired');
         if (removed.length === 0) {
           toast.success('Merged. No document left this lake.');
-          return;
+          return refreshed;
         }
         const toastId = toast.success(
           `Removed ${removed.length} ${removed.length === 1 ? 'document' : 'documents'} from this lake.`,
@@ -2684,14 +2694,14 @@ export function useApplyCorpusAction() {
             },
           }
         );
-        return;
+        return refreshed;
       }
 
       if (result.action === 'supersede') {
         const retired = result.targets.find(target => target.role === 'retired');
         if (!retired) {
           toast.success('Superseded.');
-          return;
+          return refreshed;
         }
         const name = retired.fileName ?? 'The older document';
         const retiredFabFileId = retired.fabFileId;
@@ -2706,7 +2716,7 @@ export function useApplyCorpusAction() {
                 .post(corpusActionUrl(dataLakeId, findingId), { action: 'unsupersede', fabFileId: retiredFabFileId })
                 .then(() => {
                   refresh(dataLakeId);
-                  toast.success(`"${name}" returned to ranking.`, { id: toastId });
+                  toast.success(returnedToRankingMessage(name), { id: toastId });
                 })
                 .catch((error: unknown) => {
                   toast.error(serverRefusalMessage(error) || 'Could not undo the supersede', { id: toastId });
@@ -2714,12 +2724,22 @@ export function useApplyCorpusAction() {
             },
           },
         });
-        return;
+        return refreshed;
+      }
+
+      if (result.action === 'unsupersede') {
+        const restored = result.targets.find(target => target.role === 'restored');
+        toast.success(returnedToRankingMessage(restored?.fileName ?? 'The document'));
+        return refreshed;
       }
 
       if (result.action === 'retag') toast.success('Tags updated.');
+      return refreshed;
     },
-    onError: (error: Error) => {
+    // A refusal can mean this client's rows are stale (another curator already changed the ruling),
+    // so the list is refreshed rather than left showing a chip or button that no longer applies.
+    onError: (error: Error, { dataLakeId }) => {
+      refresh(dataLakeId);
       toast.error(serverRefusalMessage(error) || error.message || 'Could not change the corpus');
     },
   });

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { randomUUID } from 'crypto';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 // Grant-held ids arrive as plain Strings (DataLakeAccessGrantModel.dataLakeId has no ObjectId
@@ -32,7 +33,9 @@ import {
   DATA_LAKE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
+  DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
+  LAKE_MANAGE_RUNGS,
 } from '@bike4mind/common';
 
 // --- Data Lake Schema ---
@@ -119,6 +122,9 @@ const DataLakeSchema = new mongoose.Schema(
     auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
     origin: { type: String, enum: [...DATA_LAKE_ORIGINS], default: 'curated', required: true },
+    // See IDataLake.pendingConnector. No default: absent is the "unknown intent" state that lakes
+    // predating the field already carry. Cleared with $unset, never a null write.
+    pendingConnector: { type: String, enum: [...DATA_LAKE_PENDING_CONNECTORS] },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
@@ -143,8 +149,9 @@ const DataLakeSchema = new mongoose.Schema(
     filesArchivedAt: { type: Date },
     // Identifies which request's claimPurging put the lake in 'purging'. It also rides on the cleanup
     // queue message, so the accepting request and the consumer each release only that claim, never a
-    // concurrent one. Unset on release.
+    // concurrent one. Retained on release until a new lifecycle generation replaces it.
     purgeClaimId: { type: String },
+    purgeStartedAt: { type: Date },
     // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
     // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
     // dedicated index - same rationale as isPublic/auditQueryTextEnabled (tiny collection).
@@ -1058,10 +1065,22 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // would reintroduce #1744 - the restore's terminal 'active' write would clobber 'purging', the
     // sweep would fail its guard, and the consumer would swallow the purge with a WARN.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: 'deleted' },
+      { _id: id, status: 'deleted', purgeStartedAt: { $exists: false } },
       { $set: { status: 'purging', purgeClaimId: claimId } }
     );
     return res.modifiedCount === 1;
+  }
+
+  async beginPurgeExecution(id: string, claimId?: string): Promise<boolean> {
+    const result = await this.dataLakeModel.updateOne(
+      {
+        _id: id,
+        status: { $in: ['deleted', 'purging'] },
+        purgeClaimId: claimId !== undefined ? claimId : { $exists: false },
+      },
+      { $set: { status: 'purging', purgeStartedAt: new Date() } }
+    );
+    return result.matchedCount === 1;
   }
 
   async claimRestoring(id: string): Promise<boolean> {
@@ -1070,8 +1089,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // 'purging' after the caller read it is no longer restorable, and this is where that is
     // enforced atomically rather than against a stale copy of the document.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: { $in: ['deleted', 'restoring'] } },
-      { $set: { status: 'restoring' } }
+      { _id: id, status: { $in: ['deleted', 'restoring'] }, purgeStartedAt: { $exists: false } },
+      // Rotate instead of clearing: delayed legacy messages must not regain admission after restore.
+      { $set: { status: 'restoring', purgeClaimId: randomUUID() } }
     );
     // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
     // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
@@ -1142,8 +1162,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // With a claimId, only that claim. Without one, only a claim stored with no id (taken before ids
     // were stored), so a legacy message can never release a keyed claim.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: 'purging', purgeClaimId: claimId !== undefined ? claimId : { $exists: false } },
-      { $set: { status: 'deleted' }, $unset: { purgeClaimId: 1 } }
+      {
+        _id: id,
+        status: 'purging',
+        purgeClaimId: claimId !== undefined ? claimId : { $exists: false },
+        purgeStartedAt: { $exists: false },
+      },
+      { $set: { status: 'deleted' } }
     );
     return res.modifiedCount === 1;
   }
@@ -1216,6 +1241,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       { $set: { status: 'active', ...extra } }
     );
     return res.modifiedCount === 1;
+  }
+
+  async clearPendingConnector(id: string): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $unset: { pendingConnector: 1 } });
   }
 
   async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
@@ -1493,6 +1522,11 @@ const DataLakeBatchSchema = new mongoose.Schema(
     completedAt: { type: Date },
     // Set only on a non-normal terminal transition (e.g. 'reconciler'); absent on normal completion.
     completionReason: { type: String, enum: ['reconciler'] },
+    // Resolved at the batch-create gate and stamped onto the upload History row - see
+    // IDataLakeBatch.uploaderManageRung.
+    uploaderManageRung: { type: String, enum: LAKE_MANAGE_RUNGS },
+    // One-shot claim for the upload History row - see claimUploadHistory.
+    uploadHistoryRecordedAt: { type: Date },
     // Background AI-tagging phase - orthogonal to `status` (see TaxonomyStatus's doc
     // comment for why it isn't layered onto the ingest status instead).
     wantsTaxonomy: { type: Boolean, default: false },
@@ -1720,6 +1754,14 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       { _id: batchId, 'files.fabFileId': fabFileId },
       { $set: { 'files.$.failureCounted': counted } }
     );
+  }
+
+  async claimUploadHistory(batchId: string): Promise<boolean> {
+    const res = await this.batchModel.updateOne(
+      { _id: batchId, uploadHistoryRecordedAt: { $exists: false } },
+      { $set: { uploadHistoryRecordedAt: new Date() } }
+    );
+    return res.modifiedCount === 1;
   }
 
   /**

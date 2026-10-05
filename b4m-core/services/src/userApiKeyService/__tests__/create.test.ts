@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS, API_KEY_USER_CAP_ERROR_CODE } from '../create';
+import {
+  createUserApiKey,
+  EMBED_SPEND_CAP_MAX_CREDITS,
+  API_KEY_USER_CAP_ERROR_CODE,
+  MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
+  MAX_ACTIVE_KEYS_PER_USER,
+} from '../create';
 import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
@@ -410,5 +416,89 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
 
     const emptyArray = await createUserApiKey('user1', { ...embedParams, allowedOrigins: [] }, adapters());
     expect(emptyArray.allowedOrigins).toEqual([]);
+  });
+});
+
+describe('createUserApiKey - per-user cap pools', () => {
+  const exchangeParams = {
+    name: 'AI (federated: VibesWire)',
+    scopes: [ApiKeyScope.AI_GENERATE],
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+    metadata: { createdFrom: 'oauth-exchange' as const, oauthClientId: 'client-a' },
+  };
+  const dashboardParams = {
+    name: 'my key',
+    scopes: [ApiKeyScope.AI_GENERATE],
+    metadata: { createdFrom: 'dashboard' as const },
+  };
+
+  // Only the userApiKeys members createUserApiKey touches are stubbed.
+  const adapters = (repo: ReturnType<typeof makeRepo>) =>
+    ({ db: { userApiKeys: repo }, systemUserId: 'sys-1' }) as unknown as Parameters<typeof createUserApiKey>[2];
+
+  async function mintError(params: Parameters<typeof createUserApiKey>[1], repo: ReturnType<typeof makeRepo>) {
+    return createUserApiKey('user-1', params, adapters(repo)).then(
+      () => null,
+      (err: unknown) => err as BadRequestError
+    );
+  }
+
+  it('counts an exchange mint against the oauth-exchange pool only', async () => {
+    const repo = makeRepo();
+    await createUserApiKey('user-1', exchangeParams, adapters(repo));
+    expect(repo.countActiveByUserId).toHaveBeenCalledTimes(1);
+    expect(repo.countActiveByUserId).toHaveBeenCalledWith('user-1', 'oauth-exchange');
+  });
+
+  it('counts a dashboard mint against the standard pool only', async () => {
+    const repo = makeRepo();
+    await createUserApiKey('user-1', dashboardParams, adapters(repo));
+    expect(repo.countActiveByUserId).toHaveBeenCalledTimes(1);
+    expect(repo.countActiveByUserId).toHaveBeenCalledWith('user-1', 'standard');
+  });
+
+  it('lets an exchange mint through when the standard pool is full', async () => {
+    const repo = makeRepo({
+      countActiveByUserId: vi.fn(async (_userId: string, pool: string) =>
+        pool === 'standard' ? MAX_ACTIVE_KEYS_PER_USER : 0
+      ),
+    });
+    await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
+  });
+
+  it('lets a dashboard mint through when the exchange pool is full', async () => {
+    const repo = makeRepo({
+      countActiveByUserId: vi.fn(async (_userId: string, pool: string) =>
+        pool === 'oauth-exchange' ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : 0
+      ),
+    });
+    await expect(createUserApiKey('user-1', dashboardParams, adapters(repo))).resolves.toBeDefined();
+  });
+
+  it('refuses an exchange mint at the exchange cap, tagged with the shared cap code', async () => {
+    const repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) });
+    const error = await mintError(exchangeParams, repo);
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error?.message).toBe(
+      `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
+    );
+    expect(error?.additionalInfo).toEqual({ errorCode: API_KEY_USER_CAP_ERROR_CODE });
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an exchange mint one below the exchange cap', async () => {
+    const repo = makeRepo({ countActiveByUserId: vi.fn().mockResolvedValue(MAX_ACTIVE_EXCHANGE_KEYS_PER_USER - 1) });
+    await expect(createUserApiKey('user-1', exchangeParams, adapters(repo))).resolves.toBeDefined();
+  });
+
+  it.each([
+    ['no expiresAt', { ...exchangeParams, expiresAt: undefined }],
+    ['no oauthClientId', { ...exchangeParams, metadata: { createdFrom: 'oauth-exchange' as const } }],
+  ])('refuses an exchange key with %s, so the separate pool stays short-lived and per-client', async (_l, params) => {
+    const repo = makeRepo();
+    const error = await mintError(params, repo);
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error?.message).toBe('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
+    expect(repo.create).not.toHaveBeenCalled();
   });
 });

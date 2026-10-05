@@ -4,7 +4,15 @@ import {
   ChatCompletionProcess,
   featureNames,
 } from '@bike4mind/services/llm';
-import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  getSettingsMap,
+  getSettingsValue,
+  NotFoundError,
+  SQSService,
+  UnprocessableEntityError,
+} from '@bike4mind/utils';
+import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -14,7 +22,15 @@ import {
   isChatModelUsable,
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
-import { adminSettingsRepository, User, Session } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentRepository,
+  fabFileRepository,
+  projectRepository,
+  sessionRepository,
+  User,
+  Session,
+} from '@bike4mind/database';
 import {
   B4MLLMTools,
   chatContract,
@@ -23,7 +39,11 @@ import {
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import type { Request } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
+import { questReplyText } from '@server/utils/questPollBody';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
@@ -79,9 +99,6 @@ const handler = nextRouteForContract(chatContract, {
     }
   }
 
-  apiTimer.phase('session');
-  const sessionId = await getSessionId(simplifiedRequest.sessionId ?? undefined, req.user.id);
-
   // Pre-compute tool recommendations once (used by both transform and response metadata)
   const recommendations = simplifiedRequest.toolMode === 'smart' ? recommendTools(simplifiedRequest.message) : [];
 
@@ -117,6 +134,13 @@ const handler = nextRouteForContract(chatContract, {
   // team-wide prompts to it; when omitted, the turn is personal (CreditHolderType.User). This
   // is what lets an org member whose org pool is empty still spend their own credits.
   const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
+
+  // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
+  // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have
+  // already minted one. `createdNotebook` marks a session this request opened, so a later reject
+  // from invoke (an unknown/disabled model) can remove it - see the invoke try/catch below.
+  apiTimer.phase('session');
+  const { sessionId, createdNotebook } = await resolveChatSessionId(req, simplifiedRequest);
 
   // Transform to internal format. The resolved organizationId (already a validated hex string,
   // or undefined for personal) also scopes team-wide system prompts downstream.
@@ -162,12 +186,31 @@ const handler = nextRouteForContract(chatContract, {
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
-  const quest = await invokeService.invoke({
-    body: internalRequest,
-    userId: req.user.id,
-    // Attributes a lake write a tool drives this turn to the key rather than its owner.
-    apiKeyId: req.apiKeyInfo?.keyId,
-  });
+  let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
+  try {
+    quest = await invokeService.invoke({
+      body: internalRequest,
+      userId: req.user.id,
+      // Attributes a lake write a tool drives this turn to the key rather than its owner.
+      apiKeyId: req.apiKeyInfo?.keyId,
+    });
+  } catch (error) {
+    // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
+    // creates the quest, so a rejected turn can land here with the fresh notebook already open.
+    // Nothing references that notebook yet - remove it rather than leave an empty orphan that
+    // disguises itself as a real chat in the list. Best-effort: cleanup must not mask the original
+    // error, and invoke throws before quest creation on every path that reaches the caller.
+    if (createdNotebook) {
+      try {
+        await sessionRepository.delete(sessionId);
+      } catch (cleanupError) {
+        req.logger.warn(
+          `Failed to remove notebook ${sessionId} after a rejected turn: ${(cleanupError as Error)?.message}`
+        );
+      }
+    }
+    throw error;
+  }
 
   if (!quest) throw new NotFoundError('Failed to create quest');
 
@@ -222,10 +265,11 @@ const handler = nextRouteForContract(chatContract, {
     return res.json({
       id: completedQuest.id,
       status: completedQuest.status,
+      sessionId,
       message_received: true,
       timestamp: new Date().toISOString(),
       model: internalRequest.params.model,
-      response: completedQuest.reply,
+      response: questReplyText(completedQuest),
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
       // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
@@ -259,6 +303,7 @@ const handler = nextRouteForContract(chatContract, {
   return res.json({
     id: quest.id,
     status: 'queued',
+    sessionId,
     message_received: true,
     timestamp: new Date().toISOString(),
     model: internalRequest.params.model,
@@ -315,26 +360,73 @@ function buildToolMeta({
 }
 
 /**
- * Get session ID - either from request or user's most recent notebook
+ * Resolve the notebook/session this turn is recorded in.
+ *
+ * An API-key caller with no `sessionId` gets a BRAND-NEW notebook, and so does any caller that
+ * sends `newConversation: true`. Neither reads nor writes `User.lastNotebookId`: that field is the
+ * human's UI cursor (the notebook the web app reopens), so a script must not be able to post into
+ * it or repoint it at its own notebook. A first-party JWT caller with no `sessionId` keeps the old
+ * last-notebook fallback. An explicit `sessionId` always wins - its access check lives downstream.
+ *
+ * `createdNotebook` is true only when this call opened the notebook, so the caller can discard it if
+ * a later validation rejects the turn (see the invoke try/catch).
  */
-async function getSessionId(requestedSessionId: string | undefined, userId: string): Promise<string> {
-  if (requestedSessionId) {
-    return requestedSessionId;
+async function resolveChatSessionId(
+  req: Request,
+  request: SimplifiedChatRequest
+): Promise<{ sessionId: string; createdNotebook: boolean }> {
+  if (request.sessionId && request.newConversation) {
+    throw new UnprocessableEntityError('Pass either sessionId or newConversation, not both');
   }
 
-  const user = await User.findById(userId, { lastNotebookId: 1 });
+  if (request.sessionId) {
+    return { sessionId: request.sessionId, createdNotebook: false };
+  }
+
+  if (request.newConversation || isApiKeyAuth(req)) {
+    const session = await sessionService.createSession(
+      req.user,
+      { name: newNotebookName(req) },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          agents: agentRepository,
+        },
+        logger: req.logger,
+      },
+      { origin: resolveSessionOrigin(req) }
+    );
+    req.logger.info(
+      `POST /api/chat created notebook ${session.id} for ${isApiKeyAuth(req) ? 'API key' : 'new conversation'}`
+    );
+    return { sessionId: session.id, createdNotebook: true };
+  }
+
+  const user = await User.findById(req.user.id, { lastNotebookId: 1 });
   if (user?.lastNotebookId) {
-    return user.lastNotebookId.toString();
+    return { sessionId: user.lastNotebookId.toString(), createdNotebook: false };
   }
 
-  const mostRecentSession = await Session.findOne({ userId }).sort({ lastUpdated: -1, createdAt: -1 });
+  const mostRecentSession = await Session.findOne({ userId: req.user.id }).sort({ lastUpdated: -1, createdAt: -1 });
   if (mostRecentSession) {
     // Update user's lastNotebookId for future requests
-    await User.findByIdAndUpdate(userId, { lastNotebookId: mostRecentSession.id });
-    return mostRecentSession.id;
+    await User.findByIdAndUpdate(req.user.id, { lastNotebookId: mostRecentSession.id });
+    return { sessionId: mostRecentSession.id, createdNotebook: false };
   }
 
   throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/v1/sessions');
+}
+
+/**
+ * Notebook name for a session this endpoint creates on the caller's behalf. The `API` prefix is
+ * what makes an API-created notebook identifiable to a human scanning the notebook list; a JWT
+ * caller's `newConversation` is labelled as an ordinary new chat instead. ASCII only, UTC-stamped.
+ */
+function newNotebookName(req: Request): string {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  return `${isApiKeyAuth(req) ? 'API chat' : 'New chat'} - ${stamp} UTC`;
 }
 
 function transformToInternalFormat(

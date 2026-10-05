@@ -1741,6 +1741,29 @@ describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', ()
   });
 });
 
+describe('DataLakeBatchRepository.claimUploadHistory - one upload History row per batch', () => {
+  setupMongoTest();
+
+  it('lets exactly one caller claim, and a reopen does not release the claim', async () => {
+    const batch = await dataLakeBatchRepository.create({
+      dataLakeId: 'lake1',
+      userId: 'u1',
+      files: [{ fabFileId: 'f1', fileName: 'a.txt', status: 'failed', error: 'enqueue: boom' }],
+    });
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(true);
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
+
+    const reopened = await dataLakeBatchRepository.reopenFinalizedWithErrors(batch.id, {
+      fabFileId: 'f1',
+      errorPrefix: 'enqueue:',
+    });
+    expect(reopened?.status).toBe('processing');
+    await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+    expect(await dataLakeBatchRepository.claimUploadHistory(batch.id)).toBe(false);
+  });
+});
+
 describe('DataLakeBatchRepository.setStatusIfActive - guarded non-terminal transition', () => {
   setupMongoTest();
 
@@ -3080,7 +3103,7 @@ describe('DataLakeRepository purge-accept claims (#1744)', () => {
     expect(await dataLakeRepository.releasePurgingToDeleted(created.id, 'claim-a')).toBe(true);
     const released = await DataLakeModel.findById(created.id).lean();
     expect(released?.status).toBe('deleted');
-    expect(released).not.toHaveProperty('purgeClaimId');
+    expect(released?.purgeClaimId).toBe('claim-a');
   });
 
   it('releases nothing when the lake is not purging, so it can never resurrect another transition', async () => {
@@ -3779,5 +3802,48 @@ describe('origin', () => {
         origin: 'machine-fed',
       })
     ).rejects.toThrow();
+  });
+});
+
+describe('DataLakeRepository - pendingConnector', () => {
+  setupMongoTest();
+
+  it.each(['github', 'googleDrive'] as const)('round-trips %s', async connector => {
+    const created = await dataLakeRepository.create(
+      baseLake({ slug: `pending-${connector}`, pendingConnector: connector })
+    );
+    const found = await dataLakeRepository.findById(created.id);
+    expect(found?.pendingConnector).toBe(connector);
+  });
+
+  it('rejects a value outside the connector enum', async () => {
+    await expect(
+      DataLakeModel.create({
+        name: 'Bad',
+        slug: 'bad-pending-connector',
+        fileTagPrefix: 'bad:',
+        datalakeTag: 'datalake:bad-pending-connector',
+        createdByUserId: 'user-1',
+        pendingConnector: 'dropbox',
+      })
+    ).rejects.toThrow();
+  });
+
+  it('reads back undefined on a lake created without it, and clearing it is a no-op', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'no-pending-connector' }));
+    expect((await dataLakeRepository.findById(created.id))?.pendingConnector).toBeUndefined();
+
+    await expect(dataLakeRepository.clearPendingConnector(created.id)).resolves.toBeUndefined();
+    expect((await dataLakeRepository.findById(created.id))?.pendingConnector).toBeUndefined();
+  });
+
+  it('clearPendingConnector removes the key rather than writing null', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'clear-pending', pendingConnector: 'github' }));
+
+    await dataLakeRepository.clearPendingConnector(created.id);
+
+    const raw = await DataLakeModel.collection.findOne({ _id: new mongoose.Types.ObjectId(created.id) });
+    expect(raw).not.toBeNull();
+    expect(raw).not.toHaveProperty('pendingConnector');
   });
 });

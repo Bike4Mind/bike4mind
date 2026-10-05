@@ -3,6 +3,8 @@ import { Alert, Box, Chip, CircularProgress, Sheet, Stack, Table, Typography } f
 import type { ColorPaletteProp } from '@mui/joy';
 import { LAKE_CONFIG_EVENT_VALUE_FIELDS } from '@bike4mind/common';
 import type {
+  DataLakeGroundingMode,
+  DataLakeOrigin,
   DataLakeStatus,
   LakeConfigChangeAction,
   LakeConfigChangeField,
@@ -98,6 +100,27 @@ const STATUS_LABEL: Record<DataLakeStatus, string> = {
   purging: 'Purging',
 };
 
+/** Total. Matches the settings modal's pickers, minus its "(recommended)" hint, which is advice
+ *  for choosing a mode and reads oddly in a record of one. */
+const GROUNDING_MODE_LABEL: Record<DataLakeGroundingMode, string> = {
+  retrieve: 'Retrieve',
+  inline: 'Inline into the prompt',
+  'auto-by-size': 'Auto (decide by size)',
+};
+
+/** Total. Matches the settings modal's origin picker. */
+const ORIGIN_LABEL: Record<DataLakeOrigin, string> = {
+  curated: 'Curated',
+  'connector-fed': 'Connector-fed',
+};
+
+/** The enum-valued fields whose stored values render through a label map. */
+const ENUM_VALUE_LABEL: Partial<Record<LakeConfigChangeField, Record<string, string>>> = {
+  status: STATUS_LABEL,
+  groundingMode: GROUNDING_MODE_LABEL,
+  origin: ORIGIN_LABEL,
+};
+
 /**
  * Total. `platform-admin` is the one rung rendered as a WARNING: every other rung belongs to someone
  * with a standing relationship to the lake, so a support-side edit is the case an owner most needs to
@@ -178,15 +201,19 @@ const EVENT_VALUE_FIELDS = new Set<LakeConfigChangeField>(LAKE_CONFIG_EVENT_VALU
 const isUnset = (value: LakeConfigLiteralValue | undefined): boolean =>
   value === undefined || value === null || value === '';
 
-/** A stored value, with `status` mapped to its UI label. Unknown statuses degrade to the raw value. */
+/**
+ * A stored value, with enum fields mapped to their UI label. Unknown values degrade to the raw
+ * value; `Object.hasOwn` keeps a stored string like `constructor` from resolving to a prototype member.
+ */
 const describeFieldValue = (
   field: LakeConfigChangeField,
   value: LakeConfigLiteralValue | undefined,
   names?: Record<string, string>
-): string =>
-  field === 'status' && typeof value === 'string'
-    ? (STATUS_LABEL[value as DataLakeStatus] ?? value)
-    : describeLakeConfigValue(value, names);
+): string => {
+  const labels = ENUM_VALUE_LABEL[field];
+  if (labels && typeof value === 'string' && Object.hasOwn(labels, value)) return labels[value];
+  return describeLakeConfigValue(value, names);
+};
 
 /** The right-hand cell for one changed field, per arm of the discriminated union. */
 export function describeLakeConfigChange(
@@ -214,14 +241,18 @@ export function describeLakeConfigChange(
  * WHOLE history table down; the honest fallback is to show the raw stored value.
  */
 const rungLabel = (rung: LakeManageRung): { label: string; color: ColorPaletteProp } =>
-  RUNG_LABEL[rung] ?? { label: rung, color: 'neutral' };
+  Object.hasOwn(RUNG_LABEL, rung) ? RUNG_LABEL[rung] : { label: rung, color: 'neutral' };
 
-const fieldLabel = (field: LakeConfigChangeField): string => FIELD_LABEL[field] ?? field;
+const fieldLabel = (field: LakeConfigChangeField): string =>
+  Object.hasOwn(FIELD_LABEL, field) ? FIELD_LABEL[field] : field;
 
-const actionLabel = (action: LakeConfigChangeAction): string => ACTION_LABEL[action] ?? action;
+const actionLabel = (action: LakeConfigChangeAction): string =>
+  Object.hasOwn(ACTION_LABEL, action) ? ACTION_LABEL[action] : action;
 
 function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNames: Record<string, string> }) {
   const rung = rungLabel(entry.manageRung);
+  const who = entry.principalName ?? entry.principalId;
+  const whoKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
   return (
     <tr data-testid="datalake-config-history-row">
       <td>
@@ -230,11 +261,15 @@ function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNa
           {actionLabel(entry.action)}
         </Typography>
       </td>
+      {/* Joy tables are fixed-layout, so an unresolved id (one unbreakable token) would paint over
+          the next column. Truncate instead; `title` keeps the full value. Same cell as the access
+          history's HistoryRow in DataLakeAccessModal. */}
       <td>
-        <Typography level="body-sm">{entry.principalName ?? entry.principalId}</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">
-          {entry.principalKind}
-          {entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}
+        <Typography level="body-sm" noWrap title={who} data-testid="datalake-config-history-who">
+          {who}
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary" noWrap title={whoKind}>
+          {whoKind}
         </Typography>
       </td>
       <td>

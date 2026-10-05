@@ -1,7 +1,17 @@
 import { isAxiosError } from 'axios';
+import type { z } from 'zod';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
+import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
-import type { ChatHistoryItemType, QuestErrorCode } from '@bike4mind/common';
+import {
+  ttsBase64ResponseSchema,
+  type CitableSourceSchema,
+  ttsResponseTooLargeSchema,
+  supportedVoiceGenerationVendor,
+  type ChatHistoryItemType,
+  type QuestErrorCode,
+  type TTSRequest,
+} from '@bike4mind/common';
 
 /**
  * A Bike4Mind notebook (session) as returned by the REST API. Only the fields the
@@ -29,7 +39,11 @@ export interface ChatWaitResponse {
   id: string;
   status: string;
   model?: string;
-  // The wait path returns the reply in `responses`; the scalar `response` is null.
+  // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
+  // caller sending `newConversation: true`) gets a freshly created notebook's id here.
+  sessionId?: string;
+  // `response` is the visible answer text; `responses` is the raw reply slots. Older servers left
+  // `response` null on the wait path.
   response?: string | null;
   responses?: string[];
   // Failure classifier. A failed turn still resolves 200 with the explanation in the reply
@@ -49,8 +63,12 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
+  promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
+
+export type RawCitable = z.infer<typeof CitableSourceSchema> & { [key: string]: unknown };
 
 /** One matching session from POST /api/sessions/semantic-search (`scores` entries). */
 export interface SessionScore {
@@ -98,6 +116,18 @@ export interface GeneratedSound {
   fabFileId?: string;
   fileName?: string;
   fileUrl?: string;
+}
+
+/** A data lake as returned by GET /api/v1/data-lakes (`DataLakeResource`, snake_case). */
+export interface RawDataLake {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  built_in?: boolean;
+  status?: string;
+  file_count?: number;
+  [key: string]: unknown;
 }
 
 export interface RawProject {
@@ -168,11 +198,26 @@ export class B4mApiClient {
     return this.client.get<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`);
   }
 
-  async createNotebook(args: { name?: string; projectId?: string }): Promise<RawNotebook> {
+  async createNotebook(args: { name?: string; projectId?: string; dataLakeId?: string }): Promise<RawNotebook> {
     return this.client.post<RawNotebook>('/api/sessions/create', {
       ...(args.name ? { name: args.name } : {}),
       ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.dataLakeId ? { dataLakeId: args.dataLakeId } : {}),
     });
+  }
+
+  /**
+   * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
+   * `{ data, next_cursor }` body), so `toList` does not apply.
+   */
+  async listDataLakes(args: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ data: RawDataLake[]; nextCursor: string | null }> {
+    const result = await this.client.get<{ data: RawDataLake[]; next_cursor: string | null }>('/api/v1/data-lakes', {
+      params: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
   }
 
   async sendChat(args: {
@@ -182,7 +227,10 @@ export class B4mApiClient {
     systemPrompt?: string;
   }): Promise<ChatWaitResponse> {
     return this.client.post<ChatWaitResponse>('/api/chat', {
-      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      // No notebookId means "start a fresh conversation": without newConversation a JWT caller
+      // would post into the user's last-opened notebook (the very context bleed this endpoint was
+      // fixed to remove for API keys). The new notebook's id comes back in the response.
+      ...(args.notebookId ? { sessionId: args.notebookId } : { newConversation: true }),
       message: args.message,
       ...(args.model ? { model: args.model } : {}),
       ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
@@ -258,6 +306,30 @@ export class B4mApiClient {
     }
   }
 
+  async synthesizeSpeech(args: Omit<TTSRequest, 'encoding'>) {
+    try {
+      const response: unknown = await this.client.post('/api/ai/tts', { ...args, encoding: 'base64' });
+      return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(response) };
+    } catch (error) {
+      if (isAxiosError(error) && error.response?.status === 413) {
+        // The billed audio is only reachable through its FabFile, so keep the id even
+        // when no signed URL was minted. A substitution rides only the header here.
+        const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
+        if (oversized.success && oversized.data.saved && oversized.data.fabFileId) {
+          const fallbackFrom = supportedVoiceGenerationVendor.safeParse(
+            error.response.headers?.['x-b4m-tts-provider-fallback-from']
+          );
+          return {
+            kind: 'saved-too-large' as const,
+            data: { ...oversized.data, fabFileId: oversized.data.fabFileId },
+            ...(fallbackFrom.success ? { fallbackFrom: fallbackFrom.data } : {}),
+          };
+        }
+      }
+      throw error;
+    }
+  }
+
   async listProjects(args: {
     search?: string;
     limit: number;
@@ -320,9 +392,17 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
   if (isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 401) {
+      // A provider-key failure also wears a 401 (e.g. /api/ai/tts); re-authenticating
+      // to Bike4Mind would not fix it, so surface the server's message instead.
+      const providerKeyMessage = providerKeyFailureMessage(error.response?.data);
+      if (providerKeyMessage) return providerKeyMessage;
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
+      // requireFeatureEnabled answers 403 too; no key scope fixes an instance-disabled feature.
+      if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
+        return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
+      }
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }
@@ -406,4 +486,10 @@ function extractServerMessage(data: unknown): string | undefined {
     if (typeof record.message === 'string') return record.message;
   }
   return undefined;
+}
+
+function providerKeyFailureMessage(data: unknown): string | undefined {
+  if (!isProviderKeyFailure(data)) return undefined;
+  const base = extractServerMessage(data) ?? 'the AI provider could not be used';
+  return `${base} (configure or fix the provider API key in Bike4Mind; this is not a Bike4Mind login problem)`;
 }

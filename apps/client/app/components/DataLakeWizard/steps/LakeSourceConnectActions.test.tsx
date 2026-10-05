@@ -34,7 +34,7 @@ vi.mock('./GitHubConnectAction', () => ({ default: () => <div data-testid="githu
 import LakeSourceConnectActions from './LakeSourceConnectActions';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const orgLake = { id: 'lake1', organizationId: 'org-1' };
+const orgLake = { id: 'lake1', organizationId: 'org-1', canManage: true, isCreator: false };
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 
 beforeEach(() => {
@@ -62,7 +62,7 @@ describe('LakeSourceConnectActions', () => {
 
   it('shows only Drive, and never reads the GitHub routes, on a personal lake', () => {
     h.gitHubConnection.current = { id: 'gh1' };
-    wrap(<LakeSourceConnectActions lake={{ id: 'lake1', organizationId: null }} />);
+    wrap(<LakeSourceConnectActions lake={{ id: 'lake1', organizationId: null, canManage: true, isCreator: true }} />);
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
     expect(screen.queryByTestId('github-connect-action')).toBeNull();
     expect(h.gitHubQueryEnabled).toHaveBeenCalledWith(false);

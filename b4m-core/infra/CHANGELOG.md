@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 1.2.1
+
+### Patch Changes
+
+- [#3754](https://github.com/Bike4Mind/bike4mind/pull/3754) [`1b883fa`](https://github.com/Bike4Mind/bike4mind/commit/1b883fac5df1d24f7cea23a5c3e72efcfd05ee70) Thanks [@aflordelis](https://github.com/aflordelis)! - move server/jobs and server/emailIngestion into apps/workers
+
 ## 1.2.0
 
 ### Minor Changes

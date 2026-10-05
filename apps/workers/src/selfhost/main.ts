@@ -22,7 +22,10 @@ import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule'
 import { SelfHostWorker } from './selfHostWorker';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
+import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
+import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
@@ -34,6 +37,7 @@ import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
 } from '@server/queueHandlers/sqsDelivery';
 
 /**
@@ -90,6 +94,8 @@ async function main() {
   registerQuestTimeoutSweep(worker);
   registerLakeHealthSweep(worker);
   registerTelemetryCleanup(worker);
+  registerApiKeyBaselineCalculation(worker);
+  registerLakeInconsistencySweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -145,8 +151,7 @@ async function main() {
   const generationCallbackQueueUrl = Resource.generationCallbackQueue?.url;
   if (generationCallbackQueueUrl) {
     worker.registerQueueHandler('generationCallbackQueue', generationCallbackQueueUrl, generationCallbackDispatch, {
-      // Matches hosted's 2-minute visibilityTimeout (infra/queues.ts).
-      visibilityTimeoutSec: 120,
+      visibilityTimeoutSec: GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
       maxReceiveCount: GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
     });
   } else {
@@ -170,6 +175,7 @@ async function main() {
   }
 
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+  registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

@@ -333,6 +333,8 @@ const toManageableConfig = (
   // current selection; absent for a non-editor OR a lake predating the field (the picker then
   // falls back to the default mode, matching how the resolver treats an absent value).
   ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
+  // Editor-only, same gate: it drives the finish-connect banner, which only a manager can act on.
+  ...(manageable && dl.pendingConnector ? { pendingConnector: dl.pendingConnector } : {}),
   // Editor-only, same gate. Absent when the lake declares no target, which is exactly the state the
   // settings field renders as blank - and the state in which the lake never converges (#1681).
   ...(manageable && typeof dl.requiredPassageTokenTarget === 'number'

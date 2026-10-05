@@ -13,6 +13,7 @@ import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
 import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -97,8 +98,9 @@ const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
   },
 });
 
-// GitHub data-lake App access revoked -> purge and release the connection (pages/api/webhooks/github/lake.ts).
-// SQS is the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
+// GitHub data-lake connection teardown -> purge and release it. Fed when the App's access is revoked
+// (pages/api/webhooks/github/lake.ts) and when a user disconnects (DELETE github-connection). SQS is
+// the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
 const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
 const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
   // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge runs in
@@ -932,6 +934,9 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Research runs resolve the web-search provider like ChatCompletion does; same wiring
+      // as infra/chatCompletion.ts and infra/agentExecutor.ts.
+      ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     },
   },
   SINGLE_RECORD_BATCH

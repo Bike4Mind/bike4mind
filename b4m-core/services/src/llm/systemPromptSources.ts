@@ -27,6 +27,7 @@ export type PromptSourceId =
   | 'helpCenter'
   | 'abstention'
   | 'viewRegistry'
+  | 'replyChoices'
   | 'toolPrompt'
   | 'agentDetection'
   | 'questMaster'
@@ -56,6 +57,7 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   'helpCenter',
   'abstention',
   'viewRegistry',
+  'replyChoices',
   'toolPrompt',
   'agentDetection',
   // Moved behind the admin/hardcoded block above: this is `origin: 'user'` content that
@@ -228,6 +230,8 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   artifactEmission: 33,
   helpCenter: 34,
   dateContext: 35,
+  // Losing it only loses the buttons; the reply's prose still lists the options.
+  replyChoices: 36,
 };
 
 /**
@@ -321,6 +325,7 @@ export const PROMPT_SOURCE_METADATA: Record<
   helpCenter: { origin: 'admin', name: 'help_center' },
   abstention: { origin: 'admin', name: 'abstention' },
   viewRegistry: { origin: 'hardcoded', name: 'view_registry' },
+  replyChoices: { origin: 'hardcoded', name: 'reply_choices' },
   toolPrompt: { origin: 'admin', name: 'tool_guidance' },
   agentDetection: { origin: 'hardcoded', name: 'agent_detection' },
   questMaster: { origin: 'session', name: 'quest_master' },

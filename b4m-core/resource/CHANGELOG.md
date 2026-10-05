@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 0.9.1
+
+### Patch Changes
+
+- [#3835](https://github.com/Bike4Mind/bike4mind/pull/3835) [`83fb75f`](https://github.com/Bike4Mind/bike4mind/commit/83fb75feff292c71203c2f22a7ae8795635eb25f) Thanks [@poysama](https://github.com/poysama)! - retain and recover permanent lake cleanup
+
 ## 0.9.0
 
 ### Minor Changes

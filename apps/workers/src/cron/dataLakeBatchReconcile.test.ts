@@ -33,6 +33,7 @@ vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   dataLakeBatchRepository: { findStuck: h.findStuck, findStuckTaxonomy: h.findStuckTaxonomy },
   dataLakeRepository: {},
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   // getSettingsValue for this cron's own flags, plus the retention pair the config-audit
   // resolver reads - one declaration serving both consumers (see lakeConfigAuditDb).

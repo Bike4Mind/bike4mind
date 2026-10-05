@@ -1,26 +1,31 @@
 import { z } from 'zod';
+import { buildRedirectTo } from './authRedirect';
+import { GITHUB_LAKE_CALLBACK_PATH } from './githubLakeCallbackSearch';
 
 /**
- * What the lake GitHub connect carries across its GitHub round-trips, in sessionStorage (same tab,
- * survives the redirects). Holds nothing secret: the signed `state` is what the server trusts.
+ * What the lake GitHub connect carries across the redirect to GitHub and back, in sessionStorage
+ * (same tab, survives the round-trip). Holds nothing secret: the signed `state` embedded in the
+ * authorize URL is what the server trusts, and the user's GitHub token never reaches the browser -
+ * the server holds it, keyed by an HttpOnly nonce cookie, for the repository picker to read.
  *
- * - `dataLakeId`: where to land the user once the connection completes.
- * - `authorizeUrl`: needed when GitHub returns from the install with `installation_id` but no
- *   `code` (the App was already installed on that account), see buildGitHubLakeConnectUrls.
- * - `installationId`: remembered across that authorize bounce, whose return carries only `code`.
+ * `dataLakeId`: where to land the user (and reopen the repository picker) once GitHub returns.
+ * `returnPath`: the page the connect started from, to navigate back to. Untrusted on read (storage
+ * is user-editable), so the callback re-sanitizes it; absent in handoffs saved before it existed.
  */
 const handoffSchema = z.object({
   dataLakeId: z.string().min(1),
-  authorizeUrl: z.url(),
-  installationId: z.number().int().positive().optional(),
+  returnPath: z.string().optional(),
 });
 
 export type GitHubLakeConnectHandoff = z.infer<typeof handoffSchema>;
 
 const STORAGE_KEY = 'b4m:github-lake-connect';
 
-export function saveGitHubLakeConnectHandoff(handoff: GitHubLakeConnectHandoff): void {
-  sessionStorage.setItem(STORAGE_KEY, JSON.stringify(handoff));
+/** Records the current page as `returnPath`, so every caller returns the user to where they started. */
+export function saveGitHubLakeConnectHandoff(handoff: Omit<GitHubLakeConnectHandoff, 'returnPath'>): void {
+  const { pathname, search, hash } = window.location;
+  const returnPath = pathname === GITHUB_LAKE_CALLBACK_PATH ? undefined : buildRedirectTo(pathname, search, hash);
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...handoff, returnPath }));
 }
 
 /** The pending handoff, or null when there is none or it does not parse (a stale or foreign value). */

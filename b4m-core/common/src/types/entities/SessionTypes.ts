@@ -11,6 +11,7 @@ import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
 import type { IQuestCallback } from '../../schemas/generationCallback';
+import type { SuggestedChoices } from '../../utils/replyChoices';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -310,7 +311,8 @@ export interface IChatHistoryItem {
   };
 
   /**
-   * Fallback model information when a fallback occurred during generation
+   * Fallback model information when a fallback occurred during generation. `null` clears a value
+   * persisted by an earlier attempt: repository updates are a `$set`, which drops `undefined`.
    */
   fallbackInfo?: {
     sessionId: string;
@@ -321,8 +323,9 @@ export interface IChatHistoryItem {
     /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
     primaryModelBackend?: string;
     fallbackModelBackend?: string;
+    reason?: string;
     timestamp: number;
-  };
+  } | null;
 
   /**
    * Prompt enhancement information for image generation
@@ -399,6 +402,13 @@ export interface IChatHistoryItem {
     target: string;
     reason: string;
   }>;
+
+  /**
+   * Next-step options parsed from the reply's trailing choices block (see utils/replyChoices).
+   * Rendered with navigationIntents as one numbered button row; the block itself is stripped
+   * from the stored reply text.
+   */
+  suggestedChoices?: SuggestedChoices;
 
   /**
    * Attachment list for interactive download buttons (Slack and web UI)

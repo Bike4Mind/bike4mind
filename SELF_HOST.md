@@ -454,7 +454,7 @@ The `web_search` tool (and `deep_research`) can run against a self-hosted [SearX
    docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
    ```
 
-Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
+Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` leads with SerpAPI when a key is set (`SerperKey` in Admin > API Keys) and otherwise uses SearXNG, so a SearXNG-only install needs no extra setting; with both configured, the other provider is the backup. Set it to `serpapi` or `searxng` to lead with that provider (an unconfigured choice disables search rather than switching providers). The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
 
 ### Reading pages: web_fetch and Firecrawl
 
@@ -1005,4 +1005,83 @@ Focused tests use disposable Mongo, exact retention boundaries and an injected l
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+```
+
+## Daily API-key usage baselines
+
+The single local worker calculates usage baselines at 02:00 UTC using the existing calculator and Mongo repositories. It processes keys whose stored status is active, using their own user's usage logs from the inclusive trailing 30-day window. It preserves the existing averages, common IPs/endpoints and UTC peak-hour calculation. Keys without usage are skipped; existing baselines on skipped or inactive keys remain unchanged. This does not change key authorization, expiry enforcement or rate limits.
+
+There is no bootstrap run. A start after 02:00 waits until the next day; an exact 02:00 start runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown uses the existing bounded worker grace period. There is no distributed scheduling lock or completion guarantee beyond that grace period.
+
+A failed key does not prevent processing the others. The local task rejects after any per-key errors so the worker records a failed run, then retries on the next daily slot. Global query failures also reject. Successfully persisted baselines remain intact; failed writes leave their prior baseline for retry. The hosted adapter keeps its existing success/error responses and per-key counts.
+
+Verification exercises the actual calculator and disposable Mongo, including user/key isolation, time boundaries, repeat results and write-failure recovery. This is application-level proof, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/apiKeyBaselineCalculation.test.ts src/selfhost/apiKeyBaselineCalculation.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/apiKeyBaselineCalculation.e2e.test.ts
+```
+
+## Notebook submission errors
+
+The notebook curation endpoint requires the configured local event queue to accept each start event. A missing queue URL or rejected enqueue reaches the API's existing error response instead of returning 202. The requirement is per call: the background session groomer publishes the same event with the default best-effort delivery, as do all other background enrichment events. The hosted publisher contract is unchanged.
+
+A 202 response establishes broker acceptance only. The current local worker still lacks the notebook start-event route and curation consumer, so this change does not establish export completion. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
+
+Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.
+
+## Permanent data-lake cleanup
+
+The local worker consumes `dataLakeCleanupQueue` one message at a time. Configure `DATA_LAKE_CLEANUP_QUEUE` and its `DATA_LAKE_CLEANUP_QUEUE_DLQ` from `.env.selfhost.example`, then recreate the broker with the updated `elasticmq.conf`. Keep the broker's retained volume. The source queue redrives to its dedicated dead-letter queue after three deliveries; this consumer does not use the worker's default exhausted-message deletion policy. Other queues retain their existing policies.
+
+Run exactly one local worker. This path does not implement a distributed execution lease. A cleanup can take longer than the hosted twelve-minute visibility window, so the consumer renews that window every minute until dispatch settles. A renewal failure prevents acknowledgement, even if the cleanup subsequently completes; replay is idempotent. Shutdown waits only for the existing bounded grace period; it does not guarantee a full cleanup drain. If the process exits during cleanup, recovery relies on same-generation replay after visibility expires. Before maintenance or replay, verify the previous worker process has stopped, and do not start a second worker against the same queue.
+
+Cleanup atomically marks its exact purge generation as started before destructive effects. A failed enqueue may release an unstarted claim to the deleted list, but retains its identity so a delayed acknowledgement cannot bypass a newer request. Started cleanup stays `purging` after failure and cannot be restored. Restores performed by this version rotate the generation so delayed keyed and unkeyed legacy messages cannot destroy a subsequently deleted lake; restores completed before this version are not retroactively fenced. Legacy messages are admitted only while the lake has no keyed generation. Stale generations are refused without destructive effects; an already-started matching generation can resume after its own cleanup removed the manager grants, including legacy unkeyed work only while the stored generation remains unkeyed. Missing claims on keyed generations and different claims still require authorization.
+
+Stored objects are deleted before their file rows. Chunks are deleted in batches of at most 1,000, retaining the file row as a retry locator. The final transaction re-reads a bounded chunk set and commits it with the file row; an overflow returns to batch cleanup. This covers chunks committed before that transaction, not arbitrary ingestion after cleanup commits. Earlier batches can remain deleted after a failure; replay removes the remainder. Mongo must support transactions; the supplied Compose Mongo runs as a replica set. Optional connector, memory and retrieval-index cleanup retain their existing dependencies and failure behavior.
+
+### Explicit dead-letter replay
+
+Inspect and correct the failure before replaying one selected message. Preserve its complete body, including `purgeClaimId` and actor; do not create a new claim or manually mark a partly purged lake as deleted. A generation refused after restore or a newer purge is deliberately not replayable as the old request. The existing hosted DLQ admin UI is not newly wired for local queues by this change.
+
+With the previous worker stopped, use an endpoint and queue URLs reachable from the machine running these commands. This example receives one message, copies its original body to the source, and removes the dead-letter copy only after an accepted send. A failed send leaves the original available after its visibility timeout. Lost send acknowledgements can create a duplicate; the same-generation recovery checks still apply.
+
+```sh
+(
+set -e
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs receive-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --max-number-of-messages 1 --visibility-timeout 60 > cleanup-replay.json
+jq -e '.Messages | length == 1' cleanup-replay.json
+jq -r '.Messages[0].Body' cleanup-replay.json > cleanup-body.json
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs send-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE" --message-body file://cleanup-body.json &&
+  aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs delete-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' cleanup-replay.json)"
+)
+```
+
+Resume the single worker and verify the lake, file rows, chunks and exact stored objects are gone; another lake's objects must remain. Keep the payload private. Queue emptiness alone does not establish completed cleanup.
+
+Focused verification:
+
+```sh
+pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
+pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
+pnpm --filter @bike4mind/client test server/queueHandlers/dataLakeCleanup.test.ts
+# Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
+CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/client test:integration server/queueHandlers/dataLakeCleanup.e2e.test.ts
+```
+
+The external-service suite skips when its explicit endpoint/bucket are absent. The always-on `dataLakeCleanup.recovery.e2e.test.ts` runs the real handler and replica-set Mongo with controlled storage and existing connector/memory-key test boundaries, including grant-removal recovery and transactional rollback. Mongo fencing and bounded-batch crash tests also run independently. These are application-level controls, not current Kubernetes deployment acceptance.
+
+### Daily lexical inconsistency sweep
+
+The single worker runs the existing deterministic inconsistency scan at 04:00 UTC. It reads active lakes and writes findings for human review; it does not change source documents or invoke a model. There is no startup run: starting after 04:00 waits until tomorrow, while starting exactly at 04:00 runs that slot. A delayed wake coalesces missed days into one run. The worker prevents overlapping runs and waits within its existing shutdown grace period; it does not provide distributed coordination or guarantee completion beyond that grace period.
+
+The shared scan retains the limits and between-page time budget defined in `apps/workers/src/cron/lakeInconsistencySweep.ts`. Attempted lakes are stamped for fairness even on failure. Findings use stable identities, and dismissed findings stay dismissed. A finding-write failure withholds a fresh summary timestamp; the next scheduled pass can retry. A failure in one lake does not abort the others. The local sweep emits no CloudWatch metrics; the hosted cron retains its run and outcome metrics.
+
+Verification uses the actual lexical algorithm and disposable Mongo, asserting persisted source excerpts, finding identity, dismissals, summary timestamps and recovery after injected write failures. This establishes application behavior, not a Kubernetes deployment drill. Model-driven inconsistency detection remains a separate queue workflow.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/lakeInconsistencySweep.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/lakeInconsistencySweep.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/lakeInconsistencySweep.e2e.test.ts
 ```

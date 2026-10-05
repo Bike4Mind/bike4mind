@@ -142,6 +142,7 @@ export const DEFAULT_MANIFEST = {
   lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
+  dataLakeCleanupQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
   // Linkable to the frontend Lambda instead of the individual queues; the shim computes it

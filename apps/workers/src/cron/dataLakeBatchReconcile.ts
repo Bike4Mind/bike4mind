@@ -18,6 +18,7 @@
 
 import {
   connectDB,
+  dataLakeAccessGrantRepository,
   dataLakeBatchRepository,
   dataLakeRepository,
   fabFileRepository,
@@ -134,6 +135,7 @@ export async function runStuckBatchSweep(runLogger: Logger): Promise<{ candidate
       dataLakes: dataLakeRepository,
       batches: dataLakeBatchRepository,
       fabFiles: fabFileRepository,
+      dataLakeAccessGrants: dataLakeAccessGrantRepository,
       ...lakeConfigAuditDb,
     },
     logger: runLogger,
