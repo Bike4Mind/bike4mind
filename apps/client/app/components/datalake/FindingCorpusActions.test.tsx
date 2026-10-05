@@ -208,6 +208,20 @@ describe('FindingCorpusActions', () => {
 
     fireEvent.click(within(screen.getByTestId('finding-corpus-merge-keep-file-b')).getByRole('radio'));
     expect(screen.queryByTestId('finding-corpus-merge-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-merge-dialog')).toBeInTheDocument();
+  });
+
+  it('falls back to the error message, then a generic one, when a merge gets no refusal text', () => {
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('network down')));
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('')));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-merge-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-merge-error')).toHaveTextContent('network down');
+
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-merge-error')).toHaveTextContent('Could not merge');
   });
 
   it('blocks a retag until the current tags have loaded, then posts the complete edited set', () => {
@@ -281,5 +295,20 @@ describe('FindingCorpusActions', () => {
 
     fireEvent.click(within(screen.getByTestId('finding-corpus-retag-file-file-b')).getByRole('radio'));
     expect(screen.queryByTestId('finding-corpus-retag-refusal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-retag-dialog')).toBeInTheDocument();
+  });
+
+  it('falls back to the error message, then a generic one, when a retag gets no refusal text', () => {
+    h.lakeTags.mockReturnValue({ data: { prefix: 'lk:', current: [] }, isLoading: false, isError: false });
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('network down')));
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError(new Error('')));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-retag-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-retag-refusal')).toHaveTextContent('network down');
+
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-retag-refusal')).toHaveTextContent('Could not retag');
   });
 });
