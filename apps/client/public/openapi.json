@@ -1650,63 +1650,150 @@
         }
       },
       "synthesizeSpeechResponse200": {
-        "type": "object",
-        "properties": {
-          "audio": {
-            "type": "string"
-          },
-          "format": {
-            "type": "string",
-            "enum": [
-              "mp3",
-              "wav",
-              "opus",
-              "aac",
-              "flac",
-              "pcm"
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "contentType": {
+                "type": "string"
+              },
+              "saved": {
+                "type": "boolean"
+              },
+              "fabFileId": {
+                "type": "string"
+              },
+              "fileName": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "saveSkippedReason": {
+                "type": "string",
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error"
+                ]
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "mp3",
+                  "wav",
+                  "opus",
+                  "aac",
+                  "flac",
+                  "pcm"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "openai",
+                  "elevenlabs"
+                ]
+              },
+              "fallbackFrom": {
+                "type": "string",
+                "enum": [
+                  "openai",
+                  "elevenlabs"
+                ]
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "url": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "contentType",
+              "format",
+              "delivery",
+              "url",
+              "bytes"
             ]
           },
-          "contentType": {
-            "type": "string"
-          },
-          "saved": {
-            "type": "boolean"
-          },
-          "fabFileId": {
-            "type": "string"
-          },
-          "fileUrl": {
-            "type": "string"
-          },
-          "saveSkippedReason": {
-            "type": "string",
-            "enum": [
-              "storage_limit",
-              "file_too_large",
-              "error"
-            ]
-          },
-          "provider": {
-            "type": "string",
-            "enum": [
-              "openai",
-              "elevenlabs"
-            ]
-          },
-          "fallbackFrom": {
-            "type": "string",
-            "enum": [
-              "openai",
-              "elevenlabs"
+          {
+            "type": "object",
+            "properties": {
+              "contentType": {
+                "type": "string"
+              },
+              "saved": {
+                "type": "boolean"
+              },
+              "fabFileId": {
+                "type": "string"
+              },
+              "fileName": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "saveSkippedReason": {
+                "type": "string",
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error"
+                ]
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "mp3",
+                  "wav",
+                  "opus",
+                  "aac",
+                  "flac",
+                  "pcm"
+                ]
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "openai",
+                  "elevenlabs"
+                ]
+              },
+              "fallbackFrom": {
+                "type": "string",
+                "enum": [
+                  "openai",
+                  "elevenlabs"
+                ]
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              },
+              "audio": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "contentType",
+              "format",
+              "audio"
             ]
           }
-        },
-        "required": [
-          "audio",
-          "format",
-          "contentType"
         ],
         "example": {
+          "delivery": "inline",
           "audio": "SUQzBAAAAAAA...",
           "format": "mp3",
           "contentType": "audio/mpeg",
@@ -1913,13 +2000,6 @@
               "pcm"
             ]
           },
-          "encoding": {
-            "type": "string",
-            "enum": [
-              "binary",
-              "base64"
-            ]
-          },
           "stability": {
             "type": "number",
             "minimum": 0,
@@ -1934,6 +2014,13 @@
             "type": "string",
             "pattern": "^[a-z]{2}$"
           },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "base64"
+            ]
+          },
           "preview": {
             "type": "boolean"
           }
@@ -1947,6 +2034,115 @@
           "voice": "alloy",
           "format": "mp3"
         }
+      },
+      "generateMusicResponse200": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "contentType": {
+                "type": "string"
+              },
+              "saved": {
+                "type": "boolean"
+              },
+              "fabFileId": {
+                "type": "string"
+              },
+              "fileName": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "saveSkippedReason": {
+                "type": "string",
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error"
+                ]
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "url": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "contentType",
+              "delivery",
+              "url",
+              "bytes"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "contentType": {
+                "type": "string"
+              },
+              "saved": {
+                "type": "boolean"
+              },
+              "fabFileId": {
+                "type": "string"
+              },
+              "fileName": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "saveSkippedReason": {
+                "type": "string",
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error"
+                ]
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              },
+              "audio": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "contentType",
+              "audio"
+            ]
+          }
+        ],
+        "example": {
+          "delivery": "inline",
+          "audio": "SUQzBAAAAAAA...",
+          "contentType": "audio/mpeg",
+          "saved": true
+        }
+      },
+      "generateMusicResponse413": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "generateMusicResponse422": {
         "type": "object",
@@ -2006,6 +2202,16 @@
           },
           "format": {
             "type": "string"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "base64"
+            ]
+          },
+          "preview": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -2016,6 +2222,115 @@
           "lengthMs": 30000,
           "forceInstrumental": true
         }
+      },
+      "generateSoundEffectResponse200": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "contentType": {
+                "type": "string"
+              },
+              "saved": {
+                "type": "boolean"
+              },
+              "fabFileId": {
+                "type": "string"
+              },
+              "fileName": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "saveSkippedReason": {
+                "type": "string",
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error"
+                ]
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "url"
+                ]
+              },
+              "url": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "contentType",
+              "delivery",
+              "url",
+              "bytes"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "contentType": {
+                "type": "string"
+              },
+              "saved": {
+                "type": "boolean"
+              },
+              "fabFileId": {
+                "type": "string"
+              },
+              "fileName": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "saveSkippedReason": {
+                "type": "string",
+                "enum": [
+                  "storage_limit",
+                  "file_too_large",
+                  "error"
+                ]
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "inline"
+                ]
+              },
+              "audio": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "contentType",
+              "audio"
+            ]
+          }
+        ],
+        "example": {
+          "delivery": "inline",
+          "audio": "SUQzBAAAAAAA...",
+          "contentType": "audio/mpeg",
+          "saved": true
+        }
+      },
+      "generateSoundEffectResponse413": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
       },
       "generateSoundEffectResponse422": {
         "type": "object",
@@ -2069,6 +2384,16 @@
           },
           "format": {
             "type": "string"
+          },
+          "encoding": {
+            "type": "string",
+            "enum": [
+              "binary",
+              "base64"
+            ]
+          },
+          "preview": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -6007,7 +6332,7 @@
       "post": {
         "operationId": "synthesizeSpeech",
         "summary": "Synthesize speech from text",
-        "description": "Generates speech from text using OpenAI or ElevenLabs. The default `encoding: \"binary\"` streams raw audio bytes with an `audio/*` Content-Type; `encoding: \"base64\"` returns JSON instead. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported via `saved`/`fabFileId` and the `X-B4M-Audio-*` headers. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates speech from text using OpenAI or ElevenLabs. When the requested provider has no usable key (or the provider rejects it), another configured provider stands in and the substitution is reported via `provider`/`fallbackFrom` and the `X-B4M-Tts-Provider*` headers. Input length is capped per provider (OpenAI 4096 characters, ElevenLabs 10000), and an output `format` the chosen provider cannot produce is rejected with a 422 before any provider cost is incurred. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -6031,22 +6356,10 @@
         },
         "responses": {
           "200": {
-            "description": "Speech synthesized. The default `encoding: \"binary\"` returns raw audio bytes whose Content-Type follows the requested `format` (`audio/mpeg` for mp3, else `audio/wav`, `audio/opus`, `audio/aac`, `audio/flac`, `audio/pcm`); `encoding: \"base64\"` returns the JSON body.",
+            "description": "Speech synthesized. Binary bodies carry a Content-Type that follows the requested `format` (`audio/mpeg` for mp3, else `audio/wav`, `audio/opus`, `audio/aac`, `audio/flac`, `audio/pcm`). The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns the JSON body. Audio over the ~4MB response ceiling cannot ride in the body: the binary encoding answers `303` instead, and the base64 encoding returns the `delivery: \"url\"` variant, whose `url` is a time-limited signed GET for the audio (`bytes` is its size).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "X-B4M-Tts-Provider": {
-                "description": "The provider that produced the audio. Present only when a fallback happened.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "X-B4M-Tts-Provider-Fallback-From": {
-                "description": "The originally requested provider that could not serve the request. Present only on a fallback.",
                 "schema": {
                   "type": "string"
                 }
@@ -6059,6 +6372,30 @@
               },
               "X-B4M-Audio-Fab-File-Id": {
                 "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Tts-Provider": {
+                "description": "The provider that produced the audio. Present only when a fallback happened.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Tts-Provider-Fallback-From": {
+                "description": "The originally requested provider that could not serve the request. Present only on a fallback.",
                 "schema": {
                   "type": "string"
                 }
@@ -6140,6 +6477,95 @@
                 "schema": {
                   "type": "string",
                   "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: \"base64\"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Signed URL of the offloaded audio.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Tts-Provider": {
+                "description": "The provider that produced the audio. Present only when a fallback happened.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Tts-Provider-Fallback-From": {
+                "description": "The originally requested provider that could not serve the request. Present only on a fallback.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -6241,7 +6667,7 @@
             }
           },
           "413": {
-            "description": "The audio was generated (and billed) but is too large to return over this endpoint. Retrieve it from `fileUrl` when a browsable copy was saved.",
+            "description": "The audio was generated (and billed) and exceeds the response ceiling, and offloading it to storage failed. Retry, or request shorter output.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6483,7 +6909,7 @@
       "post": {
         "operationId": "generateMusic",
         "summary": "Generate background music",
-        "description": "Generates an instrumental or vocal background-music track from a text prompt and returns the raw audio bytes. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / `X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates an instrumental or vocal background-music track from a text prompt. `lengthMs` (3000-120000, default 10000) is forced on the provider, so the generated track always matches the billed length; credits are reserved before generation and refunded if it fails. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -6507,7 +6933,7 @@
         },
         "responses": {
           "200": {
-            "description": "Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).",
+            "description": "Music generated. Binary bodies carry a Content-Type that follows the requested `format` (mp3 by default). The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns the JSON body. Audio over the ~4MB response ceiling cannot ride in the body: the binary encoding answers `303` instead, and the base64 encoding returns the `delivery: \"url\"` variant, whose `url` is a time-limited signed GET for the audio (`bytes` is its size).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
@@ -6577,6 +7003,11 @@
               }
             },
             "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateMusicResponse200"
+                }
+              },
               "audio/mpeg": {
                 "schema": {
                   "type": "string",
@@ -6605,6 +7036,83 @@
                 "schema": {
                   "type": "string",
                   "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: \"base64\"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Signed URL of the offloaded audio.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -6719,6 +7227,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The audio was generated (and billed) and exceeds the response ceiling, and offloading it to storage failed. Retry, or request shorter output.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateMusicResponse413"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -6912,7 +7474,7 @@
       "post": {
         "operationId": "generateSoundEffect",
         "summary": "Generate a sound effect",
-        "description": "Generates a short sound effect from a text description and returns the raw audio bytes. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. Generated audio is saved to the file browser by default (opt out via the saveGeneratedAudio preference); the outcome is reported via the `X-B4M-Audio-Saved` / `X-B4M-Audio-Fab-File-Id` / `X-B4M-Audio-File-Url` response headers - use `X-B4M-Audio-File-Url` to fetch the saved copy, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Generates a short sound effect from a text description. Omitting `durationSeconds` lets the provider pick the length (and bills at its default); `promptInfluence` trades prompt fidelity (1) against variation (0). Credits are reserved before generation and refunded if it fails. The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns JSON. Audio over the ~4MB response ceiling is returned by signed URL (a `303` for binary, the `delivery: \"url\"` variant for base64). Generated audio is saved to the file browser by default (opt out per-user via the saveGeneratedAudio preference, or per-call with `preview`); the outcome is reported in the JSON save fields and the `X-B4M-Audio-*` headers - fetch the saved copy from `fileUrl` / `X-B4M-Audio-File-Url`, since `GET /api/files/{id}` fails closed until moderation completes. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "Audio"
         ],
@@ -6936,7 +7498,7 @@
         },
         "responses": {
           "200": {
-            "description": "Raw audio bytes; the Content-Type follows the requested `format` (mp3 by default).",
+            "description": "Sound effect generated. Binary bodies carry a Content-Type that follows the requested `format` (mp3 by default). The default `encoding: \"binary\"` returns the raw audio bytes; `encoding: \"base64\"` returns the JSON body. Audio over the ~4MB response ceiling cannot ride in the body: the binary encoding answers `303` instead, and the base64 encoding returns the `delivery: \"url\"` variant, whose `url` is a time-limited signed GET for the audio (`bytes` is its size).",
             "headers": {
               "X-Request-ID": {
                 "description": "Correlation id for this request; safe to log and quote in support requests.",
@@ -7006,6 +7568,11 @@
               }
             },
             "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse200"
+                }
+              },
               "audio/mpeg": {
                 "schema": {
                   "type": "string",
@@ -7034,6 +7601,83 @@
                 "schema": {
                   "type": "string",
                   "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Binary encoding only: the audio exceeds the ~4MB response ceiling, so it was offloaded to storage and `Location` is a time-limited signed GET for it. HTTP clients that follow redirects receive the audio transparently (they drop the `Authorization` header on the cross-origin hop, as the signed URL requires); browser callers should use `encoding: \"base64\"`, since the storage origin sends no CORS headers. Carries the same `X-B4M-*` headers as the 200.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Location": {
+                "description": "Signed URL of the offloaded audio.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Saved": {
+                "description": "Whether a browsable copy was saved to the file browser (\"true\"/\"false\").",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-Fab-File-Id": {
+                "description": "Id of the saved file. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Name": {
+                "description": "File name of the saved copy. Present only when the copy was saved.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-B4M-Audio-File-Url": {
+                "description": "Signed URL for the saved copy, minted at creation. Use this rather than re-resolving the file via GET /api/files/{id}, which fails closed until the async moderation scan completes.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }
@@ -7148,6 +7792,60 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The audio was generated (and billed) and exceeds the response ceiling, and offloading it to storage failed. Retry, or request shorter output.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generateSoundEffectResponse413"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
                 }
               }
             }

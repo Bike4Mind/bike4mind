@@ -739,7 +739,7 @@ A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract gen
 
 The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
 
-Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives.
+Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives. Audio too large to return inline (over ~4MB) is delivered by a time-limited signed URL instead: a 303 redirect for raw bytes, or \`delivery: 'url'\` in the \`encoding: 'base64'\` JSON body.
 
 #### AI Endpoints Summary
 

@@ -146,7 +146,9 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 - **Saved with a URL** - `saved: true` and `file: { id, fileUrl }`, the signed download URL.
 - **Inline audio** - an MCP audio block plus metadata. If a copy was saved but no URL could be signed, the metadata reports `saved: true` and `file: { id }`; if no copy was saved, it reports `saved: false` and, when the route says why (e.g. a full storage quota versus `preview: true`), a `saveSkippedReason`.
-- **Too large to inline** - no audio block; `saved: true` and `file: { id }` (with `fileUrl` when one was signed), so the billed audio is still reachable through the file.
+- **Too large to inline** - no audio block; a time-limited `url` to the audio and its `byteLength`, plus `saved` and `file` describing any saved copy (`saved: false` when none was kept, e.g. with `preview: true`).
+
+`generate_sound_effect` returns the same three shapes.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

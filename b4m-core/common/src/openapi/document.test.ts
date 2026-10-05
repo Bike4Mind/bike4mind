@@ -262,6 +262,13 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
   });
 
+  it('documents the oversized-audio 303 as a bodiless redirect with a Location header', () => {
+    const redirect = doc.paths['/api/ai/tts'].post.responses['303'];
+    expect(redirect).toBeDefined();
+    expect(redirect.content).toBeUndefined();
+    expect(redirect.headers.Location).toBeDefined();
+  });
+
   it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
     // The unwindowed spelling is what the spec used to publish; nothing sets it,
     // so a client coding against it reads undefined.

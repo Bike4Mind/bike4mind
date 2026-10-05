@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { DEFAULT_TTS_PROVIDER, PROMPT_TEXT_MAX, ttsRequestSchema, type TTSRequest } from '@bike4mind/common';
+import {
+  DEFAULT_TTS_PROVIDER,
+  PROMPT_TEXT_MAX,
+  ttsRequestSchema,
+  type GeneratedAudioResponse,
+  type TTSRequest,
+} from '@bike4mind/common';
 import { B4mApiClient, mapApiError, type QuestResponse, type RawDataLake, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -259,39 +265,12 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
 }
 
-/**
- * Outcome of a sound-effects generation, in the two shapes the route can yield:
- * a persisted FabFile (id + name + a working signed download URL) when the caller
- * keeps generated audio, or the raw bytes when it does not - so a caller who opted
- * out of persistence, or whose save produced no usable URL, still receives what it
- * was billed for.
- */
-export type SoundEffectOutcome =
-  | {
-      saved: true;
-      provider: string;
-      contentType: string;
-      byteLength: number;
-      file: { id: string; fileName?: string; fileUrl: string };
-    }
-  | { saved: false; provider: string; contentType: string; byteLength: number; audioBase64: string };
-
 export async function generateSoundEffect(
   client: B4mApiClient,
   args: { text: string; provider: string; durationSeconds?: number; promptInfluence?: number; format?: string }
-): Promise<SoundEffectOutcome> {
-  const { audio, contentType, saved, fabFileId, fileName, fileUrl } = await client.generateSoundEffect(args);
-  const base = { provider: args.provider, contentType, byteLength: audio.length };
-
-  // Prefer the persisted-file reference over inlining bytes (mirrors get_file). The
-  // route forwards the signed URL it minted at upload, so we use it directly rather
-  // than re-resolving via getFile, which fails closed on the just-created file until
-  // the async moderation scan runs. If persistence yielded no usable URL, fall back
-  // to inlining the bytes the caller was already billed for, so audio is never lost.
-  if (saved && fabFileId && fileUrl) {
-    return { ...base, saved: true, file: { id: fabFileId, fileName, fileUrl } };
-  }
-  return { ...base, saved: false, audioBase64: audio.toString('base64') };
+): Promise<CallToolResult> {
+  const response = await client.generateSoundEffect(args);
+  return generatedAudioResult(response, { provider: args.provider });
 }
 
 function toResult(value: unknown): CallToolResult {
@@ -310,24 +289,49 @@ function errorResult(message: string): CallToolResult {
 }
 
 /**
- * Render a {@link SoundEffectOutcome} as an MCP result. A persisted file becomes
- * a JSON metadata result (carrying the signed URL), exactly like get_file. When
- * the audio was not persisted, it is returned inline as an `audio` content block
- * so the bytes are not lost; the base64 is kept out of structuredContent to avoid
- * duplicating a potentially large payload.
+ * Render a generated-audio response as an MCP result, shared by every audio tool.
+ * Oversized audio is reported by its signed URL; a saved copy with a usable URL is
+ * reported as a file (like get_file) with no inline bytes. Otherwise the audio rides
+ * inline as an `audio` block so a billed result is never lost, with any saved copy
+ * still named by id and a skipped save explained. The route forwards the signed URL
+ * it minted at upload, so no getFile re-fetch is needed (that fails closed until
+ * the async moderation scan runs).
  */
-function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
-  if (outcome.saved) {
+function generatedAudioResult(
+  response: GeneratedAudioResponse,
+  endpointMetadata: Record<string, unknown>
+): CallToolResult {
+  const metadata = { ...endpointMetadata, contentType: response.contentType };
+  const saveSkippedReason = response.saveSkippedReason ? { saveSkippedReason: response.saveSkippedReason } : {};
+  const file = response.fabFileId
+    ? {
+        id: response.fabFileId,
+        ...(response.fileName ? { fileName: response.fileName } : {}),
+        ...(response.fileUrl ? { fileUrl: response.fileUrl } : {}),
+      }
+    : undefined;
+
+  if (response.delivery === 'url') {
     return toResult({
-      saved: true,
-      provider: outcome.provider,
-      contentType: outcome.contentType,
-      byteLength: outcome.byteLength,
-      file: outcome.file,
+      ...metadata,
+      byteLength: response.bytes,
+      url: response.url,
+      saved: response.saved === true,
+      ...(response.saved && file ? { file } : {}),
+      ...saveSkippedReason,
     });
   }
-  const { audioBase64, ...meta } = outcome;
-  return inlineAudioResult(meta, audioBase64, outcome.contentType);
+
+  const byteLength = Buffer.from(response.audio, 'base64').length;
+  if (response.saved && file && file.fileUrl) {
+    return toResult({ ...metadata, byteLength, saved: true, file });
+  }
+
+  const inlineMetadata =
+    response.saved && file
+      ? { ...metadata, byteLength, saved: true, file }
+      : { ...metadata, byteLength, saved: false, ...saveSkippedReason };
+  return inlineAudioResult(inlineMetadata, response.audio, response.contentType);
 }
 
 /**
@@ -347,8 +351,9 @@ function inlineAudioResult(meta: Record<string, unknown>, audioBase64: string, m
 export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 'encoding'>): Promise<CallToolResult> {
   const response = await client.synthesizeSpeech(args);
   if (response.kind === 'saved-too-large') {
-    // Too large to inline, so the FabFile is the only way back to the audio; it is
-    // reported even without a signed URL so the agent can still name the file.
+    // A server predating the oversized-audio URL offload answers 413, leaving the
+    // FabFile as the only way back to the audio; it is reported even without a
+    // signed URL so the agent can still name the file.
     const { provider, fabFileId, fileUrl } = response.data;
     return toResult({
       saved: true,
@@ -359,30 +364,11 @@ export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 
   }
 
   const result = response.data;
-  const provider = result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER;
-  const metadata = {
-    provider,
+  return generatedAudioResult(result, {
+    provider: result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER,
     ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom } : {}),
     format: result.format,
-    contentType: result.contentType,
-    byteLength: Buffer.from(result.audio, 'base64').length,
-  };
-
-  if (result.saved && result.fabFileId && result.fileUrl) {
-    return toResult({ ...metadata, saved: true, file: { id: result.fabFileId, fileUrl: result.fileUrl } });
-  }
-
-  // No usable URL: inline the billed audio, but still report a saved copy by id,
-  // and why a copy was skipped (quota vs. preference) when the route says.
-  const inlineMetadata =
-    result.saved && result.fabFileId
-      ? { ...metadata, saved: true, file: { id: result.fabFileId } }
-      : {
-          ...metadata,
-          saved: false,
-          ...(result.saveSkippedReason ? { saveSkippedReason: result.saveSkippedReason } : {}),
-        };
-  return inlineAudioResult(inlineMetadata, result.audio, result.contentType);
+  });
 }
 
 /**
@@ -471,7 +457,7 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     },
     async args => {
       try {
-        return soundEffectResult(await generateSoundEffect(client, args));
+        return await generateSoundEffect(client, args);
       } catch (err) {
         return errorResult(mapApiError(err, baseURL, 'ai:generate'));
       }
