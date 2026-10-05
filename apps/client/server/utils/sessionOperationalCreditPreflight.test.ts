@@ -114,7 +114,7 @@ describe('checkSessionOperationalCredits', () => {
       id: ORG_ID,
       currentCredits: 1_000_000,
       maxCreditsPerMember: 10,
-      userDetails: [{ id: USER_ID, usedCredits: 10 }],
+      userDetails: [{ id: USER_ID, usedCredits: 10, periodStart: new Date() }],
     });
 
     const verdict = await preflight();
@@ -196,7 +196,7 @@ describe('checkSessionOperationalCredits', () => {
       id: ORG_ID,
       currentCredits: 1_000_000,
       maxCreditsPerMember: 10,
-      userDetails: [{ id: USER_ID, usedCredits: 10 }],
+      userDetails: [{ id: USER_ID, usedCredits: 10, periodStart: new Date() }],
     });
 
     const verdict = await preflight({ requesterId: 'someone-else' });
@@ -351,7 +351,7 @@ describe('checkSessionOperationalCredits', () => {
         id: ORG_ID,
         currentCredits: 1_000_000,
         maxCreditsPerMember: 10,
-        userDetails: [{ id: USER_ID, usedCredits: 10 }],
+        userDetails: [{ id: USER_ID, usedCredits: 10, periodStart: new Date() }],
       });
       mockGetOperationsModel.mockResolvedValue({ modelInfo: { id: 'llama3', freeToRun: true, pricing: {} } });
 
