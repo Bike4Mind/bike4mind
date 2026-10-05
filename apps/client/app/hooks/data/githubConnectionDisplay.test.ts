@@ -8,6 +8,7 @@ const conn = (over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}
   lastError: null,
   repositoryFullName: 'acme/docs',
   syncStale: false,
+  disconnecting: false,
   ...over,
 });
 
@@ -43,6 +44,14 @@ describe('describeGitHubConnection', () => {
 
   it('reads an archived lake as paused', () => {
     expect(describeGitHubConnection(conn({ enabled: false }))).toMatchObject({ label: 'Paused', color: 'neutral' });
+  });
+
+  // A pending disconnect also disables the row, so it must be read before the Paused branch.
+  it('reads a disconnecting connection as Disconnecting even though it is also disabled', () => {
+    const { label, title, color } = describeGitHubConnection(conn({ enabled: false, disconnecting: true }));
+    expect(label).toBe('Disconnecting');
+    expect(title).toBe('Disconnecting the GitHub repository acme/docs and removing its files');
+    expect(color).toBe('warning');
   });
 
   it('attributes a lastError to the previous run while a sync is in flight', () => {

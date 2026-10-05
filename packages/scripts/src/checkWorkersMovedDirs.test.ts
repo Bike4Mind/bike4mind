@@ -15,6 +15,8 @@ const MOVED = [
   { from: 'apps/client/server/events', to: 'apps/workers/src/events' },
   { from: 'apps/client/server/worker', to: 'apps/workers/src/selfhost' },
   { from: 'apps/client/server/cron', to: 'apps/workers/src/cron' },
+  { from: 'apps/client/server/jobs', to: 'apps/workers/src/jobs' },
+  { from: 'apps/client/server/emailIngestion', to: 'apps/workers/src/emailIngestion' },
 ] as const;
 
 const OS_LITTER = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
@@ -51,6 +53,14 @@ describe('directories moved into apps/workers stay moved', () => {
     const handlers = infraHandlers();
     // Proves the scan reads real handlers, so an empty result below is not a regex matching nothing.
     expect(handlers.some(({ handler }) => handler.startsWith('apps/workers/src/cron/'))).toBe(true);
+    // Each moved Lambda's own infra file must be scanned too, or a stale handler there passes unseen.
+    expect(handlers.map(({ handler }) => handler)).toEqual(
+      expect.arrayContaining([
+        'apps/workers/src/jobs/dataSyncerHandler.handler',
+        'apps/workers/src/emailIngestion/emailParser.dispatch',
+        'apps/workers/src/emailIngestion/emailAnalyzer.dispatch',
+      ])
+    );
     const stale = handlers
       .filter(({ handler }) => MOVED.some(({ from }) => handler.startsWith(`${from}/`)))
       .map(({ file, handler }) => `${file}: ${handler}`);

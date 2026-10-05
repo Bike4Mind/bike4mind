@@ -374,9 +374,6 @@ importers:
       '@tanstack/router-devtools':
         specifier: ^1.167.0
         version: 1.167.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@tanstack/router-core@1.171.14)(csstype@3.2.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/mailparser':
-        specifier: ^3.4.6
-        version: 3.4.6
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -518,9 +515,6 @@ importers:
       lucide-react:
         specifier: ^0.577.0
         version: 0.577.0(react@19.2.7)
-      mailparser:
-        specifier: ^3.9.26
-        version: 3.9.26
       mammoth:
         specifier: ^1.12.3
         version: 1.12.3
@@ -903,6 +897,9 @@ importers:
       '@aws-sdk/client-lambda':
         specifier: ^3.1080.0
         version: 3.1080.0
+      '@aws-sdk/client-s3':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@aws-sdk/client-sqs':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -948,6 +945,12 @@ importers:
       dayjs:
         specifier: ^1.11.23
         version: 1.11.23
+      mailparser:
+        specifier: ^3.9.26
+        version: 3.9.26
+      mongodb:
+        specifier: ^6.20.0
+        version: 6.20.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       mongoose:
         specifier: ^8.24.1
         version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
@@ -967,6 +970,9 @@ importers:
       '@types/aws-lambda':
         specifier: ^8.10.162
         version: 8.10.162
+      '@types/mailparser':
+        specifier: ^3.4.6
+        version: 3.4.6
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3

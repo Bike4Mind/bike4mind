@@ -2377,6 +2377,15 @@ export const FileContent = ({
     const fetchContent = async () => {
       if (!file?.mimeType) return;
 
+      // The PDF branch below renders PdfViewer straight off `signedUrl` and never reads
+      // `content`; fetching it here would re-download the file and extract its text on the
+      // main thread through the lazily-loaded unpdf (and its ~1.6 MB pdf.js bundle) for nothing.
+      if (file.mimeType === SupportedFabFileMimeTypes.PDF) {
+        setContent('');
+        setIsLoading(false);
+        return;
+      }
+
       try {
         setIsLoading(true);
 
@@ -2503,14 +2512,11 @@ export const FileContent = ({
             display: 'flex',
             width: '100%',
             height: '100%',
+            // Size only the PdfViewer root - its own flex-column layout (scroll area + info bar)
+            // needs a bounded height from here to divide between them.
             '& > div': {
-              // Target the PdfViewer's root div
               width: '100%',
               height: '100%',
-              '& > div': {
-                // Target PDF viewer's internal div
-                height: '100%',
-              },
             },
           }}
         >

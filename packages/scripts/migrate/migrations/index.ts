@@ -148,7 +148,8 @@ import EnsureOrgGitHubLakeConnectionIndexes from './20260921235959_ensure-org-gi
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001) to keep that
 // migration's id the highest on disk - its own test asserts that invariant.
 import EnsureOAuthGrantUserRevokedUpdatedAtIndex from './20260921235961_ensure-oauthgrant-user-revoked-updatedat-index';
-// Id backdated for the same reason as the two imports above.
+import EnsureGitHubLakeAuthGrantIndexes from './20260921235962_ensure-github-lake-auth-grant-indexes';
+// Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-origin-channel-index';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
@@ -275,6 +276,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureFabFileGitHubConnectionIndex,
   EnsureOrgGitHubLakeConnectionIndexes,
   EnsureOAuthGrantUserRevokedUpdatedAtIndex,
+  EnsureGitHubLakeAuthGrantIndexes,
   EnsureSessionOriginChannelIndex,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

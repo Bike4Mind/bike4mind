@@ -12,48 +12,47 @@ export type GitHubLakeCallbackSearch = {
 export type GitHubLakeCallbackStep =
   | { kind: 'cancelled' }
   | { kind: 'failed'; message: string }
-  /** Install returned no `code` (the App was already on that account): fetch one via authorize. */
-  | { kind: 'authorize'; authorizeUrl: string; handoff: GitHubLakeConnectHandoff }
-  | { kind: 'complete'; dataLakeId: string; state: string; code: string; installationId: number };
+  /** The authorize return: exchange `code` for the lake id, then open its repository picker. */
+  | { kind: 'authorize'; dataLakeId: string; state: string; code: string }
+  /**
+   * Reopen the picker without a server round-trip: the server already holds this flow's GitHub
+   * token from the first authorize. Reached from the install fallback's return (no `code`) and from
+   * an org-owner approval request, which carries a one-time notice for the toast.
+   */
+  | { kind: 'resume'; dataLakeId: string; notice?: string };
 
 export const RESTART_MESSAGE = 'The GitHub connection could not be completed. Start it again from the data lake.';
-const APPROVAL_PENDING_MESSAGE =
-  'GitHub sent the install to an owner of that organization for approval. Connect the repository again once they approve it.';
-
-function parseInstallationId(raw: string | undefined): number | undefined {
-  if (!raw || !/^\d+$/.test(raw)) return undefined;
-  const id = Number(raw);
-  return Number.isSafeInteger(id) && id > 0 ? id : undefined;
-}
+const APPROVAL_PENDING_NOTICE =
+  'GitHub sent the install request to an organization owner. Once they approve it, refresh the repository list.';
 
 /**
- * What the callback page does with one GitHub return. Two shapes arrive here:
- * - from the install: `installation_id` + `state`, plus `code` only on a first install;
- * - from the authorize bounce: `code` + `state` only, the installation id held in the handoff.
+ * What the callback page does with one GitHub return. Three shapes arrive here:
+ * - the authorize return, or an install return that carried user authorization: `code` + `state`,
+ *   exchanged server-side for the flow's user token;
+ * - an install return without a `code` (`installation_id` and/or `setup_action`): the server still
+ *   holds the flow's token, so the picker just reopens;
+ * - a non-owner's install request: `setup_action=request`, nothing installed yet.
  */
 export function resolveGitHubLakeCallbackStep(
   search: GitHubLakeCallbackSearch,
   handoff: GitHubLakeConnectHandoff | null
 ): GitHubLakeCallbackStep {
   if (search.error === 'access_denied') return { kind: 'cancelled' };
-  // A GitHub org member who is not an owner can only request the install, so nothing is installed yet.
-  if (search.setup_action === 'request') return { kind: 'failed', message: APPROVAL_PENDING_MESSAGE };
-  if (search.error || !search.state || !handoff) return { kind: 'failed', message: RESTART_MESSAGE };
+  if (!handoff) return { kind: 'failed', message: RESTART_MESSAGE };
+  if (search.error) return { kind: 'failed', message: RESTART_MESSAGE };
 
-  const installationId = parseInstallationId(search.installation_id) ?? handoff.installationId;
-  if (!installationId) return { kind: 'failed', message: RESTART_MESSAGE };
-
-  if (!search.code) {
-    // Only the install return may bounce, and only once: an authorize return without a code is a failure.
-    if (handoff.installationId !== undefined) return { kind: 'failed', message: RESTART_MESSAGE };
-    return { kind: 'authorize', authorizeUrl: handoff.authorizeUrl, handoff: { ...handoff, installationId } };
+  if (search.code && search.state) {
+    return { kind: 'authorize', dataLakeId: handoff.dataLakeId, state: search.state, code: search.code };
   }
 
-  return {
-    kind: 'complete',
-    dataLakeId: handoff.dataLakeId,
-    state: search.state,
-    code: search.code,
-    installationId,
-  };
+  // A GitHub org member who is not an owner can only request the install, so nothing is installed yet.
+  if (search.setup_action === 'request') {
+    return { kind: 'resume', dataLakeId: handoff.dataLakeId, notice: APPROVAL_PENDING_NOTICE };
+  }
+
+  if (!search.code && (search.installation_id || search.setup_action)) {
+    return { kind: 'resume', dataLakeId: handoff.dataLakeId };
+  }
+
+  return { kind: 'failed', message: RESTART_MESSAGE };
 }

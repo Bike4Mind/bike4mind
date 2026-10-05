@@ -275,6 +275,15 @@ const SuspectedElisionSchema = subSchema({
   details: { type: [String], required: false, default: undefined },
 });
 
+// Reply-choices outcome. Sub-Schema with `default: undefined` so a turn that never finalized has no
+// field rather than an empty object. No `enum` on status/reason, for the same reason as
+// SuspectedElisionSchema: Zod's `replyChoices` is the contract, and a validator must never eat a reply.
+const ReplyChoicesOutcomeSchema = subSchema({
+  offered: { type: Boolean, required: false },
+  status: { type: String, required: false },
+  reason: { type: String, required: false },
+});
+
 export const PromptMetaSchema = new Schema<PromptMeta>(
   {
     model: {
@@ -474,6 +483,8 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
     // ISO 8601 string, not a Date - the Zod field is z.string().
     generatedAt: { type: String, required: false },
     finishReason: { type: String, required: false },
+    // Must stay in sync with the Zod PromptMeta `replyChoices` (parity test enforces it).
+    replyChoices: { type: ReplyChoicesOutcomeSchema, required: false, default: undefined },
     artifacts: { type: [ArtifactSchema], required: false, default: undefined },
     toolHealth: { type: [ToolHealthSchema], required: false, default: undefined },
     executionTracking: { type: ExecutionTrackingSchema, required: false, default: undefined },
@@ -742,6 +753,22 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
       ],
       required: false,
     },
+    // Next-step options stripped from the reply's trailing choices block - see replyChoices in
+    // common. The 2-4 option count there is enforced only by parseChoiceOptions at write time;
+    // Mongoose defaults a missing `options` array to [] rather than rejecting it, so `required`
+    // on the array path would not add real validation here.
+    suggestedChoices: {
+      type: subSchema({
+        options: [
+          subSchema({
+            label: { type: String, required: true },
+            description: { type: String, required: true },
+          }),
+        ],
+        selectedIndex: { type: Number, required: false },
+      }),
+      required: false,
+    },
     // Per-file attachment delivery problems, shown under the reply. Must stay in the
     // findPageBySessionId projection below or the banner vanishes on reload.
     attachmentNotices: { type: [String], required: false },
@@ -925,7 +952,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices pinned'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
@@ -974,8 +1001,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // Include jupyterNotebook for notebook execution state display
       // Include fabFileIds so image generation can use an image the user attached to an
       // earlier turn as an input image (see ImageGenerationService.selectInputImage).
+      // Include suggestedChoices so history can re-attach a turn's stored choices (see
+      // withStoredChoices in @bike4mind/utils).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)

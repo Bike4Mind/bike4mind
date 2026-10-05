@@ -19,8 +19,9 @@ export enum ApiKeyScope {
    * Read the key owner's OWN commercial state - tier, credit balance, entitlement
    * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
    * to generate text has no business enumerating what its owner has paid for. It
-   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
-   * suffix that puts it in the New-Key modal's read-only preset.
+   * reaches only `GET /api/v1/me` and its balance-only subset `GET /api/v1/credits`
+   * (which the AI scopes also open, since spend needs a pre-flight check), so it
+   * carries the `:read` suffix that puts it in the New-Key modal's read-only preset.
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
@@ -332,6 +333,7 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
+  /** Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot. */
   countActiveByUserId: (userId: string) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */

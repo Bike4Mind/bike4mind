@@ -44,11 +44,12 @@ const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnecti
   lastSyncedAt: null,
   syncStale: false,
   fileCount: 3,
+  disconnecting: false,
+  disconnectStalled: false,
   ...over,
 });
 
 const URLS = {
-  installUrl: 'https://github.com/apps/lake-app/installations/new?state=s1',
   authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=c&state=s1',
 };
 
@@ -74,17 +75,17 @@ describe('GitHubConnectAction', () => {
   it('offers Connect GitHub, with its read-only disclosure, when the lake has no repository', () => {
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('github-connect-btn')).not.toBeDisabled();
-    expect(screen.getByTestId('github-access-disclosure')).toHaveTextContent(/Only select repositories/);
+    expect(screen.getByTestId('github-access-disclosure')).toHaveTextContent(/approve the GitHub App/);
   });
 
-  it('saves the handoff for the callback page, then sends the browser to the install page', () => {
+  it('saves the handoff for the callback page, then sends the browser to the authorize page', () => {
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
     fireEvent.click(screen.getByTestId('github-connect-btn'));
     expect(h.startMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
 
     resolveStart();
-    expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake1', authorizeUrl: URLS.authorizeUrl });
-    expect(assign).toHaveBeenCalledWith(URLS.installUrl);
+    expect(h.saveHandoff).toHaveBeenCalledWith({ dataLakeId: 'lake1' });
+    expect(assign).toHaveBeenCalledWith(URLS.authorizeUrl);
   });
 
   it('does not leave for GitHub when the handoff cannot be saved, since the callback could not finish', () => {
@@ -241,7 +242,43 @@ describe('GitHubConnectAction', () => {
       options.onSuccess();
     });
 
-    expect(h.toastSuccess).toHaveBeenCalledWith('Disconnected acme/docs.');
+    expect(h.toastSuccess).toHaveBeenCalledWith(
+      'Disconnecting acme/docs. Its files are being removed in the background.'
+    );
     expect(screen.queryByTestId('github-disconnect-warning')).toBeNull();
+  });
+
+  it('reads Disconnecting while the queued purge runs, with no Re-sync and no retry yet', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 7 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Disconnecting');
+    expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Removing 7 remaining files');
+    expect(screen.queryByTestId('github-resync-btn')).toBeNull();
+    // A retry now would only start a second purge chain over the same files.
+    const button = screen.getByTestId('github-disconnect-btn');
+    expect(button).toHaveTextContent('Disconnecting');
+    expect(button).toBeDisabled();
+  });
+
+  it('says it is finishing up rather than removing 0 files', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 0 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Finishing disconnect...');
+  });
+
+  it('uses singular wording for exactly one remaining file in the disconnecting note', () => {
+    h.connection.current = connected({ disconnecting: true, fileCount: 1 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Removing 1 remaining file in');
+  });
+
+  it('offers Retry disconnect once the purge looks stalled, so it can be re-queued', () => {
+    h.connection.current = connected({ disconnecting: true, disconnectStalled: true });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    const button = screen.getByTestId('github-disconnect-btn');
+    expect(button).toHaveTextContent('Retry disconnect');
+    expect(button).not.toBeDisabled();
   });
 });
