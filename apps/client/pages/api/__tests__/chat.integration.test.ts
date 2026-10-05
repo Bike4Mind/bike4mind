@@ -1108,6 +1108,21 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     });
   });
 
+  it('derives response from the streamed slots, since a successful turn leaves the scalar reply null', async () => {
+    // Models ChatCompletionProcess's success path: it nulls `reply` at turn start and streams
+    // only into `replies[]`, here a tool-using turn with a thinking-only slot.
+    const replies = ['<think>plan</think>', 'Answer part 1', ' part 2'];
+    mockProcess.mockImplementation(async ({ prefetchedQuest }: { prefetchedQuest: Record<string, unknown> }) => {
+      prefetchedQuest.reply = null;
+      prefetchedQuest.replies = replies;
+    });
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    const body = res._getJSONData();
+    expect(body.response).toBe('Answer part 1 part 2');
+    expect(body.responses).toEqual(replies);
+  });
+
   it('accepts promptMode: raw at the HTTP boundary', async () => {
     const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', promptMode: 'raw' } });
     await handler(req, res);
