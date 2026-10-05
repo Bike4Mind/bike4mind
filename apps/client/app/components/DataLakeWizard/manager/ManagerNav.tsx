@@ -430,7 +430,11 @@ export default function ManagerNav({
                                   flexShrink: 0,
                                 }}
                               />
-                              <ListItemContent sx={{ flex: '1 1 auto', maxWidth: 'calc(100% - 24px)' }}>
+                              <ListItemContent
+                                // 24px = the 16px folder icon + the 8px treeRowSx gap; keep in sync with both, or a
+                                // long name fills the line and wraps the icon above it.
+                                sx={{ flex: '1 1 auto', maxWidth: 'calc(100% - 24px)' }}
+                              >
                                 <Tooltip title={lake.name} size="sm" placement="top-start">
                                   <Typography
                                     noWrap
