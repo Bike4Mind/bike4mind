@@ -63,7 +63,10 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
     update.currentCredits = rest.currentCredits;
   }
 
-  // Only admins can set per-member credit caps. Coalesce a cleared cap to null, NOT undefined:
+  // Platform-admin path only. Owners and appointed org admins set the default through
+  // memberCreditBudget.setMemberCreditDefault (PUT /api/organizations/:id/member-credit-budget),
+  // which this generic update cannot serve: appointed admins fail findUpdateAccessById above.
+  // Coalesce a cleared cap to null, NOT undefined:
   // $set persists null (read as "no cap" by isMemberCreditCapExceeded), and BSON drops
   // undefined, so `?? undefined` would leave the previous cap in place (a null PUT no-ops).
   if (user.isAdmin && rest.maxCreditsPerMember !== undefined) {

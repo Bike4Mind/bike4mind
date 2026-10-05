@@ -275,6 +275,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     removeMember: vi.fn(),
+    setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),

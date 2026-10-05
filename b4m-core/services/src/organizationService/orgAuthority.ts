@@ -27,6 +27,24 @@ export function canAdministerOrganization(actor: OrgAuthorityActor, organization
   return organization.userId === actor.id || (!!organization.managerId && organization.managerId === actor.id);
 }
 
+/** The organization slice a credit-budget decision needs. */
+export type CreditBudgetOrg = Pick<IOrganization, 'userId'> & { adminUserIds?: string[] | null };
+
+/**
+ * May this actor set the org's per-member credit budgets - the default `maxCreditsPerMember` and
+ * each member's `userDetails[].maxCredits` override?
+ *
+ * Billing owner, appointed org admin (`adminUserIds`), or platform admin. Deliberately excludes a
+ * manager who is not also an appointed admin: a spending limit on the owner's pool is a billing
+ * decision, the same line `organizationService/update.ts` draws for `billingContact`. Unlike
+ * `canAdministerOrganization` it admits appointed admins, who hold only a read row in `users[]`
+ * and so cannot pass `shareable.findUpdateAccessById` - callers must fetch with `findById`.
+ */
+export function canManageMemberCreditBudgets(actor: OrgAuthorityActor, organization: CreditBudgetOrg): boolean {
+  if (actor.isAdmin) return true;
+  return organization.userId === actor.id || (organization.adminUserIds ?? []).includes(actor.id);
+}
+
 /** The organization slice a membership decision needs: the roster plus its privileged principals. */
 export type OrgMembershipRoster = AdministrableOrg & { users?: { userId: string }[] };
 

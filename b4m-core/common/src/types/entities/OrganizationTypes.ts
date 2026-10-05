@@ -204,6 +204,12 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
+   * Set one member's monthly credit budget override (`userDetails[].maxCredits`; null inherits the
+   * org default). Targeted positional `$set`; returns false when the member has no row to update.
+   */
+  setMemberMaxCredits(organizationId: string, userId: string, maxCredits: number | null): Promise<boolean>;
+
+  /**
    * Record spend against a member's monthly budget within an organization, atomically resetting
    * the row first when its `periodStart` belongs to an earlier month.
    * The caller must ensure the row exists first (see `ensureUserDetails`); the positional update

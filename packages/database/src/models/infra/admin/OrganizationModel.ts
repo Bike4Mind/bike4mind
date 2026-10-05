@@ -545,6 +545,15 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     );
   }
 
+  /** Set one member's monthly credit budget override; false when they have no `userDetails` row. */
+  async setMemberMaxCredits(organizationId: string, userId: string, maxCredits: number | null): Promise<boolean> {
+    const result = await this.organizationModel.updateOne(
+      { _id: organizationId, 'userDetails.id': userId },
+      { $set: { 'userDetails.$.maxCredits': maxCredits } }
+    );
+    return result.matchedCount > 0;
+  }
+
   /**
    * Record spend against a member's monthly budget within an organization.
    *

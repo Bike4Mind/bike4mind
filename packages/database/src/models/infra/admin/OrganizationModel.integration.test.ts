@@ -213,3 +213,31 @@ describe('OrganizationModel - updateUserDetails monthly budget period', () => {
     expect(await reloadRow(org.id, 'member-2')).toMatchObject({ usedCredits: 20 });
   });
 });
+
+describe('OrganizationModel - setMemberMaxCredits', () => {
+  it('sets and clears one member override without touching usage or other members', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      personal: false,
+      userDetails: [
+        { id: 'member-1', email: 'a@example.com', name: 'A', usedCredits: 7, lastCreditUsedAt: null },
+        { id: 'member-2', email: 'b@example.com', name: 'B', usedCredits: 9, lastCreditUsedAt: null, maxCredits: 3 },
+      ],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', 40)).toBe(true);
+    let reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]).toMatchObject({ id: 'member-1', usedCredits: 7, maxCredits: 40 });
+    expect(reloaded?.userDetails?.[1]).toMatchObject({ id: 'member-2', usedCredits: 9, maxCredits: 3 });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', null)).toBe(true);
+    reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits).toBeNull();
+  });
+
+  it('reports false for a member with no row', async () => {
+    const org = await Organization.create({ name: 'Acme', userId: 'owner-1', personal: false, userDetails: [] });
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'member-1', 40)).toBe(false);
+  });
+});
