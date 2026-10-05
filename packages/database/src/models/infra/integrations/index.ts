@@ -3,6 +3,7 @@ export * from './IntegrationHealthCheckModel';
 export * from './JiraWebhookConfigModel';
 export * from './JiraWebhookDeliveryModel';
 export * from './JiraWebhookSubscriptionModel';
+export * from './LakeConnectorClaimModel';
 export * from './OrgGitHubConnectionModel';
 export * from './OrgGitHubLakeConnectionModel';
 export * from './OrgGoogleDriveConnectionModel';

@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
 import { randomUUID } from 'crypto';
 import { redactLastError } from './OrgGoogleDriveConnectionModel';
 
@@ -115,7 +116,9 @@ class OrgGitHubLakeConnectionRepository
   /** Hard delete: a soft-deleted row would keep the unique repositoryId / targetDataLakeId claims. */
   async release(id: string, organizationId: string): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
-    return (res?.deletedCount ?? 0) > 0;
+    const deleted = (res?.deletedCount ?? 0) > 0;
+    if (deleted) await releaseLakeClaimBestEffort(id);
+    return deleted;
   }
 
   async claimForSync(id: string): Promise<string | null> {
