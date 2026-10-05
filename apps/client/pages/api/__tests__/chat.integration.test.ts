@@ -882,6 +882,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getStatusCode()).toBe(200);
       expect(invokedSessionId()).toBe('new-session');
       expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockCreateSession.mock.calls[0][3]).toEqual({ origin: { channel: 'api', apiKeyId: 'k1' } });
       expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
     });
 
@@ -892,16 +893,18 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(res._getStatusCode()).toBe(200);
       expect(invokedSessionId()).toBe('new-session');
       expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      // A JWT newConversation is a web notebook, not an API one.
+      expect(mockCreateSession.mock.calls[0][3]).toEqual({ origin: { channel: 'web' } });
       expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
     });
 
-    it('rejects newConversation together with sessionId (400) before creating anything', async () => {
+    it('rejects newConversation together with sessionId (422) before creating anything', async () => {
       validateWithScopes([ApiKeyScope.AI_CHAT]);
       const { req, res } = fire({
         body: { message: 'hi', sessionId: 'sess-1', newConversation: true },
       });
       await handler(req, res);
-      expect(res._getStatusCode()).toBe(400);
+      expect(res._getStatusCode()).toBe(422);
       expect(mockInvoke).not.toHaveBeenCalled();
       expect(mockCreateSession).not.toHaveBeenCalled();
     });

@@ -4,7 +4,14 @@ import {
   ChatCompletionProcess,
   featureNames,
 } from '@bike4mind/services/llm';
-import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  getSettingsMap,
+  getSettingsValue,
+  NotFoundError,
+  SQSService,
+  UnprocessableEntityError,
+} from '@bike4mind/utils';
 import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -33,6 +40,7 @@ import {
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -367,7 +375,7 @@ async function resolveChatSessionId(
   request: SimplifiedChatRequest
 ): Promise<{ sessionId: string; createdNotebook: boolean }> {
   if (request.sessionId && request.newConversation) {
-    throw new BadRequestError('Pass either sessionId or newConversation, not both');
+    throw new UnprocessableEntityError('Pass either sessionId or newConversation, not both');
   }
 
   if (request.sessionId) {
@@ -386,7 +394,8 @@ async function resolveChatSessionId(
           agents: agentRepository,
         },
         logger: req.logger,
-      }
+      },
+      { origin: resolveSessionOrigin(req) }
     );
     req.logger.info(
       `POST /api/chat created notebook ${session.id} for ${isApiKeyAuth(req) ? 'API key' : 'new conversation'}`

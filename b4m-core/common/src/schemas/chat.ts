@@ -24,7 +24,7 @@ import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 export const SimplifiedChatRequestSchema = z.object({
   sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
   // Force a brand-new notebook for this turn, regardless of auth mode. Mutually exclusive with
-  // `sessionId` - sending both is a 400. It never reads or writes `lastNotebookId`, so it cannot
+  // `sessionId` - sending both is a 422. It never reads or writes `lastNotebookId`, so it cannot
   // reopen (or repoint) the notebook the human last had open. The new notebook's id is returned
   // as `sessionId`, so a caller continues the conversation by passing that back.
   newConversation: z.boolean().optional(),

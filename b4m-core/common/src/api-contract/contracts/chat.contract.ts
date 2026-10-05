@@ -43,7 +43,7 @@ export const chatContract = defineEndpoint({
     'and `newConversation: true` forces a new notebook for any auth mode; both return the new ' +
     'id as `sessionId`, so the caller can continue the conversation by passing it back. A ' +
     'first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. ' +
-    'Sending `sessionId` and `newConversation` together is a 400.',
+    'Sending `sessionId` and `newConversation` together is a 422.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -114,12 +114,16 @@ export const chatContract = defineEndpoint({
     400: {
       description:
         'The request was rejected before a turn was created: a supplied `model` is unknown, disabled ' +
-        'or not a chat model; `sessionId` and `newConversation: true` were sent together (they are ' +
-        'mutually exclusive); or no usable default chat model is configured and none was supplied.',
+        'or not a chat model; or no usable default chat model is configured and none was supplied.',
       schema: ApiErrorSchema,
     },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
-    422: { description: 'Request body failed schema validation.', schema: ApiErrorSchema },
+    422: {
+      description:
+        'Request body failed schema validation, or `sessionId` and `newConversation: true` were sent ' +
+        'together (they are mutually exclusive).',
+      schema: ApiErrorSchema,
+    },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {
