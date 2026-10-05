@@ -87,20 +87,22 @@ class TestMoonshotBackend extends MoonshotBedrockBackend {
 async function run(
   firstTurn: unknown[],
   backend: BaseBedrockBackend = new TestBedrockBackend(),
-  secondTurn?: unknown[]
+  secondTurn?: unknown[],
+  extraToolNames: string[] = []
 ) {
-  const toolCalls: unknown[] = [];
-  const calcTool: ICompletionOptionTools = {
+  const calls: Record<string, unknown[]> = {};
+  const makeTool = (name: string): ICompletionOptionTools => ({
     toolSchema: {
-      name: 'calc',
-      description: 'Evaluate an expression',
-      parameters: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] },
+      name,
+      description: 'Test tool',
+      parameters: { type: 'object', properties: {}, additionalProperties: true },
     },
     toolFn: async (params: unknown) => {
-      toolCalls.push(params);
+      (calls[name] ??= []).push(params);
       return '180';
     },
-  };
+  });
+  const tools = ['calc', ...extraToolNames].map(makeTool);
   const turns = [
     firstTurn,
     secondTurn ?? [{ choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: 'done' }] }, END_FRAME],
@@ -122,10 +124,10 @@ async function run(
   await backend.complete(
     backend instanceof MoonshotBedrockBackend ? ChatModels.KIMI_K2_THINKING_BEDROCK : TEST_MODEL,
     [{ role: 'user', content: 'what is 12*15' }],
-    { stream: true, tools: [calcTool], executeTools: true } as Partial<ICompletionOptions>,
+    { stream: true, tools, executeTools: true } as Partial<ICompletionOptions>,
     cb
   );
-  return { toolCalls, clientText: texts.join('') };
+  return { toolCalls: calls.calc ?? [], calls, clientText: texts.join('') };
 }
 
 describe('BaseBedrockBackend streaming prose that shares a tool call index', () => {
@@ -171,6 +173,18 @@ describe('BaseBedrockBackend streaming prose that shares a tool call index', () 
     expect(clientText).toContain('EARLY-TEXT');
   });
 
+  it('control: unflagged text at another index while a tool streams is still dropped, as on main', async () => {
+    const { toolCalls, clientText } = await run([
+      { choices: [header] },
+      { choices: [{ index: 1, status: ChoiceStatus.STREAM, chunkText: 'POST-TOOL-TEXT' }] },
+      { choices: [args] },
+      END_FRAME,
+    ]);
+
+    expect(toolCalls).toEqual([{ x: '12*15' }]);
+    expect(clientText).not.toContain('POST-TOOL-TEXT');
+  });
+
   // Moonshot emits a native tool header only once the call closes, so its case B is intro
   // monologue plus the whole call inside one <reasoning> delta.
   it('Moonshot through the real base loop: same-frame monologue is delivered and the tool runs once', async () => {
@@ -194,6 +208,36 @@ describe('BaseBedrockBackend streaming prose that shares a tool call index', () 
 
     expect(toolCalls).toEqual([{ x: '12*15' }]);
     expect(clientText).toContain('INTRO-TEXT');
+    expect(clientText).not.toContain('<|');
+  });
+
+  // Frames captured verbatim from live moonshot.kimi-k2-thinking: a two-tool turn whose native
+  // <|tool_call...|> tokens arrive inside the reasoning stream, split mid-argument across frames.
+  it('Moonshot through the real base loop: parallel native tool calls run with intact args and no token leak', async () => {
+    const reasoning = (content: string, extra: Record<string, unknown> = {}) => ({
+      choices: [{ delta: { content: `<reasoning>${content}</reasoning>` }, ...extra }],
+    });
+    const { calls, clientText } = await run(
+      [
+        reasoning(
+          " I'll compute the math problem and get the weather for Paris for you. <|tool_calls_section_begin|> <|tool_call_begin|> functions.math_evaluate:0 <|tool_call_argument_begin|>"
+        ),
+        reasoning(
+          ' {"expression": "12*15"} <|tool_call_end|> <|tool_call_begin|> functions.get_weather:1 <|tool_call_argument_begin|> {"city": "Paris'
+        ),
+        {
+          ...reasoning('"} <|tool_call_end|> <|tool_calls_section_end|>', { finish_reason: 'stop' }),
+          'amazon-bedrock-invocationMetrics': { inputTokenCount: 236, outputTokenCount: 49 },
+        },
+      ],
+      new TestMoonshotBackend(),
+      [{ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }],
+      ['math_evaluate', 'get_weather']
+    );
+
+    expect(calls.math_evaluate).toEqual([{ expression: '12*15' }]);
+    expect(calls.get_weather).toEqual([{ city: 'Paris' }]);
+    expect(clientText).toContain("I'll compute the math problem");
     expect(clientText).not.toContain('<|');
   });
 });
