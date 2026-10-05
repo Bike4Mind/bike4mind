@@ -240,7 +240,8 @@ const NON_CONTENT_SELECTOR = [
 /**
  * Elements that are running content themselves; a promo-named one is a content slug, not chrome.
  */
-const PROMO_CONTENT_ELEMENT_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, td, th, dt, dd, pre';
+const PROMO_CONTENT_ELEMENT_SELECTOR =
+  'h1, h2, h3, h4, h5, h6, p, li, td, th, dt, dd, pre, ul, ol, dl, table, blockquote, figure';
 
 /**
  * Class words a page uses for promotional chrome - the offer card, the newsletter box, the
@@ -259,7 +260,7 @@ const NOT_A_BUTTON_CLASS = 'btn-link';
 
 /**
  * Most text a `PROMO_TOKENS` block may hold. An offer card or newsletter box is a heading, a line
- * of pitch and a button; a promo word on anything bigger names a section of the page (an `#offer`
+ * of pitch and a button; a promo word on anything bigger names a section of the page (an `.offer`
  * holding the terms, a newsletter archive's issue body), not chrome.
  */
 const MAX_PROMO_TEXT_CHARS = 300;
@@ -271,6 +272,8 @@ const MAX_PROMO_TEXT_CHARS = 300;
  */
 const CONTROL_SELECTOR =
   'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"]';
+
+const PROMO_CONTROL_SELECTOR = 'a[href], button, input, form';
 
 /**
  * Containers a control strip can be. Headings and `<p>` are excluded: `<h2><a>Title</a></h2>` is
@@ -412,24 +415,32 @@ function hasProseAncestor($: CheerioAPI, element: DomNode, boundary: DomNode): b
   return false;
 }
 
+type Sibling = { type?: string; data?: string; prev?: Sibling | null; next?: Sibling | null } | null | undefined;
+
+/** Nearest sibling in `step` direction, skipping comments and whitespace-only text. */
+function nearestSibling(start: Sibling, step: 'prev' | 'next'): Sibling {
+  let current = start;
+  while (current && (current.type === 'comment' || (current.type === 'text' && !squash(current.data ?? ''))))
+    current = current[step];
+  return current;
+}
+
 /**
  * True when `element` sits directly between two pieces of running text - a non-whitespace text
- * node as its immediately preceding or following sibling. That is the tag-agnostic version of
- * "this element sits inside running prose": `PROSE_ANCESTOR_SELECTOR` only protects a candidate
- * whose ANCESTOR is one of a fixed list of tags (`p`, headings, `li`, ...), so the same inline
- * `<span>` wrapping two links reads as protected prose inside a `<p>` but as a standalone chrome
- * candidate inside a `<div>`, `<section>` or `<td>` - none of which are prose landmarks, but all of
- * which routinely hold hand-written or CMS-rendered sentences. A text-node sibling is the
- * strongest tag-independent signal that removing `element` would leave a dangling sentence rather
- * than delete a block of chrome, regardless of what its parent is called.
+ * node as its nearest preceding or following sibling (comments are looked through). That is the
+ * tag-agnostic version of "this element sits inside running prose": `PROSE_ANCESTOR_SELECTOR` only
+ * protects a candidate whose ANCESTOR is one of a fixed list of tags (`p`, headings, `li`, ...), so
+ * the same inline `<span>` wrapping two links reads as protected prose inside a `<p>` but as a
+ * standalone chrome candidate inside a `<div>`, `<section>` or `<td>` - none of which are prose
+ * landmarks, but all of which routinely hold hand-written or CMS-rendered sentences. A text-node
+ * sibling is the strongest tag-independent signal that removing `element` would leave a dangling
+ * sentence rather than delete a block of chrome, regardless of what its parent is called.
  */
 function hasAdjacentProseText(element: DomNode): boolean {
-  const node = element as { prev?: DomNode | null; next?: DomNode | null };
-  const isNonWhitespaceText = (sibling: DomNode | null | undefined): boolean => {
-    const candidate = sibling as { type?: string; data?: string } | null | undefined;
-    return !!candidate && candidate.type === 'text' && squash(candidate.data ?? '').length > 0;
-  };
-  return isNonWhitespaceText(node.prev) || isNonWhitespaceText(node.next);
+  const node = element as Sibling & object;
+  return [nearestSibling(node.prev, 'prev'), nearestSibling(node.next, 'next')].some(
+    sibling => !!sibling && sibling.type === 'text'
+  );
 }
 
 /**
@@ -470,20 +481,14 @@ function hasButtonClass(element: DomNode): boolean {
 }
 
 /**
- * True when the nearest non-whitespace sibling on either side is inline markup (`<em>`, a plain
- * link) - running text the button would be cut out of. A neighbouring button link does not count:
+ * True when the nearest non-whitespace, non-comment sibling on either side is inline markup
+ * (`<em>`, a plain link) - running text the candidate (a button link or promo block) would be cut
+ * out of. A neighbouring button link does not count:
  * CTAs come in rows ("Create your free CSA" / "All downloads and formats").
  */
 function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
-  type Sibling = { type?: string; data?: string; prev?: Sibling | null; next?: Sibling | null } | null | undefined;
-  const nearest = (start: Sibling, step: 'prev' | 'next'): Sibling => {
-    let current = start;
-    while (current && (current.type === 'comment' || (current.type === 'text' && !squash(current.data ?? ''))))
-      current = current[step];
-    return current;
-  };
   const node = element as Sibling & object;
-  return [nearest(node.prev, 'prev'), nearest(node.next, 'next')].some(
+  return [nearestSibling(node.prev, 'prev'), nearestSibling(node.next, 'next')].some(
     sibling =>
       !!sibling &&
       sibling.type === 'tag' &&
@@ -495,9 +500,11 @@ function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
 /**
  * True when `element` is labelled as promotional chrome by its own class (`PROMO_TOKENS`); ids are
  * ignored because they are usually content-derived slugs (`#subscribe-to-a-topic`). Declined for
- * inline elements and anything in or beside running prose, for content elements themselves, and for
- * anything holding a heading, a `<pre>`, an `<article>`/`<main>`, or more than `MAX_PROMO_TEXT_CHARS`
- * of text: a promo word on a wrapper that big names a page section, not chrome.
+ * inline elements and anything in or beside running prose, for content elements themselves
+ * (`PROMO_CONTENT_ELEMENT_SELECTOR`), and for anything holding an h1-h3, a `<pre>`, an
+ * `<article>`/`<main>`, or more than `MAX_PROMO_TEXT_CHARS` of text: a promo word on a wrapper that
+ * big names a page section, not chrome. Also requires a control inside (`PROMO_CONTROL_SELECTOR`):
+ * an offer card without a link or button is indistinguishable from a short fact about the offer.
  */
 function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | undefined): boolean {
   const classAttr = (element as { attribs?: Record<string, string> }).attribs?.class ?? '';
@@ -508,6 +515,7 @@ function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | u
   if (hasAdjacentProseText(element) || hasAdjacentInlineElement($, element)) return false;
   return (
     !$element.is(`html, body, main, article, ${INLINE_SELECTOR}, ${PROMO_CONTENT_ELEMENT_SELECTOR}`) &&
+    $element.find(PROMO_CONTROL_SELECTOR).length > 0 &&
     $element.find('h1, h2, h3, pre, main, article').length === 0 &&
     squash($element.text()).length <= MAX_PROMO_TEXT_CHARS
   );
@@ -532,7 +540,7 @@ function isButtonLink($: CheerioAPI, element: DomNode): boolean {
  * Removes control strips, non-content elements, promo blocks and CTA button links from `scope`,
  * together, with ONE rollback covering all of them.
  *
- * Both prunings are done via a placeholder swap rather than an outright `remove()`, so either can
+ * These prunings are done via a placeholder swap rather than an outright `remove()`, so they can
  * be undone. They are decided together - not the strip rule with its own guard and the non-content
  * removal with none - because a subtree that is real content by itself can sit entirely inside a
  * `label`/`dialog`/`aria-hidden` wrapper (a client framework's whole-page aria-hidden mount, an

@@ -1148,7 +1148,7 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     const terms = 'The offer is valid for new customers only and renews at the standard rate. '.repeat(5);
     const page =
       '<html><body><main><h1>Spring offer</h1>' +
-      `<section id="offer"><p>${terms}</p></section>` +
+      `<section class="offer"><p>${terms}</p></section>` +
       '<div class="newsletter-issue"><h2>Issue 42</h2><p>This week in tooling.</p></div>' +
       '</main></body></html>';
 
@@ -1200,10 +1200,46 @@ describe('fetchAndParseURL page-chrome stripping', () => {
 
   it('keeps a button link whose neighbour is inline markup separated by a comment', async () => {
     const page =
-      '<html><body><main><div><em>Linux users:</em><!-- dl --><a class="btn" href="/dl">Download v3.2</a></div>' +
+      '<html><body><main><p>Pick the build that matches your operating system.</p>' +
+      '<div><em>Linux users:</em><!-- dl --><a class="btn" href="/dl">Download v3.2</a></div>' +
       '</main></body></html>';
 
     expect(await fetchText(page)).toContain('Download v3.2');
+  });
+
+  it('keeps a button link between running text and a comment', async () => {
+    const page =
+      '<html><body><main><p>Pick the build that matches your operating system.</p>' +
+      '<div>Read the<!-- --><a class="btn" href="/t">terms</a><!-- -->first.</div></main></body></html>';
+
+    expect(await fetchText(page)).toContain('terms');
+  });
+
+  it('keeps promo-named structured content and control-less blocks', async () => {
+    const page =
+      '<html><body><main><h1>Plans</h1><p>Everything you need to know about our plans.</p>' +
+      '<ol class="signup-steps"><li>Create an account</li><li>Verify your email</li></ol>' +
+      '<table class="offer-table"><tr><td>Plan A</td><td>Ten seats</td></tr></table>' +
+      '<div class="offer-details"><dl><dt>Term</dt><dd>Twelve months</dd></dl></div>' +
+      '<ul class="offer-features"><li>Unlimited exports</li></ul>' +
+      '<div class="newsletter-issue"><h4>Issue 41</h4><p>Notes on tooling.</p></div>' +
+      '<div class="subscribe-info"><p>Webhooks deliver events to your endpoint.</p></div>' +
+      '<p>Use this code at checkout:</p><div class="promo-code">SPRING25</div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of [
+      'Create an account',
+      'Ten seats',
+      'Twelve months',
+      'Unlimited exports',
+      'Issue 41',
+      'Webhooks deliver events',
+      'SPRING25',
+    ]) {
+      expect(text).toContain(kept);
+    }
   });
 
   it('restores a promo card and its nested button when pruning would leave too little text', async () => {
