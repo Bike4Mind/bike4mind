@@ -13,8 +13,8 @@
 
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { SreJobMessageSchema } from '@bike4mind/common';
-import { runSreAnalysis } from '@server/queueHandlers/sreAnalysis';
-import { runSreRevision } from '@server/queueHandlers/sreRevision';
+import { runSreAnalysis } from './sreAnalysis';
+import { runSreRevision } from './sreRevision';
 
 export const dispatch = dispatchWithLogger(async (event, _context, logger) => {
   logger.updateMetadata({ handler: 'sreJob' });

@@ -54,7 +54,7 @@ vi.mock('@server/utils/warmer', () => ({
 }));
 
 // Import after mocking
-import { dispatch } from '@server/queueHandlers/githubWebhook';
+import { dispatch } from './githubWebhook';
 import { mcpServerRepository, cacheRepository } from '@bike4mind/database';
 import { getHandler } from '@server/integrations/github/handlers';
 
