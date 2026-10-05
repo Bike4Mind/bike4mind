@@ -136,6 +136,33 @@ function NoticeBanner({ notice }: { notice: ChatToolNotice }) {
 }
 
 /**
+ * What an "always allow" on this card would grant, as text beside the buttons rather than on one.
+ *
+ * It used to BE that button's label, which is how a consent surface ended up with its broadest
+ * and least reversible choice as the biggest thing in the box: the label grew with every pattern
+ * and directory the command touched, and wrapped to two lines. The action belongs on the button
+ * and the scope belongs here, where it can wrap without pushing the other choices around.
+ *
+ * `title` carries the list uncapped and with full paths, because an abbreviated path must not be
+ * the only account of what is being granted.
+ */
+function AlwaysScopeLine({ call }: { call: ChatToolCall }) {
+  return (
+    <Typography
+      level="body-xs"
+      textColor="text.tertiary"
+      title={call.approvalAlwaysFull ?? call.approvalAlways}
+      sx={{ mt: 0.75, overflowWrap: 'anywhere' }}
+      data-testid="chat-tool-approval-scope"
+    >
+      {call.approvalAlways
+        ? `"Always allow" covers ${call.approvalAlways} for the rest of this conversation.`
+        : '"Always allow" applies for the rest of this conversation.'}
+    </Typography>
+  );
+}
+
+/**
  * The consent prompt for a tool that has not run yet.
  *
  * Deliberately not a `details` the user can leave collapsed: the command is the whole thing
@@ -200,7 +227,7 @@ function ApprovalPrompt({
           <Typography
             level="body-sm"
             fontFamily="monospace"
-            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+            sx={{ whiteSpace: 'pre-wrap', wordBreak: 'normal', overflowWrap: 'anywhere' }}
             data-testid="chat-tool-approval-detail"
           >
             {call.approvalDetail ?? summarizeInput(call)}
@@ -218,47 +245,51 @@ function ApprovalPrompt({
           testPrefix="chat-tool-approval"
         />
       ) : (
-        <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-          <Button
-            size="sm"
-            color={irreversible ? 'danger' : 'primary'}
-            onClick={() => onRespond(approvalId, { decision: 'once' })}
-            data-testid="chat-tool-approve-once"
-          >
-            {irreversible
-              ? 'Delete it'
-              : diff
-                ? 'Apply this change'
-                : isGeneration(call.name)
-                  ? 'Generate it'
-                  : 'Allow once'}
-          </Button>
-          {!irreversible && (
+        <>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Button
               size="sm"
-              variant="soft"
-              onClick={() => onRespond(approvalId, { decision: 'always' })}
-              data-testid="chat-tool-approve-always"
+              color={irreversible ? 'danger' : 'primary'}
+              onClick={() => onRespond(approvalId, { decision: 'once' })}
+              data-testid="chat-tool-approve-once"
             >
-              {call.approvalAlways ?? 'Always in this chat'}
+              {irreversible
+                ? 'Delete it'
+                : diff
+                  ? 'Apply this change'
+                  : isGeneration(call.name)
+                    ? 'Generate it'
+                    : 'Allow once'}
             </Button>
-          )}
-          <Button
-            size="sm"
-            variant="plain"
-            color="neutral"
-            onClick={() => onRespond(approvalId, { decision: 'deny' })}
-            data-testid="chat-tool-deny"
-          >
-            {irreversible
-              ? 'Keep it'
-              : diff
-                ? "Don't change it"
-                : isGeneration(call.name)
-                  ? "Don't generate"
-                  : "Don't run"}
-          </Button>
-        </Stack>
+            {!irreversible && (
+              <Button
+                size="sm"
+                variant="soft"
+                color="neutral"
+                onClick={() => onRespond(approvalId, { decision: 'always' })}
+                data-testid="chat-tool-approve-always"
+              >
+                Always allow
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={() => onRespond(approvalId, { decision: 'deny' })}
+              data-testid="chat-tool-deny"
+            >
+              {irreversible
+                ? 'Keep it'
+                : diff
+                  ? "Don't change it"
+                  : isGeneration(call.name)
+                    ? "Don't generate"
+                    : "Don't run"}
+            </Button>
+          </Stack>
+          {!irreversible && <AlwaysScopeLine call={call} />}
+        </>
       )}
     </Sheet>
   );
