@@ -238,6 +238,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       throw new InternalServerError('Could not queue the Google Drive ingest. Please try again.');
     }
 
+    // Only past the enqueue: a failed one releases a new claim, leaving the lake unbound and its
+    // intent still wanted. Best-effort, since the bind stands without it (see the GitHub connect).
+    await dataLakeRepository.clearPendingConnector(dataLakeId).catch((e: unknown) =>
+      req.logger.warn('Google Drive connect: could not clear the pending connector', {
+        connectionId,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    );
+
     return res.status(202).json({ connectionId, status: 'queued' });
   });
 

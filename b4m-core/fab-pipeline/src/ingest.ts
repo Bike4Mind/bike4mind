@@ -1,3 +1,4 @@
+import { APP_NAME, WEBSITE_URL } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
 import type { Cheerio, CheerioAPI } from 'cheerio';
@@ -124,6 +125,9 @@ function lastPathSegment(url: string): string {
   }
 }
 
+// Sites like Wikipedia reject library default UAs; their policy wants a product name plus a contact URL.
+const INGEST_USER_AGENT = `Mozilla/5.0 (compatible; ${APP_NAME || 'App'}/1.0${WEBSITE_URL ? `; +${WEBSITE_URL}` : ''})`;
+
 /**
  * Fetch one URL without following redirects, so the caller can SSRF-validate each hop itself.
  *
@@ -144,6 +148,7 @@ function lastPathSegment(url: string): string {
  */
 async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   return axios.get(url, {
+    headers: { 'User-Agent': INGEST_USER_AGENT },
     // BOTH agents, because the scheme is not fixed across a chain: an https URL can 302 to http, and
     // axios picks the agent per request from the scheme it is currently on.
     httpAgent: ssrfSafeHttpAgent,

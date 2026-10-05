@@ -81,6 +81,11 @@ export const DATA_LAKE_ORIGINS = ['curated', 'connector-fed'] as const;
  */
 export type DataLakeOrigin = (typeof DATA_LAKE_ORIGINS)[number];
 
+/** The connectors a lake can be created for (see IDataLake.pendingConnector). */
+export const DATA_LAKE_PENDING_CONNECTORS = ['github', 'googleDrive'] as const;
+
+export type DataLakePendingConnector = (typeof DATA_LAKE_PENDING_CONNECTORS)[number];
+
 export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
 
 /**
@@ -614,6 +619,13 @@ export interface IDataLake {
    */
   origin: DataLakeOrigin;
   /**
+   * The connector this lake was created to be fed by, recorded at create time and cleared when a
+   * connection of either kind binds. Lets recovery UI name the right source for an abandoned
+   * connect. Server-set only, never request input. Absent on lakes that predate the field or were
+   * never created for a connector - both read as "unknown", so no migration is needed.
+   */
+  pendingConnector?: DataLakePendingConnector;
+  /**
    * Model-driven inconsistency detection (#3057) bookkeeping - server-managed, never client input.
    *
    * A concurrency LEASE with exactly the semantics of `lakeMemoryExtractionAt`, and held for the same
@@ -879,6 +891,11 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * sequence between a claim and a settle here, unlike archive/unarchive.
    */
   activateIfDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
+  /**
+   * Drops `pendingConnector` once a connection binds - either kind, since any bound source answers
+   * the lake's intent. Idempotent; a no-op on a lake without the field.
+   */
+  clearPendingConnector(id: string): Promise<void>;
   /**
    * The reverse of `activateIfDraft`: active -> draft, guarded the same way (conditional in the
    * query, so a stale caller cannot demote a lake some other transition already moved on). The

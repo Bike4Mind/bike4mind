@@ -1211,6 +1211,30 @@ describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () =
     // Absent, not blanked - a reader must not tell "unset" from "withheld".
     expect(entry && 'groundingMode' in entry).toBe(false);
   });
+
+  it('returns the pending connector to the lake owner and withholds it from a reader', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', pendingConnector: 'github' });
+    const theirs = lake({
+      id: 'theirs',
+      slug: 'theirs',
+      createdByUserId: 'other',
+      isPublic: true,
+      pendingConnector: 'github',
+    });
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, theirs]),
+        find: vi.fn(),
+      },
+    };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+    const readerEntry = result.find(l => l.id === 'theirs');
+
+    expect(result.find(l => l.id === 'mine')?.pendingConnector).toBe('github');
+    expect(readerEntry && 'pendingConnector' in readerEntry).toBe(false);
+  });
 });
 
 // embeddingSpendMicroUsd is EDITOR-ONLY too, but unlike the fields above it is ALWAYS present
@@ -1558,6 +1582,8 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
     // Same for the grounding mode: editor-only, never shipped to a reader.
     expect((READER_LAKE_FIELDS as readonly string[]).includes('groundingMode')).toBe(false);
     expect(LAKE_FIELD_VISIBILITY.groundingMode).toBe('withheld');
+    expect((READER_LAKE_FIELDS as readonly string[]).includes('pendingConnector')).toBe(false);
+    expect(LAKE_FIELD_VISIBILITY.pendingConnector).toBe('withheld');
     // Who last changed the lake's config is editor-only: a reader gets the config history surface,
     // never a raw actor id on the lake document.
     expect((READER_LAKE_FIELDS as readonly string[]).includes('lastUpdatedByUserId')).toBe(false);

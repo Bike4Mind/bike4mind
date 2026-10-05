@@ -81,3 +81,46 @@ describe('UserApiKeyRepository.countActiveByUserId', () => {
     await expect(userApiKeyRepository.countActiveByUserId('nobody')).resolves.toBe(0);
   });
 });
+
+describe('UserApiKeyRepository.countActiveByUserId - cap pools', () => {
+  const userId = 'pool-user';
+  const future = () => new Date(Date.now() + 60 * 60 * 1000);
+  const exchange = (oauthClientId: string) => ({
+    userId,
+    expiresAt: future(),
+    metadata: { createdFrom: 'oauth-exchange' as const, oauthClientId },
+  });
+
+  it('keeps live exchange keys out of the standard pool and counts them in their own', async () => {
+    for (let i = 0; i < 2; i++) await createKey({ userId, expiresAt: future() });
+    for (const clientId of ['client-a', 'client-b', 'client-c']) await createKey(exchange(clientId));
+
+    await expect(userApiKeyRepository.countActiveByUserId(userId)).resolves.toBe(2);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(2);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'oauth-exchange')).resolves.toBe(3);
+  });
+
+  it('applies the same expiry and status predicate to the exchange pool', async () => {
+    await createKey(exchange('client-a'));
+    await createKey({ ...exchange('client-b'), expiresAt: new Date(Date.now() - 1000) });
+    await createKey({ ...exchange('client-c'), status: ApiKeyStatus.DISABLED });
+
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'oauth-exchange')).resolves.toBe(1);
+  });
+
+  it('counts a legacy row with no metadata in the standard pool', async () => {
+    // Bypass schema validation (metadata.createdFrom is required) to reproduce a pre-schema row.
+    await UserApiKey.collection.insertOne({
+      userId,
+      name: 'legacy',
+      keyHash: 'x',
+      keyPrefix: 'b4m_live_legacy01',
+      scopes: [ApiKeyScope.AI_GENERATE],
+      status: ApiKeyStatus.ACTIVE,
+      deletedAt: null,
+    });
+
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(1);
+    await expect(userApiKeyRepository.countActiveByUserId(userId, 'oauth-exchange')).resolves.toBe(0);
+  });
+});

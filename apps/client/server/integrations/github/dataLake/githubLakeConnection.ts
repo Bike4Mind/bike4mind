@@ -423,6 +423,14 @@ export async function completeGitHubLakeConnection(params: {
     throw error;
   }
 
+  // The binding stands without it: a stale intent only feeds the finish-connect banner, which also
+  // hides once a connection exists.
+  await dataLakeRepository.clearPendingConnector(lakeId).catch((error: unknown) =>
+    logger.warn('GitHub lake connect: could not clear the pending connector', {
+      connectionId: connection.id,
+      error: serializeError(error),
+    })
+  );
   // The binding stands without it: an unconsumed grant expires on its own TTL.
   await consumeGitHubLakeAuthGrant(config, nonceHash).catch((error: unknown) =>
     logger.warn('GitHub lake connect: could not consume the authorization grant', {

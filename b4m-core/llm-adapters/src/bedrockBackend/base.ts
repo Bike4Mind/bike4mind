@@ -16,6 +16,7 @@ import {
   ChoiceEndReason,
   type CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
+  type IChoice,
   IChoiceEndToolUse,
   ICompletionBackend,
   ICompletionOptions,
@@ -456,6 +457,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         let emittedTextChars = 0;
         // @see signalsStreamTermination - only meaningful for adapters that opt in.
         let sawTerminalEvent = false;
+        const isToolArgument = (choice: IChoice) => Boolean(func[choice.index]?.name) && (choice.toolArguments ?? true);
 
         for await (const streamEvent of response.body) {
           if (streamEvent.chunk?.bytes) {
@@ -468,7 +470,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               func[choice.index] ||= {};
               func[choice.index].name ||= choice.tool?.name;
               func[choice.index].id ||= choice.tool?.id;
-              if (func[choice.index].name && choice.statusEndReason !== ChoiceEndReason.TOOL_USE) {
+              if (isToolArgument(choice) && choice.statusEndReason !== ChoiceEndReason.TOOL_USE) {
                 func[choice.index].parameters ??= choice.chunkText || '';
                 func[choice.index].parameters += choice.chunkText || '';
               }
@@ -478,13 +480,19 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               cacheWriteTokens = Math.max(cacheWriteTokens, choice.usage?.cache_creation_input_tokens || 0);
             });
 
-            // Skip callback when there is a tool being streamed
-            if (func.some(f => f.name)) {
+            // While a tool is being streamed, only choices an adapter explicitly marked as prose are
+            // forwarded; everything else is dropped as before, so adapters that never set the flag
+            // behave exactly as they always did.
+            const toolSeen = func.some(f => f.name);
+            const textChoices = toolSeen
+              ? (chunk?.choices ?? []).filter(c => c.toolArguments === false && c.chunkText)
+              : (chunk?.choices ?? []);
+            if (toolSeen && textChoices.length === 0) {
               continue;
             }
 
             const streamedText: string[] = [];
-            chunk?.choices.forEach(choice => {
+            textChoices.forEach(choice => {
               streamedText[choice.index] = choice.chunkText || '';
             });
             emittedTextChars += streamedText.reduce((n, t) => n + (t?.length ?? 0), 0);

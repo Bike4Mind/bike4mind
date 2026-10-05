@@ -105,6 +105,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // reads like status rather than like owner telemetry. It does disclose that a connector is
   // attached; that is the intended trade for letting a reader judge what they are searching.
   origin: 'reader',
+  // Connect-recovery state for the lake's managers (the finish-connect banner): a reader cannot act
+  // on it, and it would tell them an owner's connect was abandoned.
+  pendingConnector: 'withheld',
   // Cost-governance meter: the lake's spend against its embedding budget is the owner's
   // financial telemetry, not something a reader needs to search the lake.
   embeddingSpendMicroUsd: 'withheld',

@@ -265,7 +265,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
       </Wrapper>
     );
 
-    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     // '' is what tells the backend to remove the gate - omitting the field would be
@@ -301,7 +301,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     );
 
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/must hold this tag/i);
-    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(
       /removes the \u201COpti\u201D gate/i
     );
@@ -316,7 +316,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
       </Wrapper>
     );
 
-    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     const nameInput = screen.getByTestId('datalake-settings-name').querySelector('input')!;
     await user.clear(nameInput);
     await user.type(nameInput, 'Renamed Lake');

@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   isEncrypted: vi.fn(),
   sendToQueue: vi.fn(),
   dlFindById: vi.fn(),
+  dlClearPendingConnector: vi.fn(),
   userFindById: vi.fn(),
   connFindByDriveFolderId: vi.fn(),
   connCreate: vi.fn(),
@@ -58,7 +59,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
     ...actual,
-    dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
+    dataLakeRepository: {
+      ...actual.dataLakeRepository,
+      findById: h.dlFindById,
+      clearPendingConnector: h.dlClearPendingConnector,
+    },
     User: { findById: h.userFindById },
     lakeConnectorClaimRepository: {
       ...actual.lakeConnectorClaimRepository,
@@ -89,7 +94,7 @@ const makeRes = () => {
   return { res: { json, status } as never, json, status };
 };
 const makeReq = (body: Record<string, unknown>, user = { id: 'u1', isAdmin: false }) =>
-  ({ method: 'POST', body, user, logger: { error: vi.fn() } }) as never;
+  ({ method: 'POST', body, user, logger: { error: vi.fn(), warn: vi.fn() } }) as never;
 const run = (req: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
 describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
@@ -110,6 +115,8 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.createDriveClient.mockReturnValue({});
     h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
+    h.dlClearPendingConnector.mockResolvedValue(undefined);
+    h.sendToQueue.mockResolvedValue(undefined);
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -468,6 +475,42 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
       /^Could not queue the Google Drive ingest\. Please try again\.$/
     );
+  });
+
+  it('clears the lake pending connector after a new claim is queued', async () => {
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(h.dlClearPendingConnector).toHaveBeenCalledWith('lake1');
+    expect(status).toHaveBeenCalledWith(202);
+  });
+
+  it('clears the lake pending connector after a same-folder reconnect is queued', async () => {
+    h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(h.dlClearPendingConnector).toHaveBeenCalledWith('lake1');
+    expect(status).toHaveBeenCalledWith(202);
+  });
+
+  it('keeps the pending connector when the ingest enqueue fails', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('queue unavailable'));
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
+      /could not queue/i
+    );
+    expect(h.dlClearPendingConnector).not.toHaveBeenCalled();
+  });
+
+  it('still answers 202 when clearing the pending connector rejects (best-effort, logged)', async () => {
+    h.dlClearPendingConnector.mockRejectedValue(new Error('mongo down'));
+    const req = makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID });
+    const { res, status } = makeRes();
+    await run(req, res);
+
+    expect(status).toHaveBeenCalledWith(202);
+    expect((req as unknown as { logger: { warn: unknown } }).logger.warn).toHaveBeenCalled();
   });
 
   it('rejects an invalid Drive folder id before any lookup', async () => {

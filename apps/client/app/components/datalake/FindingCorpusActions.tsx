@@ -20,7 +20,7 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 import type { IDataLakeFindingDocument, LakeFindingSource } from '@bike4mind/common';
 import { LAKE_CORPUS_ACTION_NOTE_MAX_CHARS, MAX_LAKE_FILE_TAG_NAME_LENGTH, MAX_TAXONOMY_TAGS } from '@bike4mind/common';
-import { useApplyCorpusAction, useLakeFileTags } from '@client/app/hooks/data/dataLakes';
+import { serverRefusalMessage, useApplyCorpusAction, useLakeFileTags } from '@client/app/hooks/data/dataLakes';
 
 /**
  * The three corpus actions (#3046) a curator can take on an OPEN finding's cited documents: merge
@@ -215,6 +215,34 @@ function SupersedeDialog({
   const [keepId, setKeepId] = useState<string | null>(finding.sources[0]?.fabFileId ?? null);
   const [retireId, setRetireId] = useState<string | null>(finding.sources[1]?.fabFileId ?? null);
   const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  // Kept and Retired must name different files: choosing the file already on the other side moves
+  // that side to the file just displaced (or, failing that, any other source).
+  const otherSourceId = (excludeId: string, preferId: string | null) =>
+    preferId && preferId !== excludeId
+      ? preferId
+      : (finding.sources.find(source => source.fabFileId !== excludeId)?.fabFileId ?? null);
+  // With no other source to hand the displaced side to (a one-source finding) the choice is ignored,
+  // so a side is never cleared to null.
+  const chooseKeep = (id: string) => {
+    if (id === retireId) {
+      const next = otherSourceId(id, keepId);
+      if (!next) return;
+      setRetireId(next);
+    }
+    setKeepId(id);
+    setError(null);
+  };
+  const chooseRetire = (id: string) => {
+    if (id === keepId) {
+      const next = otherSourceId(id, retireId);
+      if (!next) return;
+      setKeepId(next);
+    }
+    setRetireId(id);
+    setError(null);
+  };
 
   const kept = finding.sources.find(source => source.fabFileId === keepId) ?? null;
   const retired = finding.sources.find(source => source.fabFileId === retireId) ?? null;
@@ -222,6 +250,7 @@ function SupersedeDialog({
 
   const submit = () => {
     if (!kept || !retired) return;
+    setError(null);
     apply.mutate(
       {
         dataLakeId,
@@ -233,7 +262,11 @@ function SupersedeDialog({
           note: note.trim() || undefined,
         },
       },
-      { onSuccess: onClose }
+      {
+        onSuccess: onClose,
+        // The dialog stays open on a refusal, so the reason is shown here rather than only in a toast.
+        onError: (err: Error) => setError(serverRefusalMessage(err) || err.message || 'Could not supersede'),
+      }
     );
   };
 
@@ -245,7 +278,7 @@ function SupersedeDialog({
       </Typography>
       <FormControl>
         <FormLabel>Current version (kept)</FormLabel>
-        <RadioGroup value={keepId} onChange={event => setKeepId(event.target.value)}>
+        <RadioGroup value={keepId} onChange={event => chooseKeep(event.target.value)}>
           {finding.sources.map(source => (
             <Box key={source.fabFileId} data-testid={`finding-corpus-supersede-keep-${source.fabFileId}`}>
               <Radio value={source.fabFileId} label={sourceName(source)} />
@@ -255,16 +288,21 @@ function SupersedeDialog({
       </FormControl>
       <FormControl>
         <FormLabel>Older version (retired from ranking)</FormLabel>
-        <RadioGroup value={retireId} onChange={event => setRetireId(event.target.value)}>
+        <RadioGroup value={retireId} onChange={event => chooseRetire(event.target.value)}>
           {finding.sources.map(source => (
             <Box key={source.fabFileId} data-testid={`finding-corpus-supersede-retire-${source.fabFileId}`}>
-              <Radio value={source.fabFileId} disabled={source.fabFileId === keepId} label={sourceName(source)} />
+              <Radio value={source.fabFileId} label={sourceName(source)} />
             </Box>
           ))}
         </RadioGroup>
       </FormControl>
       <ConfirmList kept={kept} retired={retired ? [retired] : []} />
       <NoteField value={note} onChange={setNote} />
+      {error && (
+        <Alert color="danger" size="sm" data-testid="finding-corpus-supersede-error">
+          <Typography level="body-xs">{error}</Typography>
+        </Alert>
+      )}
       <CorpusDialogActions
         pending={apply.isPending}
         disabled={!canSubmit}
