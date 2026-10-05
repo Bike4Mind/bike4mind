@@ -33,6 +33,7 @@ export const sessionDeleteContract = defineEndpoint({
       description: 'A concurrent change touched a file this session shares; nothing was deleted. Retry.',
       schema: ApiErrorSchema,
     },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

@@ -127,7 +127,7 @@ export const SessionDeleteResponseSchema = z.object({
     .string()
     .nullable()
     .describe(
-      "The caller's most recently used remaining session, which the product UI opens next; null when none remains."
+      "The caller's most recently updated remaining session, which the product UI opens next; null when none remains."
     ),
 });
 

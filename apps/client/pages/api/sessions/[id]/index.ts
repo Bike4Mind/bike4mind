@@ -20,6 +20,9 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { getFilesStorage } from '@server/utils/storage';
 
+// Each verb's auth mode, required scope, and path/body validation come from its contract
+// (sessionGetContract, sessionUpdateContract, sessionDeleteContract), the single source of truth
+// that also drives the OpenAPI spec. `req.validated` / `req.validatedParams` are the parsed body/id.
 const getHandler = nextRouteForContract(sessionGetContract).get(async (req, res) => {
   const session = await sessionService.getSession(
     req.user!.id,
@@ -61,12 +64,9 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
   return res.json({ newLastNotebookId: newLastNotebook?.id || null });
 });
 
-// Auth mode, required scope, and request/path-param validation come from sessionUpdateContract
-// (the single source of truth also driving the OpenAPI spec). `req.validated` /
-// `req.validatedParams` are the parsed, typed body/id. This is a deliberate behavior change
-// from the endpoint's pre-PR unscoped state: any valid API key could previously call this
-// (undocumented), including narrow-purpose ones like CC_BRIDGE/EMBED_CHAT that were never
-// meant to write to sessions - see sessionUpdateContract's `scopes` comment for why.
+// PUT used to be unscoped: any valid API key could call it (undocumented), including
+// narrow-purpose ones like CC_BRIDGE/EMBED_CHAT that were never meant to write to sessions.
+// See sessionUpdateContract's `scopes` comment for why that changed.
 const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, res) => {
   const { id } = req.validatedParams;
 

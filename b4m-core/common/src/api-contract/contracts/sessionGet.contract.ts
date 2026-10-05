@@ -27,6 +27,7 @@ export const sessionGetContract = defineEndpoint({
   responses: {
     200: { description: 'The session.', schema: SessionResponseSchema },
     404: { description: 'No session with that id is visible to the caller.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',
