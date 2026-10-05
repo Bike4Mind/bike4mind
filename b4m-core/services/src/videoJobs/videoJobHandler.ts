@@ -56,11 +56,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     return { apiKey, logger: deps.logger, now: () => deps.now() };
   };
 
-  // The handle is written by this handler's submit from a ProviderJobHandle; common stores it structurally.
-  const handleOf = (job: IGenerationJobDocument): ProviderJobHandle | null => {
-    const handle = job.payload.providerHandle;
-    return handle ? { provider: job.payload.providerId, data: handle.data } : null;
-  };
+  const handleOf = (job: IGenerationJobDocument): ProviderJobHandle | null => job.payload.providerHandle ?? null;
 
   const settle = async (job: IGenerationJobDocument) => {
     const { request } = job.payload;

@@ -1,13 +1,9 @@
-import type { ValidatedVideoRequest, VideoProviderId } from '@bike4mind/common';
+import type { ProviderJobHandle, ProviderOutput, ValidatedVideoRequest, VideoProviderId } from '@bike4mind/common';
 import { MAX_VIDEO_OUTPUT_BYTES } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
-// Opaque to everything but its adapter; persisted on the job as JSON.
-export type ProviderJobHandle = { provider: VideoProviderId; data: Record<string, unknown> };
-
-export type ProviderOutput =
-  | { kind: 'inline'; base64: string; contentType: string }
-  | { kind: 'url'; url: string; requiresAuth: boolean; contentType?: string };
+// Defined in common because the job payload persists them; re-exported so adapters import one module.
+export type { ProviderJobHandle, ProviderOutput };
 
 // Expected provider outcomes are values, never exceptions; adapters throw only for transport or programmer errors.
 export type ProviderPollResult =

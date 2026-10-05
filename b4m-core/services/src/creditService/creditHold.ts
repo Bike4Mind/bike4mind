@@ -2,6 +2,7 @@ import {
   BadRequestError,
   CreditHolderType,
   insufficientCreditsError,
+  type CreditHoldRecord,
   type ICreditHolder,
   type ICreditHolderMethods,
   type IOrganizationDocument,
@@ -21,20 +22,8 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 /** The ledger row a settlement writes, minus what the hold already knows. */
 export type CreditLedgerEntry = DistributiveOmit<DeductCreditsParams, 'user' | 'organization' | 'credits'>;
 
-/**
- * Credits moved out of an owner's balance ahead of a paid provider call. Plain JSON-serializable
- * data, so a job document can carry it and a different process can settle or release it.
- */
-export type CreditHold = {
-  ownerId: string;
-  ownerType: CreditHolderType.User | CreditHolderType.Organization;
-  /** The actor: attribution and per-member usage tracking, even when the org pays. */
-  userId: string;
-  organizationId: string | null;
-  reservedCredits: number;
-  /** The owner's balance right after the hold; the ledger row's balance when no refund lands. */
-  balanceAfterHold: number;
-};
+/** Defined in common so a job document can carry it; see CreditHoldRecord. */
+export type CreditHold = CreditHoldRecord;
 
 export type CreditHoldAdapters = {
   users: ICreditHolderMethods & Pick<IUserRepository, 'findById'>;

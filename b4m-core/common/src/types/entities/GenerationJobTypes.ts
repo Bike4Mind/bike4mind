@@ -1,7 +1,7 @@
-import type { VideoGenerationRequest, VideoProviderId } from '../../video';
+import type { ProviderJobHandle, ProviderOutput, VideoGenerationRequest, VideoProviderId } from '../../video';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
-import { CreditHolderType } from './CreditHolderTypes';
+import { CreditHolderType, type CreditHoldRecord } from './CreditHolderTypes';
 
 export const GENERATION_JOB_KINDS = ['video'] as const;
 export type GenerationJobKind = (typeof GENERATION_JOB_KINDS)[number];
@@ -42,17 +42,6 @@ export type GenerationJobErrorCode = (typeof GENERATION_JOB_ERROR_CODES)[number]
 
 export type GenerationJobError = { code: GenerationJobErrorCode; message: string };
 
-// Structural duplicate: common cannot import services. Must stay in sync with
-// b4m-core/services/src/creditService/creditHold.ts CreditHold.
-export type CreditHoldRecord = {
-  ownerId: string;
-  ownerType: CreditHolderType.User | CreditHolderType.Organization;
-  userId: string;
-  organizationId: string | null;
-  reservedCredits: number;
-  balanceAfterHold: number;
-};
-
 export type VideoJobOutput = {
   location: 'files' | 'generated';
   s3Key: string;
@@ -65,11 +54,8 @@ export type VideoJobOutput = {
 export type VideoJobPayload = {
   request: VideoGenerationRequest;
   providerId: VideoProviderId;
-  // ProviderJobHandle / ProviderOutput live in utils, which common cannot import; stored structurally.
-  providerHandle?: { provider: string; data: Record<string, unknown> };
-  providerOutput?:
-    | { kind: 'inline'; base64: string; contentType: string }
-    | { kind: 'url'; url: string; requiresAuth: boolean; contentType?: string };
+  providerHandle?: ProviderJobHandle;
+  providerOutput?: ProviderOutput;
   reportedDurationSeconds?: number;
   output?: VideoJobOutput;
 };

@@ -11,6 +11,13 @@ export type ResolutionTier = (typeof RESOLUTION_TIERS)[number];
 export const VIDEO_PROVIDER_IDS = ['test'] as const;
 export type VideoProviderId = (typeof VIDEO_PROVIDER_IDS)[number];
 
+// Opaque to everything but its adapter; persisted on the job as JSON. Re-exported by @bike4mind/utils/videoProviders.
+export type ProviderJobHandle = { provider: VideoProviderId; data: Record<string, unknown> };
+
+export type ProviderOutput =
+  | { kind: 'inline'; base64: string; contentType: string }
+  | { kind: 'url'; url: string; requiresAuth: boolean; contentType?: string };
+
 export type DurationCapability =
   { kind: 'range'; min: number; max: number; step: number } | { kind: 'discrete'; values: readonly number[] };
 
