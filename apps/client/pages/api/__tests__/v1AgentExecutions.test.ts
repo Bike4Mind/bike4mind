@@ -11,13 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import {
-  AgentExecutionAckSchema,
-  AgentExecutionStatusResponseSchema,
-  ApiKeyScope,
-  DATA_LAKE_TOOL_NAMES,
-  DATA_LAKE_WRITE_TOOL_NAMES,
-} from '@bike4mind/common';
+import { AgentExecutionAckSchema, AgentExecutionStatusResponseSchema, ApiKeyScope } from '@bike4mind/common';
 
 const { mockStart, mockLoadTrace } = vi.hoisted(() => ({
   mockStart: vi.fn(),
@@ -199,44 +193,12 @@ describe('POST /api/v1/agent-executions', () => {
     expect(await statusOf((startHandler as any)(req, res))).toBe(status);
   });
 
-  // The executor subtracts scopeDeniedTools after the profile belt and the lake-tool pairing
-  // (agentExecutor.ts -> applySessionToolPolicy), so this is the door's whole lake-scope gate.
-  it('denies every lake tool to an API key that holds no datalake scope', async () => {
-    const { req, res } = post({ session_id: 's1', message: 'go', tools: ['save_content_to_data_lake'] });
-    Object.assign(req, { apiKeyInfo: { scopes: [ApiKeyScope.AI_CHAT] } });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (startHandler as any)(req, res);
-
-    expect(mockStart.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_TOOL_NAMES]);
-  });
-
-  it('denies only the lake write tools to a read-only datalake key', async () => {
-    const { req, res } = post({ session_id: 's1', message: 'go' });
-    Object.assign(req, { apiKeyInfo: { scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_READ] } });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (startHandler as any)(req, res);
-
-    expect(mockStart.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_WRITE_TOOL_NAMES]);
-  });
-
-  it('denies nothing to a session caller or a key with datalake:write', async () => {
-    const session = post({ session_id: 's1', message: 'go' });
-    const writer = post({ session_id: 's1', message: 'go' });
-    Object.assign(writer.req, { apiKeyInfo: { scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE] } });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (startHandler as any)(session.req, session.res);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (startHandler as any)(writer.req, writer.res);
-
-    expect(mockStart.mock.calls.map(c => c[0].scopeDeniedTools)).toEqual([[], []]);
-  });
-
-  it('forwards the authenticating key id from apiKeyInfo, never from the body', async () => {
+  // Scope denials are derived inside startAgentExecution (covered there); the door's job is to
+  // forward the credential, and only from the request's apiKeyInfo.
+  it('forwards the authenticating key as apiKeyInfo, never an id from the body', async () => {
+    const keyInfo = { keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT] };
     const keyed = post({ session_id: 's1', message: 'go', apiKeyId: 'spoofed' });
-    Object.assign(keyed.req, { apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT] } });
+    Object.assign(keyed.req, { apiKeyInfo: keyInfo });
     const session = post({ session_id: 's1', message: 'go' });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -244,7 +206,9 @@ describe('POST /api/v1/agent-executions', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (startHandler as any)(session.req, session.res);
 
-    expect(mockStart.mock.calls.map(c => c[0].apiKeyId)).toEqual(['key-1', undefined]);
+    expect(mockStart.mock.calls[0][0].apiKeyInfo).toBe(keyInfo);
+    expect(mockStart.mock.calls[0][0]).not.toHaveProperty('apiKeyId');
+    expect(mockStart.mock.calls[1][0].apiKeyInfo).toBeUndefined();
   });
 
   it('rejects a body with no message before dispatching anything', async () => {

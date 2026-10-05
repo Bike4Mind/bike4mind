@@ -29,7 +29,6 @@ import {
   checkApiKeyRateLimitOrThrow,
   type ApiKeyInfo,
 } from '@server/cli/auth';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
@@ -294,8 +293,7 @@ async function handleStart(
       enabledTools: cmd.enabledTools,
       enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
       // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
-      scopeDeniedTools: dataLakeToolsDeniedFor({ apiKeyInfo }),
-      apiKeyId: apiKeyInfo?.keyId,
+      apiKeyInfo,
       maxIterations: cmd.maxIterations,
       messageFileIds: cmd.messageFileIds,
       sessionFabFileIds: cmd.sessionFabFileIds,

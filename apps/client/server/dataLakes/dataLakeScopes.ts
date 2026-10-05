@@ -8,6 +8,7 @@ import {
   type IDataLakeRepository,
 } from '@bike4mind/common';
 import { dataLakeService } from '@bike4mind/services';
+import type { ApiKeyInfo } from '@server/cli/auth';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '@server/middlewares/apiKeyScopeGate';
 
 /**
@@ -68,6 +69,9 @@ export const DATA_LAKE_READ_OR_SHARE_SCOPES: ApiKeyScope[] = [...DATA_LAKE_READ_
 export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
   return holdsApiKeyScope(req, DATA_LAKE_READ_SCOPES);
 }
+
+/** The slice of `req.apiKeyInfo` the lake-tool gate and run attribution read. */
+export type ApiKeyCredential = Pick<ApiKeyInfo, 'keyId' | 'scopes'>;
 
 /**
  * The chat tools a caller may not be offered on this request: the data-lake write tools when an

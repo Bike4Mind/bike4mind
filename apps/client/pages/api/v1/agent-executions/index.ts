@@ -21,7 +21,6 @@ import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { isChatModelUsable, resolveDefaultChatModel } from '@server/utils/chatCompletionDefaults';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@server/utils/headlessConnection';
-import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
@@ -74,10 +73,7 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
       organizationId: body.organization_id,
       agentId: body.agent_id,
       enabledTools: body.tools,
-      // Same scope gate as the chat doors: a key without the datalake scopes gets no lake tools,
-      // whatever the agent's profile or the pairing would otherwise add.
-      scopeDeniedTools: dataLakeToolsDeniedFor(req),
-      apiKeyId: req.apiKeyInfo?.keyId,
+      apiKeyInfo: req.apiKeyInfo,
       maxIterations: body.max_iterations,
       messageFileIds: body.file_ids,
       sessionFabFileIds: body.session_file_ids,

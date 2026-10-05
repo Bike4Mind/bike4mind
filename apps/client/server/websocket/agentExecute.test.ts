@@ -95,7 +95,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 }));
 
 import { ApiKeyScope } from '@bike4mind/common';
-import { verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
@@ -620,22 +620,35 @@ describe('start command credential threading', () => {
       .mockResolvedValue({ ok: true } as never);
   });
 
-  it('carries the key id and the key scope denials onto the run for a b4m_live_ key', async () => {
-    vi.mocked(verifyApiKey).mockResolvedValueOnce({
-      keyId: 'key-1',
-      userId: 'user-1',
-      scopes: [ApiKeyScope.AI_CHAT],
-    } as never);
+  it('hands the verified key to the run as apiKeyInfo for a b4m_live_ key', async () => {
+    const key = { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT] };
+    vi.mocked(verifyApiKey).mockResolvedValueOnce(key as never);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (func as any)(startEvent('b4m_live_x'), {}, noopLogger);
 
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
-    expect(input.apiKeyId).toBe('key-1');
-    expect(input.scopeDeniedTools).toEqual(expect.arrayContaining(['create_data_lake']));
+    expect(input.apiKeyInfo).toBe(key);
   });
 
-  it('leaves the key id unset and denies nothing for a session JWT', async () => {
+  it('drops the key credential when its rate-limit check throws, so the JWT fallback runs unscoped', async () => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+    } as never);
+    vi.mocked(checkApiKeyRateLimitOrThrow).mockRejectedValueOnce(new Error('rate limited'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-2' } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.userId).toBe('user-2');
+    expect(input.apiKeyInfo).toBeUndefined();
+  });
+
+  it('passes no key credential for a session JWT', async () => {
     vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
     vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
 
@@ -643,7 +656,6 @@ describe('start command credential threading', () => {
     await (func as any)(startEvent('jwt'), {}, noopLogger);
 
     const input = vi.mocked(startAgentExecution).mock.calls[0][0];
-    expect(input.apiKeyId).toBeUndefined();
-    expect(input.scopeDeniedTools).toEqual([]);
+    expect(input.apiKeyInfo).toBeUndefined();
   });
 });
