@@ -48,8 +48,10 @@ export const getFileContent = async (
     case SupportedFabFileMimeTypes.PDF:
       try {
         const { getDocumentProxy, extractText } = await import('unpdf');
-        const buffer = Buffer.from(data, 'binary');
-        const pdf = await getDocumentProxy(new Uint8Array(buffer.buffer));
+        // Copy into a standalone Uint8Array. A small Buffer is a view into Node's shared allocation
+        // pool, which is untransferable: handing `buffer.buffer` to pdf.js threw DataCloneError for
+        // any PDF under half the pool size (and would have passed the whole pool, not just this file).
+        const pdf = await getDocumentProxy(new Uint8Array(Buffer.from(data, 'binary')));
         const { text } = await extractText(pdf, { mergePages: true });
         content = text as string;
       } catch (error) {

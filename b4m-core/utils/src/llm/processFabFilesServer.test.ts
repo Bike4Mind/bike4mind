@@ -10,7 +10,7 @@ import { processFabFilesServer } from './utils';
 const CHARS_PER_TOKEN = 3.5;
 const MAX_FILE_SIZE = 6000;
 
-const logger = { info: vi.fn(), log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+const logger = { info: vi.fn(), log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
 const textFile = (id: string): IFabFileDocument =>
   ({ id, fileName: `${id}.txt`, mimeType: 'text/plain', vectorized: false }) as IFabFileDocument;
@@ -467,6 +467,19 @@ describe('processFabFilesServer file notices', () => {
 
     // One unreadable attachment must not cost the turn its other attachments.
     expect(deliveredFileIds).toEqual(['good']);
+    expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false })]);
+  });
+
+  it('contains an unclassified read error to its own file instead of rejecting the batch', async () => {
+    // The shape of a pdf.js DataCloneError: not corrupted, not a 404, not a known type error.
+    mockGetFileContent.mockImplementation(async (file: IFabFileDocument) => {
+      if (file.id === 'bad') throw new Error('Cannot transfer object of unsupported type.');
+      return 'hello world';
+    });
+
+    const { fileNotices, deliveredFileIds } = await run([textFile('good'), textFile('bad'), textFile('also-good')]);
+
+    expect(deliveredFileIds.sort()).toEqual(['also-good', 'good']);
     expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'bad', band: 'read_failed', delivered: false })]);
   });
 

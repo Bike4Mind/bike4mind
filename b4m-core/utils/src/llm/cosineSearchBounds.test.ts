@@ -135,7 +135,7 @@ describe('the attachment cosine scan is bounded', () => {
     expect(new Set(cursors).size).toBe(cursors.length);
   });
 
-  it('throws rather than paging forever when the cursor does not advance', async () => {
+  it('stops rather than paging forever when the cursor does not advance', async () => {
     // A repository that ignores afterChunkId would otherwise spin until the page cap.
     const stuck = {
       findVectorsByFabFileIds: vi.fn(async () =>
@@ -144,7 +144,14 @@ describe('the attachment cosine scan is bounded', () => {
       countByFabFileId: vi.fn(async () => 5000),
     };
 
-    await expect(run(stuck)).rejects.toThrow(/cursor failed to advance/);
+    const { deliveredFileIds, fileNotices } = await run(stuck);
+
+    // The guard fires after one repeat, and processFabFilesServer contains it to this file: logged
+    // loudly, reported to the model as unread, and the rest of the turn proceeds.
+    expect(stuck.findVectorsByFabFileIds).toHaveBeenCalledTimes(2);
+    expect(logger.error.mock.calls.some(c => String(c[0]).includes('cursor failed to advance'))).toBe(true);
+    expect(deliveredFileIds).toEqual([]);
+    expect(fileNotices).toEqual([expect.objectContaining({ fabFileId: 'file-1', band: 'read_failed' })]);
   });
 
   it('tells the model it is holding a subset when the bound cut the scan', async () => {

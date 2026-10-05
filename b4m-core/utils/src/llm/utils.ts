@@ -2022,7 +2022,6 @@ export async function processFabFilesServer(
                 delivered: false,
               });
             } else {
-              logger.updateMetadata({ filePath: file.filePath });
               throw e;
             }
           }
@@ -2031,9 +2030,21 @@ export async function processFabFilesServer(
       if (delivered) deliveredFileIds.add(file.id);
       if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
-      logger.updateMetadata({ fileId: file.id });
-      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
-      throw error;
+      // Per-line metadata, not updateMetadata: that mutates the run's shared logger, so every later
+      // line - for every other file, and the rest of the run - was stamped with this file's ids.
+      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`, {
+        fileId: file.id,
+        filePath: file.filePath,
+      });
+      // Contain the failure to this file. Rethrowing rejected the whole Promise.all, so one
+      // unreadable attachment dropped every sibling that had read fine along with it.
+      fileNotices.push({
+        fabFileId: file.id,
+        fileName: file.fileName,
+        band: 'read_failed',
+        message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: an unexpected error occurred while extracting its content.`,
+        delivered: false,
+      });
     }
   };
 
