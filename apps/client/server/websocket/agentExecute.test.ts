@@ -94,7 +94,10 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { handlePermissionResponse, handleGateResponse } from './agentExecute';
+import { ApiKeyScope } from '@bike4mind/common';
+import { verifyApiKey, verifyJwtToken } from '@server/cli/auth';
+import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -594,5 +597,53 @@ describe('permission resume preparation failure', () => {
     expect(mockRestoreRejectedResume).not.toHaveBeenCalled();
     await handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
     expect(mockLambdaSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('start command credential threading', () => {
+  const startEvent = (accessToken: string) => ({
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({
+      accessToken,
+      action: 'agent_execute',
+      command: 'start',
+      sessionId: 's1',
+      questId: 'q1',
+      query: 'go',
+      model: 'm',
+    }),
+  });
+
+  beforeEach(() => {
+    vi.mocked(startAgentExecution)
+      .mockReset()
+      .mockResolvedValue({ ok: true } as never);
+  });
+
+  it('carries the key id and the key scope denials onto the run for a b4m_live_ key', async () => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+    } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('b4m_live_x'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyId).toBe('key-1');
+    expect(input.scopeDeniedTools).toEqual(expect.arrayContaining(['create_data_lake']));
+  });
+
+  it('leaves the key id unset and denies nothing for a session JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyId).toBeUndefined();
+    expect(input.scopeDeniedTools).toEqual([]);
   });
 });
