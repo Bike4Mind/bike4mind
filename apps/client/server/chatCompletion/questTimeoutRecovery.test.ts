@@ -79,7 +79,7 @@ describe('resolveQuestTimeoutRecovery', () => {
   it('marks tool-only content unfinished without discarding it', () => {
     expect(resolveQuestTimeoutRecovery(quest({ toolResults: [{ content: 'rows' }] as never }), NOW)).toEqual({
       status: 'done',
-      finishReason: 'timeout',
+      fallbackInfo: null,
       finishReason: 'timeout',
       reply: `\n\n${UNFINISHED_REPLY_NOTICE}`,
     });
