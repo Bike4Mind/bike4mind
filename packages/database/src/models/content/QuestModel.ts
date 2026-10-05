@@ -933,7 +933,7 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const result = await this.model
       .find({ sessionId, deletedAt: null })
       .select(
-        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices'
+        'sessionId timestamp type status errorCode prompt reply replies fabFileIds images promptMeta creditsUsed attachmentNotices attachmentDelivery suggestedChoices pinned'
       )
       .sort({ timestamp: sort, _id: sort })
       .skip(limit * (page - 1))
