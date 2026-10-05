@@ -7,6 +7,7 @@ import {
   GENERATION_JOB_STATES,
   TERMINAL_GENERATION_JOB_STATES,
   type GenerationJobCommit,
+  type GenerationJobCommitGuard,
   type GenerationJobCreateInput,
   type IGenerationJob,
   type IGenerationJobDocument,
@@ -67,6 +68,12 @@ export const GenerationJobModel: IGenerationJobModel =
 
 const NON_TERMINAL = GENERATION_JOB_STATES.filter(state => !TERMINAL_GENERATION_JOB_STATES.includes(state));
 const toJob = (doc: { toJSON(): unknown } | null) => (doc ? (doc.toJSON() as IGenerationJobDocument) : null);
+const unleased = (now: Date) => ({ $or: [{ leaseUntil: null }, { leaseUntil: { $lt: now } }] });
+
+const commitGuardFilter = (guard: GenerationJobCommitGuard) =>
+  guard.kind === 'lease'
+    ? { leaseUntil: guard.leaseToken }
+    : { state: 'pending', submitAttemptedAt: null, ...unleased(guard.now) };
 
 class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> implements IGenerationJobRepository {
   constructor(private jobModel: mongoose.Model<IGenerationJobDocument>) {
@@ -93,10 +100,7 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
       await this.jobModel.findOneAndUpdate(
         {
           _id: id,
-          $and: [
-            { $or: [{ leaseUntil: null }, { leaseUntil: { $lt: now } }] },
-            { $or: [{ state: { $in: NON_TERMINAL } }, { terminalHandledAt: null }] },
-          ],
+          $and: [unleased(now), { $or: [{ state: { $in: NON_TERMINAL } }, { terminalHandledAt: null }] }],
         },
         { $set: { leaseUntil } },
         { new: true }
@@ -109,11 +113,13 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
   }
 
   // Every engine step ends here: one write that applies the step's result and releases the lease.
-  // Unfenced: safe only while the lease (330s) outlives the worker Lambda timeout (300s); keep in
-  // sync with infra/queues.ts generationJobQueue.
-  async commit(id: string, update: GenerationJobCommit) {
+  async commit(id: string, update: GenerationJobCommit, guard: GenerationJobCommitGuard) {
     return toJob(
-      await this.jobModel.findOneAndUpdate({ _id: id }, { $set: { ...update, leaseUntil: null } }, { new: true })
+      await this.jobModel.findOneAndUpdate(
+        { _id: id, ...commitGuardFilter(guard) },
+        { $set: { ...update, leaseUntil: null } },
+        { new: true }
+      )
     );
   }
 
@@ -137,6 +143,10 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
 
   async markTerminalHandled(id: string, at: Date) {
     await this.jobModel.updateOne({ _id: id }, { $set: { terminalHandledAt: at } });
+  }
+
+  async recordSettlement(id: string, settledCredits: number) {
+    await this.jobModel.updateOne({ _id: id }, { $set: { settledCredits } });
   }
 
   async findStalled(overdueBefore: Date, limit: number) {

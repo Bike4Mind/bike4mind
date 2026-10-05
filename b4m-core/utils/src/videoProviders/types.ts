@@ -14,7 +14,13 @@ export type ProviderPollResult =
 
 export type ResolvedInputs = { inputImage?: { bytes: Buffer; mimeType: string } };
 
-export type VideoProviderContext = { apiKey: string; logger: Logger; now: () => Date };
+export type VideoProviderContext = {
+  apiKey: string;
+  logger: Logger;
+  now: () => Date;
+  /** Aborts before the job step's lease runs out; pass it to every network call. An abort is a transport error. */
+  signal: AbortSignal;
+};
 
 // Every method is one bounded call: no method sleeps, loops or polls. The job engine owns waiting.
 export interface VideoProvider {

@@ -24,6 +24,7 @@ export class TestVideoProvider implements VideoProvider {
     _inputs: ResolvedInputs,
     ctx: VideoProviderContext
   ): Promise<ProviderJobHandle> {
+    ctx.signal.throwIfAborted();
     if (request.prompt.includes('[reject]')) throw new ProviderSubmitError('test provider rejected the prompt', true);
     return {
       provider: this.id,
@@ -40,6 +41,7 @@ export class TestVideoProvider implements VideoProvider {
   }
 
   async poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult> {
+    ctx.signal.throwIfAborted();
     const readyAt = Number(handle.data.readyAt);
     if (ctx.now().getTime() < readyAt) return { status: 'running', progress: 0.5 };
     switch (handle.data.outcome) {
@@ -56,10 +58,13 @@ export class TestVideoProvider implements VideoProvider {
     }
   }
 
-  async fetchOutput(output: ProviderOutput): Promise<Buffer> {
+  async fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer> {
+    ctx.signal.throwIfAborted();
     if (output.kind !== 'inline') throw new Error('TestVideoProvider only produces inline output');
     return Buffer.from(output.base64, 'base64');
   }
 
-  async cancel(): Promise<void> {}
+  async cancel(_handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<void> {
+    ctx.signal.throwIfAborted();
+  }
 }

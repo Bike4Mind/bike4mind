@@ -9,6 +9,7 @@ import type {
 import type { Logger } from '@bike4mind/observability';
 import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
+import type { GenerationJobEngine } from '../generationJobs/engine';
 
 export const VIDEO_JOB_MAX_WALL_CLOCK_MS = 20 * 60_000;
 
@@ -39,6 +40,10 @@ export type VideoJobDeps = {
   }): Promise<void>;
   now(): Date;
   logger: Logger;
+};
+
+export type CreateVideoJobDeps = VideoJobDeps & {
+  engine: Pick<GenerationJobEngine, 'failBeforeStart'>;
 };
 
 export type CreateVideoJobInput = {

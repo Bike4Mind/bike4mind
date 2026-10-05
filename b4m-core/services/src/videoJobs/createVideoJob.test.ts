@@ -3,9 +3,11 @@ import { CreditHolderType, insufficientCreditsError } from '@bike4mind/common';
 import { createVideoProviderRegistry, TestVideoProvider } from '@bike4mind/utils/videoProviders';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
+import { GenerationJobEngine } from '../generationJobs/engine';
 import type { CreditHold, CreditHoldAdapters } from '../creditService/creditHold';
 import { createVideoJob } from './createVideoJob';
-import type { VideoJobDeps } from './types';
+import { createVideoJobHandler } from './videoJobHandler';
+import type { CreateVideoJobDeps, VideoJobDeps } from './types';
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -37,7 +39,7 @@ const unusedCredits = {} as CreditHoldAdapters;
 
 const makeDeps = (overrides: Partial<VideoJobDeps> = {}) => {
   const repository = createInMemoryGenerationJobRepository();
-  const deps: VideoJobDeps = {
+  const deps: CreateVideoJobDeps = {
     repository,
     providers: createVideoProviderRegistry([new TestVideoProvider()]),
     getSettings: async () => ({ enforceCredits: true, videoGeneration: undefined }),
@@ -50,8 +52,18 @@ const makeDeps = (overrides: Partial<VideoJobDeps> = {}) => {
     recordUsage: vi.fn(async () => undefined),
     now: () => new Date('2026-10-06T00:00:00Z'),
     logger: new Logger({ metadata: { test: 'createVideoJob' } }),
+    engine: { failBeforeStart: (jobId, error) => engine.failBeforeStart(jobId, error) },
     ...overrides,
   };
+  const engine = new GenerationJobEngine({
+    repository,
+    handlers: [createVideoJobHandler(deps)],
+    enqueue: deps.enqueue,
+    notify: async () => undefined,
+    now: deps.now,
+    logger: deps.logger,
+    leaseMs: 330_000,
+  });
   return { deps, repository };
 };
 
@@ -275,5 +287,16 @@ describe('createVideoJob', () => {
     expect(job.settledCredits).toBe(0);
     expect(job.terminalHandledAt).toBeTruthy();
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('succeeds when the enqueue errors but a worker already started the job: the send landed', async () => {
+    const { deps, repository } = makeDeps();
+    deps.enqueue = vi.fn(async (jobId: string) => {
+      await repository.acquireLease(jobId, deps.now(), new Date(deps.now().getTime() + 330_000));
+      throw new Error('SQS ack lost');
+    });
+    const result = await createVideoJob({ user, request: validRequest, source: 'api' }, deps);
+    expect(result).toMatchObject({ ok: true, created: true, job: { state: 'pending' } });
+    expect(releaseCreditHold).not.toHaveBeenCalled();
   });
 });

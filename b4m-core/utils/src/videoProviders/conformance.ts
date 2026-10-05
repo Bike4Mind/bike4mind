@@ -35,6 +35,7 @@ export function describeVideoProviderConformance(name: string, setup: Conformanc
     apiKey: 'test-key',
     logger: new Logger({ metadata: { conformance: name } }),
     now: () => new Date(),
+    signal: new AbortController().signal,
     ...setup.context,
   });
 

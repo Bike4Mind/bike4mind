@@ -15,7 +15,7 @@ import type { CreditHoldAdapters } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
 import { createVideoJobHandler } from './videoJobHandler';
-import type { CreateVideoJobResult, VideoJobDeps } from './types';
+import type { CreateVideoJobDeps, CreateVideoJobResult, VideoJobDeps } from './types';
 
 vi.mock('../creditService/creditHold', () => ({
   holdCredits: vi.fn(),
@@ -31,7 +31,7 @@ const setup = (overrides: Partial<VideoJobDeps> = {}) => {
   let clock = new Date('2026-10-06T00:00:00Z');
   const repository = createInMemoryGenerationJobRepository({ now: () => clock });
   const queue: string[] = [];
-  const deps: VideoJobDeps = {
+  const deps: CreateVideoJobDeps = {
     repository,
     providers: createVideoProviderRegistry([new TestVideoProvider()]),
     getSettings: async () => ({ enforceCredits: true, videoGeneration: undefined }),
@@ -50,6 +50,7 @@ const setup = (overrides: Partial<VideoJobDeps> = {}) => {
     recordUsage: vi.fn(async () => undefined),
     now: () => clock,
     logger: new Logger({ metadata: { test: 'videoJobHandler' } }),
+    engine: { failBeforeStart: (jobId, error) => engine.failBeforeStart(jobId, error) },
     ...overrides,
   };
   const engine = new GenerationJobEngine({
@@ -76,7 +77,10 @@ const setup = (overrides: Partial<VideoJobDeps> = {}) => {
     if (!job) throw new Error('job vanished');
     return job;
   };
-  return { deps, repository, engine, runToCompletion, jobOf };
+  const advance = (ms: number) => {
+    clock = new Date(clock.getTime() + ms);
+  };
+  return { deps, repository, engine, runToCompletion, jobOf, advance };
 };
 
 const request = (prompt = 'a cat') => ({
@@ -374,6 +378,26 @@ describe('video job end to end with the test provider', () => {
     expect(warn).toHaveBeenCalledWith('video_job_cancel_no_key', { jobId: created.job.id, providerId: 'test' });
   });
 
+  it('an aborted step signal fails the provider call like a transport error: the step retries', async () => {
+    const t = setup();
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    if (!created.ok) throw new Error('expected creation to succeed');
+    await t.engine.step(created.job.id); // submit -> running
+    const handler = createVideoJobHandler(t.deps);
+    const aborted = new GenerationJobEngine({
+      repository: t.repository,
+      handlers: [{ ...handler, poll: job => handler.poll(job, { signal: AbortSignal.abort() }) }],
+      enqueue: t.deps.enqueue,
+      notify: async () => undefined,
+      now: t.deps.now,
+      logger: t.deps.logger,
+      leaseMs: 330_000,
+    });
+    t.advance(60_000);
+    expect(await aborted.step(created.job.id)).toBe('advanced');
+    expect(t.jobOf(created)).toMatchObject({ state: 'running', attempts: 1 });
+  });
+
   it('cancels at the provider when a running job is cancelled', async () => {
     const cancel = vi.fn<NonNullable<VideoProvider['cancel']>>(async () => undefined);
     const t = setup({ providers: createVideoProviderRegistry([stubProvider({ cancel })]) });
@@ -414,8 +438,9 @@ describe('video job end to end with the test provider', () => {
       },
     });
     const handler = createVideoJobHandler(t.deps);
-    const first = await handler.store(structuredClone(storing));
-    const rerun = await handler.store(structuredClone(storing));
+    const context = { signal: new AbortController().signal };
+    const first = await handler.store(structuredClone(storing), context);
+    const rerun = await handler.store(structuredClone(storing), context);
     expect(first).toMatchObject({ next: 'succeeded', payload: { output: { location: 'files', bytes: 4 } } });
     expect(rerun).toMatchObject({ next: 'succeeded' });
     expect(t.deps.saveToFiles).toHaveBeenCalledTimes(2);

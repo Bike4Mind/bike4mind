@@ -6,6 +6,7 @@ import { GenerationJobModel, generationJobRepository } from './GenerationJobMode
 
 const t0 = new Date('2026-10-06T00:00:00Z');
 const plus = (ms: number) => new Date(t0.getTime() + ms);
+const lease = (leaseToken: Date) => ({ kind: 'lease' as const, leaseToken });
 
 const newJob = (overrides: Partial<IGenerationJob> = {}): Omit<IGenerationJob, 'createdAt' | 'updatedAt'> => ({
   kind: 'video',
@@ -76,8 +77,69 @@ describe('GenerationJobRepository', () => {
   it('commit clears the lease so the next step can run immediately', async () => {
     const job = await generationJobRepository.createJob(newJob());
     await generationJobRepository.acquireLease(job.id, t0, plus(330_000));
-    await generationJobRepository.commit(job.id, { state: 'running' });
+    await generationJobRepository.commit(job.id, { state: 'running' }, lease(plus(330_000)));
     expect(await generationJobRepository.acquireLease(job.id, plus(1_000), plus(331_000))).not.toBeNull();
+  });
+
+  it('rejects the commit of a worker whose expired lease was taken over by a second worker', async () => {
+    const job = await generationJobRepository.createJob(newJob());
+    const firstToken = plus(330_000);
+    await generationJobRepository.acquireLease(job.id, t0, firstToken);
+    const secondToken = plus(331_000 + 330_000);
+    expect(await generationJobRepository.acquireLease(job.id, plus(331_000), secondToken)).not.toBeNull();
+
+    expect(await generationJobRepository.commit(job.id, { state: 'failed' }, lease(firstToken))).toBeNull();
+    const afterStale = await generationJobRepository.findById(job.id);
+    expect(afterStale?.state).toBe('pending');
+    expect(afterStale?.leaseUntil).toEqual(secondToken);
+
+    expect(await generationJobRepository.commit(job.id, { state: 'running' }, lease(secondToken))).toMatchObject({
+      state: 'running',
+      leaseUntil: null,
+    });
+  });
+
+  describe('an unstarted commit', () => {
+    const unstarted = { kind: 'unstarted' as const, now: t0 };
+    const failed = { state: 'failed' as const, error: { code: 'enqueue_failed' as const, message: 'x' } };
+
+    it('applies to a pending job no worker has touched', async () => {
+      const job = await generationJobRepository.createJob(newJob());
+      expect(await generationJobRepository.commit(job.id, failed, unstarted)).toMatchObject({ state: 'failed' });
+    });
+
+    it('applies once a crashed worker lease has expired without a submit', async () => {
+      const job = await generationJobRepository.createJob(newJob({ leaseUntil: plus(-1_000) }));
+      expect(await generationJobRepository.commit(job.id, failed, unstarted)).toMatchObject({ state: 'failed' });
+    });
+
+    it('is rejected once a worker holds the lease, submitted, or advanced the job', async () => {
+      const leased = await generationJobRepository.createJob(newJob());
+      await generationJobRepository.acquireLease(leased.id, t0, plus(330_000));
+      const submitted = await generationJobRepository.createJob(newJob({ submitAttemptedAt: t0 }));
+      const running = await generationJobRepository.createJob(newJob({ state: 'running' }));
+      for (const job of [leased, submitted, running]) {
+        expect(await generationJobRepository.commit(job.id, failed, unstarted)).toBeNull();
+      }
+      expect(await GenerationJobModel.countDocuments({ state: 'failed' })).toBe(0);
+    });
+  });
+
+  it('recordSettlement writes the settled credits whatever the lease state', async () => {
+    const job = await generationJobRepository.createJob(newJob({ state: 'succeeded' }));
+    await generationJobRepository.acquireLease(job.id, t0, plus(330_000));
+    await generationJobRepository.recordSettlement(job.id, 12);
+    expect(await generationJobRepository.findById(job.id)).toMatchObject({
+      settledCredits: 12,
+      leaseUntil: plus(330_000),
+    });
+  });
+
+  it('rejects a commit once the lease it carried was already released', async () => {
+    const job = await generationJobRepository.createJob(newJob());
+    await generationJobRepository.acquireLease(job.id, t0, plus(330_000));
+    await generationJobRepository.commit(job.id, { state: 'running' }, lease(plus(330_000)));
+    expect(await generationJobRepository.commit(job.id, { state: 'failed' }, lease(plus(330_000)))).toBeNull();
   });
 
   it('does not lease a terminal job whose terminal handling is done', async () => {
@@ -117,7 +179,12 @@ describe('GenerationJobRepository', () => {
 
   it('hides rawProviderError by default', async () => {
     const job = await generationJobRepository.createJob(newJob());
-    await generationJobRepository.commit(job.id, { rawProviderError: { secret: 'provider payload' } });
+    await generationJobRepository.acquireLease(job.id, t0, plus(330_000));
+    await generationJobRepository.commit(
+      job.id,
+      { rawProviderError: { secret: 'provider payload' } },
+      lease(plus(330_000))
+    );
     const found = await generationJobRepository.findById(job.id);
     expect((found as Record<string, unknown>).rawProviderError).toBeUndefined();
     const stored = await GenerationJobModel.findById(job.id).select('+rawProviderError');

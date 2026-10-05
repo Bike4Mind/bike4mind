@@ -26,10 +26,11 @@ describeVideoProviderConformance('TestVideoProvider', {
   },
 });
 
-const makeContext = (now: () => Date) => ({
+const makeContext = (now: () => Date, signal: AbortSignal = new AbortController().signal) => ({
   apiKey: 'k',
   logger: new Logger({ metadata: { suite: 'TestVideoProvider' } }),
   now,
+  signal,
 });
 
 describe('TestVideoProvider specifics', () => {
@@ -49,6 +50,18 @@ describe('TestVideoProvider specifics', () => {
     );
     await expect(submission).rejects.toBeInstanceOf(ProviderSubmitError);
     await expect(submission).rejects.toMatchObject({ name: 'ProviderSubmitError', definitive: true });
+  });
+
+  it('honours an aborted signal on every call, like a real adapter whose request was cancelled', async () => {
+    const provider = new TestVideoProvider();
+    const live = makeContext(() => new Date());
+    const handle = await provider.submit(request('a cat'), {}, live);
+    const aborted = makeContext(() => new Date(), AbortSignal.abort());
+    const output = { kind: 'inline' as const, base64: 'AA==', contentType: 'video/mp4' };
+    await expect(provider.submit(request('a cat'), {}, aborted)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(provider.poll(handle, aborted)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(provider.fetchOutput(output, aborted)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(provider.cancel(handle, aborted)).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
 

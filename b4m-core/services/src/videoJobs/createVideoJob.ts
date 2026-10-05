@@ -14,6 +14,7 @@ import {
 import { holdCredits, releaseCreditHold, type CreditHold } from '../creditService/creditHold';
 import {
   VIDEO_JOB_MAX_WALL_CLOCK_MS,
+  type CreateVideoJobDeps,
   type CreateVideoJobInput,
   type CreateVideoJobResult,
   type VideoJobDeps,
@@ -27,7 +28,10 @@ const isDuplicateKeyError = (error: unknown): boolean =>
  * Expected refusals are returned as values; a failure to persist or enqueue throws (a 5xx for the caller)
  * after returning the hold.
  */
-export async function createVideoJob(input: CreateVideoJobInput, deps: VideoJobDeps): Promise<CreateVideoJobResult> {
+export async function createVideoJob(
+  input: CreateVideoJobInput,
+  deps: CreateVideoJobDeps
+): Promise<CreateVideoJobResult> {
   const parsed = VideoGenerationRequestSchema.safeParse(input.request);
   if (!parsed.success) {
     const message = parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ');
@@ -127,22 +131,27 @@ export async function createVideoJob(input: CreateVideoJobInput, deps: VideoJobD
   try {
     await deps.enqueue(job.id, 0);
   } catch (error) {
-    await runCleanup(deps, { jobId: job.id, ownerId }, () => failUnqueuedJob(job, hold, deps));
-    throw error;
+    // No message will reach the job, so fail it and return its hold here, unless a worker already started it:
+    // then the send landed despite the error and the job is live.
+    const outcome = await runCleanup(deps, { jobId: job.id, ownerId }, () =>
+      deps.engine.failBeforeStart(job.id, { code: 'enqueue_failed', message: 'The job could not be queued' })
+    );
+    if (outcome !== 'skipped') throw error;
   }
   return { ok: true, job, created: true };
 }
 
 /** Runs a cleanup step on a path that is already failing, so its own error never masks the original one. */
-async function runCleanup(
+async function runCleanup<T>(
   deps: VideoJobDeps,
   context: { jobId?: string; ownerId: string },
-  cleanup: () => Promise<void>
-) {
+  cleanup: () => Promise<T>
+): Promise<T | undefined> {
   try {
-    await cleanup();
+    return await cleanup();
   } catch (cleanupError) {
     deps.logger.error('video_job_create_cleanup_failed', { ...context, error: cleanupError });
+    return undefined;
   }
 }
 
@@ -178,17 +187,3 @@ const replayOrReject = (existing: IGenerationJobDocument, request: VideoGenerati
         code: 'idempotency_key_reused',
         message: 'This Idempotency-Key was already used with a different request',
       };
-
-// The job never reached the queue, so nothing else will ever settle it: fail it and return the credits here.
-async function failUnqueuedJob(job: IGenerationJobDocument, hold: CreditHold | null, deps: VideoJobDeps) {
-  await deps.repository.commit(job.id, {
-    state: 'failed',
-    nextPollAt: null,
-    error: { code: 'enqueue_failed', message: 'The job could not be queued' },
-  });
-  if (!(await deps.repository.claimTerminalHandling(job.id, deps.now()))) return;
-  if (hold) await releaseCreditHold(hold, deps.credits);
-  // Same settlement marker as the handler's onTerminal (videoJobHandler.ts).
-  await deps.repository.commit(job.id, { settledCredits: 0 });
-  await deps.repository.markTerminalHandled(job.id, deps.now());
-}

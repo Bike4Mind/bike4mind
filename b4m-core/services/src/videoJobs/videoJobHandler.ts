@@ -20,7 +20,7 @@ import {
 } from '@bike4mind/utils/videoProviders';
 import { releaseCreditHold, settleCreditHold, type CreditLedgerEntry } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
-import type { GenerationJobHandler, StepResult } from '../generationJobs/types';
+import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
 import { VIDEO_JOB_MAX_WALL_CLOCK_MS, type VideoJobDeps } from './types';
 
 const FEATURE_LABEL = 'video generation';
@@ -50,10 +50,13 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
   };
 
   // Every provider call goes through here, so this is the last boundary before an unusable key reaches a provider.
-  const contextFor = async (job: IGenerationJobDocument): Promise<VideoProviderContext | null> => {
+  const contextFor = async (
+    job: IGenerationJobDocument,
+    { signal }: GenerationJobStepContext
+  ): Promise<VideoProviderContext | null> => {
     const apiKey = await deps.resolveApiKey(job.payload.providerId, job.requestedBy);
     if (!apiKey || apiKey === EXPIRED_KEY_SENTINEL) return null;
-    return { apiKey, logger: deps.logger, now: () => deps.now() };
+    return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
   };
 
   const handleOf = (job: IGenerationJobDocument): ProviderJobHandle | null => job.payload.providerHandle ?? null;
@@ -100,17 +103,16 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
   // Written right after credits move, before anything else can fail, so a manual repair of a stuck terminal claim
   // (the engine's reportUnclaimable) can tell "settled, but markTerminalHandled was lost" from "never settled".
-  // Must stay in sync with createVideoJob's failUnqueuedJob.
   const markSettled = async (job: IGenerationJobDocument, settledCredits: number) => {
-    await deps.repository.commit(job.id, { settledCredits });
+    await deps.repository.recordSettlement(job.id, settledCredits);
   };
 
   return {
     kind: 'video',
     maxWallClockMs: VIDEO_JOB_MAX_WALL_CLOCK_MS,
 
-    async submit(job) {
-      const ctx = await contextFor(job);
+    async submit(job, context) {
+      const ctx = await contextFor(job, context);
       if (!ctx) return noApiKey(job);
       const { request } = job.payload;
       // Defensive: the catalog may have changed since the job was created.
@@ -134,8 +136,8 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       }
     },
 
-    async poll(job) {
-      const ctx = await contextFor(job);
+    async poll(job, context) {
+      const ctx = await contextFor(job, context);
       if (!ctx) return noApiKey(job);
       const handle = handleOf(job);
       if (!handle) return fail('provider_error', 'running without a provider handle');
@@ -171,11 +173,11 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       }
     },
 
-    async store(job) {
+    async store(job, context) {
       const { payload } = job;
       // Not idempotent: the output is only persisted by the terminal commit, so a crash after saving and before
       // that commit re-runs this step and stores a duplicate file (bounded by MAX_STEP_ATTEMPTS).
-      const ctx = await contextFor(job);
+      const ctx = await contextFor(job, context);
       if (!ctx) return noApiKey(job);
       if (!payload.providerOutput) return fail('provider_error', 'storing without provider output');
 
@@ -212,11 +214,11 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       return { next: 'succeeded', payload: { ...withoutProviderOutput(payload), output } };
     },
 
-    async cancelAtProvider(job) {
+    async cancelAtProvider(job, context) {
       const handle = handleOf(job);
       const provider = deps.providers.get(job.payload.providerId);
       if (!handle || !provider?.cancel) return;
-      const ctx = await contextFor(job);
+      const ctx = await contextFor(job, context);
       if (!ctx) {
         deps.logger.warn('video_job_cancel_no_key', { jobId: job.id, providerId: job.payload.providerId });
         return;

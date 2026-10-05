@@ -102,10 +102,19 @@ export type GenerationJobCommit = Partial<
     | 'nextPollAt'
     | 'error'
     | 'rawProviderError'
-    | 'settledCredits'
     | 'submitAttemptedAt'
   >
 >;
+
+/**
+ * Who a commit is written for, and so when it still applies:
+ * - `lease`: a worker's step. A worker whose lease expired mid-step (a slow provider call, a paused process) must
+ *   not overwrite the job a newer worker has since advanced, so it applies only while the stored leaseUntil
+ *   still equals the token it acquired.
+ * - `unstarted`: a caller failing a job no worker has touched. It applies only while the job is pending, was never
+ *   submitted and holds no live lease, so a worker that already started always wins.
+ */
+export type GenerationJobCommitGuard = { kind: 'lease'; leaseToken: Date } | { kind: 'unstarted'; now: Date };
 
 // A lowercase 24-hex ObjectId string; exact, so the stored id equals the supplied one.
 export const GENERATION_JOB_ID_PATTERN = /^[0-9a-f]{24}$/;
@@ -125,11 +134,23 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
     ownerId: string,
     key: string
   ): Promise<IGenerationJobDocument | null>;
+  /**
+   * Leases the job until `leaseUntil`, which doubles as the lease token for commit. A lease is only granted once
+   * the previous one has expired, so a newer lease always carries a later token than the one it replaced.
+   */
   acquireLease(id: string, now: Date, leaseUntil: Date): Promise<IGenerationJobDocument | null>;
   markSubmitAttempted(id: string, at: Date): Promise<void>;
-  commit(id: string, update: GenerationJobCommit): Promise<IGenerationJobDocument | null>;
+  /** Applies the update and releases the lease. Null when the guard no longer holds (or the job is gone). */
+  commit(
+    id: string,
+    update: GenerationJobCommit,
+    guard: GenerationJobCommitGuard
+  ): Promise<IGenerationJobDocument | null>;
+  /** Only a pending or running job can be cancelled; storing output is already paid for. */
   requestCancel(id: string): Promise<IGenerationJobDocument | null>;
   claimTerminalHandling(id: string, at: Date): Promise<boolean>;
+  /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
+  recordSettlement(id: string, settledCredits: number): Promise<void>;
   markTerminalHandled(id: string, at: Date): Promise<void>;
   findStalled(overdueBefore: Date, limit: number): Promise<IGenerationJobDocument[]>;
 }

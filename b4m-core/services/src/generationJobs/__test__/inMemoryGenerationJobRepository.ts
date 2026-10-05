@@ -2,6 +2,7 @@ import {
   GENERATION_JOB_ID_PATTERN,
   TERMINAL_GENERATION_JOB_STATES,
   type GenerationJobCommit,
+  type GenerationJobCommitGuard,
   type GenerationJobCreateInput,
   type IGenerationJob,
   type IGenerationJobDocument,
@@ -19,6 +20,11 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
   const jobs = new Map<string, IGenerationJobDocument>();
   let sequence = 0;
   const isTerminal = (job: IGenerationJob) => TERMINAL_GENERATION_JOB_STATES.includes(job.state);
+  const isUnleased = (job: IGenerationJob, at: Date) => !job.leaseUntil || job.leaseUntil < at;
+  const guardHolds = (job: IGenerationJob, guard: GenerationJobCommitGuard) =>
+    guard.kind === 'lease'
+      ? job.leaseUntil?.getTime() === guard.leaseToken.getTime()
+      : job.state === 'pending' && !job.submitAttemptedAt && isUnleased(job, guard.now);
   // Every write bumps updatedAt, like Mongoose timestamps:true on updateOne / findOneAndUpdate.
   const touch = (job: IGenerationJobDocument) => {
     job.updatedAt = now();
@@ -65,9 +71,8 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
     async acquireLease(id: string, at: Date, leaseUntil: Date) {
       const job = jobs.get(id);
       if (!job) return null;
-      const free = !job.leaseUntil || job.leaseUntil < at;
       const leasable = !isTerminal(job) || !job.terminalHandledAt;
-      if (!free || !leasable) return null;
+      if (!isUnleased(job, at) || !leasable) return null;
       job.leaseUntil = leaseUntil;
       touch(job);
       return structuredClone(job);
@@ -80,9 +85,9 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       touch(job);
     },
 
-    async commit(id: string, update: GenerationJobCommit) {
+    async commit(id: string, update: GenerationJobCommit, guard: GenerationJobCommitGuard) {
       const job = jobs.get(id);
-      if (!job) return null;
+      if (!job || !guardHolds(job, guard)) return null;
       // Mongo's $set drops undefined values rather than clearing the field.
       const defined = Object.fromEntries(Object.entries(update).filter(([, value]) => value !== undefined));
       Object.assign(job, defined, { leaseUntil: null, updatedAt: now() });
@@ -109,6 +114,13 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       const job = jobs.get(id);
       if (!job) return;
       job.terminalHandledAt = at;
+      touch(job);
+    },
+
+    async recordSettlement(id: string, settledCredits: number) {
+      const job = jobs.get(id);
+      if (!job) return;
+      job.settledCredits = settledCredits;
       touch(job);
     },
 

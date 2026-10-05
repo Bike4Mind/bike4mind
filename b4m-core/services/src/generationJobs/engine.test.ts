@@ -329,6 +329,78 @@ describe('GenerationJobEngine', () => {
     expect(t.repository.jobs.get(job.id)!.leaseUntil).toBeNull();
   });
 
+  it('passes every step a live abort signal', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    t.results.poll.push({ next: 'poll_again' });
+    await t.engine.step(job.id);
+    const [, context] = vi.mocked(t.handler.poll).mock.calls[0];
+    expect(context.signal).toBeInstanceOf(AbortSignal);
+    expect(context.signal.aborted).toBe(false);
+  });
+
+  it('refuses a lease too short to leave the step time to commit after its abort', () => {
+    const repository = createInMemoryGenerationJobRepository();
+    const logger = new Logger({ metadata: { test: 'engine' } });
+    const deps = { repository, handlers: [], enqueue: vi.fn(), notify: vi.fn(), now: () => new Date(), logger };
+    expect(() => new GenerationJobEngine({ ...deps, leaseMs: 30_000 })).toThrow(/leaseMs must exceed/);
+  });
+
+  it('drops the result of a worker whose lease expired and was taken over mid-step', async () => {
+    const t = setup();
+    const warnSpy = vi.spyOn(t.logger, 'warn');
+    const job = await t.create({ state: 'running' });
+    let takeover: Awaited<ReturnType<typeof t.engine.step>> | undefined;
+    vi.mocked(t.handler.poll)
+      .mockImplementationOnce(async () => {
+        // The first worker stalls past its lease; a second worker leases the job and advances it.
+        t.advance(LEASE_MS + 1_000);
+        takeover = await t.engine.step(job.id);
+        return { next: 'failed', error: { code: 'provider_error', message: 'stale result' } } satisfies StepResult;
+      })
+      .mockImplementationOnce(async () => ({ next: 'poll_again' }) satisfies StepResult);
+
+    expect(await t.engine.step(job.id)).toBe('skipped');
+    expect(takeover).toBe('advanced');
+    const after = t.repository.jobs.get(job.id)!;
+    expect(after).toMatchObject({ state: 'running', pollCount: 1, leaseUntil: null });
+    expect(t.enqueue).toHaveBeenCalledTimes(1);
+    expect(t.handler.onTerminal).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'generation job step result dropped: the lease was lost before its commit',
+      expect.objectContaining({ jobId: job.id })
+    );
+  });
+
+  describe('failBeforeStart', () => {
+    const enqueueFailed = { code: 'enqueue_failed' as const, message: 'The job could not be queued' };
+
+    it('fails a job no worker has started and runs its terminal handling', async () => {
+      const t = setup();
+      const job = await t.create();
+      expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('failed');
+      expect(t.repository.jobs.get(job.id)).toMatchObject({
+        state: 'failed',
+        error: enqueueFailed,
+        nextPollAt: null,
+        terminalHandledAt: expect.any(Date),
+      });
+      expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ['holds the lease', { leaseUntil: new Date('2026-10-06T00:05:30Z') }],
+      ['already submitted', { submitAttemptedAt: new Date('2026-10-06T00:00:00Z') }],
+      ['already advanced it', { state: 'running' as const }],
+    ])('leaves the job to a worker that %s', async (_name, overrides) => {
+      const t = setup();
+      const job = await t.create(overrides);
+      expect(await t.engine.failBeforeStart(job.id, enqueueFailed)).toBe('skipped');
+      expect(t.repository.jobs.get(job.id)!.error).toBeUndefined();
+      expect(t.handler.onTerminal).not.toHaveBeenCalled();
+    });
+  });
+
   it('a notify failure never fails the step', async () => {
     const t = setup();
     const job = await t.create();
