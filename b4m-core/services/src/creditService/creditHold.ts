@@ -70,6 +70,11 @@ export async function holdCredits(
   adapters: CreditHoldAdapters
 ): Promise<CreditHold> {
   const { userId, organizationId, requiredCredits, featureLabel } = params;
+  // A negative hold would credit the owner and NaN would corrupt the balance ($inc NaN passes the
+  // `< 0` check), so refuse before any read. A pricing bug, not caller input: not a 400.
+  if (!Number.isFinite(requiredCredits) || requiredCredits <= 0) {
+    throw new Error(`${featureLabel} credit hold requires a positive finite amount, got ${requiredCredits}`);
+  }
 
   const user = await adapters.users.findById(userId);
   if (!user) throw new BadRequestError('User not found');
@@ -137,7 +142,17 @@ export async function settleCreditHold(
   adapters: CreditHoldAdapters
 ): Promise<number> {
   const { featureLabel, logger } = context;
-  const charged = Math.min(Math.max(chargedCredits, 0), hold.reservedCredits);
+  // A non-finite charge is a pricing bug after the provider delivered: keep the whole hold rather
+  // than throw (or let NaN through the clamp), and make it loud.
+  if (!Number.isFinite(chargedCredits)) {
+    logger.error(`${featureLabel} settled with a non-finite charge - keeping the full reservation`, {
+      ownerId: hold.ownerId,
+      chargedCredits: String(chargedCredits),
+    });
+  }
+  const charged = Number.isFinite(chargedCredits)
+    ? Math.min(Math.max(chargedCredits, 0), hold.reservedCredits)
+    : hold.reservedCredits;
   const overReserved = hold.reservedCredits - charged;
   // The ledger row records the post-settlement balance, so it must see the refund.
   let settledHolder: ICreditHolder = { currentCredits: hold.balanceAfterHold };

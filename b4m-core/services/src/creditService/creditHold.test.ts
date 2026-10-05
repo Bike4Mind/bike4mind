@@ -75,6 +75,19 @@ describe('holdCredits', () => {
     expect(state.user).toBe(10);
   });
 
+  it.each([-5, 0, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses a non-positive or non-finite amount (%s) before reading anything',
+    async requiredCredits => {
+      const { adapters, state } = makeAdapters({ user: 100 });
+      await expect(
+        holdCredits({ userId: 'u1', organizationId: null, requiredCredits, featureLabel: 'video' }, adapters)
+      ).rejects.toThrow(`video credit hold requires a positive finite amount, got ${requiredCredits}`);
+      expect(adapters.users.findById).not.toHaveBeenCalled();
+      expect(adapters.users.incrementCredits).not.toHaveBeenCalled();
+      expect(state.user).toBe(100);
+    }
+  );
+
   it('runs assertBillable before moving any balance', async () => {
     const { adapters, state } = makeAdapters({ user: 100 });
     await expect(
@@ -133,6 +146,26 @@ describe('settleCreditHold', () => {
     const revived = JSON.parse(JSON.stringify(hold));
     expect(await settleCreditHold(revived, 10, entry, { featureLabel: 'video', logger }, adapters)).toBe(10);
     expect(state.user).toBe(90);
+  });
+
+  it('keeps the full reservation and logs when the charge is not finite', async () => {
+    const { adapters, state } = makeAdapters({ user: 100 });
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const hold = await holdCredits(
+      { userId: 'u1', organizationId: null, requiredCredits: 30, featureLabel: 'video' },
+      adapters
+    );
+    expect(await settleCreditHold(hold, Number.NaN, entry, { featureLabel: 'video', logger }, adapters)).toBe(30);
+    expect(state.user).toBe(70);
+    expect(errorSpy).toHaveBeenCalledWith('video settled with a non-finite charge - keeping the full reservation', {
+      ownerId: 'u1',
+      chargedCredits: 'NaN',
+    });
+    expect(deductCreditsWithOrgSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 30 }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('logs rather than throws when the ledger write fails', async () => {
