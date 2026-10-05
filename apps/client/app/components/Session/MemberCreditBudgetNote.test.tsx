@@ -54,8 +54,8 @@ describe('MemberCreditBudgetNote', () => {
     mocks.organization = orgWithUsage(500, 500);
     render(<MemberCreditBudgetNote />, { wrapper: TestWrapper });
     const text = screen.getByTestId('member-credit-budget-note-text').textContent;
-    expect(text).toContain('500');
-    expect(text).not.toContain('450');
+    expect(text).toContain('used your monthly limit of 500');
+    expect(text).not.toContain('of your 500');
   });
 
   it('hides after the dismiss button is clicked', () => {

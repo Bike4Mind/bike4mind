@@ -43,7 +43,8 @@ const CreditLimitModal: FC<CreditLimitModalProps> = ({
   const [draft, setDraft] = useState('');
 
   useEffect(() => {
-    if (open) setDraft(currentValue == null ? '' : String(Math.round(currentValue)));
+    if (open)
+      setDraft(currentValue == null ? '' : String(currentValue > 0 ? Math.max(1, Math.round(currentValue)) : 0));
   }, [open, currentValue]);
 
   const parsed = draft.trim() === '' ? null : Number(draft);

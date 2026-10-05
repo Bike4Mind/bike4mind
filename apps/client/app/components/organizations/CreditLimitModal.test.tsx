@@ -10,15 +10,20 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const renderModal = (onSave: (value: number | null) => Promise<unknown>, onClose = vi.fn()) => {
+const renderModal = (
+  onSave: (value: number | null) => Promise<unknown>,
+  onClose = vi.fn(),
+  currentValue: number | null = null,
+  allowZero = false
+) => {
   render(
     <CreditLimitModal
       open
       onClose={onClose}
       title="Limit"
       description="Desc"
-      currentValue={null}
-      allowZero={false}
+      currentValue={currentValue}
+      allowZero={allowZero}
       clearLabel="Remove limit"
       saving={false}
       onSave={onSave}
@@ -58,5 +63,15 @@ describe('CreditLimitModal', () => {
     expect(saveButton.disabled).toBe(true);
     fireEvent.submit(screen.getByTestId('credit-limit-input').closest('form')!);
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('prefills a legacy decimal default rounded to a whole credit', () => {
+    renderModal(vi.fn(), vi.fn(), 12.5, false);
+    expect((screen.getByTestId('credit-limit-input') as HTMLInputElement).value).toBe('13');
+  });
+
+  it('never prefills a positive value as zero', () => {
+    renderModal(vi.fn(), vi.fn(), 0.3, true);
+    expect((screen.getByTestId('credit-limit-input') as HTMLInputElement).value).toBe('1');
   });
 });
