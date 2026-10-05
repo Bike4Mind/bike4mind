@@ -29,3 +29,15 @@ export function getPeriodUsedCredits(
   if (!details?.periodStart) return 0;
   return new Date(details.periodStart) < getMemberCreditPeriodStart(now) ? 0 : (details.usedCredits ?? 0);
 }
+
+/**
+ * The monthly cap that applies to a member: their `userDetails[].maxCredits` override when set,
+ * otherwise the org default `maxCreditsPerMember`. null means uncapped. The server cap gates
+ * (`creditService/memberCreditCap.ts`) and the client usage display both resolve it here.
+ */
+export function resolveMemberCreditCap(
+  details: Pick<IUserDetails, 'maxCredits'> | null | undefined,
+  orgDefault: number | null | undefined
+): number | null {
+  return details?.maxCredits ?? orgDefault ?? null;
+}
