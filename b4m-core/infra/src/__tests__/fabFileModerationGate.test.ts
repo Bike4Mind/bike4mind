@@ -191,6 +191,8 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Audio-only generation, never an image. ---
+  'apps/client/server/utils/generatedAudioDelivery.ts':
+    'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
   'apps/client/server/utils/persistGeneratedAudio.ts':
     'audio-only (type AUDIO, audio/* mime from TTS/sound-effects) — DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; audio is never image content, so isImageServeable is inapplicable',
 
