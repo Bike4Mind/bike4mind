@@ -94,6 +94,48 @@ describe('GET /api/admin/platform-usage', () => {
     expect(res._getJSONData().days).toBe(7);
   });
 
+  describe('consumer owner attribution', () => {
+    const orgKeyId = 'a'.repeat(24);
+    const userKeyId = 'b'.repeat(24);
+
+    it('attributes an org-billed key to its organization and a user-billed key to its user, even when the latter carries an organizationId', async () => {
+      mockPlatformUsageSummary.mockResolvedValue({
+        overTime: [],
+        byFeature: [],
+        byConsumer: [{ apiKeyId: orgKeyId }, { apiKeyId: userKeyId }],
+        byModel: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      });
+      mockUserApiKeyFind.mockResolvedValue([
+        {
+          id: orgKeyId,
+          name: 'org key',
+          keyPrefix: 'org_',
+          userId: 'user-1',
+          organizationId: 'org-1',
+          billingOwnerType: CreditHolderType.Organization,
+        },
+        {
+          id: userKeyId,
+          name: 'user key',
+          keyPrefix: 'usr_',
+          userId: 'user-2',
+          organizationId: 'org-2',
+          billingOwnerType: CreditHolderType.User,
+        },
+      ]);
+      const { res, run } = call({});
+      await run();
+      const byApiKeyId = new Map<string, { ownerType: string; ownerId: string }>(
+        res
+          ._getJSONData()
+          .byConsumer.map((c: { apiKeyId: string; ownerType: string; ownerId: string }) => [c.apiKeyId, c])
+      );
+      expect(byApiKeyId.get(orgKeyId)).toMatchObject({ ownerType: CreditHolderType.Organization, ownerId: 'org-1' });
+      expect(byApiKeyId.get(userKeyId)).toMatchObject({ ownerType: CreditHolderType.User, ownerId: 'user-2' });
+    });
+  });
+
   describe('endpoint traffic filters', () => {
     it.each(['api', 'cli'] as const)('passes source %s and the owner type to the endpoint rollup', async source => {
       const { run } = call({ query: { source, ownerType: CreditHolderType.Organization } });

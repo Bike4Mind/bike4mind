@@ -5,7 +5,7 @@ export const resolveApiKeyOwnerType = ({
   billingOwnerType,
   organizationId,
 }: {
-  billingOwnerType?: CreditHolderType;
+  billingOwnerType?: ApiKeyBillingOwnerType;
   organizationId?: string | null;
 }): ApiKeyBillingOwnerType =>
   billingOwnerType === CreditHolderType.Organization && organizationId

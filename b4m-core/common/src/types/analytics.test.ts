@@ -41,6 +41,6 @@ describe('resolveApiCompletionSource', () => {
 
 describe('isApiKeyCompletionSource', () => {
   it('is true only for api and cli', () => {
-    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource)).toEqual(['cli', 'api']);
+    expect(COMPLETION_SOURCES.filter(isApiKeyCompletionSource).sort()).toEqual(['api', 'cli']);
   });
 });
