@@ -152,30 +152,30 @@ interface VideoProvider {
   readonly models: readonly VideoModelCapabilities[];
   submit(request: ValidatedVideoRequest, input: ResolvedInputs, ctx: VideoProviderContext): Promise<ProviderJobHandle>;
   poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult>;
-  openOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Readable>;
+  fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer>;
   cancel?(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<void>;
 }
 ```
 
 - `ResolvedInputs` carries the input image bytes/URL already fetched from the user's library and access-checked; adapters never touch our database.
-- `openOutput` returns a stream that is piped into S3 multipart upload. Clips are not buffered whole in Lambda memory except for the provider-inline case, which is bounded at 4MB by Omni.
+- `fetchOutput` returns the clip as a `Buffer`, bounded by `MAX_VIDEO_OUTPUT_BYTES` (256MB; a 10s 4k clip is well under it) and rejected above it. Buffering is deliberate: `S3Storage.upload` and `createFabFile` both take a `Buffer`, and streaming would mean reworking FabFile creation for no gain at 3-10s clip sizes. The Lambda is sized for it.
 - Adapters map provider statuses into `ProviderPollResult` and classify errors (`retryable`). They never throw for an expected provider outcome; they throw only for programmer errors and transport failures, which the engine treats as retryable.
 - A provider registry (`getVideoProvider(id)`) replaces the `aiVideoService` vendor switch. API keys resolve through the existing `getEffectiveLLMApiKeys` (user key -> admin demo key -> env), keyed by provider.
 
 ### 5.4 `GenerationJob` (generic) and the `video` kind
 
-New Mongoose model in `packages/database`, with a `kind` discriminator.
+New Mongoose model in `packages/database`. `kind` is a plain enum field over a shared `GENERATION_JOB_KINDS` const (the repo uses no Mongoose discriminators); kind-specific data lives in a typed `payload` sub-document.
 
 | Field | Notes |
 |---|---|
-| `kind` | `'video'` (discriminator; future: `'image'`, `'music'`, ...) |
+| `kind` | `'video'` (enum; future: `'image'`, `'music'`, ...) |
 | `ownerType`, `ownerId` | personal or org ownership, symmetric |
 | `requestedBy` | user id |
 | `source` | `'api' \| 'studio' \| 'agent'` |
 | `state` | see section 6 |
 | `attempts`, `leaseUntil`, `nextPollAt`, `submitAttemptedAt`, `deadlineAt` | engine bookkeeping |
 | `idempotencyKey` | unique per owner when present |
-| `credits` | `{ reserved, settled, billedTo, usesOwnKey }` |
+| `creditHold` | `{ ownerId, ownerType, reservedCredits }` or null when credits are not enforced; `settledCredits` |
 | `error` | `{ code, message }`; `rawProviderError` stored separately, `select: false` |
 | `callbackUrl`, `questId` | optional links |
 | video fields | `request`, `providerHandle`, `output: { s3Key, contentType, bytes, durationSeconds, fileId? }` |
@@ -227,7 +227,7 @@ The SQS message body is `{ jobId }`. The worker:
 - Adapters distinguish a submit the provider **definitively rejected** (an HTTP error response such as 4xx or 429: nothing was created) from one whose outcome is **unknown** (timeout, connection reset). A definitive rejection clears `submitAttemptedAt` and retries normally.
 - A retry that finds `state: pending` with `submitAttemptedAt` still set (outcome unknown) does **not** resubmit (the provider may already be generating). It moves the job to `failed` with `orphaned_submit`, releases the reservation, logs and alarms.
 - None of the v1 providers accept a client idempotency key, so this gap cannot be closed in general: the platform may pay for an orphaned provider job, but the user is never charged twice and never charged for a result they cannot get. If a provider later offers idempotency keys, its adapter can pass `jobId` and the gap closes for it.
-- `storing` writes to a deterministic key (`generated-video/<ownerId>/<jobId>.mp4`), so a re-run overwrites the same object. FabFile creation is keyed by `jobId` and checks for an existing record first.
+- `storing` is idempotent: before creating a FabFile it looks one up by the job's tag; the generated-bucket fallback writes a deterministic key (`generated-video/<ownerId>/<jobId>.mp4`), so a re-run overwrites the same object.
 - Transport failures and `retryable: true` provider failures re-enqueue with backoff, up to a per-step attempt cap, then fail with `provider_error`.
 
 ### 6.5 Backoff, deadline and the sweeper
@@ -242,12 +242,13 @@ The SQS message body is `{ jobId }`. The worker:
 
 ### 6.7 Notifications
 
-Every state commit publishes `generation_job_updated` (`{ jobId, kind, state, progress?, output? }`) to the owner over the existing websocket fanout. Terminal states also enqueue the completion callback on the existing `generationCallbackQueue` when `callbackUrl` is set, and update the linked quest for agent jobs.
+Every state commit publishes `generation_job_updated` (`{ jobId, kind, state, progress?, output? }`) to the owner over the existing websocket fanout. Completion callbacks for API callers and quest updates for agent jobs are added with those surfaces (plan 2 and plan 5). The existing callback machinery (`dispatchQuestCallback`) is quest-keyed, so plan 2 decides between a job-keyed variant and a quest per job.
 
 ## 7. Storage and delivery
 
-- The **job owns the S3 object.** It is written to the generated-media bucket at the deterministic key. Completion never depends on a Files copy succeeding.
-- A **Files copy** (FabFile) is created when the shared persist check allows it (the user has not opted out and is within storage quota). The check generalises `shouldPersistGeneratedAudio` into `shouldPersistGeneratedMedia` so audio and video share one rule. When skipped or failed, `output.fileId` is absent and the job still succeeds.
+- **One copy, never two.** The `storing` step first creates a FabFile (`createFabFile`, `KnowledgeType.VIDEO`, prefix `generated-video`, tagged `generated` + the job id), which uploads into the files bucket. If that is refused (storage limit, max file size), it writes the clip to the generated-media bucket instead. The job records `output: { location: 'files' | 'generated', s3Key, fileId? }`.
+- Completion never depends on the Files copy: a quota-blocked user still gets their paid video.
+- There is no per-user opt-out for video (unlike `saveGeneratedAudio`): every video is a deliberate, paid request, so it is always offered to Files.
 - The API **never returns video bytes.** A succeeded job exposes `output.url`, a short-lived signed URL minted on read, with `expiresAt`. This follows the generated-audio delivery work, which removed byte responses over the serverless response ceiling.
 - Playback in the client uses the signed S3/CloudFront URL, which the existing `media-src` CSP already allows. No `data:` URLs.
 
@@ -284,10 +285,10 @@ A Tanstack route (`/studio/video`), MUI Joy.
 
 ## 11. Billing and credits
 
-1. **Create:** reserve `estimateVideoCost(caps, request)` against the personal or org balance, including the org cap check. Insufficient credits fails before any provider call with `insufficient_credits`.
-2. **Succeeded:** settle on the actual duration (provider-reported, else read from the MP4 header) via `deductCreditsWithOrgSupport`, transaction type `video_generation_usage`, and write a usage event.
+1. **Create:** hold `estimateVideoCost(caps, request)` against the personal or org balance, including the org cap check. Insufficient credits fails before any provider call with `insufficient_credits`. The hold is a serialisable `CreditHold` stored on the job, so it can be settled or released by a later Lambda. `holdCredits` / `settleCreditHold` / `releaseCreditHold` are extracted from `apps/client/server/billing/reserveRequestCredits.ts` into `b4m-core/services/src/creditService`, and `reserveRequestCredits` is rewritten on top of them (one implementation of the money movement).
+2. **Succeeded:** settle on the actual duration (provider-reported, else the requested duration; capability validation already pins the requested duration to what the model produces) via `deductCreditsWithOrgSupport`, transaction type `video_generation_usage`, and write a usage event.
 3. **Blocked / failed / cancelled / orphaned:** release the full reservation.
-4. **Own key:** when the effective key is the user's own, no platform credits are reserved or charged; the usage event is still recorded. *To confirm during planning that this matches chat's current own-key behaviour.*
+4. **Own keys are billed like every other path.** Chat, image and the old video pipeline all charge platform credits regardless of whose key served the call, and `getEffectiveLLMApiKeys` cannot tell the caller which key it returned. Changing that is a platform-wide policy change and out of scope.
 5. `estimateVideoCost` is a pure function in `common`, used by the studio for display and by the server for reservation, so the shown estimate and the reservation cannot drift. Prices live in capability declarations, sourced from vendor price pages and converted with `usdToCredits`.
 
 `enforceCredits` and org caps apply unchanged.
@@ -305,7 +306,7 @@ A `videoGeneration` settings block with a per-model enable map. Gemini Omni Flas
 
 ## 14. Infrastructure
 
-- New `generationJobQueue` + DLQ in `infra/queues.ts`, wired into `dlqRegistry`, `dlqAlarms` and `logMonitor`. Handler timeout 60s (a step is one bounded provider call or one streamed upload; the upload step gets the larger of the two budgets and is sized during planning).
+- New `generationJobQueue` + DLQ in `infra/queues.ts`, wired into `dlqRegistry`, `dlqAlarms` and `logMonitor`. Handler timeout 5 minutes and 2048MB memory, sized for the `storing` step (download + upload of a 4k clip); poll steps finish in seconds. Visibility timeout 6 minutes.
 - Sweeper cron in `apps/workers/src/cron`.
 - `videoGenerationQueue` and its handler are removed.
 - **Self-host:** the same handler runs under the self-host worker runner. Delayed re-enqueue must be supported there; planning confirms the self-host queue implements `DelaySeconds` and covers every file that self-host queue parity requires.
@@ -316,7 +317,7 @@ Delete: `OpenAISoraVideoService`, the `aiVideoService` factory, `VideoModels` / 
 
 ## 16. Testing
 
-- **Provider conformance suite:** `describeVideoProviderConformance(adapter, fixtures)` runs every adapter through submit, poll-running, succeeded-inline, succeeded-url, blocked, failed (retryable and not), and `openOutput` streaming, against recorded HTTP fixtures (msw). A provider is done when it passes.
+- **Provider conformance suite:** `describeVideoProviderConformance(adapter, fixtures)` runs every adapter through submit, poll-running, succeeded-inline, succeeded-url, blocked, failed (retryable and not), and `fetchOutput` (including the size cap), against recorded HTTP fixtures (msw). A provider is done when it passes.
 - **Engine:** fake job kind + `createMongoServer()`; every transition, duplicate and out-of-order messages, a simulated crash after each step, lease expiry, deadline, sweeper, cancel in each state, orphaned submit.
 - **Video kind:** capability validation, reservation / settlement / release arithmetic, own-key path, persist-check skip path, deterministic S3 key.
 - **API:** each contract endpoint, idempotency-key semantics, error codes, scope enforcement.
@@ -325,16 +326,15 @@ Delete: `OpenAISoraVideoService`, the `aiVideoService` factory, `VideoModels` / 
 
 ## 17. Delivery plan (finalised in the implementation plan)
 
-1. Common types and schemas, generation-job engine, `test` provider, Sora removal.
-2. Gemini Omni Flash adapter and the new public API.
+1. Common types and schemas, generation-job engine, `test` provider, queue and sweeper wiring (split into two PRs: domain + credit holds, then engine + video kind).
+2. Gemini Omni Flash adapter, the new public API and Sora removal (removed in the same PR that replaces its endpoint, so the contract never has a gap).
 3. Veo 3.1 and xAI adapters.
 4. Studio UI.
 5. Agent tool and chat `VideoJobCard`.
 
-## 18. Open items for planning
+## 18. Open items
 
-- Confirm the Omni Flash JS SDK surface and minimum `@google/genai` version; bump if needed.
-- Confirm own-key billing behaviour matches chat.
-- Confirm self-host queue delay support and the files involved.
-- Size the `storing` step's Lambda timeout against 4k clip sizes.
-- Decide whether the generated-media bucket or the FabFile bucket holds the job-owned object, to avoid a second copy when a Files record is created.
+- Confirm the Omni Flash JS SDK surface and minimum `@google/genai` version; bump if needed (plan 2).
+- Resolved: own keys are billed like every other path (section 11).
+- Resolved: self-host runs the same handler via `apps/workers/src/selfhost/main.ts`; ElasticMQ honours per-message `DelaySeconds`; the queue is added to `elasticmq.conf`, `.env.selfhost.example` and the resource manifest (pinned by `selfHostQueueParity.test.ts`). A live self-host run verifies delayed re-enqueue.
+- Resolved: one stored copy, in the files bucket or the generated bucket (section 7). The worker gets 2048MB memory and a 5-minute timeout to cover a 4k download and upload.
