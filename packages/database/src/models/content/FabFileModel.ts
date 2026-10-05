@@ -3460,6 +3460,15 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
     return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
   }
+
+  async listLakeSupersededIds(fabFileIds: string[], dataLakeId: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: fabFileIds }, 'supersededInLakes.dataLakeId': dataLakeId })
+      .select('_id')
+      .lean();
+    return docs.map(doc => String(doc._id));
+  }
 }
 
 // Non-destructive AI-edit history for binary Office documents. `_id: false` keeps entries
