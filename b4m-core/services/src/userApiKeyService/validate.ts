@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
+import { computeKeyDigest, keyDigestMatches } from './keyDigest';
 
 interface ValidateUserApiKeyAdapters {
   db: {
@@ -110,8 +111,12 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'not_found' };
   }
 
-  // Verify the hash
-  const isHashValid = await bcrypt.compare(key, apiKey.keyHash);
+  // Verify the secret. A key with a stored digest is checked by constant-time
+  // SHA-256 compare only - the digest is authoritative, so a mismatch never falls
+  // through to bcrypt. Keys minted before the digest existed fall back to the
+  // bcrypt keyHash and get a digest backfilled below.
+  const storedDigest = apiKey.keyDigest;
+  const isHashValid = storedDigest ? keyDigestMatches(key, storedDigest) : await bcrypt.compare(key, apiKey.keyHash);
   if (!isHashValid) {
     return { isValid: false, reason: 'invalid_hash' };
   }
@@ -127,6 +132,17 @@ export const validateUserApiKey = async (
     apiKey.keyPrefix = keyPrefix;
     db.userApiKeys.update({ id: apiKey.id, keyPrefix }).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
+    });
+  }
+
+  // Backfill the fast-path digest for a pre-digest key (fire and forget), same
+  // valid-only rule as the prefix heal, so existing keys migrate on first use
+  // without a rotation sweep.
+  if (!storedDigest && result.isValid) {
+    const keyDigest = computeKeyDigest(key);
+    apiKey.keyDigest = keyDigest;
+    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest).catch(err => {
+      Logger.globalInstance.warn('Failed to backfill API key digest:', err);
     });
   }
 

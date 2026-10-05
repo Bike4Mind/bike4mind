@@ -226,6 +226,13 @@ export interface IUserApiKey {
   userId: string;
   name: string; // Human-friendly name
   keyHash: string; // Hashed secret (never store plain text)
+  /**
+   * Hex SHA-256 of the raw key: the fast validation path. Keys are 128-bit random
+   * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
+   * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
+   * and writes it back on first successful use. Never serialized (see toJSON).
+   */
+  keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
   scopes: ApiKeyScope[]; // Permissions array
   status: ApiKeyStatus;
@@ -334,6 +341,8 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
+  /** Stores the fast-path digest for a key validated via the legacy bcrypt hash. */
+  setKeyDigest: (id: string, keyDigest: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**

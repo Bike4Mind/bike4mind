@@ -90,6 +90,10 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
+  async setKeyDigest(id: string, keyDigest: string) {
+    await this.model.updateOne({ _id: id }, { $set: { keyDigest } });
+  }
+
   findActiveByKeyPrefix(keyPrefix: string) {
     return this.model
       .findOne({
@@ -225,6 +229,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     userId: { type: String, required: true },
     name: { type: String, required: true },
     keyHash: { type: String, required: true },
+    keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
     scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
@@ -326,8 +331,9 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     toJSON: {
       virtuals: true,
       transform: function (doc, ret: any) {
-        // Never expose the keyHash in JSON responses
+        // Never expose the keyHash or keyDigest in JSON responses
         delete ret.keyHash;
+        delete ret.keyDigest;
         delete ret.callbackSigningSecret;
         return ret;
       },
