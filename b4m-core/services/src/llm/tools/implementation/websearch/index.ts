@@ -10,7 +10,6 @@ import {
   type WebSearchPlace,
 } from '@bike4mind/common';
 import {
-  resolveWebSearchProvider,
   resolveWebSearchProviders,
   searchCacheGet,
   searchCacheSet,
@@ -240,7 +239,7 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
  * provider that answered so the image/place calls go to a live provider. When both come back empty
  * it returns the empty answer; when both fail it throws, so the backend records the call as failed.
  */
-async function searchWithHedge(
+export async function searchWithHedge(
   lead: WebSearchProvider,
   backup: WebSearchProvider | null,
   query: string,
@@ -309,7 +308,9 @@ export async function performWebSearch(
   // Surface a clear "not configured" message instead of silently returning
   // "No results found", which reads to the model (and user) as if the web
   // genuinely had nothing - the exact confusion this tool's gating fixes.
-  const provider = await (resolvedProvider ?? resolveWebSearchProvider(adapters));
+  const [provider, defaultBackup] = resolvedProvider
+    ? [await resolvedProvider, null]
+    : await resolveWebSearchProviders(adapters);
   if (!provider) {
     Logger.globalInstance.error('❌ WebSearch Tool: No web-search provider configured. Skipping search.');
     return { formattedResults: WEB_SEARCH_NOT_CONFIGURED_MSG, citables: [] };
@@ -327,7 +328,7 @@ export async function performWebSearch(
       Logger.globalInstance.log('WebSearch Tool: cache hit', { query: params.query });
       results = cached;
     } else {
-      const backup = (await resolvedBackup) ?? null;
+      const backup = (await resolvedBackup) ?? defaultBackup;
       ({ results, servedBy } = await searchWithHedge(provider, backup, params.query, numResults, searchOptions));
       if (results.length > 0) searchCacheSet(params.query, numResults, results, isPlaceSearch);
     }

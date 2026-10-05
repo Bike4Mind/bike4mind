@@ -5,9 +5,11 @@ vi.mock('../webfetch/firecrawlApp', () => ({
   createFirecrawlApp: (...a: unknown[]) => createFirecrawlApp(...a),
 }));
 
-const resolveWebSearchProvider = vi.fn();
-vi.mock('../websearch', () => ({
-  resolveWebSearchProvider: (...a: unknown[]) => resolveWebSearchProvider(...a),
+const resolveWebSearchProviders = vi.fn();
+// The real searchWithHedge runs, so the failover tests exercise the same hedge chat uses.
+vi.mock('../websearch', async importOriginal => ({
+  ...(await importOriginal<typeof import('../websearch')>()),
+  resolveWebSearchProviders: (...a: unknown[]) => resolveWebSearchProviders(...a),
 }));
 
 const plainFetchScrape = vi.fn(async () => ({ markdown: 'plain content' }));
@@ -70,7 +72,7 @@ const searchProvider = () => ({
 
 beforeEach(() => {
   createFirecrawlApp.mockReset();
-  resolveWebSearchProvider.mockReset();
+  resolveWebSearchProviders.mockReset();
   plainFetchScrape.mockClear();
 });
 
@@ -78,8 +80,9 @@ describe('performDeepResearch discovery precedence', () => {
   it('uses Firecrawl for discovery when both Firecrawl and a provider are configured', async () => {
     const app = firecrawlApp();
     const provider = searchProvider();
+    const backup = searchProvider();
     createFirecrawlApp.mockReturnValue(app);
-    resolveWebSearchProvider.mockResolvedValue(provider);
+    resolveWebSearchProviders.mockResolvedValue([provider, backup]);
 
     const result = await performDeepResearch(
       makeContext(),
@@ -90,12 +93,38 @@ describe('performDeepResearch discovery precedence', () => {
     expect(result.success).toBe(true);
     expect(app.search).toHaveBeenCalled();
     expect(provider.search).not.toHaveBeenCalled(); // hosted stays byte-identical: no SerpAPI/SearXNG burn
+    expect(backup.search).not.toHaveBeenCalled();
+  });
+
+  it('fails over to the backup provider when the lead fails and Firecrawl is absent', async () => {
+    const lead = {
+      name: 'serpapi' as const,
+      search: vi.fn(async () => {
+        throw new Error('SerpAPI did not respond within 10s');
+      }),
+    };
+    const backup = {
+      name: 'searxng' as const,
+      search: vi.fn(async () => [{ url: 'https://backup.example', title: 'Backup', snippet: 's' }]),
+    };
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProviders.mockResolvedValue([lead, backup]);
+
+    const result = await performDeepResearch(
+      makeContext(),
+      { topic: 'quantum computing' },
+      { maxDepth: 1, duration: 1 }
+    );
+
+    expect(result.success).toBe(true);
+    expect(backup.search).toHaveBeenCalled();
+    expect(plainFetchScrape).toHaveBeenCalledWith('https://backup.example');
   });
 
   it('uses the web-search provider for discovery when Firecrawl is absent', async () => {
     const provider = searchProvider();
     createFirecrawlApp.mockReturnValue(null);
-    resolveWebSearchProvider.mockResolvedValue(provider);
+    resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
     const result = await performDeepResearch(
       makeContext(),
@@ -115,7 +144,7 @@ describe('performDeepResearch discovery precedence', () => {
       search: vi.fn(async () => [{ url: 'https://sx.example/paper.pdf', title: 'PDF', snippet: 's' }]),
     };
     createFirecrawlApp.mockReturnValue(null);
-    resolveWebSearchProvider.mockResolvedValue(provider);
+    resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
     const result = await performDeepResearch(
       makeContext(),
@@ -130,7 +159,7 @@ describe('performDeepResearch discovery precedence', () => {
 
   it('fails when neither a provider nor Firecrawl is configured', async () => {
     createFirecrawlApp.mockReturnValue(null);
-    resolveWebSearchProvider.mockResolvedValue(null);
+    resolveWebSearchProviders.mockResolvedValue([null, null]);
 
     const result = await performDeepResearch(
       makeContext(),
@@ -154,7 +183,7 @@ describe('performDeepResearch honors the turn abort signal', () => {
   it('does no search work at all when the turn is already aborted', async () => {
     const provider = searchProvider();
     createFirecrawlApp.mockReturnValue(null);
-    resolveWebSearchProvider.mockResolvedValue(provider);
+    resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
     const controller = new AbortController();
     controller.abort();
@@ -180,7 +209,7 @@ describe('performDeepResearch honors the turn abort signal', () => {
       }),
     };
     createFirecrawlApp.mockReturnValue(null);
-    resolveWebSearchProvider.mockResolvedValue(provider);
+    resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
     const context = makeContext(() => controller.signal);
     // The planner must keep feeding the loop work, or it would run out of queries after the
@@ -199,7 +228,7 @@ describe('performDeepResearch honors the turn abort signal', () => {
   it('passes the signal into its own analysis sub-call', async () => {
     const provider = searchProvider();
     createFirecrawlApp.mockReturnValue(null);
-    resolveWebSearchProvider.mockResolvedValue(provider);
+    resolveWebSearchProviders.mockResolvedValue([provider, null]);
 
     const controller = new AbortController();
     const context = makeContext(() => controller.signal);

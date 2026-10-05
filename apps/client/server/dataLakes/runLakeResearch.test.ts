@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   findLakeById: vi.fn(),
   findUserById: vi.fn(),
   findOrgById: vi.fn(),
-  resolveWebSearchProvider: vi.fn(),
+  resolveWebSearchProviders: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
@@ -49,8 +49,10 @@ vi.mock('@bike4mind/services', () => ({
   },
   recordOperationalUsage: h.recordOperationalUsage,
 }));
-vi.mock('@bike4mind/services/llm', () => ({
-  resolveWebSearchProvider: h.resolveWebSearchProvider,
+// The real searchWithHedge runs, so the failover test exercises the same hedge chat uses.
+vi.mock('@bike4mind/services/llm', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm')>()),
+  resolveWebSearchProviders: h.resolveWebSearchProviders,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableModels }));
 // fetchAndParseURL comes from fab-pipeline, not utils: the lint rule `no-restricted-imports` routes
@@ -98,7 +100,7 @@ beforeEach(() => {
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
   h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
   h.findOrgById.mockResolvedValue(null);
-  h.resolveWebSearchProvider.mockResolvedValue({ name: 'serpapi', search: vi.fn(async () => []) });
+  h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
   h.executeResearchRun.mockResolvedValue({
@@ -421,10 +423,58 @@ describe('runLakeResearch', () => {
     );
   });
 
+  describe('web search failover', () => {
+    const searchOnce = () => {
+      let hits: unknown;
+      h.executeResearchRun.mockImplementation(
+        async (_l: unknown, _r: string, ports: { search: (q: string, n: number, d?: number) => Promise<unknown> }) => {
+          hits = await ports.search('q', 5, 30);
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+        }
+      );
+      return () => hits;
+    };
+    const timedOutLead = () => ({
+      name: 'serpapi',
+      search: vi.fn(async () => {
+        throw new Error('Web search timed out: SerpAPI did not respond within 10s (tried 2 times)');
+      }),
+    });
+
+    it('takes candidates from the backup when the lead times out', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => [{ title: 'Backup', url: 'https://backup.example', snippet: 's' }]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(hits()).toEqual([{ title: 'Backup', url: 'https://backup.example', snippet: 's' }]);
+      expect(backup.search).toHaveBeenCalledWith('q', 5, expect.objectContaining({ recencyDays: 30 }));
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+    });
+
+    it('fails the run naming both providers when both fail', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => {
+          throw new Error('SearXNG returned 502');
+        }),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      searchOnce();
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/Web search failed on both providers/);
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed' }));
+    });
+  });
+
   describe('terminal operator faults settle rather than throw', () => {
     // Throwing would burn the SQS deliveries and a DLQ entry on a message that can never succeed.
     it('names what an administrator must do when web search is unconfigured', async () => {
-      h.resolveWebSearchProvider.mockResolvedValue(null);
+      h.resolveWebSearchProviders.mockResolvedValue([null, null]);
 
       expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
       expect(h.settleRun).toHaveBeenCalledWith(
