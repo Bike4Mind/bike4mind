@@ -237,7 +237,8 @@ const errorMessage = (error: unknown): string => (error instanceof Error ? error
  * answer also starts the backup, since a throttled SearXNG answers 200 with no results. With no
  * backup the lead keeps its own failure mode (SearXNG fail-soft, SerpAPI throws). Returns the
  * provider that answered so follow-up calls (images, places) go to a live provider. With a backup,
- * results are empty only when both providers came back empty, and it throws only when both failed.
+ * results are empty when neither provider has any (both empty, or one empty and the other failed),
+ * and it throws only when both failed.
  */
 export async function searchWithHedge(
   lead: WebSearchProvider,
