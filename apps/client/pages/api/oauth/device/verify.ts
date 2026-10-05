@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { deviceAuthorizationRepository, DeviceAuthorizationModel } from '@bike4mind/database';
 import { z } from 'zod';
+import { LEGACY_DEVICE_CLIENT_ID, oauthClientDisplayName } from '@bike4mind/common';
 
 const VerifyRequestSchema = z.object({
   user_code: z.string(),
@@ -55,10 +56,13 @@ const handler = baseApi()
 
     // TODO: Add audit logging for security
 
+    const clientId = authorization.clientId ?? LEGACY_DEVICE_CLIENT_ID;
+
     return res.json({
       success: true,
       device_info: {
-        client_type: 'b4m-cli',
+        client_type: clientId,
+        client_name: oauthClientDisplayName(clientId),
         ip_address: authorization.ipAddress,
         created_at: authorization.createdAt.toISOString(),
       },
