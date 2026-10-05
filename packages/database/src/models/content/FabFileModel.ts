@@ -1359,7 +1359,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
                 $filter: {
                   input: '$tags.name',
                   cond: {
+                    // $regexMatch throws on a non-string input (the old $match skipped it); tags are
+                    // [Object] in the schema, so test the type first. $and short-circuits.
                     $and: [
+                      { $eq: [{ $type: '$$this' }, 'string'] },
                       { $regexMatch: { input: '$$this', regex: prefixRegex } },
                       { $not: [{ $regexMatch: { input: '$$this', regex: META_TAG_REGEX } }] },
                     ],

@@ -120,6 +120,23 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
 
       expect(sortedByTag(counts).map(c => c.tag)).toEqual(['acme', 'acme:legal']);
     });
+
+    // The schema types tags as [Object], so legacy data can hold a non-string name.
+    it('skips a tag whose name is not a string instead of failing the count', async () => {
+      await FabFile.create({
+        userId: USER,
+        fileName: 'malformed',
+        type: KnowledgeType.TEXT,
+        tags: [{ name: 'acme:legal' }, { name: 123 }, { name: ['acme:x'] }, { name: { x: 1 } }],
+      });
+
+      const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:']);
+
+      expect(sortedByTag(counts)).toEqual([
+        { tag: 'acme', count: 0, fileCount: 1 },
+        { tag: 'acme:legal', count: 1, fileCount: 1 },
+      ]);
+    });
   });
 
   it('ignores tags outside the requested prefixes', async () => {
