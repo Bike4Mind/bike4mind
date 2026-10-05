@@ -98,3 +98,6 @@ export type GeneratedAudioResponse = z.infer<typeof generatedAudioResponseSchema
  * `name`/`request_id`.
  */
 export const generatedAudioTooLargeSchema = z.object({ error: z.string() });
+
+/** Key prefix for oversized generated audio staged for download. Reaped by the bucket lifecycle rules, so reserved from user-chosen FabFile prefixes. */
+export const GENERATED_AUDIO_OFFLOAD_PREFIX = 'generated-audio-offload/';

@@ -314,6 +314,15 @@ export function assertContractConventions(contracts: readonly EndpointContract[]
         );
       }
 
+      if (status === 303 && !('noBody' in spec && spec.noBody)) {
+        fail(
+          contract,
+          'status-table',
+          'status 303 must declare noBody: true.',
+          'A redirect carries no body; set noBody and a Location header.'
+        );
+      }
+
       if (isJsonErrorResponse(status, spec) && !spec.bespokeErrorShape) {
         // A schema-less JSON error is published as an opaque binary body, which no
         // client can read an `error` out of. Force the author to say which it is.

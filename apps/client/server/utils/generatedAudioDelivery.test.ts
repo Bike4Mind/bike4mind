@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import type { Response } from 'express';
 import type { Logger } from '@bike4mind/observability';
@@ -111,6 +111,31 @@ describe('deliverGeneratedAudio', () => {
       const { res } = await deliver({ encoding: 'base64' });
       expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
       expect(res._getJSONData()).not.toHaveProperty('saved');
+    });
+  });
+
+  describe('self-host', () => {
+    beforeEach(() => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+    });
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('delivers oversized base64 audio inline without touching storage', async () => {
+      const { res } = await deliver({ audio: oversized(), encoding: 'base64', save: savedCopy });
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ delivery: 'inline' });
+      expect(upload).not.toHaveBeenCalled();
+    });
+
+    it('sends oversized binary audio as raw bytes with no redirect', async () => {
+      const audio = oversized();
+      const { res } = await deliver({ audio });
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getRedirectUrl()).toBe('');
+      expect(res._getData()).toEqual(audio);
+      expect(upload).not.toHaveBeenCalled();
     });
   });
 

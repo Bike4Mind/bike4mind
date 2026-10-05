@@ -5,4 +5,4 @@
  * these objects. Skipped by the object-created handlers via untrackedFabFileKey.ts (no
  * FabFile row). A leaf module so that key predicate stays free of storage imports.
  */
-export const GENERATED_AUDIO_OFFLOAD_PREFIX = 'generated-audio-offload/';
+export { GENERATED_AUDIO_OFFLOAD_PREFIX } from '@bike4mind/common';

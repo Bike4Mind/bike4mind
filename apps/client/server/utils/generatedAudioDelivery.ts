@@ -28,8 +28,9 @@ export { GENERATED_AUDIO_OFFLOAD_PREFIX };
 /** Lifetime of an offloaded object's signed URL, in seconds. Well inside the 1-day lifecycle expiry. */
 export const GENERATED_AUDIO_OFFLOAD_URL_TTL_SECONDS = 60 * 60;
 
+// Self-host has no Lambda payload cap and its storage is not browser-reachable, so it always delivers inline.
 export function exceedsGeneratedAudioResponseLimit(audioBytes: number): boolean {
-  return audioBytes > GENERATED_AUDIO_MAX_RESPONSE_BYTES;
+  return process.env.B4M_SELF_HOST !== 'true' && audioBytes > GENERATED_AUDIO_MAX_RESPONSE_BYTES;
 }
 
 /**
