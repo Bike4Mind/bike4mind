@@ -728,9 +728,27 @@ POST /api/v1/video-generations
 > \`POST /api/ai/edit-image\`, and \`POST /api/ai/generate-video\` are legacy aliases of the
 > same handlers and keep working.
 
+#### Voice Sessions
+
+\`\`\`
+GET  /api/v1/voice/voices
+POST /api/v1/voice/sessions
+POST /api/v1/voice/sessions/{id}/end
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+> **These endpoints are generated from their contracts.** The full request/response
+> reference lives in the [generated API docs](/api/v1/docs) under \`listVoices\`,
+> \`createVoiceSession\`, and \`endVoiceSession\`, derived from the same objects the handlers
+> validate with. \`createVoiceSession\` reserves credits for the maximum call length (when credit enforcement is on) and returns a
+> \`clientBootstrap\` for the ElevenLabs Conversational AI SDK; call \`endVoiceSession\` when the call
+> ends to refund the unused part. \`/api/voice/v2/voices\`, \`/api/voice/v2/sessions\`, and
+> \`/api/voice/v2/sessions/{id}/end\` are legacy aliases of the same handlers and keep working.
+
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|

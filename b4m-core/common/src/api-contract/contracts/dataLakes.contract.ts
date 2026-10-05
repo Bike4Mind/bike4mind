@@ -13,10 +13,14 @@ import {
   DataLakeSearchRequestSchema,
   DataLakeSearchResponseSchema,
   ListDataLakesResponseSchema,
-  ProviderNotConfiguredErrorSchema,
 } from '../../schemas/dataLakePublic';
 import { PaginationQuerySchema } from '../../schemas/pagination';
-import { ApiErrorSchema, InsufficientCreditsErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+import {
+  ApiErrorSchema,
+  InsufficientCreditsErrorSchema,
+  ProviderNotConfiguredErrorSchema,
+  ScopeForbiddenErrorSchema,
+} from '../../schemas/chat';
 
 /**
  * The integrator-facing subset of the data-lake API. Each route is a `/api/v1` twin of an SPA route
