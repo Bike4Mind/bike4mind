@@ -3,6 +3,8 @@ import { Logger } from '@bike4mind/observability';
 import { IFabFileDocument, ModelBackend, ModelInfo } from '@bike4mind/common';
 import { processFabFilesServer } from './utils';
 
+type ServerDeps = Parameters<typeof processFabFilesServer>[6];
+
 /**
  * Regression lock for the hard constraint that generated audio is NEVER sent to
  * an LLM (no model accepts audio input). processFabFilesServer is the single
@@ -76,12 +78,13 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
   });
 
   it('skips a video file the same way, with a video notice', async () => {
-    const storage = { download: vi.fn(), getSignedUrl: vi.fn() } as any;
+    // Partial doubles: only the members the guard could reach are stubbed, so any other call fails loudly.
+    const storage = { download: vi.fn(), getSignedUrl: vi.fn() };
     const db = {
       fabfilechunks: { findVectorsByFabFileIds: vi.fn(), countByFabFileId: vi.fn() },
       fabfiles: { update: vi.fn() },
       caches: { get: vi.fn(), set: vi.fn() },
-    } as any;
+    };
     const videoFile = {
       ...audioFile,
       id: 'video-1',
@@ -97,7 +100,11 @@ describe('processFabFilesServer — audio is never attached to an LLM', () => {
       100_000,
       visionModel,
       async () => {},
-      { logger: new Logger({ component: 'video-guard-test' }), storage, db }
+      {
+        logger: new Logger({ component: 'video-guard-test' }),
+        storage: storage as unknown as ServerDeps['storage'],
+        db: db as unknown as ServerDeps['db'],
+      }
     );
 
     expect(result.userMessages).toEqual([]);
