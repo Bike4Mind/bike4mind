@@ -2644,6 +2644,61 @@ describe('useApplyCorpusAction', () => {
     expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
   });
 
+  it('stays pending until the findings refetch lands, so a second click cannot act on stale rows', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'unsupersede',
+          findingId: 'finding-1',
+          targets: [{ fabFileId: 'b', fileName: 'b.md', role: 'restored' }],
+          detail: {},
+        },
+      },
+    });
+    let release!: () => void;
+    const refetch = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const { result, invalidate } = mount();
+    invalidate.mockImplementation(filters =>
+      JSON.stringify(filters?.queryKey) === JSON.stringify(['dataLakeFindings', 'lake1']) ? refetch : Promise.resolve()
+    );
+
+    act(() => {
+      result.current.mutate({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'unsupersede', fabFileId: 'b' },
+      });
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(result.current.isPending).toBe(true);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+  });
+
+  it('re-reads the findings list when the server refuses, since the refusal can mean the rows are stale', async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This document is not superseded in this data lake'));
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          dataLakeId: 'lake1',
+          findingId: 'finding-1',
+          body: { action: 'unsupersede', fabFileId: 'b' },
+        })
+        .catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('This document is not superseded in this data lake');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+  });
+
   it('surfaces the server refusal text on a closed finding rather than axios status line', async () => {
     apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This finding has already been ruled on'));
     const { result } = mount();
