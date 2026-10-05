@@ -13597,7 +13597,7 @@
             }
           },
           "404": {
-            "description": "The `sessionId` does not exist or is not accessible to the caller.",
+            "description": "The `sessionId` does not exist or is not owned by the caller (a malformed id is also a 404).",
             "content": {
               "application/json": {
                 "schema": {

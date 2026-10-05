@@ -122,7 +122,10 @@ export const createVoiceSessionContract = defineEndpoint({
         'maximum number of concurrent voice sessions open (end one first).',
       schema: ScopeForbiddenErrorSchema,
     },
-    404: { description: 'The `sessionId` does not exist or is not accessible to the caller.', schema: ApiErrorSchema },
+    404: {
+      description: 'The `sessionId` does not exist or is not owned by the caller (a malformed id is also a 404).',
+      schema: ApiErrorSchema,
+    },
     422: {
       description:
         'Request body failed validation, or the caller cannot afford the up-front reservation - the latter ' +

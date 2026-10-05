@@ -113,11 +113,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
   if (sessionId) {
     // A malformed id is a 404, not a CastError from deep in the query (CONVENTIONS.md status table).
     if (!isValidObjectId(sessionId)) throw new NotFoundError('Session not found');
-    session = await sessionService.getSession(
-      req.user.id,
-      { id: sessionId },
-      { db: { sessions: sessionRepository, users: userRepository } }
-    );
+    session = await sessionRepository.findByIdAndUserId(sessionId, req.user.id);
     if (!session) {
       throw new NotFoundError('Session not found');
     }

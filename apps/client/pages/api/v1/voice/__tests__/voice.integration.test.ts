@@ -202,7 +202,7 @@ beforeEach(() => {
   mocks.countActiveVoiceSessions.mockResolvedValue(0);
   mocks.sessionUpdate.mockResolvedValue(undefined);
   mocks.incrementCredits.mockResolvedValue(undefined);
-  mocks.getSession.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
+  mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
 });
 
@@ -370,7 +370,7 @@ describe('POST /api/v1/voice/sessions', () => {
   });
 
   it('reuses the live hold on a reconnect: no second charge, reservation record untouched', async () => {
-    mocks.getSession.mockResolvedValue({
+    mocks.findByIdAndUserId.mockResolvedValue({
       id: SESSION_ID,
       name: 'My notebook',
       voiceReservedCredits: RESERVED_CREDITS,
@@ -390,10 +390,53 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.sessionUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
     );
+    expect(mocks.findByIdAndUserId).toHaveBeenCalledWith(SESSION_ID, 'user-1');
+  });
+
+  it('creates a session when no sessionId is sent', async () => {
+    const { res, run } = fireSessions({ body: { reasoningModelId: 'claude-sonnet-4-6' } });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.findByIdAndUserId).not.toHaveBeenCalled();
+    expect(mocks.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      { name: 'Voice \u2022 claude-sonnet-4-6' },
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: SESSION_ID, voiceReservedCredits: RESERVED_CREDITS })
+    );
+  });
+
+  it('still charges a reconnect when the session holds no live reservation', async () => {
+    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
+    expect(mocks.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ voiceReservedCredits: RESERVED_CREDITS })
+    );
+  });
+
+  it('does not refund on a 502 when a reconnect reused the live hold', async () => {
+    mocks.findByIdAndUserId.mockResolvedValue({
+      id: SESSION_ID,
+      name: 'My notebook',
+      voiceReservedCredits: RESERVED_CREDITS,
+      voiceSessionStartedAt: new Date(),
+    });
+    mocks.createTransportSession.mockRejectedValue(new Error(UPSTREAM_SECRET_DETAIL));
+    const { res, run } = fireSessions({ body: { sessionId: SESSION_ID, isReconnect: true } });
+    await run();
+    expect(res._getStatusCode()).toBe(502);
+    expect(mocks.incrementCredits).not.toHaveBeenCalled();
+    expect(mocks.sessionUpdate).not.toHaveBeenCalled();
   });
 
   it('returns 404 for a session the caller cannot see', async () => {
-    mocks.getSession.mockResolvedValue(null);
+    mocks.findByIdAndUserId.mockResolvedValue(null);
     const { res, run } = fireSessions();
     await run();
     expect(res._getStatusCode()).toBe(404);
@@ -404,7 +447,7 @@ describe('POST /api/v1/voice/sessions', () => {
     const { res, run } = fireSessions({ body: { sessionId: 'not-an-id' } });
     await run();
     expect(res._getStatusCode()).toBe(404);
-    expect(mocks.getSession).not.toHaveBeenCalled();
+    expect(mocks.findByIdAndUserId).not.toHaveBeenCalled();
   });
 
   it('returns 502 without leaking the upstream message, and refunds the hold', async () => {
