@@ -5,21 +5,39 @@ import { getAppFileUrl } from '@client/app/utils/s3';
 import { Box, Avatar, Stack, IconButton, Dropdown, MenuButton, Menu, MenuItem, Chip, Typography } from '@mui/joy';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { FC, useCallback } from 'react';
+import { FC, useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useRemoveMemberFromOrganization, useLeaveOrganization } from '@client/app/hooks/data/organizations';
+import {
+  useRemoveMemberFromOrganization,
+  useLeaveOrganization,
+  useSetMemberCreditOverride,
+} from '@client/app/hooks/data/organizations';
 import { useNavigate } from '@tanstack/react-router';
+import CreditLimitModal from './CreditLimitModal';
+import { formatMemberCredits, formatMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 
 interface OrganizationUserCardProps {
   organization: IOrganizationDocument;
-  user: IUserDocument & { status: 'accepted' | 'pending'; permissions: Permission[]; usedCredits: number };
+  /** `creditUsage` is null for a pending invite, which has no budget yet. */
+  user: IUserDocument & {
+    status: 'accepted' | 'pending';
+    permissions: Permission[];
+    creditUsage: MemberCreditUsage | null;
+  };
   /** Permissions the current viewer holds for this org (from parent context). */
   userPermissions: Permission[];
+  /** Viewer may set this member's monthly credit limit (`canManageMemberCreditBudgets`). */
+  canManageCreditBudgets: boolean;
 }
 
-const OrganizationUserCard: FC<OrganizationUserCardProps> = ({ organization, user, userPermissions }) => {
+const OrganizationUserCard: FC<OrganizationUserCardProps> = ({
+  organization,
+  user,
+  userPermissions,
+  canManageCreditBudgets,
+}) => {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
@@ -98,8 +116,32 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({ organization, use
   const canRevoke = canManage && user.status === 'accepted';
   const canLeave = user.status === 'accepted' && currentUser?.id === user.id;
   const canCancelInvite = user.status === 'pending' && canManage;
+  // The owner row is excluded from roster actions but not from budgets: the owner's own spend from
+  // the pool is capped like anyone's.
+  const hasRosterAction = !isOwner && (canRevoke || canLeave || canCancelInvite);
+  const canSetCreditLimit = canManageCreditBudgets && user.status === 'accepted';
 
-  const actionsMenu = (canRevoke || canLeave || canCancelInvite) && user.id !== organization.userId && (
+  const [editingLimit, setEditingLimit] = useState(false);
+  const setOverride = useSetMemberCreditOverride();
+  const creditUsage = user.creditUsage;
+  const creditUsageLabel = creditUsage ? formatMemberCreditUsage(creditUsage) : '-';
+  const creditUsageCell = (
+    <Typography
+      level="body-sm"
+      component="span"
+      sx={{ color: creditUsage?.tracked ? 'text.primary' : 'text.tertiary', whiteSpace: 'nowrap' }}
+      data-testid="organization-user-card-credit-usage"
+    >
+      {creditUsageLabel}
+      {creditUsage?.isOverride && (
+        <Typography level="body-xs" component="span" sx={{ color: 'text.tertiary', ml: 0.5 }}>
+          (own limit)
+        </Typography>
+      )}
+    </Typography>
+  );
+
+  const actionsMenu = (hasRosterAction || canSetCreditLimit) && (
     <Dropdown>
       <MenuButton
         className="organization-user-card-menu-button"
@@ -109,7 +151,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({ organization, use
         <MoreVertIcon />
       </MenuButton>
       <Menu placement="bottom-end" sx={{ zIndex: 9999 }}>
-        {canCancelInvite && (
+        {canSetCreditLimit && (
+          <MenuItem onClick={() => setEditingLimit(true)} data-testid="organization-user-card-set-limit">
+            Set monthly limit
+          </MenuItem>
+        )}
+        {!isOwner && canCancelInvite && (
           <MenuItem
             onClick={() =>
               confirm({
@@ -128,10 +175,28 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({ organization, use
             Cancel Invite
           </MenuItem>
         )}
-        {canRevoke && <MenuItem onClick={() => handleRemoveMember(user.id)}>Revoke Access</MenuItem>}
-        {canLeave && <MenuItem onClick={handleLeaveOrganization}>Leave Organization</MenuItem>}
+        {!isOwner && canRevoke && <MenuItem onClick={() => handleRemoveMember(user.id)}>Revoke Access</MenuItem>}
+        {!isOwner && canLeave && <MenuItem onClick={handleLeaveOrganization}>Leave Organization</MenuItem>}
       </Menu>
     </Dropdown>
+  );
+
+  const creditLimitModal = canSetCreditLimit && (
+    <CreditLimitModal
+      open={editingLimit}
+      onClose={() => setEditingLimit(false)}
+      title={`Monthly credit limit for ${user.name}`}
+      description={
+        organization.maxCreditsPerMember == null
+          ? 'Overrides the organization default, which is currently no limit.'
+          : `Overrides the organization default of ${formatMemberCredits(organization.maxCreditsPerMember)} credits per month.`
+      }
+      currentValue={creditUsage?.isOverride ? creditUsage.cap : null}
+      allowZero
+      clearLabel="Use organization default"
+      saving={setOverride.isPending}
+      onSave={maxCredits => setOverride.mutateAsync({ organizationId, userId: user.id, maxCredits })}
+    />
   );
 
   if (isMobile) {
@@ -160,14 +225,13 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({ organization, use
               </Box>
               <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
                 {chips}
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  {user.usedCredits} credits
-                </Typography>
+                {creditUsageCell}
               </Stack>
             </Stack>
           </Stack>
           <Box sx={{ flexShrink: 0 }}>{actionsMenu}</Box>
         </Stack>
+        {creditLimitModal}
       </Box>
     );
   }
@@ -211,11 +275,12 @@ const OrganizationUserCard: FC<OrganizationUserCardProps> = ({ organization, use
       </Box>
 
       <Box className="organization-user-card-credits" display="flex" justifyContent="center" alignItems="center">
-        {user.usedCredits}
+        {creditUsageCell}
       </Box>
       <Box className="organization-user-card-actions" display="flex" gap="10px" justifyContent="flex-end" zIndex={2}>
         {actionsMenu}
       </Box>
+      {creditLimitModal}
     </Box>
   );
 };

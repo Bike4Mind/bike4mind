@@ -1,4 +1,10 @@
-import { getPeriodUsedCredits, InviteType, IOrganizationDocument, IUserDocument, Permission } from '@bike4mind/common';
+import {
+  canManageMemberCreditBudgets,
+  InviteType,
+  IOrganizationDocument,
+  IUserDocument,
+  Permission,
+} from '@bike4mind/common';
 import GenericAddItemsModal from '@client/app/components/common/GenericAddItemsModal';
 import UserCard from '@client/app/components/common/UserCard';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -15,6 +21,8 @@ import { FC, Fragment, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import OrganizationUserCard from './UserCard';
+import MemberCreditBudgetCard from './MemberCreditBudgetCard';
+import { getMemberCreditUsage, MemberCreditUsage } from './memberCreditBudget';
 import { useOrganizationSeats } from '@client/app/hooks/data/organizations';
 
 interface OrganizationMembersProps {
@@ -78,15 +86,19 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
 
   // Filter and sort users
   const filteredUsers = useMemo(() => {
-    let result: (IUserDocument & { status: 'accepted' | 'pending'; permissions: Permission[]; usedCredits: number })[] =
+    let result: (IUserDocument & {
+      status: 'accepted' | 'pending';
+      permissions: Permission[];
+      creditUsage: MemberCreditUsage | null;
+    })[] =
       users?.map(u => ({
         ...u,
         status: 'accepted' as const,
         permissions: organization.users.find(m => m.userId === u.id)?.permissions || [],
-        usedCredits: getPeriodUsedCredits(organization.userDetails?.find(m => m.id === u.id)),
+        creditUsage: getMemberCreditUsage(organization, u.id),
       })) || [];
     result.push(
-      ...(pendingUsers?.map(u => ({ ...u, status: 'pending' as const, permissions: [], usedCredits: 0 })) || [])
+      ...(pendingUsers?.map(u => ({ ...u, status: 'pending' as const, permissions: [], creditUsage: null })) || [])
     );
 
     if (search) {
@@ -97,11 +109,14 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
     }
 
     return result.sort((a, b) => (sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)));
-  }, [users, search, sortOrder, pendingUsers, organization.users, organization.userDetails]);
+  }, [users, search, sortOrder, pendingUsers, organization]);
 
   const canManageMembers = useMemo(() => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
+
+  // Mirrors the server gate on the credit-budget routes; wider than canManageMembers (appointed admins).
+  const canManageCreditBudgets = !!currentUser && canManageMemberCreditBudgets(currentUser, organization);
 
   // Owner ID, falling back to the current user.
   const ownerId = useMemo(() => {
@@ -248,6 +263,8 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
         </Card>
       )}
 
+      <MemberCreditBudgetCard organization={organization} canManage={canManageCreditBudgets} />
+
       {/* Search and Actions Section */}
       <Stack className="organization-members-search-container" spacing={1} mx={{ xs: 0, sm: '20px' }}>
         <Input
@@ -359,12 +376,17 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
             alignItems="center"
             sx={{ whiteSpace: 'nowrap' }}
           >
-            Credits
+            Credits this month
           </Box>
         </Box>
         {filteredUsers.map(user => (
           <Fragment key={user.id}>
-            <OrganizationUserCard organization={organization} user={user} userPermissions={userPermissions} />
+            <OrganizationUserCard
+              organization={organization}
+              user={user}
+              userPermissions={userPermissions}
+              canManageCreditBudgets={canManageCreditBudgets}
+            />
           </Fragment>
         ))}
       </Stack>
