@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -106,7 +107,7 @@ describe('tool handlers', () => {
           id: 'l1',
           name: 'Docs',
           slug: 'docs',
-          description: null,
+          description: 'Product docs',
           built_in: false,
           status: 'ready',
           file_count: 3,
@@ -127,10 +128,10 @@ describe('tool handlers', () => {
           id: 'l1',
           name: 'Docs',
           slug: 'docs',
-          description: undefined,
-          built_in: false,
+          description: 'Product docs',
+          builtIn: false,
           status: 'ready',
-          file_count: 3,
+          fileCount: 3,
         },
       ],
       nextCursor: 'c2',
@@ -167,6 +168,7 @@ describe('tool handlers', () => {
               id: 'fab1',
               type: 'document',
               title: 'Handbook.pdf',
+              url: '/files/fab1',
               description: 'p. 3',
               metadata: { fullContext: 'long passage text' },
             },
@@ -179,11 +181,11 @@ describe('tool handlers', () => {
 
     expect(result.reply).toBe('grounded');
     expect(result.citables).toEqual([
-      { id: 'fab1', type: 'document', title: 'Handbook.pdf', url: undefined, description: 'p. 3' },
+      { id: 'fab1', type: 'document', title: 'Handbook.pdf', url: '/files/fab1', description: 'p. 3' },
     ]);
   });
 
-  it('send_message still returns the reply with empty citables when the quest fetch fails', async () => {
+  it('send_message still returns the reply, with citables omitted, when the quest fetch fails', async () => {
     const client = mockClient({
       sendChat: vi
         .fn()
@@ -193,7 +195,7 @@ describe('tool handlers', () => {
 
     const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
 
-    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: [] });
+    expect(result).toEqual({ notebookId: 'nb1', questId: 'q1', reply: 'hello', model: 'gpt', citables: undefined });
   });
 
   it('send_message joins multiple responses with a blank line', async () => {
@@ -440,14 +442,32 @@ describe('tool handlers', () => {
 describe('registerTools', () => {
   const collectTools = (client: B4mApiClient) => {
     const tools = new Map<string, (args: unknown) => Promise<CallToolResult>>();
+    const schemas = new Map<string, z.ZodRawShape>();
     const server = {
-      registerTool: (name: string, _config: unknown, cb: (args: unknown) => Promise<CallToolResult>) => {
+      registerTool: (
+        name: string,
+        config: { inputSchema: z.ZodRawShape },
+        cb: (args: unknown) => Promise<CallToolResult>
+      ) => {
         tools.set(name, cb);
+        schemas.set(name, config.inputSchema);
       },
     } as unknown as McpServer;
     registerTools(server, client);
-    return tools;
+    return Object.assign(tools, { schemas });
   };
+
+  // The SDK validates arguments against inputSchema before the handler runs, so a field
+  // missing from a shape is silently stripped and never reaches the client.
+  it('create_notebook input schema keeps dataLakeId', () => {
+    const shape = collectTools(mockClient({})).schemas.get('create_notebook')!;
+    expect(z.object(shape).parse({ name: 'n', dataLakeId: 'l1' })).toEqual({ name: 'n', dataLakeId: 'l1' });
+  });
+
+  it('list_lakes input schema keeps cursor and defaults limit to 25', () => {
+    const shape = collectTools(mockClient({})).schemas.get('list_lakes')!;
+    expect(z.object(shape).parse({ cursor: 'c1' })).toEqual({ cursor: 'c1', limit: 25 });
+  });
 
   it('registers every tool in TOOL_NAMES', () => {
     const tools = collectTools(mockClient({}));
@@ -493,6 +513,25 @@ describe('registerTools', () => {
     expect(result.content[0]).toMatchObject({
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: files:read)",
+    });
+  });
+
+  it('maps a FEATURE_DISABLED 403 to a feature-disabled message, not a scope hint', async () => {
+    const disabled = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: { error: 'Feature not available', code: 'FEATURE_DISABLED' },
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ listDataLakes: vi.fn().mockRejectedValue(disabled) }));
+
+    const result = await tools.get('list_lakes')!({ limit: 25 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: 'feature disabled on this Bike4Mind instance (ask an admin to enable it)',
     });
   });
 

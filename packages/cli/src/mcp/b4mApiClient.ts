@@ -1,9 +1,11 @@
 import { isAxiosError } from 'axios';
+import type { z } from 'zod';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
   ttsBase64ResponseSchema,
+  type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
@@ -65,14 +67,7 @@ export interface QuestResponse {
   [key: string]: unknown;
 }
 
-export interface RawCitable {
-  id: string;
-  type: string;
-  title: string;
-  url?: string;
-  description?: string;
-  [key: string]: unknown;
-}
+export type RawCitable = z.infer<typeof CitableSourceSchema> & { [key: string]: unknown };
 
 /** One matching session from POST /api/sessions/semantic-search (`scores` entries). */
 export interface SessionScore {
@@ -403,6 +398,10 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
+      // requireFeatureEnabled answers 403 too; no key scope fixes an instance-disabled feature.
+      if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
+        return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
+      }
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }

@@ -177,9 +177,9 @@ function lakeSummary(l: RawDataLake) {
     name: l.name,
     slug: l.slug,
     description: l.description ?? undefined,
-    built_in: l.built_in,
+    builtIn: l.built_in,
     status: l.status,
-    file_count: l.file_count,
+    fileCount: l.file_count,
   };
 }
 
@@ -219,13 +219,16 @@ export async function sendMessage(
   }
   const notebookId = args.notebookId ?? res.sessionId ?? quest?.sessionId;
   // Drop `metadata`: it can carry `fullContext` passage text that would bloat the MCP client's context.
-  const citables = (quest?.promptMeta?.citables ?? []).map(c => ({
-    id: c.id,
-    type: c.type,
-    title: c.title,
-    url: c.url,
-    description: c.description,
-  }));
+  // A failed quest fetch leaves citables undefined (omitted), so it never reads as "no sources".
+  const citables = quest
+    ? (quest.promptMeta?.citables ?? []).map(c => ({
+        id: c.id,
+        type: c.type,
+        title: c.title,
+        url: c.url,
+        description: c.description,
+      }))
+    : undefined;
 
   // The completed quest carries the assistant reply in `responses` (a string
   // array); the scalar `response` is null on the wait path, so prefer `responses`.
