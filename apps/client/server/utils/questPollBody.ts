@@ -1,11 +1,28 @@
 import {
   PolledFallbackInfoSchema,
   redactPromptMetaForViewer,
+  stripChoicesFromReplies,
   toToolPayloads,
+  visibleReplyText,
   type IChatHistoryItemDocument,
 } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 import { toGeneratedFiles } from '@server/utils/generatedFiles';
+
+/**
+ * The visible answer text of a quest, for the scalar `reply` (poll) / `response` (`wait: true`)
+ * fields. The chat pipeline streams into `replies[]` and leaves `quest.reply` null on an ordinary
+ * success (or a stale rapid-reply prefix), so the scalar is derived here from the slots with the
+ * same rule the server uses when it does write it (setErrorReply in ChatCompletionProcess,
+ * questTimeoutRecovery.ts). Paths that write only `reply` (pre-flight invoke error, empty
+ * recovery) have no visible slots, so the stored scalar is the fallback.
+ */
+export function questReplyText(quest: Pick<IChatHistoryItemDocument, 'reply' | 'replies'>): string | null {
+  const visible = stripChoicesFromReplies(quest.replies ?? [])
+    .replies.map(slot => visibleReplyText(slot))
+    .join('');
+  return visible || (quest.reply ?? null);
+}
 
 /**
  * The `GET /api/v1/quests/{id}` body. Also the body of a generation completion callback
@@ -71,7 +88,7 @@ export function toQuestPollBody(
     // carry a code from an attempt that has since succeeded. Reading it ungated resurfaces one.
     ...(quest.type === 'error' && { errorCode: quest.errorCode }),
     sessionId: quest.sessionId,
-    reply: quest.reply,
+    reply: questReplyText(quest),
     replies: quest.replies,
     // Which model actually answered, when the requested one failed over.
     fallbackInfo,
