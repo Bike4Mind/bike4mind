@@ -223,13 +223,23 @@ function SupersedeDialog({
     preferId && preferId !== excludeId
       ? preferId
       : (finding.sources.find(source => source.fabFileId !== excludeId)?.fabFileId ?? null);
+  // With no other source to hand the displaced side to (a one-source finding) the choice is ignored,
+  // so a side is never cleared to null.
   const chooseKeep = (id: string) => {
-    if (id === retireId) setRetireId(otherSourceId(id, keepId));
+    if (id === retireId) {
+      const next = otherSourceId(id, keepId);
+      if (!next) return;
+      setRetireId(next);
+    }
     setKeepId(id);
     setError(null);
   };
   const chooseRetire = (id: string) => {
-    if (id === keepId) setKeepId(otherSourceId(id, retireId));
+    if (id === keepId) {
+      const next = otherSourceId(id, retireId);
+      if (!next) return;
+      setKeepId(next);
+    }
     setRetireId(id);
     setError(null);
   };
