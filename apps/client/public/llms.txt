@@ -45,11 +45,14 @@ To answer from a data lake's files, the key needs `datalake:read`,
    `running`; stop at `done` or `stopped`.
 
 - Check for failure before reading the answer: `type: "error"` (with
-  `errorCode` when classified) or a `stopped` status is a failed turn.
-- The answer is currently the last entry of `replies[]`; `reply` can be `null`.
-  Fall back to `reply` when `replies` is empty.
+  `errorCode` when classified) or a `stopped` status is a failed turn. A run
+  that died part-way still polls back as `done`, with `promptMeta.finishReason`
+  set to `timeout` or `abandoned`: treat that text as partial.
+- `replies[]` holds content slots, not separate answers. The answer is every
+  entry joined in order, with any `<think>...</think>` blocks removed. If
+  `replies` is empty, use `reply` (it can be `null`).
 - Polling does not use the daily key quota.
-- The full curl recipe is in the in-app API Cookbook (admins).
+- Request and response shapes: the [API reference](/api/v1/docs).
 
 ## API
 

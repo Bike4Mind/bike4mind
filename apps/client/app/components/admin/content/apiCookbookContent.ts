@@ -16,6 +16,7 @@ export const API_COOKBOOK_INTRO: string =
   'Set `B4M_API_KEY` and `B4M_BASE_URL` in your environment before running any recipe.';
 
 export const COOKBOOK_RECIPES: CookbookRecipe[] = [
+  // Keep in sync with the "Grounded answer" section of apps/client/public/llms.txt.
   {
     id: 'lake-grounded-answer',
     title: 'Get a Lake-Grounded Answer',
@@ -79,14 +80,15 @@ export const COOKBOOK_RECIPES: CookbookRecipe[] = [
       '```',
       '',
       '```json',
-      '{ "id": "quest_123", "status": "done", "reply": null, "replies": ["The refund policy allows..."] }',
+      '{ "id": "quest_123", "status": "done", "type": "message", "reply": null, "replies": ["<think>...</think>", "The refund policy allows..."] }',
       '```',
       '',
       '- `pending` or `running`: wait a second or two and poll again. `done` or `stopped`: stop polling.',
       '- Check for failure first: `type: "error"` (with `errorCode` when it is classified) or a `stopped`',
-      '  status is a failed turn, not an answer.',
-      '- The answer is currently the last entry of `replies[]`; `reply` can be `null`. Fall back to `reply`',
-      '  when `replies` is empty. This may change, so read both.',
+      '  status is a failed turn, not an answer. A run that died part-way still polls back as `done`, with',
+      '  `promptMeta.finishReason` set to `timeout` or `abandoned`: treat that text as partial.',
+      '- `replies[]` holds content slots, not separate answers. The answer is every entry joined in order,',
+      '  with any `<think>...</think>` blocks removed. If `replies` is empty, use `reply` (it can be `null`).',
       '- Polling does not count against the daily key quota.',
       '',
       '### Tips',
