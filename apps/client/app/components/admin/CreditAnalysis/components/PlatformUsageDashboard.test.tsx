@@ -196,6 +196,18 @@ describe('PlatformUsageDashboard endpoint section', () => {
       'Last 90 days (the log keeps 90 days of history)'
     );
   });
+
+  it('notes that a source or owner filter excludes rows logged before those fields existed', () => {
+    const note = 'Filtering excludes requests logged before source and owner type were recorded.';
+    setData({ source: 'cli' });
+    const { unmount } = renderDashboard();
+    expect(screen.getByTestId('platform-usage-endpoint-section')).toHaveTextContent(note);
+    unmount();
+
+    setData({ source: undefined, ownerType: undefined });
+    renderDashboard();
+    expect(screen.getByTestId('platform-usage-endpoint-section')).not.toHaveTextContent(note);
+  });
 });
 
 describe('PlatformUsageDashboard credit sections', () => {

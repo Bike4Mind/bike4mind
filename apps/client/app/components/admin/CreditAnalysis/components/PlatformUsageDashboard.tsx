@@ -178,7 +178,8 @@ const EndpointSection: React.FC<{
   endpoints: IPlatformEndpointUsage | null;
   endpointWindowDays: number;
   requestedDays: number;
-}> = ({ endpoints, endpointWindowDays, requestedDays }) => {
+  isFiltered: boolean;
+}> = ({ endpoints, endpointWindowDays, requestedDays, isFiltered }) => {
   const chartData = useMemo(
     () => zeroFillDailySeries(endpoints?.overTime ?? [], endpointWindowDays, d => d.requests),
     [endpoints, endpointWindowDays]
@@ -198,8 +199,9 @@ const EndpointSection: React.FC<{
         </Chip>
       </Stack>
       <Typography level="body-xs" color="neutral" sx={{ mb: 2 }}>
-        From the API-key request log, which records api and cli traffic only. Not split by api vs cli and not filtered
-        by owner type. Last {endpointWindowDays} days
+        From the API-key request log, which records api and cli traffic only.
+        {isFiltered ? ' Filtering excludes requests logged before source and owner type were recorded.' : ''} Last{' '}
+        {endpointWindowDays} days
         {endpointWindowDays < requestedDays ? ' (the log keeps 90 days of history)' : ''}.
       </Typography>
 
@@ -393,6 +395,7 @@ export const PlatformUsageDashboard: React.FC = () => {
               endpoints={data.endpoints}
               endpointWindowDays={data.endpointWindowDays}
               requestedDays={data.days}
+              isFiltered={!!data.source || !!data.ownerType}
             />
           </Stack>
         )

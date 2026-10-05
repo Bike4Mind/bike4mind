@@ -153,6 +153,8 @@ import EnsureGitHubLakeAuthGrantIndexes from './20260921235962_ensure-github-lak
 import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-origin-channel-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureQuestCallbackDispatchedIndex from './20260921235990_ensure-quest-callback-dispatched-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
+import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikeyusagelog-source-owner-index';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -281,6 +283,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureGitHubLakeAuthGrantIndexes,
   EnsureSessionOriginChannelIndex,
   EnsureQuestCallbackDispatchedIndex,
+  EnsureApiKeyUsageLogSourceOwnerIndex,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
