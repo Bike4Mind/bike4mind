@@ -14,8 +14,10 @@
  * /api/ai/v1/completions), so a key holding *either* scope passes.
  *
  * The handler is driven down its async path (wait defaults false) with an
- * explicit sessionId, so `ChatCompletionProcess` and the getSessionId lookups
- * never run - only `ChatCompletionInvoke.invoke` needs to return a quest.
+ * explicit sessionId, so `ChatCompletionProcess` and the session-resolution
+ * lookups/creation never run - only `ChatCompletionInvoke.invoke` needs to
+ * return a quest. The `session resolution` block below drops the explicit
+ * sessionId to exercise that resolution directly.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
@@ -34,6 +36,8 @@ const {
   mockResolveUserRateLimitPerMin,
   mockOrgFindAccessibleById,
   mockSystemPromptText,
+  mockCreateSession,
+  mockFindByIdAndUpdate,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -46,6 +50,11 @@ const {
   mockTryIncrement: vi.fn(),
   mockResolveUserRateLimitPerMin: vi.fn(),
   mockOrgFindAccessibleById: vi.fn(),
+  // Fresh-session creation for API-key / newConversation callers (see resolveChatSessionId).
+  mockCreateSession: vi.fn(),
+  // The lastNotebookId write on the JWT most-recent fallback: asserted NOT to run for
+  // API-key / newConversation callers.
+  mockFindByIdAndUpdate: vi.fn(),
   // What process() leaves on itself, rather than on the quest: the disclosed text is never
   // persisted. Holds a value only for the tests that opt in.
   mockSystemPromptText: { value: undefined as unknown },
@@ -102,6 +111,11 @@ vi.mock('@bike4mind/services', async orig => {
   const actual = await orig<Record<string, unknown>>();
   return {
     ...actual,
+    sessionService: {
+      ...(actual.sessionService as object),
+      // resolveChatSessionId creates a real notebook through this; the DB edge is stubbed here.
+      createSession: (...a: unknown[]) => mockCreateSession(...a),
+    },
     userApiKeyService: {
       ...(actual.userApiKeyService as object),
       validateUserApiKey: (...a: unknown[]) => mockValidate(...a),
@@ -148,7 +162,12 @@ vi.mock('@bike4mind/database', async orig => {
   return {
     ...actual,
     connectDB: vi.fn().mockResolvedValue(undefined),
-    User: Object.assign(Object.create(RealUser), { findById: (...a: unknown[]) => mockFindById(...a) }),
+    User: Object.assign(Object.create(RealUser), {
+      findById: (...a: unknown[]) => mockFindById(...a),
+      // The JWT most-recent fallback writes lastNotebookId; the API-key / newConversation paths
+      // must never reach it.
+      findByIdAndUpdate: (...a: unknown[]) => mockFindByIdAndUpdate(...a),
+    }),
     cacheRepository: {
       ...(actual.cacheRepository as object),
       // Hoisted so tests can assert the per-user limiter actually ran, and drive
@@ -242,6 +261,8 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockResolveUserRateLimitPerMin.mockResolvedValue(60);
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
+    mockCreateSession.mockResolvedValue({ id: 'new-session' });
+    mockFindByIdAndUpdate.mockResolvedValue(undefined);
     // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
     mockResolveDefaultChatModel.mockImplementation(
       async ({ configuredModel }: { configuredModel?: string | null }) => ({
@@ -819,6 +840,105 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
+    });
+  });
+
+  // The bug: with no sessionId, the old getSessionId() fell back to User.lastNotebookId - the
+  // notebook the human last opened in the UI - so an API-key script posted into it. An API-key
+  // caller (and any newConversation call) must instead get its own notebook and leave that cursor
+  // alone. apiKeyAuth's user lookup and the JWT fallback share User.findById, so the fixture
+  // carries the open-notebook cursor here.
+  describe('session resolution (API key vs JWT vs newConversation)', () => {
+    const OPEN_NOTEBOOK = 'open-notebook';
+
+    const withOpenNotebook = () => {
+      mockFindById.mockReturnValue(
+        Promise.resolve({
+          id: 'user-1',
+          _id: 'user-1',
+          isBanned: false,
+          disputePending: false,
+          lastNotebookId: OPEN_NOTEBOOK,
+        })
+      );
+    };
+    const invokedSessionId = () => (mockInvoke.mock.calls[0][0] as { body: { sessionId?: string } }).body.sessionId;
+
+    it('API key with no sessionId creates a fresh notebook and never touches lastNotebookId', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe('new-session');
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('newConversation: true from a JWT caller creates a fresh notebook despite an open one', async () => {
+      withOpenNotebook();
+      const { req, res } = fire({ apiKey: null, body: { message: 'hi', newConversation: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe('new-session');
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockFindByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rejects newConversation together with sessionId (400) before creating anything', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({
+        body: { message: 'hi', sessionId: 'sess-1', newConversation: true },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('API key with an explicit sessionId uses it unchanged and creates nothing', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'explicit-sess' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe('explicit-sess');
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('JWT caller with no sessionId still gets the last open notebook, unchanged', async () => {
+      withOpenNotebook();
+      const { req, res } = fire({ apiKey: null, body: { message: 'hi' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(invokedSessionId()).toBe(OPEN_NOTEBOOK);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+    });
+
+    it('echoes the newly created sessionId on the async ACK', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi' } });
+      await handler(req, res);
+      expect(res._getJSONData().sessionId).toBe('new-session');
+    });
+
+    it('echoes the resolved sessionId on the wait: true body too', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi', wait: true } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData().sessionId).toBe('new-session');
+    });
+
+    it('labels an API-created notebook so a human can spot it in the notebook list', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      const { req, res } = fire({ body: { message: 'hi' } });
+      await handler(req, res);
+      const name = (mockCreateSession.mock.calls[0][1] as { name: string }).name;
+      expect(name).toMatch(/^API chat - /);
     });
   });
 });
