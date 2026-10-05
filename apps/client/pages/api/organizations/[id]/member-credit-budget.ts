@@ -1,6 +1,6 @@
 // PUT /api/organizations/:id/member-credit-budget
 // Set or clear the org's default monthly per-member credit budget. Billing owner, appointed org
-// admin, or platform admin (organizationService.canManageMemberCreditBudgets).
+// admin, or platform admin (canManageMemberCreditBudgets in @bike4mind/common).
 
 import { ApiKeyScope, toSafeOrganization } from '@bike4mind/common';
 import { organizationService } from '@bike4mind/services';

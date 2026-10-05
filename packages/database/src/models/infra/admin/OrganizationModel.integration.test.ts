@@ -260,6 +260,21 @@ describe('OrganizationModel - setMemberMaxCredits', () => {
     expect(reloaded?.userDetails?.[0]?.maxCredits ?? null).toBeNull();
   });
 
+  it('still sets an override for the appointed manager, who has no users[] row', async () => {
+    const org = await Organization.create({
+      name: 'Acme',
+      userId: 'owner-1',
+      managerId: 'mgr-1',
+      personal: false,
+      users: [],
+      userDetails: [{ id: 'mgr-1', email: 'm@example.com', name: 'M', usedCredits: 0, lastCreditUsedAt: null }],
+    });
+
+    expect(await organizationRepository.setMemberMaxCredits(org.id, 'mgr-1', 40)).toBe(true);
+    const reloaded = await Organization.findById(org.id);
+    expect(reloaded?.userDetails?.[0]?.maxCredits).toBe(40);
+  });
+
   it('still sets an override for the owner, who has no users[] row', async () => {
     const org = await Organization.create({
       name: 'Acme',

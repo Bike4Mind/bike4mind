@@ -1,6 +1,6 @@
 // PUT /api/organizations/:id/members/:userId/credit-budget
 // Set or clear one member's monthly credit budget override (null inherits the org default).
-// Billing owner, appointed org admin, or platform admin (organizationService.canManageMemberCreditBudgets).
+// Billing owner, appointed org admin, or platform admin (canManageMemberCreditBudgets in @bike4mind/common).
 // A sibling of index.ts rather than a new method on it: that route is gated on `datalake:share`,
 // which says nothing about credit budgets.
 

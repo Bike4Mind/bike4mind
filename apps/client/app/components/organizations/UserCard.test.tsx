@@ -9,6 +9,7 @@ import OrganizationUserCard from './UserCard';
 import { MemberCreditUsage } from './memberCreditBudget';
 
 const setOverride = vi.fn();
+const viewer = vi.hoisted(() => ({ id: 'viewer' }));
 vi.mock('@client/app/hooks/data/organizations', () => ({
   useRemoveMemberFromOrganization: () => ({ mutateAsync: vi.fn() }),
   useLeaveOrganization: () => ({ mutateAsync: vi.fn() }),
@@ -16,7 +17,7 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
 }));
 vi.mock('@client/app/hooks/data/invites', () => ({ useCancelInvite: () => ({ mutateAsync: vi.fn() }) }));
 vi.mock('@client/app/hooks/useConfirmation', () => ({ useConfirmation: () => vi.fn() }));
-vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: 'viewer' } }) }));
+vi.mock('@client/app/contexts/UserContext', () => ({ useUser: () => ({ currentUser: { id: viewer.id } }) }));
 vi.mock('@client/app/hooks/useIsMobile', () => ({ useIsMobile: () => false }));
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => vi.fn() }));
 vi.mock('@client/app/utils/s3', () => ({ getAppFileUrl: () => '' }));
@@ -74,7 +75,10 @@ describe('OrganizationUserCard credit usage', () => {
 });
 
 describe('OrganizationUserCard monthly limit control', () => {
-  beforeEach(() => setOverride.mockReset().mockResolvedValue({}));
+  beforeEach(() => {
+    viewer.id = 'viewer';
+    setOverride.mockReset().mockResolvedValue({});
+  });
 
   it('is hidden from a viewer who cannot manage budgets', () => {
     renderCard(member('a', { tracked: true, used: 0, cap: 500, isOverride: false }), false);
@@ -90,6 +94,15 @@ describe('OrganizationUserCard monthly limit control', () => {
     expect(screen.queryByText('Cancel Invite')).toBeNull();
     fireEvent.click(screen.getByTestId('organization-user-card-set-limit'));
     expect(screen.getByTestId('credit-limit-modal')).toBeTruthy();
+  });
+
+  // The billing owner viewing their own row would satisfy canLeave, so this pins the `!isOwner` guard on it.
+  it('offers the owner no Leave Organization on their own row', async () => {
+    viewer.id = 'owner1';
+    renderCard(member('owner1', { tracked: true, used: 0, cap: 500, isOverride: false }), true, [Permission.share]);
+    openMenu();
+    expect(await screen.findByText('Set monthly limit')).toBeTruthy();
+    expect(screen.queryByText('Leave Organization')).toBeNull();
   });
 
   it('saves an override of 0 and can clear back to the org default', async () => {

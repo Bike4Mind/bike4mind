@@ -49,14 +49,15 @@ interface GroupMembershipParams {
   userId: string;
 }
 
-type OrgLike = { userId: string; adminUserIds?: string[]; users: Array<{ userId: string }> };
-
 /**
  * Who may manage an org's group memberships: a platform admin, the org's billing owner, or an
- * appointed org admin (`adminUserIds`). A plain member has no group-management authority.
+ * appointed org admin (`adminUserIds`) who still holds a `users[]` row. A plain member, or an admin
+ * left with a stale `adminUserIds` entry, has no group-management authority.
  */
-export const assertCanManageOrgGroups = (actingUser: IUserDocument, organization: OrgLike): void => {
-  // An appointed org admin must ALSO still be a current member - see isOrgOwnerOrCurrentAdmin.
+export const assertCanManageOrgGroups = (
+  actingUser: IUserDocument,
+  organization: Parameters<typeof isOrgOwnerOrCurrentAdmin>[1]
+): void => {
   if (!isOrgOwnerOrCurrentAdmin(actingUser, organization)) {
     throw new ForbiddenError("Not authorized to manage this organization's groups");
   }

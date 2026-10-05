@@ -10,7 +10,7 @@ const updateSchema = z.object({
   billingContact: z.string().optional(),
   currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(), // ~2500 tokens
-  maxCreditsPerMember: z.number().positive().nullable().optional(),
+  maxCreditsPerMember: z.number().int().positive().nullable().optional(),
 });
 
 type UpdateParameters = z.infer<typeof updateSchema>;

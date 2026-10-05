@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { MemberCreditBudgetNote } from './MemberCreditBudgetNote';
@@ -33,8 +33,14 @@ const orgWithUsage = (used: number, cap: number) => ({
 
 describe('MemberCreditBudgetNote', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T12:00:00Z'));
     mocks.selectedAccount = { id: 'org1', personal: false };
     mocks.organization = orgWithUsage(450, 500);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('shows used and cap once the member nears the monthly limit', () => {
@@ -42,6 +48,14 @@ describe('MemberCreditBudgetNote', () => {
     const text = screen.getByTestId('member-credit-budget-note-text').textContent;
     expect(text).toContain('450');
     expect(text).toContain('500');
+  });
+
+  it('shows the exhausted state once the member has used the whole limit', () => {
+    mocks.organization = orgWithUsage(500, 500);
+    render(<MemberCreditBudgetNote />, { wrapper: TestWrapper });
+    const text = screen.getByTestId('member-credit-budget-note-text').textContent;
+    expect(text).toContain('500');
+    expect(text).not.toContain('450');
   });
 
   it('hides after the dismiss button is clicked', () => {

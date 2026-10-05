@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import React from 'react';
-import { renderHook } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 import { useSetMemberCreditDefault, useSetMemberCreditOverride } from './organizations';
 
@@ -33,6 +34,7 @@ describe('credit budget mutations', () => {
 
     expect(put).toHaveBeenCalledWith('/api/organizations/org1/member-credit-budget', { maxCreditsPerMember: 500 });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
+    expect(toast.success).toHaveBeenCalledWith('Monthly credit limit updated');
   });
 
   it('useSetMemberCreditDefault sends null to remove the limit', async () => {
@@ -51,4 +53,25 @@ describe('credit budget mutations', () => {
     expect(put).toHaveBeenCalledWith('/api/organizations/org1/members/user1/credit-budget', { maxCredits: 0 });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['organizations'] });
   });
+
+  it.each([
+    ['useSetMemberCreditDefault', useSetMemberCreditDefault, { organizationId: 'org1', maxCreditsPerMember: 5 }],
+    [
+      'useSetMemberCreditOverride',
+      useSetMemberCreditOverride,
+      { organizationId: 'org1', userId: 'user1', maxCredits: 5 },
+    ],
+  ] as const)(
+    '%s rejects, toasts the failure and does not invalidate when the request fails',
+    async (_name, useHook, variables) => {
+      put.mockRejectedValue(new Error('boom'));
+      const { result, invalidateSpy } = renderWithClient(useHook);
+
+      await expect(result.current.mutateAsync(variables as never)).rejects.toThrow('boom');
+
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('boom')));
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+    }
+  );
 });
