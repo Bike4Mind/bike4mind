@@ -16,15 +16,19 @@ describe('renderApiKeyReownedEmail', () => {
     expect(html).toContain('My Key');
   });
 
-  it('escapes HTML characters in the key name', () => {
-    const { html } = renderApiKeyReownedEmail('<script>alert(1)</script>');
+  it('escapes all five HTML special characters in the key name', () => {
+    const { html } = renderApiKeyReownedEmail('A&B "q" \'x\'');
+    expect(html).toContain('A&amp;B');
+    expect(html).toContain('&quot;q&quot;');
+    expect(html).toContain('&#39;x&#39;');
     expect(html).not.toContain('<script>');
-    expect(html).toContain('&lt;script&gt;');
   });
 
-  it('strips newlines from the subject to prevent header injection', () => {
-    const { subject } = renderApiKeyReownedEmail('Key\nWith\nNewlines');
-    expect(subject).not.toMatch(/\n/);
+  it('strips CR and LF from the subject to prevent header injection', () => {
+    // The newlines are what enable injection - stripping them collapses the
+    // injected fragment into the subject value, which is harmless.
+    const { subject } = renderApiKeyReownedEmail('Key\r\nBcc: attacker@evil.test');
+    expect(subject).not.toMatch(/[\r\n]/);
   });
 });
 

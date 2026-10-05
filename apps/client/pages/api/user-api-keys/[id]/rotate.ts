@@ -49,7 +49,11 @@ const handler = baseApi().post(
     );
 
     if (rotatedKey.previousOwnerUserId) {
-      await notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name);
+      // Cap the wait so a stalled SMTP host cannot delay the show-once credential response.
+      await Promise.race([
+        notifyApiKeyRotationReown(rotatedKey.previousOwnerUserId, rotatedKey.name, req.logger),
+        new Promise<void>(resolve => setTimeout(resolve, 5_000)),
+      ]);
     }
 
     return res.status(200).json(rotatedKey);

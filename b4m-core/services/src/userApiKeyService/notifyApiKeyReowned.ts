@@ -5,6 +5,7 @@ export interface ApiKeyReownedNotifyDeps {
   db: { users: Pick<IUserRepository, 'findActiveEmailsByIds'> };
   /** Mirrors the app-layer MailService.sendEmail signature. */
   mailer: { sendEmail(to: string, data: { subject: string; html: string }): Promise<unknown> };
+  logger?: { warn(msg: string, meta: unknown): void };
 }
 
 export function renderApiKeyReownedEmail(keyName: string): { subject: string; html: string } {
@@ -30,7 +31,8 @@ export async function notifyApiKeyReowned(
   context: { previousOwnerUserId: string; keyName: string },
   deps: ApiKeyReownedNotifyDeps
 ): Promise<void> {
-  const warn = (msg: string, meta: unknown) => console.warn(msg, meta);
+  const warn = (msg: string, meta: unknown) =>
+    deps.logger?.warn ? deps.logger.warn(msg, meta) : console.warn(msg, meta);
   try {
     const emailRows = await deps.db.users.findActiveEmailsByIds([context.previousOwnerUserId]);
     if (emailRows.length === 0) {
