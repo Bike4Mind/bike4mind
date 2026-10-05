@@ -160,8 +160,6 @@ describe('[strategy]/callback - banned user gate', () => {
 
   it('still signs in a user who is not banned', async () => {
     const res = await runCallback(null, { id: 'u-ok', email: 'ok@example.com', isBanned: false }, undefined);
-    // The handler does not await passport's callback, and the success path awaits more
-    // than the refusal paths do, so let its remaining microtasks drain before asserting.
 
     expect(mockIssueBrowserSession).toHaveBeenCalled();
     expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
