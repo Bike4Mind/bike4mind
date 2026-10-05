@@ -1349,8 +1349,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
       },
       {
-        // Deduped per file before the unwind, so a file counts once per path however many of its
-        // tags sit under that path, and the $group below stays one key per path.
+        // Each file's matched tags as a deduped set, so a file counts once per path however many of
+        // its tags sit under that path.
         $project: {
           own: {
             $setUnion: [
@@ -1369,15 +1369,24 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           },
         },
       },
+      // Path expansion is the expensive step (about 2x the whole old per-tag pipeline when run per
+      // file), so it runs once per distinct tag set, weighted by how many files share that set.
+      // Grouping only saves work: if $setUnion's unspecified order splits one set, counts still add.
+      { $group: { _id: '$own', files: { $sum: 1 } } },
       {
         $project: {
-          own: 1,
+          own: '$_id',
+          files: 1,
           paths: {
-            $reduce: {
-              input: '$own',
-              initialValue: [],
-              in: { $setUnion: ['$$value', TAG_SELF_AND_ANCESTOR_PATHS] },
-            },
+            $setUnion: [
+              {
+                $reduce: {
+                  input: { $map: { input: '$_id', in: TAG_SELF_AND_ANCESTOR_PATHS } },
+                  initialValue: [],
+                  in: { $concatArrays: ['$$value', '$$this'] },
+                },
+              },
+            ],
           },
         },
       },
@@ -1385,8 +1394,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       {
         $group: {
           _id: '$paths',
-          count: { $sum: { $cond: [{ $in: ['$paths', '$own'] }, 1, 0] } },
-          fileCount: { $sum: 1 },
+          count: { $sum: { $cond: [{ $in: ['$paths', '$own'] }, '$files', 0] } },
+          fileCount: { $sum: '$files' },
         },
       },
       { $project: { tag: '$_id', count: 1, fileCount: 1, _id: 0 } },
