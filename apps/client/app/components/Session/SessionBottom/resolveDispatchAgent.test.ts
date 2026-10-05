@@ -47,10 +47,17 @@ describe('useSendMessage - agent-mode dispatch uses resolveDispatchAgent', () =>
     );
   });
 
-  it('forwards that agent as agentId and model on agentExecution.start', () => {
+  it('forwards that agent as agentId on agentExecution.start', () => {
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     expect(dispatch).toMatch(/^\s*agentId: dispatchAgent\?\.id,\s*$/m);
-    expect(source).toMatch(/const dispatchModel = dispatchAgent\?\.preferredModel \?\? \(model as string\);/);
+    expect(dispatch).toMatch(/^\s*model: dispatchModel,\s*$/m);
+  });
+
+  // A picker-only agent resolves as `dispatchAgent` (see 'runs as the picker-attached agent'), so
+  // deriving the model from it would let its preferredModel override the composer selection.
+  it('takes the model from an @mentioned agent only, never a picker-attached one', () => {
+    const line = source.match(/^\s*const dispatchModel = (.*);$/m);
+    expect(line?.[1]).toBe('(orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string)');
   });
 });

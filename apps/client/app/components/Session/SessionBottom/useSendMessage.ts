@@ -909,19 +909,18 @@ export function useSendMessage({
     //     (preserves the earlier `@specific-agent` UX). A briefcase
     //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
     //   - Without (toggle ON or `@agent` literal): run as the first agent
-    //     attached with the Agents picker, or dispatch agentless when none is
-    //     attached and let the executor build a synthetic profile from admin defaults.
+    //     attached with the Agents picker on the composer-selected model, or
+    //     dispatch agentless when none is attached and let the executor build a
+    //     synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
       try {
-        // Prefer the dispatched agent's own text model (see `resolveDispatchAgent`)
-        // so a personality-only agent runs on its `preferredModel` rather than the
-        // caller's current selection. Mirrors the `agentId` resolution below
-        // (#agent-mode-persona). Falls back to the caller's `model` when the
-        // agent pins none.
         // Same set the composer's Agents badge shows (SessionBottom `displayAgents`).
         const pickerAgents = currentSessionId ? sessionAgents : workBenchAgents;
         const dispatchAgent = resolveDispatchAgent(orchestrationAgent, mentionedAgent, pickerAgents);
-        const dispatchModel = dispatchAgent?.preferredModel ?? (model as string);
+        // Only an @mentioned agent's `preferredModel` overrides the composer model
+        // (#agent-mode-persona). A picker-attached agent sets `agentId` alone, so the
+        // composer-selected model still wins for it, as it does in chat mode.
+        const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
         // `currentSessionId` is a stale render-closure value on `/new` (still null even
         // after the Data Lake seam above just created + set the session), so fall back to
         // the locally-created id to avoid minting a second, ungrounded session here.
