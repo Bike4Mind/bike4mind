@@ -430,7 +430,7 @@ export default function ManagerNav({
                                   flexShrink: 0,
                                 }}
                               />
-                              <ListItemContent sx={{ flex: '1 1 auto', maxWidth: '100%' }}>
+                              <ListItemContent sx={{ flex: '1 1 auto', maxWidth: 'calc(100% - 24px)' }}>
                                 <Tooltip title={lake.name} size="sm" placement="top-start">
                                   <Typography
                                     noWrap
