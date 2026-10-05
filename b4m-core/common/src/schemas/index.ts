@@ -19,6 +19,7 @@ export * from './promptMeta';
 export * from './analytics';
 export * from './llm';
 export * from './me';
+export * from './creditBalance';
 export * from './publicFile';
 export * from './embeddingsApi';
 export * from './toolSideEffects';
