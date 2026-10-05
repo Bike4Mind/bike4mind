@@ -13,8 +13,7 @@ import { deleteFromQueue, receiveFromQueue } from '@server/utils/sqs';
  * the hosted Lambda uses (e.g. researchEngineQueue.dispatch), wrapped in a synthetic
  * EventBridge/SQS-shaped event, so there is one code path in every environment.
  *
- * ElasticMQ has no dead-letter queue, so this implements a poison-message guard in
- * software: a message whose handler keeps throwing is left for redelivery until
+ * Queues without broker-managed redrive use a poison-message guard in software: a message whose handler keeps throwing is left for redelivery until
  * ApproximateReceiveCount exceeds maxReceiveCount, then deleted with an error log.
  */
 
@@ -244,7 +243,7 @@ export class SelfHostWorker {
     // on receive count (e.g. isFinalDeliveryAttempt) needs the count it sees at its own last
     // invocation to line up with maxReceiveCount, exactly as it would on a real SQS-backed queue.
     if (receiveCount > q.maxReceiveCount) {
-      // Poison guard: no DLQ in ElasticMQ, so drop after the cap and log loudly.
+      // Default poison guard. Broker-redriven queues opt out with their registration cap.
       this.logger.error(
         `[selfHostWorker] "${q.name}" message dropped after ${receiveCount} deliveries (> ${q.maxReceiveCount})`,
         { messageId: message.MessageId }
