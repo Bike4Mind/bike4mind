@@ -1,6 +1,7 @@
 import { usdToCredits } from '../pricing';
 import type { VideoGenerationRequest } from './request';
 import type { VideoModelCapabilities } from './types';
+import { validateAgainstCapabilities } from './validate';
 
 export const estimateVideoCostUsd = (caps: VideoModelCapabilities, request: VideoGenerationRequest): number => {
   const { pricing } = caps;
@@ -23,3 +24,17 @@ export const estimateVideoCostUsd = (caps: VideoModelCapabilities, request: Vide
 // Shared by the studio (display) and the server (credit hold) so the two can never drift.
 export const estimateVideoCostCredits = (caps: VideoModelCapabilities, request: VideoGenerationRequest): number =>
   usdToCredits(estimateVideoCostUsd(caps, request));
+
+/**
+ * The request a finished clip is billed on: the provider-reported duration when the model could have been asked for
+ * it, otherwise the requested one. A reported 8.04s has no per-clip price, and billing must not fail on rounding.
+ */
+export const billedVideoRequest = (
+  caps: VideoModelCapabilities,
+  request: VideoGenerationRequest,
+  reportedDurationSeconds: number | undefined
+): VideoGenerationRequest => {
+  if (reportedDurationSeconds === undefined) return request;
+  const reported = { ...request, durationSeconds: reportedDurationSeconds };
+  return validateAgainstCapabilities(reported, caps).ok ? reported : request;
+};

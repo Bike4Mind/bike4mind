@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { usdToCredits } from '../pricing';
 import type { VideoModelCapabilities } from './types';
 import type { VideoGenerationRequest } from './request';
-import { estimateVideoCostCredits, estimateVideoCostUsd } from './estimateCost';
+import { billedVideoRequest, estimateVideoCostCredits, estimateVideoCostUsd } from './estimateCost';
 
 const perSecond: VideoModelCapabilities = {
   provider: 'test',
@@ -56,5 +56,27 @@ describe('estimateVideoCostUsd', () => {
 describe('estimateVideoCostCredits', () => {
   it('converts through usdToCredits so the shown estimate equals the held amount', () => {
     expect(estimateVideoCostCredits(perSecond, request({ durationSeconds: 5 }))).toBe(usdToCredits(0.5));
+  });
+});
+
+describe('billedVideoRequest', () => {
+  it('bills a reported duration the per-clip model has no clip for on the requested duration', () => {
+    const requested = request({ durationSeconds: 6 });
+    const billed = billedVideoRequest(perClip, requested, 6.04);
+    expect(billed).toEqual(requested);
+    expect(estimateVideoCostUsd(perClip, billed)).toBeCloseTo(0.28);
+  });
+
+  it('bills on the reported duration when the model accepts it', () => {
+    expect(billedVideoRequest(perSecond, request({ durationSeconds: 8 }), 5).durationSeconds).toBe(5);
+  });
+
+  it('ignores a reported duration outside the model range', () => {
+    expect(billedVideoRequest(perSecond, request({ durationSeconds: 8 }), 2).durationSeconds).toBe(8);
+  });
+
+  it('uses the requested duration when nothing was reported', () => {
+    const requested = request({ durationSeconds: 8 });
+    expect(billedVideoRequest(perSecond, requested, undefined)).toBe(requested);
   });
 });
