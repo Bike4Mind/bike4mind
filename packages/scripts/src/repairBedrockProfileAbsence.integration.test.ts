@@ -82,8 +82,9 @@ const seed = async () => {
   );
 };
 
-const statusOf = (rows: Awaited<ReturnType<typeof modelCatalogRepository.rowsInForce>>, modelId: string) =>
-  (resolveCatalogRecords(rows).get(modelId)?.record.lifecycle as { status?: string } | undefined)?.status;
+const lifecycleOf = (rows: Awaited<ReturnType<typeof modelCatalogRepository.rowsInForce>>, modelId: string) =>
+  resolveCatalogRecords(rows).get(modelId)?.record.lifecycle as
+    { status?: string; deprecationDate?: string } | undefined;
 
 describe('repairBedrockProfileAbsence', () => {
   it('reports the affected profile id without writing in a dry run', async () => {
@@ -104,10 +105,12 @@ describe('repairBedrockProfileAbsence', () => {
     expect(first.repaired).toBe(1);
 
     const rows = await modelCatalogRepository.rowsInForce(new Date());
-    expect(statusOf(rows, 'global.anthropic.claude-sonnet-4-6')).toBe('active');
+    // Active AND undated, or isModelDeprecated would still hide it from /api/models.
+    expect(lifecycleOf(rows, 'global.anthropic.claude-sonnet-4-6')).toMatchObject({ status: 'active' });
+    expect(lifecycleOf(rows, 'global.anthropic.claude-sonnet-4-6')?.deprecationDate).toBeUndefined();
     // Selective: the bare graduated id and the operator row keep their status.
-    expect(statusOf(rows, 'anthropic.claude-3-haiku-20240307-v1:0')).toBe('deprecated');
-    expect(statusOf(rows, 'us.anthropic.claude-opus-4-1-20250805-v1:0')).toBe('deprecated');
+    expect(lifecycleOf(rows, 'anthropic.claude-3-haiku-20240307-v1:0')?.status).toBe('deprecated');
+    expect(lifecycleOf(rows, 'us.anthropic.claude-opus-4-1-20250805-v1:0')?.status).toBe('deprecated');
 
     // The stale streak is cleared, so the next discovery run starts from zero.
     const state = await ModelDiscoveryState.findOne({ modelId: 'global.anthropic.claude-sonnet-4-6' }).lean();
