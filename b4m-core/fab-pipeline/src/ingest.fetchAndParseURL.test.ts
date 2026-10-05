@@ -101,6 +101,14 @@ describe('fetchAndParseURL redirect handling', () => {
     expect(axiosGet.mock.calls[0][1]).toMatchObject({ proxy: false });
   });
 
+  it('sends a descriptive User-Agent instead of the axios default', async () => {
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    await fetchAndParseURL(PUBLIC_URL, { logger });
+
+    expect(axiosGet.mock.calls[0][1].headers['User-Agent']).toMatch(/compatible;/);
+  });
+
   it('gives up after too many redirects instead of looping', async () => {
     axiosGet.mockResolvedValue(redirectTo('http://93.184.216.34/again'));
 
