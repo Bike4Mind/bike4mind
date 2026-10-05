@@ -26,7 +26,8 @@ export type GenerationJobHandler = {
   kind: GenerationJobKind;
   /**
    * Throwing means the outcome is unknown (the provider may have created a job), so the engine fails it as
-   * orphaned_submit. Return `{ next: 'retry' }` only for a definitive rejection that created nothing; it is resubmitted.
+   * orphaned_submit. Return `{ next: 'retry' }` for anything that created nothing (a failure before the provider
+   * call, or a definitive rejection); it is resubmitted.
    */
   submit(job: IGenerationJobDocument, context: GenerationJobStepContext): Promise<StepResult>;
   poll(job: IGenerationJobDocument, context: GenerationJobStepContext): Promise<StepResult>;

@@ -1,4 +1,5 @@
 import {
+  billedVideoRequest,
   estimateVideoCostCredits,
   estimateVideoCostUsd,
   getVideoModelCapabilities,
@@ -6,6 +7,7 @@ import {
   validateAgainstCapabilities,
   type GenerationJobErrorCode,
   type IGenerationJobDocument,
+  type ValidatedVideoRequest,
   type VideoJobOutput,
   type VideoJobPayload,
 } from '@bike4mind/common';
@@ -38,6 +40,22 @@ const noApiKey = (job: IGenerationJobDocument) =>
 const inlineBytes = (output: ProviderOutput) =>
   output.kind === 'inline' ? Math.floor((output.base64.length * 3) / 4) : 0;
 
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+// The provider reports progress as 0..1; a misbehaving adapter must not push a nonsense value to the client.
+const clampProgress = (progress: number | undefined): { progress?: number } =>
+  progress !== undefined && Number.isFinite(progress) ? { progress: Math.min(1, Math.max(0, progress)) } : {};
+
+const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = { 'video/mp4': 'mp4', 'video/webm': 'webm' };
+const extensionFor = (contentType: string): string => EXTENSION_BY_CONTENT_TYPE[contentType] ?? 'bin';
+
+type PreparedSubmit = {
+  provider: VideoProvider;
+  request: ValidatedVideoRequest;
+  inputs: ResolvedInputs;
+  ctx: VideoProviderContext;
+};
+
 // Inline output can be large base64, so it must not outlive the store step on the job document.
 const withoutProviderOutput = ({ providerOutput: _dropped, ...payload }: VideoJobPayload): VideoJobPayload => payload;
 
@@ -61,11 +79,23 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
   const handleOf = (job: IGenerationJobDocument): ProviderJobHandle | null => job.payload.providerHandle ?? null;
 
-  const settle = async (job: IGenerationJobDocument) => {
+  // A pricing failure (a catalog change since the job was created) must not fail terminal handling: NaN makes
+  // settleCreditHold keep the full reservation and log it at error level.
+  const estimate = (job: IGenerationJobDocument) => {
     const { request } = job.payload;
     const caps = getVideoModelCapabilities(request.model);
-    // Capability validation pinned the requested duration to what the model produces; prefer what it reports.
-    const billed = { ...request, durationSeconds: job.payload.reportedDurationSeconds ?? request.durationSeconds };
+    const billed = billedVideoRequest(caps, request, job.payload.reportedDurationSeconds);
+    try {
+      return { billed, credits: estimateVideoCostCredits(caps, billed), usd: estimateVideoCostUsd(caps, billed) };
+    } catch (error) {
+      deps.logger.error('video_job_estimate_failed', { jobId: job.id, model: request.model, error });
+      return { billed, credits: Number.NaN, usd: null };
+    }
+  };
+
+  const settle = async (job: IGenerationJobDocument) => {
+    const { request } = job.payload;
+    const { billed, credits, usd } = estimate(job);
     // Jobs without a quest use the job id: the video ledger variant is quest-scoped.
     const entry: CreditLedgerEntry = {
       type: 'video_generation_usage',
@@ -76,24 +106,46 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     const charged = job.creditHold
       ? await settleCreditHold(
           job.creditHold,
-          estimateVideoCostCredits(caps, billed),
+          credits,
           entry,
           { featureLabel: FEATURE_LABEL, logger: deps.logger },
           deps.credits
         )
       : 0;
     await markSettled(job, charged);
+    // Without a price there is no honest cost to report; the estimate failure is already logged.
+    if (usd === null) return;
     // Usage is reporting only: the credits already moved, so a failure here must not hold up terminal handling.
     try {
       await deps.recordUsage({
         job,
         creditsCharged: charged,
-        costUsd: estimateVideoCostUsd(caps, billed),
+        costUsd: usd,
         durationSeconds: billed.durationSeconds,
       });
     } catch (error) {
       deps.logger.error('video_job_record_usage_failed', { jobId: job.id, creditsCharged: charged, error });
     }
+  };
+
+  const prepareSubmit = async (
+    job: IGenerationJobDocument,
+    context: GenerationJobStepContext
+  ): Promise<PreparedSubmit | StepResult> => {
+    const provider = providerFor(job);
+    const ctx = await contextFor(job, context);
+    if (!ctx) return noApiKey(job);
+    const { request } = job.payload;
+    // Defensive: the catalog may have changed since the job was created.
+    const validation = validateAgainstCapabilities(request, getVideoModelCapabilities(request.model));
+    if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
+    const inputs: ResolvedInputs = {};
+    if (request.mode === 'image_to_video' && request.inputImageFileId) {
+      const image = await deps.loadInputImage(job.requestedBy, request.inputImageFileId);
+      if (!image) return fail('input_image_not_found', 'Input image not found');
+      inputs.inputImage = image;
+    }
+    return { provider, request: validation.request, inputs, ctx };
   };
 
   const release = async (job: IGenerationJobDocument) => {
@@ -111,20 +163,21 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     kind: 'video',
 
     async submit(job, context) {
-      const ctx = await contextFor(job, context);
-      if (!ctx) return noApiKey(job);
-      const { request } = job.payload;
-      // Defensive: the catalog may have changed since the job was created.
-      const validation = validateAgainstCapabilities(request, getVideoModelCapabilities(request.model));
-      if (!validation.ok) return fail('provider_error', `stored request is no longer valid: ${validation.message}`);
-      const inputs: ResolvedInputs = {};
-      if (request.mode === 'image_to_video' && request.inputImageFileId) {
-        const image = await deps.loadInputImage(job.requestedBy, request.inputImageFileId);
-        if (!image) return fail('input_image_not_found', 'Input image not found');
-        inputs.inputImage = image;
-      }
+      let prepared: PreparedSubmit | StepResult;
       try {
-        const providerHandle = await providerFor(job).submit(validation.request, inputs, ctx);
+        prepared = await prepareSubmit(job, context);
+      } catch (error) {
+        // Nothing has reached the provider yet, so the outcome is known: no provider job exists to orphan.
+        deps.logger.warn('video job failed before reaching the provider; retrying', {
+          jobId: job.id,
+          message: messageOf(error),
+        });
+        return { next: 'retry', reason: messageOf(error) };
+      }
+      if ('next' in prepared) return prepared;
+      const { provider, request, inputs, ctx } = prepared;
+      try {
+        const providerHandle = await provider.submit(request, inputs, ctx);
         return { next: 'running', payload: { ...job.payload, providerHandle } };
       } catch (error) {
         // The engine treats any submit throw as an unknown outcome (orphaned_submit). Only a definitive provider
@@ -143,7 +196,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       const result = await providerFor(job).poll(handle, ctx);
       switch (result.status) {
         case 'running':
-          return { next: 'poll_again', progress: result.progress };
+          return { next: 'poll_again', ...clampProgress(result.progress) };
         case 'succeeded':
           if (inlineBytes(result.output) > MAX_INLINE_PROVIDER_OUTPUT_BYTES) {
             return fail(
@@ -174,8 +227,8 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
     async store(job, context) {
       const { payload } = job;
-      // Not idempotent: the output is only persisted by the terminal commit, so a crash after saving and before
-      // that commit re-runs this step and stores a duplicate file (bounded by MAX_STEP_ATTEMPTS).
+      // The output is only persisted by the terminal commit, so a crash after saving and before that commit
+      // re-runs this step and saves again: saveToFiles dedups per job (see VideoJobDeps.saveToFiles).
       const ctx = await contextFor(job, context);
       if (!ctx) return noApiKey(job);
       if (!payload.providerOutput) return fail('provider_error', 'storing without provider output');
@@ -206,7 +259,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         output = { location: 'files', s3Key: files.s3Key, fileId: files.fileId, ...common };
       } else {
         deps.logger.warn('video saved outside Files', { jobId: job.id, reason: files.reason });
-        const key = `generated-video/${job.ownerId}/${job.id}.mp4`;
+        const key = `generated-video/${job.ownerId}/${job.id}.${extensionFor(contentType)}`;
         const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType });
         output = { location: 'generated', s3Key, ...common };
       }

@@ -7,7 +7,7 @@ export type { ProviderJobHandle, ProviderOutput };
 
 // Expected provider outcomes are values, never exceptions; adapters throw only for transport or programmer errors.
 export type ProviderPollResult =
-  | { status: 'running'; progress?: number }
+  | { status: 'running'; /** Fraction complete, 0..1; the job handler clamps anything outside. */ progress?: number }
   | { status: 'succeeded'; output: ProviderOutput; reportedDurationSeconds?: number }
   | { status: 'blocked'; reason?: string; raw: unknown }
   | { status: 'failed'; retryable: boolean; message: string; raw: unknown };

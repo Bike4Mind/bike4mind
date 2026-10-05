@@ -178,6 +178,43 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ durationSeconds: 2 }));
   });
 
+  it('bills a reported duration the model does not offer on the requested duration', async () => {
+    const base = new TestVideoProvider();
+    const t = setup({
+      providers: createVideoProviderRegistry([
+        stubProvider({
+          poll: async (handle, ctx) => {
+            const result = await base.poll(handle, ctx);
+            return result.status === 'succeeded' ? { ...result, reportedDurationSeconds: 8.04 } : result;
+          },
+        }),
+      ]),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const job = t.jobOf(created);
+    const [, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+    expect(charged).toBe(job.creditHold?.reservedCredits);
+    expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ costUsd: 0.04, durationSeconds: 4 }));
+  });
+
+  it('keeps the full reservation and still finishes terminal handling when the price lookup throws', async () => {
+    const t = setup();
+    const error = vi.spyOn(t.deps.logger, 'error');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    await t.engine.step(job.id); // submit -> running
+    // A catalog change after submit: the stored resolution no longer has a price.
+    t.repository.jobs.get(job.id)!.payload.request.resolution = '1080p';
+    await t.runToCompletion();
+    const settled = t.jobOf(created);
+    expect(settled).toMatchObject({ state: 'succeeded' });
+    expect(settled.terminalHandledAt).toBeTruthy();
+    expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBeNaN();
+    expect(error).toHaveBeenCalledWith('video_job_estimate_failed', expect.objectContaining({ jobId: job.id }));
+    expect(t.deps.recordUsage).not.toHaveBeenCalled();
+  });
+
   it('falls back to the generated bucket when Files refuses', async () => {
     const t = setup({ saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
@@ -187,6 +224,28 @@ describe('video job end to end with the test provider', () => {
     expect(job.payload.output).toMatchObject({ location: 'generated', s3Key: `generated-video/u1/${job.id}.mp4` });
     expect(job.payload.output?.fileId).toBeUndefined();
     expect(settleCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['video/webm', 'webm'],
+    ['application/octet-stream', 'bin'],
+  ])('names a generated-bucket %s clip with the .%s extension', async (contentType, extension) => {
+    const t = setup({ saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    const storing = {
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: { kind: 'inline' as const, base64: Buffer.from('clip').toString('base64'), contentType },
+      },
+    };
+    const result = await createVideoJobHandler(t.deps).store(storing, { signal: new AbortController().signal });
+    expect(result).toMatchObject({
+      next: 'succeeded',
+      payload: { output: { location: 'generated', s3Key: `generated-video/u1/${pending.id}.${extension}` } },
+    });
   });
 
   it('passes the input image to the provider for image_to_video', async () => {
@@ -271,6 +330,43 @@ describe('video job end to end with the test provider', () => {
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'orphaned_submit' } });
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a failure before the provider call instead of failing it as orphaned_submit', async () => {
+    const submit = vi.fn<VideoProvider['submit']>();
+    const t = setup({
+      providers: createVideoProviderRegistry([stubProvider({ submit })]),
+      resolveApiKey: async () => {
+        throw new Error('secrets store unavailable');
+      },
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      attempts: MAX_STEP_ATTEMPTS - 1,
+      error: { code: 'provider_error' },
+    });
+    expect(submit).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [1.7, 1],
+    [-0.5, 0],
+    [0.25, 0.25],
+  ])('clamps a reported progress of %s to %s', async (reported, expected) => {
+    const t = setup({
+      providers: createVideoProviderRegistry([
+        stubProvider({ poll: async () => ({ status: 'running', progress: reported }) }),
+      ]),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    await t.engine.step(job.id); // submit -> running
+    const running = t.repository.jobs.get(job.id)!;
+    const result = await createVideoJobHandler(t.deps).poll(running, { signal: new AbortController().signal });
+    expect(result).toEqual({ next: 'poll_again', progress: expected });
   });
 
   it('a retryable poll failure polls again and then succeeds', async () => {
@@ -420,7 +516,7 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
   });
 
-  it('store is not idempotent: a re-run after a crash before the terminal commit saves again', async () => {
+  it('store may run twice for one job: both runs save under the same job id, which saveToFiles dedups', async () => {
     const t = setup();
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     const pending = t.jobOf(created);
@@ -442,8 +538,9 @@ describe('video job end to end with the test provider', () => {
     const first = await handler.store(structuredClone(storing), context);
     const rerun = await handler.store(structuredClone(storing), context);
     expect(first).toMatchObject({ next: 'succeeded', payload: { output: { location: 'files', bytes: 4 } } });
-    expect(rerun).toMatchObject({ next: 'succeeded' });
+    expect(rerun).toEqual(first);
     expect(t.deps.saveToFiles).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(t.deps.saveToFiles).mock.calls.map(([params]) => params.jobId)).toEqual([pending.id, pending.id]);
   });
 
   it('persists the settlement marker even when recording usage fails', async () => {

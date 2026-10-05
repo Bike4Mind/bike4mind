@@ -20,6 +20,10 @@ export type VideoJobDeps = {
   getSettings(): Promise<{ enforceCredits: boolean; videoGeneration: VideoGenerationSettings | undefined }>;
   resolveApiKey(providerId: VideoProviderId, userId: string): Promise<string | null>;
   loadInputImage(userId: string, fileId: string): Promise<{ bytes: Buffer; mimeType: string } | null>;
+  /**
+   * Must be idempotent per jobId: the store step can run twice for one job (a crash before its terminal commit),
+   * and the second call must return the first file rather than save a duplicate.
+   */
   saveToFiles(params: {
     userId: string;
     jobId: string;
