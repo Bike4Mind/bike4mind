@@ -87,7 +87,7 @@ export const COOKBOOK_RECIPES: CookbookRecipe[] = [
       '- Check for failure first: `type: "error"` (with `errorCode` when it is classified) or a `stopped`',
       '  status is a failed turn, not an answer. A run that died part-way still polls back as `done`, with',
       '  `promptMeta.finishReason` set to `timeout` or `abandoned`: treat that text as partial.',
-      '- `replies[]` holds content slots, not separate answers. The answer is every entry joined in order,',
+      '- `replies[]` holds content slots, not separate answers. The answer is every entry concatenated in order (no separator),',
       '  with any `<think>...</think>` blocks removed. If `replies` is empty, use `reply` (it can be `null`).',
       '- Polling does not count against the daily key quota.',
       '',

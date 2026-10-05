@@ -49,8 +49,8 @@ To answer from a data lake's files, the key needs `datalake:read`,
   that died part-way still polls back as `done`, with `promptMeta.finishReason`
   set to `timeout` or `abandoned`: treat that text as partial.
 - `replies[]` holds content slots, not separate answers. The answer is every
-  entry joined in order, with any `<think>...</think>` blocks removed. If
-  `replies` is empty, use `reply` (it can be `null`).
+  entry concatenated in order (no separator), with any `<think>...</think>`
+  blocks removed. If `replies` is empty, use `reply` (it can be `null`).
 - Polling does not use the daily key quota.
 - Request and response shapes: the [API reference](/api/v1/docs).
 
