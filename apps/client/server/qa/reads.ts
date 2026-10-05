@@ -30,6 +30,8 @@ const HISTORY_LIMIT = 50;
 export const QA_RUNS_PAGE_SIZE = 50;
 const BASELINE_DAYS = 7;
 const BASELINE_MAX_RUNS = 200;
+/** Earlier runs findPreviousRun inspects for test rows before giving up. */
+const PREVIOUS_RUN_CANDIDATES = 5;
 /** Slowest tests of a run that get a per-test median. */
 export const QA_TEST_MEDIAN_LIMIT = 50;
 
@@ -139,7 +141,10 @@ export interface QaRunDetail {
   medianDurationMs: number | null;
   /** Every test, without error bodies or media (those are on failedTests/flakyTests). */
   tests: QaTestView[];
-  /** Null for imported runs and when no earlier run has tests. */
+  /**
+   * Null for an imported run, a run where nothing ran or that has no test rows, and when none of the
+   * newest qualifying earlier runs (see findPreviousRun) has test rows.
+   */
   diff: QaRunDiff | null;
   failedTests: QaTestView[];
   flakyTests: QaTestView[];
@@ -321,29 +326,42 @@ async function mediaView(
 
 type PreviousRun = { id: string; startedAt: Date; tests: Pick<IQaTestResult, 'testKey' | 'title' | 'status'>[] };
 
-/** Newest earlier run of the same state with test rows: not an import, not an infra-error with nothing run. */
+/**
+ * Newest earlier run of the same state with test rows. Skips imports and infra-errors: an aborted run
+ * stores never-run tests as notStarted, which would hide a passed -> failed change. A qualifying run
+ * with no rows (pruned or never stored) is stepped over, up to PREVIOUS_RUN_CANDIDATES.
+ */
 async function findPreviousRun(run: LeanRun): Promise<PreviousRun | null> {
-  const previous = await QaRun.findOne({
+  const candidates = await QaRun.find({
     ...stateKeyFilter(run),
     source: { $ne: 'slack-backfill' },
+    status: { $ne: 'infra-error' },
     'counts.ran': { $gt: 0 },
     startedAt: { $lt: run.startedAt },
   })
     .sort({ startedAt: -1 })
+    .limit(PREVIOUS_RUN_CANDIDATES)
     .select('startedAt')
-    .lean<{ _id: unknown; startedAt: Date }>();
-  if (!previous) return null;
-  const id = String(previous._id);
-  const tests = await QaTestResult.find({ runId: id }).select('testKey title status').lean<PreviousRun['tests']>();
-  return tests.length > 0 ? { id, startedAt: previous.startedAt, tests } : null;
+    .lean<{ _id: unknown; startedAt: Date }[]>();
+  for (const candidate of candidates) {
+    const id = String(candidate._id);
+    const tests = await QaTestResult.find({ runId: id }).select('testKey title status').lean<PreviousRun['tests']>();
+    if (tests.length > 0) return { id, startedAt: candidate.startedAt, tests };
+  }
+  return null;
 }
 
-/** Same-state runs in the 7 days before `run`, so `run` is never its own baseline. Zero-duration runs carry no signal. */
+/**
+ * Same-state runs in the 7 days before `run`, so `run` is never its own baseline. Zero-duration and
+ * infra-error runs carry no signal: an aborted run is short and would drag the median down.
+ */
 function findBaselineRuns(run: LeanRun) {
   return QaRun.find({
     ...stateKeyFilter(run),
     startedAt: { $gte: new Date(run.startedAt.getTime() - BASELINE_DAYS * DAY_MS), $lt: run.startedAt },
     durationMs: { $gt: 0 },
+    status: { $ne: 'infra-error' },
+    'counts.ran': { $gt: 0 },
   })
     .sort({ startedAt: -1 })
     .limit(BASELINE_MAX_RUNS)
@@ -373,11 +391,13 @@ export async function getQaRunDetail(id: string, deps: QaRunDetailDeps): Promise
   const expired = (deps.now ?? new Date()).getTime() - run.startedAt.getTime() > QA_MEDIA_RETENTION_DAYS * DAY_MS;
   // Imports hold counts only: no tests to diff or time.
   const imported = run.source === 'slack-backfill';
+  // A run where nothing ran has no rows to compare; diffing it would list every earlier test as removed.
+  const diffable = !imported && run.counts.ran > 0;
 
   const [results, baseline, previous] = await Promise.all([
     QaTestResult.find({ runId }).sort({ _id: 1 }).lean<IQaTestResult[]>(),
     findBaselineRuns(run),
-    imported ? null : findPreviousRun(run),
+    diffable ? findPreviousRun(run) : null,
   ]);
 
   const views = await Promise.all(
@@ -433,13 +453,14 @@ export async function getQaRunDetail(id: string, deps: QaRunDetailDeps): Promise
     run: { ...toSummary(run), suiteSummary: run.suiteSummary ?? [], metrics: run.metrics ?? [] },
     medianDurationMs: median(baseline.map(r => r.durationMs)),
     tests,
-    diff: previous
-      ? {
-          previousRunId: previous.id,
-          previousStartedAt: previous.startedAt.toISOString(),
-          ...diffTests(results, previous.tests),
-        }
-      : null,
+    diff:
+      previous && results.length > 0
+        ? {
+            previousRunId: previous.id,
+            previousStartedAt: previous.startedAt.toISOString(),
+            ...diffTests(results, previous.tests),
+          }
+        : null,
     failedTests: views.filter(v => v.status === 'failed'),
     flakyTests: views.filter(v => v.status === 'flaky'),
     report,

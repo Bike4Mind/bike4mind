@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   bucketByDay,
+  dayLabel,
   dayTicks,
   durationData,
   isFailing,
@@ -11,6 +12,7 @@ import {
   passRateData,
   percentDomain,
   startOfLocalDay,
+  tooltipLabel,
   UNLABELED,
   type Entry,
 } from './chartData';
@@ -188,6 +190,23 @@ describe('daily bucketing (30d)', () => {
     );
     expect(d.runs).toEqual({ [local(28)]: 3, [local(29)]: 1 });
     expect(d.rows[0]).toEqual({ t: local(28), 'Core . staging': 100, 'Core . production': 100 });
+  });
+
+  it('titles a daily tooltip "<date>: N runs", singular for one', () => {
+    const d = passRateData(
+      [day(28, 9), day(28, 10), day(28, 11, { env: 'production' }), day(29, 9, { env: 'production' })],
+      '30d'
+    );
+    const three = tooltipLabel(d, local(28));
+    expect(three).toBe(`${dayLabel(local(28))}: 3 runs`);
+    expect(three).toMatch(/28.*: 3 runs$/);
+    expect(tooltipLabel(d, local(29))).toBe(`${dayLabel(local(29))}: 1 run`);
+    expect(tooltipLabel(d, local(30))).toBe(`${dayLabel(local(30))}: 0 runs`);
+  });
+
+  it('titles a per-run tooltip with the full timestamp on 7d', () => {
+    const d = passRateData([day(28, 9)], '7d');
+    expect(tooltipLabel(d, local(28, 9))).toBe(new Date(local(28, 9)).toLocaleString());
   });
 
   it('buckets each series on its own', () => {

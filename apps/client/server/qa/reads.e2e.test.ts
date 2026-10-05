@@ -37,6 +37,7 @@ afterEach(async () => {
 
 const NOW = new Date('2026-09-28T12:00:00.000Z');
 const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOString();
+const ZERO_RAN = { passed: 0, failed: 0, skipped: 0, notStarted: 2, ran: 0, total: 0 };
 const FILTERS = { product: 'product-a', branch: 'main', rangeDays: 7 as const };
 let seq = 0;
 
@@ -275,6 +276,44 @@ describe('getQaRunDetail', () => {
       expect(diff?.recovered.map(t => t.testKey)).toEqual([TEST_B]);
     });
 
+    it('is null when nothing ran or the run has no test rows, instead of listing every earlier test as removed', async () => {
+      await seed({ hours: 30 });
+      const envDown = await seed({ hours: 10, counts: ZERO_RAN, tests: [] });
+      const noRows = await seed({ hours: 5, tests: [] });
+      expect((await getQaRunDetail(envDown.runId, deps))?.diff).toBeNull();
+      expect((await getQaRunDetail(noRows.runId, deps))?.diff).toBeNull();
+    });
+
+    it('skips an infra-error run that ran some tests, so a partial run cannot hide passed -> failed', async () => {
+      const ci = await seed({ hours: 30 });
+      await seed({
+        hours: 15,
+        counts: { passed: 1, failed: 0, skipped: 0, notStarted: 1, ran: 1, total: 2 },
+        tests: [passedTest(TEST_A), { ...passedTest(TEST_B), status: 'notStarted' as const }],
+      });
+      const current = await seed({ hours: 1, failing: [TEST_B] });
+      const detail = await getQaRunDetail(current.runId, deps);
+      expect(detail?.diff?.previousRunId).toBe(ci.runId);
+      expect(detail?.diff?.newlyFailing.map(t => t.testKey)).toEqual([TEST_B]);
+    });
+
+    it('steps over earlier runs that ran but stored no test rows', async () => {
+      const withRows = await seed({ hours: 40, failing: [TEST_B] });
+      await seed({ hours: 30, tests: [] });
+      await seed({ hours: 20, tests: [] });
+      const current = await seed({ hours: 1 });
+      const diff = (await getQaRunDetail(current.runId, deps))?.diff;
+      expect(diff?.previousRunId).toBe(withRows.runId);
+      expect(diff?.recovered.map(t => t.testKey)).toEqual([TEST_B]);
+    });
+
+    it('stops looking after five rowless earlier runs', async () => {
+      await seed({ hours: 40 });
+      for (const hours of [30, 25, 20, 15, 10]) await seed({ hours, tests: [] });
+      const current = await seed({ hours: 1 });
+      expect((await getQaRunDetail(current.runId, deps))?.diff).toBeNull();
+    });
+
     it('is null for an imported run, which also gets no tests or per-test medians', async () => {
       await seed({ hours: 10 });
       const imported = await seed({ hours: 1, source: 'slack-backfill', tests: [] });
@@ -293,6 +332,20 @@ describe('getQaRunDetail', () => {
       await seed({ hours: 12, durationMs: 900_000, env: 'production' });
       await seed({ hours: 0.5, durationMs: 5_000_000 });
       const current = await seed({ hours: 1, durationMs: 999_999 });
+      expect((await getQaRunDetail(current.runId, deps))?.medianDurationMs).toBe(150_000);
+    });
+
+    it('excludes infra-error runs, which are aborted early and would drag the median down', async () => {
+      await seed({ hours: 30, durationMs: 100_000 });
+      await seed({ hours: 20, durationMs: 200_000 });
+      await seed({
+        hours: 15,
+        durationMs: 5_000,
+        counts: { passed: 1, failed: 0, skipped: 0, notStarted: 1, ran: 1, total: 2 },
+        tests: [passedTest(TEST_A), { ...passedTest(TEST_B), status: 'notStarted' as const }],
+      });
+      await seed({ hours: 14, durationMs: 3_000, counts: ZERO_RAN, tests: [] });
+      const current = await seed({ hours: 1 });
       expect((await getQaRunDetail(current.runId, deps))?.medianDurationMs).toBe(150_000);
     });
 

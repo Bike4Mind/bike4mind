@@ -15,12 +15,14 @@ import {
 } from 'recharts';
 import type { QaSeriesPoint } from '@client/app/hooks/data/qaStatus';
 import {
+  dayLabel,
   durationData,
   isFailing,
   latencyData,
   metricData,
   passRateData,
   percentDomain,
+  tooltipLabel,
   type ChartData,
   type ChartRange,
   type ChartSeries,
@@ -30,8 +32,6 @@ import { QA_THRESHOLD_COLOR, seriesColor } from './qaSeriesColors';
 
 type Mode = 'light' | 'dark';
 type ColorOf = (key: string) => string;
-
-const dayLabel = (t: number) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
 /** Which series are toggled off. */
 function useSeriesOff() {
@@ -125,12 +125,6 @@ const Plot: FC<PlotProps> = ({ id, data, off, colorOf, height, fitPercent }) => 
   }
   const visible = data.series.filter(s => !off.has(s.key));
   const yDomain = fitPercent ? percentDomain(data.rows.flatMap(r => visible.map(s => r[s.key]))) : undefined;
-  const tooltipLabel = (t: unknown) => {
-    const when = Number(t);
-    if (!data.daily) return new Date(when).toLocaleString();
-    const n = data.runs[when] ?? 0;
-    return `${dayLabel(when)}: ${n} ${n === 1 ? 'run' : 'runs'}`;
-  };
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -146,7 +140,7 @@ const Plot: FC<PlotProps> = ({ id, data, off, colorOf, height, fitPercent }) => 
           fontSize={11}
         />
         <YAxis fontSize={11} width={40} domain={yDomain ?? ['auto', 'auto']} />
-        <Tooltip labelFormatter={tooltipLabel} />
+        <Tooltip labelFormatter={t => tooltipLabel(data, t)} />
         {data.thresholds.map(value => (
           <ReferenceLine
             key={value}

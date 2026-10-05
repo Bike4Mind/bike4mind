@@ -98,6 +98,16 @@ export function bucketByDay(entries: Entry[], agg: Agg, round: (n: number) => nu
   }));
 }
 
+export const dayLabel = (t: number) => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+/** Tooltip title: a daily bucket reads "<date>: N runs"; a per-run point reads its full timestamp. */
+export function tooltipLabel(data: Pick<ChartData, 'daily' | 'runs'>, t: unknown): string {
+  const when = Number(t);
+  if (!data.daily) return new Date(when).toLocaleString();
+  const n = data.runs[when] ?? 0;
+  return `${dayLabel(when)}: ${n} ${n === 1 ? 'run' : 'runs'}`;
+}
+
 /** A value past its limit: below for pass rate, above for metrics. */
 export function isFailing(value: unknown, limit: number | undefined, fail: ChartData['fail']): boolean {
   if (typeof value !== 'number' || limit === undefined) return false;
