@@ -218,9 +218,39 @@ describe('GenerationJobRepository', () => {
     });
   });
 
-  it('requestCancel on a terminal job returns null', async () => {
-    const job = await generationJobRepository.createJob(newJob({ state: 'succeeded' }));
-    expect(await generationJobRepository.requestCancel(job.id)).toBeNull();
+  it('requestCancel flags only pending and running jobs', async () => {
+    for (const state of ['pending', 'running'] as const) {
+      const job = await generationJobRepository.createJob(newJob({ state }));
+      expect(await generationJobRepository.requestCancel(job.id)).toMatchObject({ cancelRequested: true });
+    }
+    for (const state of ['storing', 'succeeded', 'cancelled'] as const) {
+      const job = await generationJobRepository.createJob(newJob({ state }));
+      expect(await generationJobRepository.requestCancel(job.id)).toBeNull();
+      expect((await generationJobRepository.findById(job.id))?.cancelRequested).toBe(false);
+    }
+  });
+
+  it('findStalled returns in-flight jobs by nextPollAt before terminal jobs by updatedAt, within the limit', async () => {
+    const setUpdatedAt = (id: string, updatedAt: Date) =>
+      GenerationJobModel.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { updatedAt } });
+    // Stuck-claimed terminal jobs older than every in-flight one: they must not crowd the in-flight jobs out.
+    for (let i = 0; i < 3; i++) {
+      const stuck = await generationJobRepository.createJob(
+        newJob({ state: 'failed', terminalHandledAt: null, terminalHandlingClaimedAt: plus(-120_000) })
+      );
+      await setUpdatedAt(stuck.id, plus(-120_000 + i));
+    }
+    const later = await generationJobRepository.createJob(newJob({ state: 'running', nextPollAt: plus(-10_000) }));
+    const earlier = await generationJobRepository.createJob(newJob({ state: 'running', nextPollAt: plus(-20_000) }));
+    const unclaimed = await generationJobRepository.createJob(newJob({ state: 'succeeded', terminalHandledAt: null }));
+    await setUpdatedAt(unclaimed.id, plus(-600_000));
+
+    expect((await generationJobRepository.findStalled(t0, 2)).map(j => j.id)).toEqual([earlier.id, later.id]);
+    expect((await generationJobRepository.findStalled(t0, 3)).map(j => j.id)).toEqual([
+      earlier.id,
+      later.id,
+      unclaimed.id,
+    ]);
   });
 
   it('concurrent acquireLease calls yield exactly one winner', async () => {

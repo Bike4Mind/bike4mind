@@ -36,6 +36,39 @@ describe('runGenerationJobSweep', () => {
     expect(enqueue).toHaveBeenCalledWith(overdue.id, 0);
   });
 
+  it('recovers in-flight jobs ahead of terminal jobs stuck on a claim', async () => {
+    const now = new Date('2026-10-06T01:00:00Z');
+    const repository = createInMemoryGenerationJobRepository({ now: () => new Date('2026-10-06T00:00:00Z') });
+    const base = {
+      kind: 'video',
+      ownerType: CreditHolderType.User,
+      ownerId: 'u1',
+      requestedBy: 'u1',
+      source: 'studio',
+      payload: {} as IGenerationJob['payload'],
+      pollCount: 0,
+      attempts: 0,
+      cancelRequested: false,
+      deadlineAt: now,
+      creditHold: null,
+    } as const;
+    await repository.createJob({
+      ...base,
+      state: 'failed',
+      terminalHandlingClaimedAt: new Date('2026-10-06T00:00:00Z'),
+    });
+    const inFlight = await repository.createJob({
+      ...base,
+      state: 'running',
+      nextPollAt: new Date('2026-10-06T00:50:00Z'),
+    });
+    const enqueue = vi.fn(async (_jobId: string, _delay: number) => undefined);
+
+    await runGenerationJobSweep({ repository, enqueue, now: () => now, logger: new Logger() }, { limit: 1 });
+
+    expect(enqueue).toHaveBeenCalledExactlyOnceWith(inFlight.id, 0);
+  });
+
   it('keeps sweeping the batch when one enqueue fails', async () => {
     const now = new Date('2026-10-06T01:00:00Z');
     const repository = createInMemoryGenerationJobRepository({ now: () => now });

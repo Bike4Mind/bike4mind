@@ -292,12 +292,16 @@ describe('GenerationJobEngine', () => {
     expect(t.handler.cancelAtProvider).toHaveBeenCalledTimes(state === 'running' ? 1 : 0);
   });
 
-  it('requestCancel on a terminal job returns null and enqueues nothing', async () => {
-    const t = setup();
-    const job = await t.create({ state: 'succeeded' });
-    expect(await t.engine.requestCancel(job.id)).toBeNull();
-    expect(t.enqueue).not.toHaveBeenCalled();
-  });
+  it.each(['storing', 'succeeded'] as const)(
+    'requestCancel on a %s job returns null and enqueues nothing',
+    async state => {
+      const t = setup();
+      const job = await t.create({ state });
+      expect(await t.engine.requestCancel(job.id)).toBeNull();
+      expect(t.repository.jobs.get(job.id)!.cancelRequested).toBe(false);
+      expect(t.enqueue).not.toHaveBeenCalled();
+    }
+  );
 
   it('cancel requested while storing is ignored: the result is already paid for', async () => {
     const t = setup();

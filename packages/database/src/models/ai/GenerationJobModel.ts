@@ -9,6 +9,7 @@ import {
   type GenerationJobCommit,
   type GenerationJobCommitGuard,
   type GenerationJobCreateInput,
+  type GenerationJobState,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
@@ -67,6 +68,8 @@ export const GenerationJobModel: IGenerationJobModel =
   mongoose.model<IGenerationJobDocument, IGenerationJobModel>(ModelName, GenerationJobSchema);
 
 const NON_TERMINAL = GENERATION_JOB_STATES.filter(state => !TERMINAL_GENERATION_JOB_STATES.includes(state));
+// Storing is excluded: the provider already produced (and billed) the output, so a cancel saves nothing.
+const CANCELLABLE: GenerationJobState[] = ['pending', 'running'];
 const toJob = (doc: { toJSON(): unknown } | null) => (doc ? (doc.toJSON() as IGenerationJobDocument) : null);
 const unleased = (now: Date) => ({ $or: [{ leaseUntil: null }, { leaseUntil: { $lt: now } }] });
 
@@ -126,7 +129,7 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
   async requestCancel(id: string) {
     return toJob(
       await this.jobModel.findOneAndUpdate(
-        { _id: id, state: { $in: NON_TERMINAL } },
+        { _id: id, state: { $in: CANCELLABLE } },
         { $set: { cancelRequested: true } },
         { new: true }
       )
@@ -149,29 +152,36 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     await this.jobModel.updateOne({ _id: id }, { $set: { settledCredits } });
   }
 
+  /**
+   * Oldest first: in-flight jobs by nextPollAt, then terminal jobs by updatedAt. Two queries because Mongo sorts a
+   * null nextPollAt (every terminal job) first. A stuck-claimed terminal job matches every sweep forever, so it must
+   * never crowd out real recovery; each sweep's lease bumps its updatedAt, which also rotates it behind older ones.
+   * Served by the { state, nextPollAt } and { state, terminalHandledAt, updatedAt } indexes.
+   */
   async findStalled(overdueBefore: Date, limit: number) {
-    const docs = await this.jobModel
-      .find({
-        $or: [
-          { state: { $in: NON_TERMINAL }, nextPollAt: { $lt: overdueBefore } },
-          {
-            state: { $in: TERMINAL_GENERATION_JOB_STATES },
-            terminalHandledAt: null,
-            terminalHandlingClaimedAt: null,
-            updatedAt: { $lt: overdueBefore },
-          },
-          // Claimed long ago and never finished (worker died mid-handling). Re-enqueued only so the
-          // engine's stuck path alarms every sweep; onTerminal is never re-run because settle/release
-          // are non-idempotent $inc, so this is at-most-once plus an alarm, never a retry.
-          {
-            state: { $in: TERMINAL_GENERATION_JOB_STATES },
-            terminalHandledAt: null,
-            terminalHandlingClaimedAt: { $lt: overdueBefore },
-          },
-        ],
-      })
+    const inFlight = await this.jobModel
+      .find({ state: { $in: NON_TERMINAL }, nextPollAt: { $lt: overdueBefore } })
+      .sort({ nextPollAt: 1 })
       .limit(limit);
-    return docs.map(doc => doc.toJSON() as IGenerationJobDocument);
+    const remaining = limit - inFlight.length;
+    const terminal =
+      remaining > 0
+        ? await this.jobModel
+            .find({
+              state: { $in: TERMINAL_GENERATION_JOB_STATES },
+              terminalHandledAt: null,
+              $or: [
+                { terminalHandlingClaimedAt: null, updatedAt: { $lt: overdueBefore } },
+                // Claimed long ago and never finished (worker died mid-handling). Re-enqueued only so the
+                // engine's stuck path alarms every sweep; onTerminal is never re-run because settle/release
+                // are non-idempotent $inc, so this is at-most-once plus an alarm, never a retry.
+                { terminalHandlingClaimedAt: { $lt: overdueBefore } },
+              ],
+            })
+            .sort({ updatedAt: 1 })
+            .limit(remaining)
+        : [];
+    return [...inFlight, ...terminal].map(doc => doc.toJSON() as IGenerationJobDocument);
   }
 }
 

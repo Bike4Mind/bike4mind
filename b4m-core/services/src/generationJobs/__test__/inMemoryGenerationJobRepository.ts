@@ -96,7 +96,7 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
 
     async requestCancel(id: string) {
       const job = jobs.get(id);
-      if (!job || isTerminal(job)) return null;
+      if (!job || (job.state !== 'pending' && job.state !== 'running')) return null;
       job.cancelRequested = true;
       touch(job);
       return structuredClone(job);
@@ -125,17 +125,21 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
     },
 
     async findStalled(overdueBefore: Date, limit: number) {
-      return [...jobs.values()]
-        .filter(job =>
-          isTerminal(job)
-            ? !job.terminalHandledAt &&
-              (job.terminalHandlingClaimedAt
-                ? job.terminalHandlingClaimedAt < overdueBefore
-                : job.updatedAt < overdueBefore)
-            : !!job.nextPollAt && job.nextPollAt < overdueBefore
+      const time = (date: Date | null | undefined) => date?.getTime() ?? 0;
+      const inFlight = [...jobs.values()]
+        .filter(job => !isTerminal(job) && !!job.nextPollAt && job.nextPollAt < overdueBefore)
+        .sort((a, b) => time(a.nextPollAt) - time(b.nextPollAt));
+      const terminal = [...jobs.values()]
+        .filter(
+          job =>
+            isTerminal(job) &&
+            !job.terminalHandledAt &&
+            (job.terminalHandlingClaimedAt
+              ? job.terminalHandlingClaimedAt < overdueBefore
+              : time(job.updatedAt) < overdueBefore.getTime())
         )
-        .slice(0, limit)
-        .map(job => structuredClone(job));
+        .sort((a, b) => time(a.updatedAt) - time(b.updatedAt));
+      return [...inFlight, ...terminal].slice(0, limit).map(job => structuredClone(job));
     },
   };
 
