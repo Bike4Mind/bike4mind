@@ -613,7 +613,7 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           background: {
             type: 'string',
             description:
-              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+              'Background handling. "transparent" renders a real alpha channel on gpt-image-1.x and gpt-image-2.5 (gpt-image-2 steps down to gpt-image-1.5; other providers ignore it). Use it when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
             enum: ['transparent', 'opaque', 'auto'],
           },
           output_format: {

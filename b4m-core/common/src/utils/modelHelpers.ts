@@ -99,6 +99,14 @@ export function rejectsTransparentBackground(model?: string | null): boolean {
   return isGPTImage2Model(model) && !isGPTImage25Model(model);
 }
 
+/**
+ * True for models that render a real alpha channel for background: 'transparent' (gpt-image-1.x
+ * and the 2.5 models). Every other provider ignores the field and returns an opaque image.
+ */
+export function supportsTransparentBackground(model?: string | null): boolean {
+  return isGPTImageModel(model) && !rejectsTransparentBackground(model);
+}
+
 export const isExtendedGptImageQuality = (quality: unknown): quality is ExtendedGptImageQuality =>
   (EXTENDED_GPT_IMAGE_QUALITIES as readonly unknown[]).includes(quality);
 

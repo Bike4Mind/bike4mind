@@ -6,6 +6,7 @@ import {
   isGPTImage2Model,
   isGPTImage25Model,
   rejectsTransparentBackground,
+  supportsTransparentBackground,
   clampImageQualityForModel,
   isKontextModel,
   requiresImageInput,
@@ -119,6 +120,24 @@ describe('rejectsTransparentBackground', () => {
     expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(false);
     expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_2_5_FLARE)).toBe(false);
     expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_1_5)).toBe(false);
+  });
+});
+
+describe('supportsTransparentBackground', () => {
+  it('is true for gpt-image-1.x and the 2.5 models', () => {
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_1)).toBe(true);
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_1_MINI)).toBe(true);
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_1_5)).toBe(true);
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(true);
+    expect(supportsTransparentBackground('gpt-image-2.5-flare-2026-09-08')).toBe(true);
+  });
+
+  it('is false for gpt-image-2 and every non-OpenAI provider', () => {
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_2)).toBe(false);
+    expect(supportsTransparentBackground('gpt-image-2-2026-04-21')).toBe(false);
+    expect(supportsTransparentBackground(ImageModels.FLUX_PRO_1_1)).toBe(false);
+    expect(supportsTransparentBackground(ImageModels.GEMINI_3_PRO_IMAGE)).toBe(false);
+    expect(supportsTransparentBackground(null)).toBe(false);
   });
 });
 
