@@ -160,7 +160,13 @@ describe('notebookCuration queue handler idempotency', () => {
 
   it('skips a redelivered message whose curation job already completed', async () => {
     NotebookCurationJob.findOne.mockReturnValue({
-      lean: () => Promise.resolve({ curationJobId: 'job-789', sessionId: 'session-123', status: 'completed' }),
+      lean: () =>
+        Promise.resolve({
+          curationJobId: 'job-789',
+          sessionId: 'session-123',
+          userId: 'user-456',
+          status: 'completed',
+        }),
     });
 
     await dispatch(createEvent(basePayload), mockContext);
@@ -178,18 +184,11 @@ describe('notebookCuration queue handler idempotency', () => {
     expect(mockCurateNotebook).toHaveBeenCalledTimes(1);
   });
 
-  it('records a terminal completed status after a successful curation', async () => {
-    NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
-
-    await dispatch(createEvent(basePayload), mockContext);
-
-    expect(NotebookCurationJob.updateOne).toHaveBeenCalledWith(
-      { curationJobId: 'job-789' },
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: 'completed' }),
-      }),
-      expect.objectContaining({ upsert: true })
-    );
+  it('does not turn a committed result into a failure when notification fails', async () => {
+    mockSendToClient.mockRejectedValueOnce(new Error('notification unavailable'));
+    await expect(dispatch(createEvent(basePayload), mockContext)).resolves.toBeUndefined();
+    expect(NotebookCurationEvents.Error.publish).not.toHaveBeenCalled();
+    expect(NotebookCurationJob.updateOne).not.toHaveBeenCalled();
   });
 
   it('does NOT record a status when curation throws, so SQS can retry', async () => {

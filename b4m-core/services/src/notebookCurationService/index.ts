@@ -17,7 +17,7 @@ import {
 } from '@bike4mind/common';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
-import { createFabFile, CreateFabFileAdapters } from '../fabFileService/create';
+import { prepareFabFile, CreateFabFileAdapters } from '../fabFileService/create';
 import { FormatConverter } from './formatConverter';
 import { createHash } from 'crypto';
 
@@ -32,6 +32,9 @@ interface ChatHistorySource {
 }
 
 export interface NotebookCurationAdapters {
+  commitCuration?: (write: () => Promise<CurationResult>, stagedFilePath?: string) => Promise<CurationResult>;
+  objectKeyPrefix?: string;
+  checkDeadline?: () => void;
   sessionRepository: ISessionRepository;
   chatHistoryRepository: ChatHistorySource;
   fabFileRepository: IFabFileRepository;
@@ -221,7 +224,7 @@ export class NotebookCurationService {
             message: 'Reused existing curation (no changes since last run)',
           });
 
-          return {
+          const cached: CurationResult = {
             success: true,
             curatedFileId: session.curatedNotebookFileId,
             // Mirror the regenerate path's result shape so consumers see the same
@@ -233,6 +236,7 @@ export class NotebookCurationService {
             tokensProcessed: totalTokens,
             tokensDeducted: 0,
           };
+          return this.adapters.commitCuration ? this.adapters.commitCuration(async () => cached) : cached;
         }
 
         this.adapters.logger.info('Curation content unchanged but stored file is missing - regenerating', {
@@ -275,100 +279,84 @@ export class NotebookCurationService {
         message: 'Saving curated notebook...',
       });
 
-      let fileId = null;
-      let fileName = null;
-      let fileSize = null;
-
-      try {
-        const result = await this.storeFile(
-          sessionId,
-          userId,
-          markdown,
-          options.exportFormat,
-          options.customNotebookName
-        );
-        fileId = result.fileId;
-        fileName = result.fileName;
-        fileSize = result.fileSize;
-      } catch (error) {
-        this.adapters.logger.error('Failed to store curated file', { sessionId, userId, error });
-        Logger.globalInstance.error('Failed to store curated file', error);
-        // An admission gate refusal (MaxFileSize / storage quota) names its reason and cannot
-        // succeed on retry; every other storage failure keeps the generic, retryable wording.
-        if (error instanceof BadRequestError) {
-          throw new NotebookCurationError(error.message, 'ADMISSION_REFUSED', error);
-        }
-        throw new NotebookCurationError('Failed to store curated file', 'STORAGE_FAILED', error);
-      }
-
-      // Stage 6: Update session metadata (store the content hash so an unchanged
-      // re-curation hits the cache above and skips the LLM next time)
-      await this.adapters.sessionRepository.update({
-        id: sessionId,
-        curatedNotebookFileId: fileId,
-        curatedAt: new Date(),
-        curationContentHash: contentHash,
-      });
-
-      this.adapters.logger.info('Updated session metadata', { sessionId, curatedFileId: fileId });
-
-      await this.sendProgress({
-        stage: 'storing',
-        percentage: 100,
-        message: 'Curation completed successfully!',
-      });
-
-      // Deduct tokens/credits for curation
-      const { subtractCredits } = await import('../creditService/subtractCredits');
-      const { CreditHolderType } = await import('@bike4mind/common');
-
-      // Calculate total tokens: base cost (100 for processing) + LLM tokens (if executive summary)
-      const baseCost = options.tokenBudget ?? 100;
-      const tokensDeducted = baseCost + llmTokensUsed;
-
-      await subtractCredits(
-        {
-          ownerId: userId,
-          ownerType: CreditHolderType.User,
-          credits: tokensDeducted,
-          type: 'generic_deduct',
-          reason: 'notebook_curation',
-          description: `Curated notebook for session ${sessionId}`,
-          metadata: {
-            sessionId,
-            artifactCount: artifacts.length,
-            messageCount: messages.length,
-            tokensProcessed: totalTokens,
-            curatedFileId: fileId,
-          },
-        },
-        {
-          db: {
-            creditTransactions: this.adapters.creditTransactionRepository,
-          },
-          creditHolderMethods: this.adapters.userRepository,
-        }
-      );
-
-      this.adapters.logger.info('Deducted tokens for curation', {
+      this.adapters.checkDeadline?.();
+      const prepared = await this.prepareFile(
         sessionId,
         userId,
-        tokensDeducted,
-      });
+        markdown,
+        options.exportFormat,
+        options.customNotebookName
+      );
+      const persist = async (): Promise<CurationResult> => {
+        this.adapters.checkDeadline?.();
+        const file = await this.adapters.fabFileRepository.create(prepared);
+        const fileId = file.id;
+        const fileName = file.fileName;
+        const fileSize = file.fileSize;
+        // Deduct tokens/credits for curation
+        const { subtractCredits } = await import('../creditService/subtractCredits');
+        const { CreditHolderType } = await import('@bike4mind/common');
 
-      return {
-        success: true,
-        curatedFileId: fileId,
-        fileName,
-        fileSize,
-        artifactCount: artifacts.length,
-        messageCount: messages.length,
-        tokensProcessed: totalTokens,
-        tokensDeducted,
+        // Calculate total tokens: base cost (100 for processing) + LLM tokens (if executive summary)
+        const baseCost = options.tokenBudget ?? 100;
+        const tokensDeducted = baseCost + llmTokensUsed;
+
+        await subtractCredits(
+          {
+            ownerId: userId,
+            ownerType: CreditHolderType.User,
+            credits: tokensDeducted,
+            type: 'generic_deduct',
+            reason: 'notebook_curation',
+            description: `Curated notebook for session ${sessionId}`,
+            metadata: {
+              sessionId,
+              artifactCount: artifacts.length,
+              messageCount: messages.length,
+              tokensProcessed: totalTokens,
+              curatedFileId: fileId,
+            },
+          },
+          {
+            db: {
+              creditTransactions: this.adapters.creditTransactionRepository,
+            },
+            creditHolderMethods: this.adapters.userRepository,
+          }
+        );
+
+        await this.adapters.sessionRepository.update({
+          id: sessionId,
+          curatedNotebookFileId: fileId,
+          curatedAt: new Date(),
+          curationContentHash: contentHash,
+        });
+        this.adapters.logger.info('Deducted tokens for curation', {
+          sessionId,
+          userId,
+          tokensDeducted,
+        });
+
+        return {
+          success: true,
+          curatedFileId: fileId,
+          fileName,
+          fileSize,
+          artifactCount: artifacts.length,
+          messageCount: messages.length,
+          tokensProcessed: totalTokens,
+          tokensDeducted,
+        };
       };
+      return this.adapters.commitCuration
+        ? await this.adapters.commitCuration(persist, prepared.filePath)
+        : await persist();
     } catch (error) {
       this.adapters.logger.error('Notebook curation failed', { sessionId, userId, error });
 
+      if (error instanceof BadRequestError) {
+        return { success: false, error: error.message, retryable: false };
+      }
       if (error instanceof NotebookCurationError) {
         return {
           success: false,
@@ -559,13 +547,13 @@ export class NotebookCurationService {
    * Store curated file as a FabFile in the selected format
    * Saves only the format specified in options
    */
-  private async storeFile(
+  private async prepareFile(
     sessionId: string,
     userId: string,
     markdown: string,
     format: 'markdown' | 'txt' | 'html' = 'markdown',
     customNotebookName?: string
-  ): Promise<{ fileId: string; fileName: string; fileSize: number }> {
+  ) {
     const { KnowledgeType } = await import('@bike4mind/common');
 
     const baseFileName = customNotebookName || `curated-notebook-${sessionId}`;
@@ -581,7 +569,7 @@ export class NotebookCurationService {
     const converted = await converter.convert(markdown, format);
 
     try {
-      const fabFile = await createFabFile(
+      const prepared = await prepareFabFile(
         userId,
         {
           fileName: `${baseFileName}${converted.extension}`,
@@ -609,22 +597,13 @@ export class NotebookCurationService {
             dataLakes: { findByDatalakeTag: async () => null, find: async () => [] },
           },
           storage: this.adapters.fileStorageService,
+          objectKey: this.adapters.objectKeyPrefix
+            ? `${this.adapters.objectKeyPrefix}/${createHash('sha256').update(converted.content).digest('hex')}${converted.extension}`
+            : undefined,
         }
       );
 
-      this.adapters.logger.info(`Created ${format} FabFile for curated notebook`, {
-        sessionId,
-        userId,
-        fabFileId: fabFile.id,
-        fileName: fabFile.fileName,
-        fileSize: fabFile.fileSize,
-      });
-
-      return {
-        fileId: fabFile.id,
-        fileName: fabFile.fileName,
-        fileSize: fabFile.fileSize,
-      };
+      return prepared;
     } catch (error) {
       this.adapters.logger.error(`Failed to create ${format} file`, {
         sessionId,
