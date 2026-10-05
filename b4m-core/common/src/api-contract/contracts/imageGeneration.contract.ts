@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_RESOURCE_ID, EXAMPLE_SESSION_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
@@ -22,8 +23,8 @@ export const imageQuestPollResult = {
     '`type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does ' +
     'not mean success.',
   example: {
-    id: '664f1c2b9a1e4d0012ab34cd',
-    sessionId: '664f1c2b9a1e4d0012ab34aa',
+    id: EXAMPLE_RESOURCE_ID,
+    sessionId: EXAMPLE_SESSION_ID,
     status: 'done',
     type: 'message',
     images: ['3f6c1a52-9d1e-4b7a-8c2f-5e0d4a9b1c7e.png'],

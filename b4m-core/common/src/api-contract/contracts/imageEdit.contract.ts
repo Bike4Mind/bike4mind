@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_FILE_ID, EXAMPLE_SESSION_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts.
 import { EditImageRequestBodySchema } from '../../llm';
@@ -44,9 +45,9 @@ export const editImageContract = defineEndpoint({
   requestExample: {
     prompt: 'replace the sky with a starry night',
     model: 'gpt-image-1',
-    sessionId: '664f1c2b9a1e4d0012ab34aa',
+    sessionId: EXAMPLE_SESSION_ID,
     image: 'https://example.com/source.png',
-    fabFileIds: ['664f1c2b9a1e4d0012ab34bb'],
+    fabFileIds: [EXAMPLE_FILE_ID],
   },
   responses: {
     200: {
@@ -78,9 +79,9 @@ export const editImageContract = defineEndpoint({
     body: {
       prompt: 'replace the sky with a starry night',
       model: 'gpt-image-1',
-      sessionId: '664f1c2b9a1e4d0012ab34aa',
+      sessionId: EXAMPLE_SESSION_ID,
       image: 'https://example.com/source.png',
-      fabFileIds: ['664f1c2b9a1e4d0012ab34bb'],
+      fabFileIds: [EXAMPLE_FILE_ID],
     },
   },
 });

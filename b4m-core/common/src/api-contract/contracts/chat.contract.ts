@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   SimplifiedChatRequestSchema,
@@ -105,7 +106,7 @@ export const chatContract = defineEndpoint({
           '`files`, `toolPayloads`, `promptMeta`, and the attachment report ' +
           '(`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.',
         example: {
-          id: '664f1c2b9a1e4d0012ab34cd',
+          id: EXAMPLE_RESOURCE_ID,
           status: 'done',
           type: 'error',
           errorCode: 'insufficient_credits',
