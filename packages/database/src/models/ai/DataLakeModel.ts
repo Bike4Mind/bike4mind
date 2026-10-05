@@ -32,6 +32,7 @@ import {
   DATA_LAKE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
+  DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
   LAKE_MANAGE_RUNGS,
 } from '@bike4mind/common';
@@ -120,6 +121,9 @@ const DataLakeSchema = new mongoose.Schema(
     auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
     origin: { type: String, enum: [...DATA_LAKE_ORIGINS], default: 'curated', required: true },
+    // See IDataLake.pendingConnector. No default: absent is the "unknown intent" state that lakes
+    // predating the field already carry. Cleared with $unset, never a null write.
+    pendingConnector: { type: String, enum: [...DATA_LAKE_PENDING_CONNECTORS] },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
@@ -1217,6 +1221,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       { $set: { status: 'active', ...extra } }
     );
     return res.modifiedCount === 1;
+  }
+
+  async clearPendingConnector(id: string): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $unset: { pendingConnector: 1 } });
   }
 
   async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
