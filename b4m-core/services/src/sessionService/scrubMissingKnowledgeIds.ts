@@ -34,8 +34,13 @@ export interface ScrubMissingKnowledgeIdsAdapters {
  *      soft-deleted row is RECOVERABLE: a lake teardown soft-deletes its members and
  *      `restoreDeletedDataLake` revives them (`undeleteByDataLakeTag`), so a prompt sent while the
  *      lake is down would otherwise strip those files from every notebook fleet-wide and leave
- *      nothing pointing at them once they came back. Nothing is lost by waiting for the row to go
- *      for real - the owner-driven delete path (`deleteFabFile`) unlinks sessions itself.
+ *      nothing pointing at them once they came back.
+ *
+ * SCOPE: this repairs only ids whose row was HARD-deleted - the data-lake purges
+ * (cleanupDeletedDataLake, purgeDataLakeConnectionFiles, purgeDataLakeDocument), none of which
+ * unlink sessions. A soft-deleted ghost is kept forever: nothing hard-deletes soft-deleted FabFiles
+ * later, so ids left by the delete-all-files route (pages/api/files/index.ts) or by a session delete
+ * stay pinned. Single-file deletes need no repair - `deleteFabFile` unlinks sessions itself.
  *
  * `pullKnowledgeIds` ($pull), never a read-modify-write: a turn runs concurrently with whatever else
  * the owner is doing, and rewriting the whole array would clobber a file attached in that window.
