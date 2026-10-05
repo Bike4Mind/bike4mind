@@ -1006,3 +1006,18 @@ VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCle
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
 TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
 ```
+
+## Daily API-key usage baselines
+
+The single local worker calculates usage baselines at 02:00 UTC using the existing calculator and Mongo repositories. It processes keys whose stored status is active, using their own user's usage logs from the inclusive trailing 30-day window. It preserves the existing averages, common IPs/endpoints and UTC peak-hour calculation. Keys without usage are skipped; existing baselines on skipped or inactive keys remain unchanged. This does not change key authorization, expiry enforcement or rate limits.
+
+There is no bootstrap run. A start after 02:00 waits until the next day; an exact 02:00 start runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown uses the existing bounded worker grace period. There is no distributed scheduling lock or completion guarantee beyond that grace period.
+
+A failed key does not prevent processing the others. The local task rejects after any per-key errors so the worker records a failed run, then retries on the next daily slot. Global query failures also reject. Successfully persisted baselines remain intact; failed writes leave their prior baseline for retry. The hosted adapter keeps its existing success/error responses and per-key counts.
+
+Verification exercises the actual calculator and disposable Mongo, including user/key isolation, time boundaries, repeat results and write-failure recovery. This is application-level proof, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/apiKeyBaselineCalculation.test.ts src/selfhost/apiKeyBaselineCalculation.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/apiKeyBaselineCalculation.e2e.test.ts
+```
