@@ -327,9 +327,10 @@ async function mediaView(
 type PreviousRun = { id: string; startedAt: Date; tests: Pick<IQaTestResult, 'testKey' | 'title' | 'status'>[] };
 
 /**
- * Newest earlier run of the same state with test rows. Skips imports and infra-errors: an aborted run
- * stores never-run tests as notStarted, which would hide a passed -> failed change. A qualifying run
- * with no rows (pruned or never stored) is stepped over, up to PREVIOUS_RUN_CANDIDATES.
+ * Newest earlier run of the same state with test rows. Skips imports, infra-errors, and any run with
+ * notStarted rows: an aborted run, even one with failures, stores never-run tests as notStarted, which
+ * would hide a passed -> failed change. A qualifying run with no rows (pruned or never stored) is
+ * stepped over, up to PREVIOUS_RUN_CANDIDATES.
  */
 async function findPreviousRun(run: LeanRun): Promise<PreviousRun | null> {
   const candidates = await QaRun.find({
@@ -337,6 +338,7 @@ async function findPreviousRun(run: LeanRun): Promise<PreviousRun | null> {
     source: { $ne: 'slack-backfill' },
     status: { $ne: 'infra-error' },
     'counts.ran': { $gt: 0 },
+    'counts.notStarted': { $not: { $gt: 0 } },
     startedAt: { $lt: run.startedAt },
   })
     .sort({ startedAt: -1 })
@@ -352,8 +354,9 @@ async function findPreviousRun(run: LeanRun): Promise<PreviousRun | null> {
 }
 
 /**
- * Same-state runs in the 7 days before `run`, so `run` is never its own baseline. Zero-duration and
- * infra-error runs carry no signal: an aborted run is short and would drag the median down.
+ * Same-state runs in the 7 days before `run`, so `run` is never its own baseline. Zero-duration,
+ * infra-error and other aborted (notStarted) runs carry no signal: an aborted run is short and would
+ * drag the median down.
  */
 function findBaselineRuns(run: LeanRun) {
   return QaRun.find({
@@ -362,6 +365,7 @@ function findBaselineRuns(run: LeanRun) {
     durationMs: { $gt: 0 },
     status: { $ne: 'infra-error' },
     'counts.ran': { $gt: 0 },
+    'counts.notStarted': { $not: { $gt: 0 } },
   })
     .sort({ startedAt: -1 })
     .limit(BASELINE_MAX_RUNS)

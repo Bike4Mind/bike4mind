@@ -46,7 +46,10 @@ const run = (id: string, startedAt: string) => ({
 // Four runs over two local days: one point per run on 7d, one per day on 30d.
 const series = [run('r1', local(28, 9)), run('r2', local(28, 10)), run('r3', local(28, 11)), run('r4', local(29, 9))];
 
-const dots = () => [...screen.getByTestId('qa-chart-pass-rate').querySelectorAll('.recharts-dot')];
+// The fixture's 0.5 pass rate is under the threshold, so every plotted point renders a failing dot.
+const failingDots = () => [
+  ...screen.getByTestId('qa-chart-pass-rate').querySelectorAll('[data-testid="qa-chart-failing-dot"]'),
+];
 
 beforeEach(() => {
   search = {};
@@ -67,11 +70,11 @@ describe('QaStatusPage', () => {
     search = { range: '30d' };
     render(<QaStatusPage />, { wrapper: QaTestWrapper });
     expect(useQaOverview).toHaveBeenCalledWith(expect.objectContaining({ product: 'product-a', range: '30d' }));
-    expect(dots()).toHaveLength(2);
+    expect(failingDots()).toHaveLength(2);
   });
 
   it('plots one point per run when no range is chosen', () => {
     render(<QaStatusPage />, { wrapper: QaTestWrapper });
-    expect(dots()).toHaveLength(4);
+    expect(failingDots()).toHaveLength(4);
   });
 });

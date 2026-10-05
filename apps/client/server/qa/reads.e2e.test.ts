@@ -280,7 +280,16 @@ describe('getQaRunDetail', () => {
       await seed({ hours: 30 });
       const envDown = await seed({ hours: 10, counts: ZERO_RAN, tests: [] });
       const noRows = await seed({ hours: 5, tests: [] });
+      const envDownWithRows = await seed({
+        hours: 8,
+        counts: ZERO_RAN,
+        tests: [
+          { ...passedTest(TEST_A), status: 'notStarted' as const },
+          { ...passedTest(TEST_B), status: 'notStarted' as const },
+        ],
+      });
       expect((await getQaRunDetail(envDown.runId, deps))?.diff).toBeNull();
+      expect((await getQaRunDetail(envDownWithRows.runId, deps))?.diff).toBeNull();
       expect((await getQaRunDetail(noRows.runId, deps))?.diff).toBeNull();
     });
 
@@ -297,10 +306,23 @@ describe('getQaRunDetail', () => {
       expect(detail?.diff?.newlyFailing.map(t => t.testKey)).toEqual([TEST_B]);
     });
 
-    it('steps over earlier runs that ran but stored no test rows', async () => {
+    it('skips an aborted run with failures, so its notStarted rows cannot hide passed -> failed', async () => {
+      const ci = await seed({ hours: 30 });
+      await seed({
+        hours: 15,
+        failing: [TEST_A],
+        counts: { passed: 0, failed: 1, skipped: 0, notStarted: 1, ran: 1, total: 2 },
+        tests: [failedTest(TEST_A), { ...passedTest(TEST_B), status: 'notStarted' as const }],
+      });
+      const current = await seed({ hours: 1, failing: [TEST_B] });
+      const diff = (await getQaRunDetail(current.runId, deps))?.diff;
+      expect(diff?.previousRunId).toBe(ci.runId);
+      expect(diff?.newlyFailing.map(t => t.testKey)).toEqual([TEST_B]);
+    });
+
+    it('steps over up to four rowless earlier runs to reach one with rows', async () => {
       const withRows = await seed({ hours: 40, failing: [TEST_B] });
-      await seed({ hours: 30, tests: [] });
-      await seed({ hours: 20, tests: [] });
+      for (const hours of [35, 30, 25, 20]) await seed({ hours, tests: [] });
       const current = await seed({ hours: 1 });
       const diff = (await getQaRunDetail(current.runId, deps))?.diff;
       expect(diff?.previousRunId).toBe(withRows.runId);
@@ -345,6 +367,13 @@ describe('getQaRunDetail', () => {
         tests: [passedTest(TEST_A), { ...passedTest(TEST_B), status: 'notStarted' as const }],
       });
       await seed({ hours: 14, durationMs: 3_000, counts: ZERO_RAN, tests: [] });
+      await seed({
+        hours: 13,
+        durationMs: 4_000,
+        failing: [TEST_A],
+        counts: { passed: 0, failed: 1, skipped: 0, notStarted: 1, ran: 1, total: 2 },
+        tests: [failedTest(TEST_A), { ...passedTest(TEST_B), status: 'notStarted' as const }],
+      });
       const current = await seed({ hours: 1 });
       expect((await getQaRunDetail(current.runId, deps))?.medianDurationMs).toBe(150_000);
     });

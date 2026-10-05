@@ -99,7 +99,11 @@ function dotFor(series: ChartSeries, data: ChartData, color: string) {
     if (cx === undefined || cy === undefined) return null;
     const value: unknown = payload?.[series.key];
     if (isFailing(value, series.limit, data.fail)) {
-      return <Dot cx={cx} cy={cy} r={5} fill={QA_THRESHOLD_COLOR} stroke={color} strokeWidth={2} />;
+      return (
+        <g data-testid="qa-chart-failing-dot">
+          <Dot cx={cx} cy={cy} r={5} fill={QA_THRESHOLD_COLOR} stroke={color} strokeWidth={2} />
+        </g>
+      );
     }
     return plotted === 1 && typeof value === 'number' ? <Dot cx={cx} cy={cy} r={3} fill={color} /> : null;
   };
