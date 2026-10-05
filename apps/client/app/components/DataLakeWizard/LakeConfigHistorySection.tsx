@@ -251,6 +251,8 @@ const actionLabel = (action: LakeConfigChangeAction): string =>
 
 function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNames: Record<string, string> }) {
   const rung = rungLabel(entry.manageRung);
+  const who = entry.principalName ?? entry.principalId;
+  const whoKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
   return (
     <tr data-testid="datalake-config-history-row">
       <td>
@@ -259,11 +261,15 @@ function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNa
           {actionLabel(entry.action)}
         </Typography>
       </td>
+      {/* Joy tables are fixed-layout, so an unresolved id (one unbreakable token) would paint over
+          the next column. Truncate instead; `title` keeps the full value. Same cell as the access
+          history's HistoryRow in DataLakeAccessModal. */}
       <td>
-        <Typography level="body-sm">{entry.principalName ?? entry.principalId}</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">
-          {entry.principalKind}
-          {entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}
+        <Typography level="body-sm" noWrap title={who} data-testid="datalake-config-history-who">
+          {who}
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary" noWrap title={whoKind}>
+          {whoKind}
         </Typography>
       </td>
       <td>
