@@ -23,9 +23,9 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
-import { fabFilesService } from '@bike4mind/services';
+import { fabFilesService, modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
-import { createVideoJobHandler, EXPIRED_KEY_SENTINEL, type VideoJobDeps } from '@bike4mind/services/videoJobs';
+import { createVideoJobHandler, type VideoJobDeps } from '@bike4mind/services/videoJobs';
 import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
 import { isValidObjectId } from '@server/utils/objectId';
@@ -47,11 +47,11 @@ const SAVE_FAILURE_PATTERNS = {
 
 /**
  * Maps the raw value of a provider key to one a provider call may use. getEffectiveLLMApiKeys answers an
- * expired per-user key with EXPIRED_KEY_SENTINEL (a truthy string, so it would otherwise reach the
+ * expired per-user key with the expired-key sentinel (a truthy string, so it would otherwise reach the
  * provider as a bearer token); a missing or empty key is null or ''.
  */
 export const usableApiKey = (raw: string | null | undefined): string | null => {
-  if (!raw || raw === EXPIRED_KEY_SENTINEL) return null;
+  if (!raw || raw === modelDiscoveryService.EXPIRED_KEY_SENTINEL) return null;
   return raw;
 };
 
