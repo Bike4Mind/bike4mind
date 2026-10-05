@@ -50,7 +50,7 @@ export function lakeVisibilityLabelShort(lake: LakeVisibilityScope): string {
  * membership (and the ingest's admin-actor writes) is anchored to `createdByUserId`, not the
  * effective owner, so a personal lake gates on `isCreator` rather than `isOwn`. The status route
  * 404s outside the gate, so offering it there is a control that can only fail. Every render site
- * (SelectedLakeHeader, the wizard's SourceSelectionStep, ConnectSourceMenu) derives the gate here -
+ * (SelectedLakeHeader, the wizard's SourceSelectionStep, the lakeSources registry) derives the gate here -
  * they drifted once when each held its own copy of the expression.
  *
  * Absent fields fail closed: an unknown manage or creator status renders no control.
