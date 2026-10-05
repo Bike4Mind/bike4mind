@@ -41,6 +41,14 @@ const countOf = async (
   return counts.find(c => c.tag === tag)?.count ?? 0;
 };
 
+// One file tagged `acme:uncategorized`: its own row plus the `acme` ancestor row the tree branches on.
+const UNCATEGORIZED_ONE = [
+  { tag: 'acme', count: 0, fileCount: 1 },
+  { tag: 'acme:uncategorized', count: 1, fileCount: 1 },
+];
+
+const sortedByTag = <T extends { tag: string }>(rows: T[]) => [...rows].sort((a, b) => a.tag.localeCompare(b.tag));
+
 describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
   setupMongoTest();
 
@@ -50,6 +58,52 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
 
     expect(await countOf('acme:industry', ['acme:'])).toBe(2);
     expect(await countOf('acme:hardware', ['acme:'])).toBe(1);
+  });
+
+  describe('distinct files per tree path', () => {
+    const rowOf = async (tag: string) =>
+      (await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'])).find(c => c.tag === tag);
+
+    // The tree's branch rows read fileCount; summing per-tag counts here gave 12.
+    it('counts a branch over multi-tagged files once per file, not once per tag', async () => {
+      const leaves = ['acme:legal:a', 'acme:legal:b', 'acme:legal:c', 'acme:legal:d'];
+      for (const fileName of ['f1', 'f2', 'f3']) await makeFile({ tags: leaves, fileName });
+
+      expect(await rowOf('acme:legal')).toEqual({ tag: 'acme:legal', count: 0, fileCount: 3 });
+      expect(await rowOf('acme')).toEqual({ tag: 'acme', count: 0, fileCount: 3 });
+      for (const leaf of leaves) expect(await rowOf(leaf)).toEqual({ tag: leaf, count: 3, fileCount: 3 });
+    });
+
+    it('still adds up a branch whose leaves hold disjoint files', async () => {
+      await makeFile({ tags: ['acme:legal:a'], fileName: 'a' });
+      await makeFile({ tags: ['acme:legal:b'], fileName: 'b' });
+      await makeFile({ tags: ['acme:legal:a', 'acme:legal:b'], fileName: 'ab' });
+
+      expect(await rowOf('acme:legal')).toEqual({ tag: 'acme:legal', count: 0, fileCount: 3 });
+      expect(await rowOf('acme:legal:a')).toEqual({ tag: 'acme:legal:a', count: 2, fileCount: 2 });
+    });
+
+    it('counts a branch tagged directly as its own files and its descendants together', async () => {
+      await makeFile({ tags: ['acme:legal', 'acme:legal:a'], fileName: 'both' });
+      await makeFile({ tags: ['acme:legal'], fileName: 'branch-only' });
+
+      expect(await rowOf('acme:legal')).toEqual({ tag: 'acme:legal', count: 2, fileCount: 2 });
+      expect(await rowOf('acme:legal:a')).toEqual({ tag: 'acme:legal:a', count: 1, fileCount: 1 });
+    });
+
+    it('counts a tag repeated on one file once', async () => {
+      await makeFile({ tags: ['acme:legal:a', 'acme:legal:a'] });
+
+      expect(await rowOf('acme:legal:a')).toEqual({ tag: 'acme:legal:a', count: 1, fileCount: 1 });
+    });
+
+    it('keeps the meta-tag and out-of-prefix tags out of the ancestor rows', async () => {
+      await makeFile({ tags: ['datalake:acme:handbook', 'invoices:2024', 'acme:legal'] });
+
+      const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:', 'datalake:']);
+
+      expect(sortedByTag(counts).map(c => c.tag)).toEqual(['acme', 'acme:legal']);
+    });
   });
 
   it('ignores tags outside the requested prefixes', async () => {
@@ -124,7 +178,7 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
         dataLakeTags: ['datalake:orga:acme'],
       });
 
-      expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+      expect(sortedByTag(result)).toEqual(UNCATEGORIZED_ONE);
     });
 
     it('includes a file shared with our user through the plain base-access arm', async () => {
@@ -136,7 +190,7 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
 
       const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {});
 
-      expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+      expect(sortedByTag(result)).toEqual(UNCATEGORIZED_ONE);
     });
   });
 
@@ -152,9 +206,8 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
       await makeFile({ userId: 'creator-1', tags: ['acme:uncategorized'] });
 
       expect(await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], {})).toEqual([]);
-      expect(await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], { lakeMemberships: [scope] })).toEqual([
-        { tag: 'acme:uncategorized', count: 1 },
-      ]);
+      const scoped = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:'], { lakeMemberships: [scope] });
+      expect(sortedByTag(scoped)).toEqual(UNCATEGORIZED_ONE);
     });
 
     it("does not count a different creator's file carrying the same prefix", async () => {
@@ -181,7 +234,7 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
 
     const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:', '']);
 
-    expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+    expect(sortedByTag(result)).toEqual(UNCATEGORIZED_ONE);
   });
 
   it("ignores a colon-less prefix, which would reach another lake's namespace", async () => {
@@ -201,6 +254,6 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
 
     const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, [' acme:']);
 
-    expect(result).toEqual([{ tag: 'acme:uncategorized', count: 1 }]);
+    expect(sortedByTag(result)).toEqual(UNCATEGORIZED_ONE);
   });
 });

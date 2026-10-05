@@ -48,12 +48,38 @@ import {
   LAKE_REPORTING_EXCLUDED_STATUS,
 } from '../../queries/dataLakeLifecycleScope';
 
+// Bare regex for aggregation expressions ($regexMatch); NOT_META_TAG below is the query-operator form.
+const META_TAG_REGEX = new RegExp(`^${DATALAKE_TAG_PREFIX}`);
+
 /**
  * "not a lake membership tag", derived from the one constant rather than spelled out, so a change
  * to the namespace cannot leave a counter behind. Both tag counters exclude it: a meta-tag is
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
-const NOT_META_TAG = { $not: new RegExp(`^${DATALAKE_TAG_PREFIX}`) };
+const NOT_META_TAG = { $not: META_TAG_REGEX };
+
+/**
+ * Aggregation expression: `$$this` (a tag name) expanded to itself and every ancestor path,
+ * splitting on `:` exactly as buildTagTree does - `a:b:c` gives `['a', 'a:b', 'a:b:c']`.
+ */
+const TAG_SELF_AND_ANCESTOR_PATHS = {
+  $let: {
+    vars: { segments: { $split: ['$$this', ':'] } },
+    in: {
+      $map: {
+        input: { $range: [1, { $add: [{ $size: '$$segments' }, 1] }] },
+        as: 'depth',
+        in: {
+          $reduce: {
+            input: { $slice: ['$$segments', '$$depth'] },
+            initialValue: null,
+            in: { $cond: [{ $eq: ['$$value', null] }, '$$this', { $concat: ['$$value', ':', '$$this'] }] },
+          },
+        },
+      },
+    },
+  },
+};
 
 /**
  * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
@@ -1270,8 +1296,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
-   * Counts tags matching specific prefixes across data-lake-accessible files.
-   * Used by the Data Lake Explorer to build the tag tree without fetching all articles.
+   * Counts tags matching specific prefixes across data-lake-accessible files, one row per tag-tree
+   * path. Used by the Data Lake Explorer to build the tag tree without fetching all articles.
+   *
+   * `count` is files tagged with exactly `tag`; `fileCount` is distinct files tagged with `tag` or
+   * anything under it. Rows include every ancestor path of a matched tag (`acme` and `acme:legal`
+   * for `acme:legal:a`), with `count: 0` when no file carries that path itself. buildTagTree reads
+   * `fileCount` for branch rows - see parseTagNamespace.ts, whose countTagPaths mirrors this on the
+   * client.
    */
   async countDataLakeTagsByPrefix(
     userId: string,
@@ -1283,7 +1315,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
     }
-  ): Promise<{ tag: string; count: number }[]> {
+  ): Promise<{ tag: string; count: number; fileCount: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
     if (usablePrefixes.length === 0) return [];
 
@@ -1299,7 +1331,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const prefixPattern = usablePrefixes.map(p => escapeRegex(p)).join('|');
     const prefixRegex = new RegExp(`^(${prefixPattern})`);
 
-    const result = await this.fabFileModel.aggregate([
+    const result = await this.fabFileModel.aggregate<{ tag: string; count: number; fileCount: number }>([
       {
         // Pre-unwind filter: use $elemMatch with the prefix regex so MongoDB can use
         // the tags.name index and skip non-data-lake files entirely before the $unwind
@@ -1316,10 +1348,48 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
       },
-      { $unwind: '$tags' },
-      { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
-      { $group: { _id: '$tags.name', count: { $sum: 1 } } },
-      { $project: { tag: '$_id', count: 1, _id: 0 } },
+      {
+        // Deduped per file before the unwind, so a file counts once per path however many of its
+        // tags sit under that path, and the $group below stays one key per path.
+        $project: {
+          own: {
+            $setUnion: [
+              {
+                $filter: {
+                  input: '$tags.name',
+                  cond: {
+                    $and: [
+                      { $regexMatch: { input: '$$this', regex: prefixRegex } },
+                      { $not: [{ $regexMatch: { input: '$$this', regex: META_TAG_REGEX } }] },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      {
+        $project: {
+          own: 1,
+          paths: {
+            $reduce: {
+              input: '$own',
+              initialValue: [],
+              in: { $setUnion: ['$$value', TAG_SELF_AND_ANCESTOR_PATHS] },
+            },
+          },
+        },
+      },
+      { $unwind: '$paths' },
+      {
+        $group: {
+          _id: '$paths',
+          count: { $sum: { $cond: [{ $in: ['$paths', '$own'] }, 1, 0] } },
+          fileCount: { $sum: 1 },
+        },
+      },
+      { $project: { tag: '$_id', count: 1, fileCount: 1, _id: 0 } },
     ]);
     return result;
   }

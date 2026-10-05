@@ -2113,14 +2113,18 @@ export interface DataLakeArticlesParams {
 
 /** Response shape for the tag-counts endpoint. */
 export interface DataLakeTagCountsResponse {
-  /** Tag-occurrence sums that drive the Data Lake Explorer's tag tree. */
-  tagCounts: { tag: string; count: number }[];
+  /**
+   * One row per tag-tree path (ancestors included) driving the Data Lake Explorer's tag tree:
+   * `count` is files tagged with exactly `tag`, `fileCount` distinct files at or under it. See
+   * countDataLakeTagsByPrefix.
+   */
+  tagCounts: { tag: string; count: number; fileCount: number }[];
   /** Distinct-file counts: combined total + per-prefix breakdown (keyed by lake tag prefix, e.g. 'opti:'). */
   uniqueArticleCounts: { total: number; byPrefix: Record<string, number> };
   /**
    * Distinct live files per lake, keyed by `datalakeTag`. This is the number to show for a
    * LAKE: it counts membership, so it stays truthful for files that carry no taxonomy tag and
-   * counts a multi-tagged file once. The prefix/occurrence counts above still drive the tag
+   * counts a multi-tagged file once. `tagCounts` above still drives the tag
    * tree's branches.
    */
   lakeFileCounts: Record<string, number>;

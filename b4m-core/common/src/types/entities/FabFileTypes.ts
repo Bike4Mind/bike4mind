@@ -1342,7 +1342,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
     }
-  ): Promise<{ tag: string; count: number }[]>;
+  ): Promise<{ tag: string; count: number; fileCount: number }[]>;
 
   /**
    * Count unique data-lake FILES (not tag occurrences) under the same scoping as
