@@ -60,8 +60,10 @@ describe('agentExecutor toolDeps wiring', () => {
   });
 
   it('carries the scope denials to every child row and the child MCP denylist', () => {
-    expect(source).toMatch(
-      /const baseFields = \{[^}]*\.\.\.\(execution\.scopeDeniedTools\?\.length && \{ scopeDeniedTools: execution\.scopeDeniedTools \}\),/
+    const baseFieldsAt = source.indexOf('const baseFields = {');
+    expect(baseFieldsAt).toBeGreaterThan(-1);
+    expect(source.slice(baseFieldsAt, source.indexOf('};', baseFieldsAt))).toContain(
+      '...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),'
     );
     expect(source).toMatch(/nodeDefaults: \{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
     expect(source).toMatch(
