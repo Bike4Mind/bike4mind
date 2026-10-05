@@ -139,8 +139,8 @@ describe('performDeepResearch discovery precedence', () => {
     expect(result.success).toBe(true);
     expect(lead.search).toHaveBeenCalled();
     expect(backup.search).toHaveBeenCalled();
-    const [[{ deepResearchState }]] = vi.mocked(context.statusUpdate).mock.calls as unknown as [
-      [{ deepResearchState: { activities: { type: string; status: string; message: string }[] } }],
+    const [{ deepResearchState }] = vi.mocked(context.statusUpdate).mock.lastCall as unknown as [
+      { deepResearchState: { activities: { type: string; status: string; message: string }[] } },
     ];
     expect(deepResearchState.activities).toContainEqual(
       expect.objectContaining({ type: 'search', status: 'error', message: expect.stringMatching(/both providers/) })
