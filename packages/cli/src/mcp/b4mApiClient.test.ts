@@ -181,17 +181,23 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/files/f1');
   });
 
-  it('generates a sound effect, requesting bytes and reading the persisted-file headers', async () => {
-    mockAxiosPost.mockResolvedValue({
-      data: Buffer.from('audio-bytes'),
-      headers: {
-        'content-type': 'audio/mpeg',
-        'x-b4m-audio-saved': 'true',
-        'x-b4m-audio-fab-file-id': 'fab1',
-        'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
-        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
-      },
-    });
+  const jsonBody = (value: unknown) => ({
+    data: Buffer.from(JSON.stringify(value)),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  it('generates a sound effect with base64 encoding and parses the JSON body', async () => {
+    mockAxiosPost.mockResolvedValue(
+      jsonBody({
+        delivery: 'inline',
+        audio: 'YXVkaW8tYnl0ZXM=',
+        contentType: 'audio/mpeg',
+        saved: true,
+        fabFileId: 'fab1',
+        fileName: 'sound-effect-thunderclap.mp3',
+        fileUrl: 'https://signed.example/audio.mp3',
+      })
+    );
 
     const result = await client.generateSoundEffect({
       provider: 'elevenlabs',
@@ -209,13 +215,13 @@ describe('B4mApiClient', () => {
         durationSeconds: 3,
         promptInfluence: 0.5,
         format: 'mp3_44100_128',
+        encoding: 'base64',
       },
       { responseType: 'arraybuffer' }
     );
-    // The signed URL comes straight off the header, not a re-fetch, so the CLI never
-    // hits the moderation race that GET /api/files/:id would on a just-created file.
     expect(result).toEqual({
-      audio: Buffer.from('audio-bytes'),
+      delivery: 'inline',
+      audio: 'YXVkaW8tYnl0ZXM=',
       contentType: 'audio/mpeg',
       saved: true,
       fabFileId: 'fab1',
@@ -224,7 +230,45 @@ describe('B4mApiClient', () => {
     });
   });
 
-  it('drops the persisted-file headers when the save header is not "true"', async () => {
+  it('returns the url variant for an oversized sound effect', async () => {
+    mockAxiosPost.mockResolvedValue(
+      jsonBody({ delivery: 'url', url: 'https://signed.example/big.mp3', bytes: 9_000_000, contentType: 'audio/mpeg' })
+    );
+
+    await expect(client.generateSoundEffect({ provider: 'elevenlabs', text: 'long' })).resolves.toEqual({
+      delivery: 'url',
+      url: 'https://signed.example/big.mp3',
+      bytes: 9_000_000,
+      contentType: 'audio/mpeg',
+    });
+  });
+
+  it('normalizes an old server raw-bytes answer into the inline variant using the X-B4M-Audio headers', async () => {
+    mockAxiosPost.mockResolvedValue({
+      data: Buffer.from('audio-bytes'),
+      headers: {
+        'content-type': 'audio/mpeg',
+        'x-b4m-audio-saved': 'true',
+        'x-b4m-audio-fab-file-id': 'fab1',
+        'x-b4m-audio-file-name': 'sound-effect-thunderclap.mp3',
+        'x-b4m-audio-file-url': 'https://signed.example/audio.mp3',
+      },
+    });
+
+    const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'thunderclap' });
+
+    expect(result).toEqual({
+      delivery: 'inline',
+      audio: Buffer.from('audio-bytes').toString('base64'),
+      contentType: 'audio/mpeg',
+      saved: true,
+      fabFileId: 'fab1',
+      fileName: 'sound-effect-thunderclap.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
+    });
+  });
+
+  it('drops the old-server file headers when the save header is not "true"', async () => {
     // A duplicated header arrives as an array; only the scalar string form is kept,
     // and none of the file headers are read at all unless the save actually succeeded.
     mockAxiosPost.mockResolvedValue({
@@ -239,27 +283,19 @@ describe('B4mApiClient', () => {
 
     const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
 
-    expect(result.saved).toBe(false);
-    expect(result.fabFileId).toBeUndefined();
-    expect(result.fileName).toBeUndefined();
-    expect(result.fileUrl).toBeUndefined();
+    expect(result).toMatchObject({ saved: false, audio: Buffer.from('audio-bytes').toString('base64') });
+    expect((result as Record<string, unknown>).fabFileId).toBeUndefined();
+    expect((result as Record<string, unknown>).fileName).toBeUndefined();
+    expect((result as Record<string, unknown>).fileUrl).toBeUndefined();
   });
 
-  it('omits optional sound-effect fields and reports not-saved when no fab-file header is set', async () => {
-    mockAxiosPost.mockResolvedValue({
-      data: Buffer.from('bytes'),
-      headers: { 'content-type': 'audio/mpeg' },
-    });
+  it('reports not-saved for an old-server answer with no audio headers beyond the content type', async () => {
+    mockAxiosPost.mockResolvedValue({ data: Buffer.from('bytes'), headers: { 'content-type': 'audio/mpeg' } });
 
     const result = await client.generateSoundEffect({ provider: 'elevenlabs', text: 'wind' });
 
-    expect(mockAxiosPost).toHaveBeenCalledWith(
-      '/api/ai/sound-effects',
-      { provider: 'elevenlabs', text: 'wind' },
-      { responseType: 'arraybuffer' }
-    );
-    expect(result.saved).toBe(false);
-    expect(result.fabFileId).toBeUndefined();
+    expect(result).toMatchObject({ delivery: 'inline', saved: false });
+    expect((result as Record<string, unknown>).fabFileId).toBeUndefined();
   });
 
   it('decodes an arraybuffer error body so mapApiError can read the server message', async () => {
@@ -281,22 +317,59 @@ describe('B4mApiClient', () => {
     });
   });
 
-  it('synthesizes speech through the scoped TTS route with base64 encoding', async () => {
-    mockPost.mockResolvedValue({ audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true });
+  it('synthesizes speech through the TTS route with base64 encoding', async () => {
+    mockAxiosPost.mockResolvedValue(jsonBody({ audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true }));
 
     const result = await client.synthesizeSpeech({ text: 'Hello', provider: 'openai', voice: 'alloy' });
 
-    expect(mockPost).toHaveBeenCalledWith('/api/ai/tts', {
-      text: 'Hello',
-      provider: 'openai',
-      voice: 'alloy',
-      encoding: 'base64',
-    });
+    expect(mockAxiosPost).toHaveBeenCalledWith(
+      '/api/ai/tts',
+      { text: 'Hello', provider: 'openai', voice: 'alloy', encoding: 'base64' },
+      { responseType: 'arraybuffer' }
+    );
     expect(result).toMatchObject({ kind: 'audio', data: { audio: 'YWJj' } });
   });
 
+  it('returns the url variant for oversized TTS audio', async () => {
+    mockAxiosPost.mockResolvedValue(
+      jsonBody({
+        delivery: 'url',
+        url: 'https://signed.example/offload.mp3',
+        bytes: 5_000_000,
+        format: 'mp3',
+        contentType: 'audio/mpeg',
+      })
+    );
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toMatchObject({
+      kind: 'audio',
+      data: { delivery: 'url', url: 'https://signed.example/offload.mp3', bytes: 5_000_000 },
+    });
+  });
+
+  it('returns a saved file from a legacy 413 whose error body arrives as bytes', async () => {
+    mockAxiosPost.mockRejectedValue(
+      axiosError(413, {
+        data: Buffer.from(
+          JSON.stringify({
+            error: 'Response too large',
+            provider: 'elevenlabs',
+            saved: true,
+            fabFileId: 'fab1',
+            fileUrl: 'https://signed.example/audio.mp3',
+          })
+        ),
+      })
+    );
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toMatchObject({
+      kind: 'saved-too-large',
+      data: { fabFileId: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+  });
+
   it('returns a saved file from an oversized billed TTS response', async () => {
-    mockPost.mockRejectedValue(
+    mockAxiosPost.mockRejectedValue(
       axiosError(413, {
         data: {
           error: 'Response too large',
@@ -315,13 +388,13 @@ describe('B4mApiClient', () => {
   });
 
   it('preserves an oversized TTS error when no saved file can be retrieved', async () => {
-    mockPost.mockRejectedValue(axiosError(413, { data: { error: 'Response too large', provider: 'openai' } }));
+    mockAxiosPost.mockRejectedValue(axiosError(413, { data: { error: 'Response too large', provider: 'openai' } }));
 
     await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ response: { status: 413 } });
   });
 
   it('keeps the saved file id and fallback provider from an oversized TTS response without a URL', async () => {
-    mockPost.mockRejectedValue(
+    mockAxiosPost.mockRejectedValue(
       axiosError(413, {
         data: { error: 'Response too large', provider: 'elevenlabs', saved: true, fabFileId: 'fab1' },
         headers: { 'x-b4m-tts-provider-fallback-from': 'openai' },
@@ -336,7 +409,7 @@ describe('B4mApiClient', () => {
   });
 
   it('rethrows an oversized TTS error whose body does not match the 413 schema', async () => {
-    mockPost.mockRejectedValue(
+    mockAxiosPost.mockRejectedValue(
       axiosError(413, { data: { error: 'Response too large', saved: true, fabFileId: 'fab1' } })
     );
 
@@ -345,7 +418,7 @@ describe('B4mApiClient', () => {
 
   it('rethrows a non-413 TTS failure unchanged', async () => {
     const failure = axiosError(500, { data: { error: 'Failed to generate speech' } });
-    mockPost.mockRejectedValue(failure);
+    mockAxiosPost.mockRejectedValue(failure);
 
     await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toBe(failure);
   });

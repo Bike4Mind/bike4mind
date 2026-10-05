@@ -271,7 +271,8 @@ describe('tool handlers', () => {
     const getFile = vi.fn();
     const client = mockClient({
       generateSoundEffect: vi.fn().mockResolvedValue({
-        audio: Buffer.from('abc'),
+        delivery: 'inline',
+        audio: Buffer.from('abc').toString('base64'),
         contentType: 'audio/mpeg',
         saved: true,
         fabFileId: 'fab1',
@@ -283,53 +284,97 @@ describe('tool handlers', () => {
 
     const result = await generateSoundEffect(client, { text: 'thunder', provider: 'elevenlabs' });
 
-    // The URL comes off the response header, so no GET /api/files/:id round-trip is
+    // The signed URL comes from the response, so no GET /api/files/:id round-trip is
     // made - that re-fetch would fail closed until the async moderation scan runs.
     expect(getFile).not.toHaveBeenCalled();
-    expect(result).toEqual({
+    expect(result.structuredContent).toEqual({
       saved: true,
       provider: 'elevenlabs',
       contentType: 'audio/mpeg',
       byteLength: 3,
       file: { id: 'fab1', fileName: 'sound-effect.mp3', fileUrl: 'https://signed' },
     });
+    expect(result.content.some(item => item.type === 'audio')).toBe(false);
   });
 
-  it('generate_sound_effect falls back to inline audio when a save yields no usable URL', async () => {
+  it('generate_sound_effect inlines the audio but reports the saved file id when a save yields no usable URL', async () => {
     const client = mockClient({
-      generateSoundEffect: vi
-        .fn()
-        .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: true, fabFileId: 'fab1' }),
+      generateSoundEffect: vi.fn().mockResolvedValue({
+        audio: Buffer.from('abc').toString('base64'),
+        contentType: 'audio/mpeg',
+        saved: true,
+        fabFileId: 'fab1',
+      }),
     });
 
     const result = await generateSoundEffect(client, { text: 'thunder', provider: 'elevenlabs' });
 
     // Persisted but no fileUrl: hand back the bytes the caller was already billed for.
-    expect(result).toEqual({
-      saved: false,
+    expect(result.content).toContainEqual({
+      type: 'audio',
+      data: Buffer.from('abc').toString('base64'),
+      mimeType: 'audio/mpeg',
+    });
+    expect(result.structuredContent).toEqual({
+      saved: true,
       provider: 'elevenlabs',
       contentType: 'audio/mpeg',
       byteLength: 3,
-      audioBase64: Buffer.from('abc').toString('base64'),
+      file: { id: 'fab1' },
     });
   });
 
   it('generate_sound_effect returns the audio inline (base64) when it was not persisted', async () => {
     const client = mockClient({
-      generateSoundEffect: vi
-        .fn()
-        .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: false }),
+      generateSoundEffect: vi.fn().mockResolvedValue({
+        audio: Buffer.from('abc').toString('base64'),
+        contentType: 'audio/mpeg',
+        saved: false,
+        saveSkippedReason: 'storage_limit',
+      }),
     });
 
     const result = await generateSoundEffect(client, { text: 'thunder', provider: 'elevenlabs' });
 
-    expect(result).toEqual({
+    expect(result.content).toContainEqual({
+      type: 'audio',
+      data: Buffer.from('abc').toString('base64'),
+      mimeType: 'audio/mpeg',
+    });
+    expect(result.structuredContent).toEqual({
       saved: false,
       provider: 'elevenlabs',
       contentType: 'audio/mpeg',
       byteLength: 3,
-      audioBase64: Buffer.from('abc').toString('base64'),
+      saveSkippedReason: 'storage_limit',
     });
+  });
+
+  it('generate_sound_effect returns the offloaded URL and byte count for oversized audio, with no audio block', async () => {
+    const client = mockClient({
+      generateSoundEffect: vi.fn().mockResolvedValue({
+        delivery: 'url',
+        url: 'https://signed.example/big.mp3',
+        bytes: 9_000_000,
+        contentType: 'audio/mpeg',
+        saved: true,
+        fabFileId: 'fab1',
+        fileName: 'sound-effect.mp3',
+        fileUrl: 'https://signed.example/file.mp3',
+      }),
+    });
+
+    const result = await generateSoundEffect(client, { text: 'thunder', provider: 'elevenlabs' });
+
+    expect(result.structuredContent).toEqual({
+      provider: 'elevenlabs',
+      contentType: 'audio/mpeg',
+      byteLength: 9_000_000,
+      url: 'https://signed.example/big.mp3',
+      saved: true,
+      file: { id: 'fab1', fileName: 'sound-effect.mp3', fileUrl: 'https://signed.example/file.mp3' },
+    });
+    expect(result.content.some(item => item.type === 'audio')).toBe(false);
   });
 
   it('text_to_speech returns the saved file URL and actual fallback provider', async () => {
@@ -359,6 +404,33 @@ describe('tool handlers', () => {
       contentType: 'audio/mpeg',
       byteLength: 3,
       file: { id: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+    expect(result.content.some(item => item.type === 'audio')).toBe(false);
+  });
+
+  it('text_to_speech returns the offloaded URL and byte count for oversized audio, with no audio block', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: {
+          delivery: 'url',
+          url: 'https://signed.example/offload.mp3',
+          bytes: 5_000_000,
+          format: 'mp3',
+          contentType: 'audio/mpeg',
+        },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.structuredContent).toEqual({
+      provider: 'openai',
+      format: 'mp3',
+      contentType: 'audio/mpeg',
+      byteLength: 5_000_000,
+      url: 'https://signed.example/offload.mp3',
+      saved: false,
     });
     expect(result.content.some(item => item.type === 'audio')).toBe(false);
   });
@@ -558,7 +630,7 @@ describe('registerTools', () => {
     const tools = collectTools(
       mockClient({
         generateSoundEffect: vi.fn().mockResolvedValue({
-          audio: Buffer.from('abc'),
+          audio: Buffer.from('abc').toString('base64'),
           contentType: 'audio/mpeg',
           saved: true,
           fabFileId: 'fab1',
@@ -578,9 +650,11 @@ describe('registerTools', () => {
   it('generate_sound_effect returns an audio content block when the bytes were not persisted', async () => {
     const tools = collectTools(
       mockClient({
-        generateSoundEffect: vi
-          .fn()
-          .mockResolvedValue({ audio: Buffer.from('abc'), contentType: 'audio/mpeg', saved: false }),
+        generateSoundEffect: vi.fn().mockResolvedValue({
+          audio: Buffer.from('abc').toString('base64'),
+          contentType: 'audio/mpeg',
+          saved: false,
+        }),
       })
     );
 
