@@ -1,7 +1,13 @@
 import { isAxiosError } from 'axios';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
-import type { ChatHistoryItemType, QuestErrorCode } from '@bike4mind/common';
+import {
+  ttsBase64ResponseSchema,
+  ttsResponseTooLargeSchema,
+  type ChatHistoryItemType,
+  type QuestErrorCode,
+  type TTSRequest,
+} from '@bike4mind/common';
 
 /**
  * A Bike4Mind notebook (session) as returned by the REST API. Only the fields the
@@ -261,6 +267,21 @@ export class B4mApiClient {
       };
     } catch (error) {
       throw decodeArrayBufferErrorBody(error);
+    }
+  }
+
+  async synthesizeSpeech(args: Omit<TTSRequest, 'encoding'>) {
+    try {
+      const response: unknown = await this.client.post('/api/ai/tts', { ...args, encoding: 'base64' });
+      return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(response) };
+    } catch (error) {
+      if (isAxiosError(error) && error.response?.status === 413) {
+        const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
+        if (oversized.success && oversized.data.saved && oversized.data.fabFileId && oversized.data.fileUrl) {
+          return { kind: 'saved-too-large' as const, data: oversized.data };
+        }
+      }
+      throw error;
     }
   }
 

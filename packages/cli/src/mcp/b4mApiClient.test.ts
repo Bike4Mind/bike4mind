@@ -259,6 +259,45 @@ describe('B4mApiClient', () => {
     });
   });
 
+  it('synthesizes speech through the scoped TTS route with base64 encoding', async () => {
+    mockPost.mockResolvedValue({ audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true });
+
+    const result = await client.synthesizeSpeech({ text: 'Hello', provider: 'openai', voice: 'alloy' });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/tts', {
+      text: 'Hello',
+      provider: 'openai',
+      voice: 'alloy',
+      encoding: 'base64',
+    });
+    expect(result).toMatchObject({ kind: 'audio', data: { audio: 'YWJj' } });
+  });
+
+  it('returns a saved file from an oversized billed TTS response', async () => {
+    mockPost.mockRejectedValue(
+      axiosError(413, {
+        data: {
+          error: 'Response too large',
+          provider: 'elevenlabs',
+          saved: true,
+          fabFileId: 'fab1',
+          fileUrl: 'https://signed.example/audio.mp3',
+        },
+      })
+    );
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).resolves.toMatchObject({
+      kind: 'saved-too-large',
+      data: { fabFileId: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+  });
+
+  it('preserves an oversized TTS error when no saved file can be retrieved', async () => {
+    mockPost.mockRejectedValue(axiosError(413, { data: { error: 'Response too large', provider: 'openai' } }));
+
+    await expect(client.synthesizeSpeech({ text: 'Hello' })).rejects.toMatchObject({ response: { status: 413 } });
+  });
+
   it('lists projects with nested pagination and normalizes the envelope', async () => {
     mockGet.mockResolvedValue({ data: [{ id: 'p1', name: 'Proj' }], hasMore: true, total: 5 });
 

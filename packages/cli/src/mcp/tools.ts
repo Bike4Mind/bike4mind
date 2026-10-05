@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { PROMPT_TEXT_MAX } from '@bike4mind/common';
+import { PROMPT_TEXT_MAX, ttsRequestSchema, type TTSRequest } from '@bike4mind/common';
 import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
@@ -57,6 +57,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Generate sound effect',
     description:
       'Generate a sound effect from a text description. Returns the saved audio file (with a signed download URL) when the caller keeps generated audio, otherwise the audio inline.',
+    scope: 'ai:generate',
+  },
+  {
+    name: 'text_to_speech',
+    title: 'Text to speech',
+    description:
+      'Synthesize speech from text. Returns a saved audio file with a signed download URL when available, otherwise audio inline.',
     scope: 'ai:generate',
   },
 ];
@@ -128,6 +135,13 @@ const generateSoundEffectShape = {
     .optional()
     .describe('How strictly to follow the prompt (0 = loose, 1 = strict)'),
   format: z.string().optional().describe('Provider output encoding token, e.g. mp3_44100_128'),
+};
+
+const textToSpeechShape = {
+  ...ttsRequestSchema.omit({ encoding: true }).shape,
+  text: ttsRequestSchema.shape.text.describe('Text to speak'),
+  provider: ttsRequestSchema.shape.provider.describe('Speech provider; defaults to OpenAI'),
+  preview: ttsRequestSchema.shape.preview.describe('Skip saving a copy to the file browser'),
 };
 
 function notebookSummary(n: RawNotebook) {
@@ -275,6 +289,40 @@ function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
   };
 }
 
+export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 'encoding'>): Promise<CallToolResult> {
+  const response = await client.synthesizeSpeech(args);
+  if (response.kind === 'saved-too-large') {
+    return toResult({
+      saved: true,
+      provider: response.data.provider,
+      file: { id: response.data.fabFileId, fileUrl: response.data.fileUrl },
+    });
+  }
+
+  const result = response.data;
+  const provider = result.provider ?? args.provider ?? 'openai';
+  const metadata = {
+    provider,
+    ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom } : {}),
+    format: result.format,
+    contentType: result.contentType,
+    byteLength: Buffer.from(result.audio, 'base64').length,
+  };
+
+  if (result.saved && result.fabFileId && result.fileUrl) {
+    return toResult({ ...metadata, saved: true, file: { id: result.fabFileId, fileUrl: result.fileUrl } });
+  }
+
+  const inlineMetadata = { ...metadata, saved: false };
+  return {
+    content: [
+      { type: 'text', text: JSON.stringify(inlineMetadata, null, 2) },
+      { type: 'audio', data: result.audio, mimeType: result.contentType },
+    ],
+    structuredContent: inlineMetadata,
+  };
+}
+
 /**
  * Register the Bike4Mind MCP tools on `server`. Each handler is wrapped so an
  * API failure becomes a structured `isError` result carrying a friendly message
@@ -356,6 +404,22 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     async args => {
       try {
         return soundEffectResult(await generateSoundEffect(client, args));
+      } catch (err) {
+        return errorResult(mapApiError(err, baseURL, 'ai:generate'));
+      }
+    }
+  );
+
+  server.registerTool(
+    'text_to_speech',
+    {
+      title: meta('text_to_speech').title,
+      description: meta('text_to_speech').description,
+      inputSchema: textToSpeechShape,
+    },
+    async args => {
+      try {
+        return await textToSpeech(client, args);
       } catch (err) {
         return errorResult(mapApiError(err, baseURL, 'ai:generate'));
       }

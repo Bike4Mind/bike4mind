@@ -139,6 +139,9 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
+| `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
+
+`text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. When a copy is saved, the result includes its signed download URL; otherwise it includes an MCP audio block.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

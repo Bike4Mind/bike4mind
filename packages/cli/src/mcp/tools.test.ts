@@ -13,6 +13,7 @@ import {
   sendMessage,
   searchKnowledgeBase,
   generateSoundEffect,
+  textToSpeech,
 } from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
@@ -29,6 +30,7 @@ describe('TOOL_NAMES', () => {
       'list_files',
       'get_file',
       'generate_sound_effect',
+      'text_to_speech',
     ]);
   });
 });
@@ -235,6 +237,68 @@ describe('tool handlers', () => {
       audioBase64: Buffer.from('abc').toString('base64'),
     });
   });
+
+  it('text_to_speech returns the saved file URL and actual fallback provider', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: {
+          audio: 'YWJj',
+          format: 'mp3',
+          contentType: 'audio/mpeg',
+          saved: true,
+          fabFileId: 'fab1',
+          fileUrl: 'https://signed.example/audio.mp3',
+          provider: 'elevenlabs',
+          fallbackFrom: 'openai',
+        },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello', provider: 'openai' });
+
+    expect(result.structuredContent).toEqual({
+      saved: true,
+      provider: 'elevenlabs',
+      fallbackFrom: 'openai',
+      format: 'mp3',
+      contentType: 'audio/mpeg',
+      byteLength: 3,
+      file: { id: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+    expect(result.content.some(item => item.type === 'audio')).toBe(false);
+  });
+
+  it('text_to_speech returns inline audio if a saved copy has no URL', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: { audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab1' },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.content).toContainEqual({ type: 'audio', data: 'YWJj', mimeType: 'audio/mpeg' });
+    expect(result.structuredContent).toMatchObject({ saved: false, provider: 'openai', byteLength: 3 });
+  });
+
+  it('text_to_speech returns a saved URL when the billed response is too large', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'saved-too-large',
+        data: { provider: 'openai', fabFileId: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.structuredContent).toEqual({
+      saved: true,
+      provider: 'openai',
+      file: { id: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+  });
 });
 
 describe('registerTools', () => {
@@ -354,6 +418,25 @@ describe('registerTools', () => {
     const tools = collectTools(mockClient({ generateSoundEffect: vi.fn().mockRejectedValue(forbidden) }));
 
     const result = await tools.get('generate_sound_effect')!({ text: 'rain', provider: 'elevenlabs' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
+    });
+  });
+
+  it('text_to_speech maps a scope failure to an MCP error', async () => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ synthesizeSpeech: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get('text_to_speech')!({ text: 'Hello' });
 
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({
