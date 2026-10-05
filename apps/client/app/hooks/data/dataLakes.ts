@@ -13,6 +13,7 @@ import type {
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
+  ILakeFindingListItem,
   InconsistencyKind,
   LakeCorpusAction,
   LakeCorpusActionTarget,
@@ -2422,7 +2423,7 @@ export function useDataLakeFindings(
     queryKey: dataLakeKeys.findings(dataLakeId, filters),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
-      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+      const { data } = await api.get<{ data: ILakeFindingListItem[]; hasMore: boolean }>(
         `/api/data-lakes/${dataLakeId}/findings`,
         { params: { ...filters, offset: pageParam } }
       );
@@ -2607,7 +2608,7 @@ export function useLakeFileTags(dataLakeId: string | null, fabFileId: string | n
  * The `POST .../findings/:findingId/corpus-action` request union. Re-declared here rather than
  * imported: the contract lives in the route (a zod discriminated union) and in
  * `@bike4mind/services`' internal type, neither of which the browser bundle may reach, and the
- * client additionally never sends `unsupersede` from a picker (only the supersede Undo does).
+ * client sends `unsupersede` only for a file the findings list reports in `supersededFabFileIds`.
  */
 export type CorpusActionBody =
   | { action: 'merge'; keepFabFileId: string; retireFabFileIds: string[]; note?: string }
@@ -2714,6 +2715,12 @@ export function useApplyCorpusAction() {
             },
           },
         });
+        return;
+      }
+
+      if (result.action === 'unsupersede') {
+        const restored = result.targets.find(target => target.role === 'restored');
+        toast.success(`"${restored?.fileName ?? 'The document'}" returned to ranking.`);
         return;
       }
 
