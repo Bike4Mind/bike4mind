@@ -198,7 +198,7 @@ export function isModelAccessible(
   // with the data-lake rule and the registry, robust to stray whitespace.
   const normalizedKeys = entitlementKeys.map(normalizeEntitlementKey);
   const normalizedAllowedEntitlements = (model.allowedEntitlements ?? []).map(normalizeEntitlementKey);
-  return normalizedKeys.some(key => normalizedAllowedEntitlements.includes(key));
+  return normalizedAllowedEntitlements.length === 0 || normalizedKeys.some(key => normalizedAllowedEntitlements.includes(key));
 }
 
 /**
