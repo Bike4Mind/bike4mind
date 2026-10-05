@@ -215,6 +215,24 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).not.toHaveBeenCalled();
   });
 
+  it('keeps the full reservation when the model left the catalog before settlement', async () => {
+    const t = setup();
+    const error = vi.spyOn(t.deps.logger, 'error');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const job = t.jobOf(created);
+    await t.engine.step(job.id); // submit -> running
+    // A catalog change after submit: the model itself was removed.
+    const stored = t.repository.jobs.get(job.id)!;
+    stored.payload.reportedDurationSeconds = 4;
+    stored.payload.request.model = 'removed-video-model' as typeof stored.payload.request.model;
+    await t.runToCompletion();
+    const settled = t.jobOf(created);
+    expect(settled).toMatchObject({ state: 'succeeded' });
+    expect(settled.terminalHandledAt).toBeTruthy();
+    expect(vi.mocked(settleCreditHold).mock.calls[0][1]).toBeNaN();
+    expect(error).toHaveBeenCalledWith('video_job_estimate_failed', expect.objectContaining({ jobId: job.id }));
+  });
+
   it('falls back to the generated bucket when Files refuses', async () => {
     const t = setup({ saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })) });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);

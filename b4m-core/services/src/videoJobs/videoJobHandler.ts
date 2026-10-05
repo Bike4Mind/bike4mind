@@ -79,17 +79,18 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
   const handleOf = (job: IGenerationJobDocument): ProviderJobHandle | null => job.payload.providerHandle ?? null;
 
-  // A pricing failure (a catalog change since the job was created) must not fail terminal handling: NaN makes
-  // settleCreditHold keep the full reservation and log it at error level.
+  // A pricing failure (a catalog change since the job was created, including a removed model) must not fail
+  // terminal handling: NaN makes settleCreditHold keep the full reservation and log it at error level.
   const estimate = (job: IGenerationJobDocument) => {
     const { request } = job.payload;
-    const caps = getVideoModelCapabilities(request.model);
-    const billed = billedVideoRequest(caps, request, job.payload.reportedDurationSeconds);
     try {
+      const caps = getVideoModelCapabilities(request.model);
+      if (!caps) throw new Error(`Video model ${request.model} is no longer in the catalog`);
+      const billed = billedVideoRequest(caps, request, job.payload.reportedDurationSeconds);
       return { billed, credits: estimateVideoCostCredits(caps, billed), usd: estimateVideoCostUsd(caps, billed) };
     } catch (error) {
       deps.logger.error('video_job_estimate_failed', { jobId: job.id, model: request.model, error });
-      return { billed, credits: Number.NaN, usd: null };
+      return { billed: request, credits: Number.NaN, usd: null };
     }
   };
 
