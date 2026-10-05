@@ -173,6 +173,7 @@ import {
   createWorkItemTools,
 } from './tools';
 import { WorkItemsClient } from './api/WorkItemsClient.js';
+import { PostEditDiagnostics } from './diagnostics/PostEditDiagnostics.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
 import { checkForUpdate } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
@@ -335,6 +336,7 @@ function CliApp() {
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
+  const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
 
   // Use Zustand store for UI state. The session is the single source of truth;
   // handlers read the latest value via `useCliStore.getState().session` and
@@ -860,6 +862,7 @@ function CliApp() {
       const agentContext: AgentContext = {
         currentAgent: null,
         observationQueue: [],
+        onFileChanged: filePath => postEditDiagnosticsRef.current.enqueue(filePath),
       };
 
       // Build CLI tools, MCP/agent/context stores, the subagent orchestrator,
@@ -1626,6 +1629,7 @@ function CliApp() {
       todoStore: todoStoreRef.current,
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
+      postEditDiagnostics: postEditDiagnosticsRef.current,
       workflowStores: {
         decisionStore: decisionStoreRef.current,
         blockerStore: blockerStoreRef.current,
