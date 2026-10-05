@@ -29,6 +29,10 @@ export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 
 export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
 
+export const MAX_ACTIVE_KEYS_PER_USER = 10;
+/** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
+export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
+
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
   scopes: z.array(z.enum(ApiKeyScope)).min(1),
@@ -245,13 +249,29 @@ export const createUserApiKey = async (
     }
   }
 
-  // Per-user cap: max 10 active keys. Skip only for the shared system user -
-  // keyed on userId === systemUserId (NOT on scope) to prevent rogue-admin bypass.
-  const MAX_ACTIVE_KEYS_PER_USER = 10;
+  // Exchange keys sit outside the standard cap only because they are short-lived and
+  // tagged to one relying party (pages/api/oauth/ai-token.ts keeps one per (user, client)).
+  // Refuse one that is neither, so the separate pool can't mint an unbounded long-lived key.
+  const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
+  if (isExchangeKey && (!params.expiresAt || !params.metadata.oauthClientId)) {
+    throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
+  }
+
+  // Per-user caps, one per ApiKeyCapPool: 10 standard keys, and a separate ceiling on
+  // concurrently authorized federated apps so they never crowd out the user's own keys.
+  // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
+  // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
   if (!isSystemUser) {
-    const activeCount = await db.userApiKeys.countActiveByUserId(userId);
-    if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
+    const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
+    const activeCount = await db.userApiKeys.countActiveByUserId(userId, pool);
+    if (isExchangeKey && activeCount >= MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) {
+      throw new BadRequestError(
+        `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`,
+        { errorCode: API_KEY_USER_CAP_ERROR_CODE }
+      );
+    }
+    if (!isExchangeKey && activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
       throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
         errorCode: API_KEY_USER_CAP_ERROR_CODE,
       });
