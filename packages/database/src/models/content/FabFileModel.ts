@@ -3180,11 +3180,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         await removeBatch();
         continue;
       }
-      await withTransaction(async () => {
+      const completed = await withTransaction(async () => {
+        // Include chunks committed between the candidate read and transaction start.
+        const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+          .limit(chunkBatchSize + 1)
+          .lean();
+        if (finalChunks.length > chunkBatchSize) return false;
         await this.hardDeleteOneById(fabFileId);
-        await removeBatch();
+        await FabFileChunk.deleteMany({ fabFileId, _id: { $in: finalChunks.map(chunk => chunk._id) } });
+        return true;
       });
-      return;
+      if (completed) return;
     }
   }
 

@@ -171,8 +171,9 @@ export const cleanupDeletedDataLake = async (
     // Already gone - idempotent success.
     return;
   }
+  const validResumeClaim = purgeClaimId === undefined || (typeof purgeClaimId === 'string' && purgeClaimId.length > 0);
   const resumesStartedGeneration =
-    beginPurge && purgeClaimId && existing.purgeStartedAt && existing.purgeClaimId === purgeClaimId;
+    beginPurge && validResumeClaim && existing.purgeStartedAt && existing.purgeClaimId === purgeClaimId;
   // A started generation may have removed its own grants; its atomic claim still gates every retry.
   if (!resumesStartedGeneration && !(await resolveCanManageLake(existing, actor, { db }))) {
     throw new BadRequestError('You do not have permission to clean up this data lake');

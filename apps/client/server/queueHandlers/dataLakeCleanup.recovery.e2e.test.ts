@@ -6,6 +6,7 @@ import type { Logger } from '@bike4mind/observability';
 import { KnowledgeType } from '@bike4mind/common';
 import {
   dataLakeRepository,
+  DataLakeModel,
   dataLakeAccessGrantRepository,
   dataLakeProposalRepository,
   FabFile,
@@ -170,27 +171,35 @@ describe('cleanup handler recovery with real replica-set Mongo', () => {
     expect((await dataLakeRepository.findById(f.lake.id))?.purgeClaimId).toBe('new-generation');
     expect(await FabFileChunk.countDocuments({ fabFileId: f.file.id })).toBe(1);
   });
-  it('replays the same started grant-manager generation after its grants were removed', async () => {
-    const f = await seed();
-    await dataLakeAccessGrantRepository.upsertGrant({
-      dataLakeId: f.lake.id,
-      principalType: 'user',
-      principalId: 'curator',
-      role: 'curator',
-      grantedByUserId: 'owner',
-    });
-    const body = JSON.parse(f.event.Records[0].body);
-    body.actor = { userId: 'curator', isAdmin: false };
-    f.event.Records[0].body = JSON.stringify(body);
-    vi.spyOn(dataLakeProposalRepository, 'deleteForLake').mockRejectedValueOnce(new Error('post-grant failure'));
-    await expect(dispatch(f.event, {} as Context)).rejects.toThrow('post-grant failure');
-    expect(await dataLakeAccessGrantRepository.listByLake(f.lake.id)).toEqual([]);
-    expect((await dataLakeRepository.findById(f.lake.id))?.purgeStartedAt).toBeTruthy();
-    const wrong = { Records: [{ body: JSON.stringify({ ...body, purgeClaimId: 'wrong-generation' }) }] } as SQSEvent;
-    await dispatch(wrong, {} as Context);
-    expect(await dataLakeRepository.findById(f.lake.id)).not.toBeNull();
-    await dispatch(f.event, {} as Context);
-    expect(await dataLakeRepository.findById(f.lake.id)).toBeNull();
-    expect(await read(f.otherKey)).toBe('other lake bytes');
-  });
+  it.each(['keyed', 'legacy'])(
+    'replays the same started %s grant-manager generation after its grants were removed',
+    async kind => {
+      const f = await seed();
+      await dataLakeAccessGrantRepository.upsertGrant({
+        dataLakeId: f.lake.id,
+        principalType: 'user',
+        principalId: 'curator',
+        role: 'curator',
+        grantedByUserId: 'owner',
+      });
+      const body = JSON.parse(f.event.Records[0].body);
+      body.actor = { userId: 'curator', isAdmin: false };
+      if (kind === 'legacy') {
+        await DataLakeModel.updateOne({ _id: f.lake.id }, { $unset: { purgeClaimId: 1 } });
+        expect((await dataLakeRepository.findById(f.lake.id))?.purgeClaimId).toBeUndefined();
+        delete body.purgeClaimId;
+      }
+      f.event.Records[0].body = JSON.stringify(body);
+      vi.spyOn(dataLakeProposalRepository, 'deleteForLake').mockRejectedValueOnce(new Error('post-grant failure'));
+      await expect(dispatch(f.event, {} as Context)).rejects.toThrow('post-grant failure');
+      expect(await dataLakeAccessGrantRepository.listByLake(f.lake.id)).toEqual([]);
+      expect((await dataLakeRepository.findById(f.lake.id))?.purgeStartedAt).toBeTruthy();
+      const wrong = { Records: [{ body: JSON.stringify({ ...body, purgeClaimId: 'wrong-generation' }) }] } as SQSEvent;
+      await dispatch(wrong, {} as Context);
+      expect(await dataLakeRepository.findById(f.lake.id)).not.toBeNull();
+      await dispatch(f.event, {} as Context);
+      expect(await dataLakeRepository.findById(f.lake.id)).toBeNull();
+      expect(await read(f.otherKey)).toBe('other lake bytes');
+    }
+  );
 });

@@ -455,27 +455,30 @@ describe('cleanup execution admission and atomic deletion adapter', () => {
 });
 
 describe('started generation recovery', () => {
-  it('resumes a granted manager after the same purge removed its grants', async () => {
-    const db = makeDb([]);
-    const lake = { ...LAKE, purgeClaimId: 'generation-a', purgeStartedAt: undefined as Date | undefined };
-    db.dataLakes.findById.mockImplementation(async () => lake);
-    let grants = [{ principalType: 'user', principalId: 'curator', role: 'curator' }];
-    db.dataLakeAccessGrants.listByLake.mockImplementation(async () => grants as never);
-    db.dataLakeAccessGrants.removeAllForLake.mockImplementation(async () => {
-      grants = [];
-    });
-    db.dataLakes.delete.mockRejectedValueOnce(new Error('late write interrupted'));
-    const beginPurge = vi.fn(async () => {
-      lake.purgeStartedAt = new Date();
-      return true;
-    });
-    const actor = { userId: 'curator', isAdmin: false };
-    const options = { db, beginPurge, purgeClaimId: 'generation-a' };
-    await expect(cleanupDeletedDataLake(actor, LAKE.id, options)).rejects.toThrow('late write interrupted');
-    expect(grants).toEqual([]);
-    await expect(cleanupDeletedDataLake(actor, LAKE.id, options)).resolves.toBeUndefined();
-    expect(db.dataLakes.delete).toHaveBeenCalledTimes(2);
-  });
+  it.each(['generation-a', undefined])(
+    'resumes a granted manager after the same %s purge removed its grants',
+    async claimId => {
+      const db = makeDb([]);
+      const lake = { ...LAKE, purgeClaimId: claimId, purgeStartedAt: undefined as Date | undefined };
+      db.dataLakes.findById.mockImplementation(async () => lake);
+      let grants = [{ principalType: 'user', principalId: 'curator', role: 'curator' }];
+      db.dataLakeAccessGrants.listByLake.mockImplementation(async () => grants as never);
+      db.dataLakeAccessGrants.removeAllForLake.mockImplementation(async () => {
+        grants = [];
+      });
+      db.dataLakes.delete.mockRejectedValueOnce(new Error('late write interrupted'));
+      const beginPurge = vi.fn(async () => {
+        lake.purgeStartedAt = new Date();
+        return true;
+      });
+      const actor = { userId: 'curator', isAdmin: false };
+      const options = { db, beginPurge, purgeClaimId: claimId };
+      await expect(cleanupDeletedDataLake(actor, LAKE.id, options)).rejects.toThrow('late write interrupted');
+      expect(grants).toEqual([]);
+      await expect(cleanupDeletedDataLake(actor, LAKE.id, options)).resolves.toBeUndefined();
+      expect(db.dataLakes.delete).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it.each([undefined, 'other-generation'])('does not bypass authorization for claim %s', async purgeClaimId => {
     const db = makeDb([]);
@@ -509,4 +512,30 @@ describe('started generation recovery', () => {
     expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
     expect(db.dataLakes.delete).toHaveBeenCalledWith(LAKE.id);
   });
+});
+
+it('does not resume a started generation without the admission adapter', async () => {
+  const db = makeDb([]);
+  const lake = { ...LAKE, purgeClaimId: 'a', purgeStartedAt: new Date() };
+  db.dataLakes.findById.mockResolvedValue(lake);
+  await expect(
+    cleanupDeletedDataLake({ userId: 'outsider', isAdmin: false }, LAKE.id, { db, purgeClaimId: 'a' })
+  ).rejects.toBeInstanceOf(BadRequestError);
+  expect(db.dataLakes.delete).not.toHaveBeenCalled();
+});
+
+it.each(['', null])('does not resume a malformed claim %s', async malformedClaim => {
+  const db = makeDb([]);
+  db.dataLakes.findById.mockResolvedValue({ ...LAKE, purgeClaimId: malformedClaim, purgeStartedAt: new Date() });
+  const beginPurge = vi.fn().mockResolvedValue(true);
+  await expect(
+    cleanupDeletedDataLake({ userId: 'outsider', isAdmin: false }, LAKE.id, {
+      db,
+      beginPurge,
+      // Exercise malformed values at the runtime boundary.
+      purgeClaimId: malformedClaim as unknown as string,
+    })
+  ).rejects.toBeInstanceOf(BadRequestError);
+  expect(beginPurge).not.toHaveBeenCalled();
+  expect(db.dataLakes.delete).not.toHaveBeenCalled();
 });

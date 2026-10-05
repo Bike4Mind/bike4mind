@@ -75,3 +75,41 @@ it('bounds chunk batches, retains the retry locator after partial progress, and 
   ).toBe(true);
   observed.mockRestore();
 });
+
+it('includes chunks committed after candidate selection but before the final transaction', async () => {
+  const file = await FabFile.create({
+    userId: 'owner',
+    fileName: 'race.txt',
+    filePath: 'race.txt',
+    mimeType: 'text/plain',
+    type: KnowledgeType.FILE,
+    fileSize: 3,
+    status: 'complete',
+    deletedAt: new Date(),
+  });
+  await FabFileChunk.create({ fabFileId: file.id, text: 'initial', tokenCount: 1 });
+  const original = mongoose.connection.transaction.bind(mongoose.connection);
+  const transaction = vi.spyOn(mongoose.connection, 'transaction').mockImplementationOnce(async (...args) => {
+    await FabFileChunk.create({ fabFileId: file.id, text: 'late', tokenCount: 1 });
+    return original(...args);
+  });
+  try {
+    await fabFileRepository.hardDeleteWithChunks(file.id, 1);
+    expect(await FabFile.collection.findOne({ _id: file._id })).toBeNull();
+    expect(await FabFileChunk.countDocuments({ fabFileId: file.id })).toBe(0);
+  } finally {
+    transaction.mockRestore();
+  }
+});
+
+it.each([0, 1001, 1.5, NaN])('rejects invalid batch size %s before database writes', async size => {
+  const deletion = vi.spyOn(FabFileChunk, 'deleteMany');
+  try {
+    await expect(
+      fabFileRepository.hardDeleteWithChunks(new mongoose.Types.ObjectId().toString(), size)
+    ).rejects.toThrow('batch size');
+    expect(deletion).not.toHaveBeenCalled();
+  } finally {
+    deletion.mockRestore();
+  }
+});
