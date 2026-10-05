@@ -1,0 +1,58 @@
+import { describe, it, expect } from 'vitest';
+import type { DataLakeStatus, IDataLake } from '@bike4mind/common';
+import { dataLakeRepository } from './DataLakeModel';
+import { setupMongoTest } from '../../__test__/utils';
+
+/**
+ * A deleted or purging lake keeps reserving its slug but must not be reachable by it, or a by-slug
+ * write (e.g. a content proposal) lands on a lake the user deleted. Every slug lookup arm must
+ * apply the same filter; by-id lookups stay status-agnostic for restore and purge.
+ */
+
+const lake = (slug: string, status: DataLakeStatus, organizationId?: string): Omit<IDataLake, 'id'> =>
+  ({
+    name: slug,
+    slug,
+    fileTagPrefix: `${slug}:`,
+    datalakeTag: organizationId ? `datalake:${organizationId}:${slug}` : `datalake:${slug}`,
+    createdByUserId: 'owner-1',
+    status,
+    ...(organizationId ? { organizationId } : {}),
+  }) as Omit<IDataLake, 'id'>;
+
+const ORG = 'org-1';
+const UNRESOLVABLE: DataLakeStatus[] = ['deleted', 'purging'];
+const RESOLVABLE: DataLakeStatus[] = ['draft', 'active', 'archived', 'deleting'];
+
+describe('DataLakeRepository slug lookups skip deleted and purging lakes', () => {
+  setupMongoTest();
+
+  it.each(UNRESOLVABLE)('a %s lake is unreachable by every slug arm, but still by id', async status => {
+    const own = await dataLakeRepository.create(lake('own', status, ORG));
+    const orgless = await dataLakeRepository.create(lake('orgless', status));
+
+    await expect(dataLakeRepository.findBySlug('own', [ORG])).resolves.toBeNull();
+    await expect(dataLakeRepository.findBySlug('orgless')).resolves.toBeNull();
+    await expect(dataLakeRepository.findBySlugAmongIds('own', [own.id])).resolves.toBeNull();
+    expect((await dataLakeRepository.findById(own.id))?.id).toBe(own.id);
+    expect((await dataLakeRepository.findById(orgless.id))?.id).toBe(orgless.id);
+  });
+
+  it.each(RESOLVABLE)('a %s lake still resolves by every slug arm', async status => {
+    const own = await dataLakeRepository.create(lake('own', status, ORG));
+    const orgless = await dataLakeRepository.create(lake('orgless', status));
+
+    expect((await dataLakeRepository.findBySlug('own', [ORG]))?.id).toBe(own.id);
+    expect((await dataLakeRepository.findBySlug('orgless'))?.id).toBe(orgless.id);
+    expect((await dataLakeRepository.findBySlugAmongIds('own', [own.id]))?.id).toBe(own.id);
+  });
+
+  it('a deleted own-org lake falls through to an org-less lake sharing its slug', async () => {
+    // Consistent with the arm order (own org first, then org-less), but new: before the filter
+    // the deleted own-org lake would have won.
+    await dataLakeRepository.create(lake('shared', 'deleted', ORG));
+    const orgless = await dataLakeRepository.create(lake('shared', 'active'));
+
+    expect((await dataLakeRepository.findBySlug('shared', [ORG]))?.id).toBe(orgless.id);
+  });
+});

@@ -170,7 +170,9 @@ const orgSortKey = (organizationId: string | null | undefined): readonly [0 | 1,
  * the ranking, and no precondition to assert at runtime - a foreign-org lake with no grant simply
  * ranks `null` instead of being assumed away by elimination. Must stay in sync with `findBySlug`
  * (packages/database/src/models/ai/DataLakeModel.ts) - a row that fails there is a slug this reply
- * promised and `add` then refuses as "No Data Lake found".
+ * promised and `add` then refuses as "No Data Lake found". Its status filter
+ * (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES) needs no mirror: the rows come from `listDataLakes`, which
+ * returns only LAKE_ATTACHABLE_STATUSES.
  */
 export const slugTier = (
   lake: ListableLake,

@@ -22,7 +22,7 @@ import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dat
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
 import { slugifyDataLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
-import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { useDataLakeSlugPreview, useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
@@ -46,8 +46,11 @@ export default function ConfigStep() {
 
   // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
   // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
-  // on the source step; they appear here read-only in the summary.
-  const slug = targetLake ? targetLake.slug : slugifyDataLakeName(config.name);
+  // on the source step; they appear here read-only in the summary. Create mode asks the server,
+  // because a lake (even a deleted one) already holding the slug pushes the new one to "-1";
+  // slugify is only the fallback while that loads or if it fails.
+  const slugPreview = useDataLakeSlugPreview(config.name, !targetLake && !!config.name);
+  const slug = targetLake ? targetLake.slug : (slugPreview.data ?? slugifyDataLakeName(config.name));
 
   // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
   // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).

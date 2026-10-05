@@ -51,6 +51,14 @@ export const DATA_LAKE_STATUSES = [
 export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /**
+ * Statuses a slug lookup (`findBySlug` / `findBySlugAmongIds`) never resolves. The lake keeps
+ * reserving its slug (create still disambiguates past it, and restore needs it back), but reaching
+ * it by slug would let writes land on a lake the user deleted. `deleting` stays resolvable so an
+ * in-flight delete can still be retried or inspected by slug. By-id lookups are unaffected.
+ */
+export const DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES = ['deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
+
+/**
  * Stable (non-transitional) lake statuses - a lake sitting in one of these is at rest, not
  * mid-operation. Load-bearing as the INPUT to `DATA_LAKE_TRANSITIONAL_STATUSES` below, which is
  * what drives the needs-attention list; it is not itself a filter any list path applies.
@@ -648,7 +656,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
    * preferred, falling back to an org-less lake with that slug. Without a set, only
-   * org-less lakes match.
+   * org-less lakes match. Never returns a lake in `DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES`.
    */
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /**
@@ -659,7 +667,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * it here - keeping the decision of WHEN to pay for that extra grants lookup in the service
    * layer, not hidden inside this repository method. Sorted by `_id` so two candidates sharing a
    * slug (e.g. two independent `transferLakeOwnership` calls into different non-member orgs)
-   * resolve to the same winner every time.
+   * resolve to the same winner every time. Excludes `DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES` like
+   * `findBySlug`.
    */
   findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
