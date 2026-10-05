@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from 'node:util';
 import { Types } from 'mongoose';
 import {
   CreditHolderType,
@@ -8,6 +7,7 @@ import {
   isVideoModelEnabled,
   validateAgainstCapabilities,
   VideoGenerationRequestSchema,
+  type IGenerationJob,
   type IGenerationJobDocument,
   type VideoGenerationRequest,
 } from '@bike4mind/common';
@@ -116,16 +116,11 @@ export async function createVideoJob(
       questId: input.questId,
     });
   } catch (error) {
-    // A concurrent request with the same key won the unique index: no job carries this hold, so return it
-    // and answer as the winner's replay.
-    if (input.idempotencyKey && isDuplicateKeyError(error)) {
-      if (hold) await runCleanup(deps, { ownerId }, () => releaseCreditHold(hold, deps.credits));
-      const winner = await deps.repository.findByIdempotencyKey(ownerType, ownerId, input.idempotencyKey);
-      if (winner) return replayOrReject(winner, request);
-      throw error;
-    }
-    if (hold) await releaseIfJobAbsent(hold, jobId, ownerId, deps);
-    throw error;
+    const failed: FailedCreate = { jobId, ownerType, ownerId, idempotencyKey: input.idempotencyKey, hold, request };
+    const recovery = await recoverFailedCreate(error, failed, deps);
+    if (recovery.outcome === 'replay') return recovery.result;
+    if (recovery.outcome === 'failed') throw error;
+    job = recovery.job;
   }
 
   try {
@@ -155,31 +150,81 @@ async function runCleanup<T>(
   }
 }
 
+type FailedCreate = {
+  jobId: string;
+  ownerType: IGenerationJob['ownerType'];
+  ownerId: string;
+  idempotencyKey: string | undefined;
+  hold: CreditHold | null;
+  request: VideoGenerationRequest;
+};
+
+type CreateRecovery =
+  | { outcome: 'landed'; job: IGenerationJobDocument }
+  | { outcome: 'replay'; result: CreateVideoJobResult }
+  | { outcome: 'failed' };
+
 /**
- * A non-duplicate createJob error is ambiguous: the insert may have landed before the error (e.g. a lost ack).
- * If the job exists, its onTerminal owns the hold (the sweeper picks it up via nextPollAt), so releasing here
- * would refund twice. The caller-generated id makes the outcome checkable: release only when the job is
- * confirmed absent; when the lookup itself fails, keep the hold and alarm for manual repair.
+ * A createJob error is ambiguous: the insert may have landed before it (a lost ack, a driver retry that then hit
+ * the idempotency index). The caller-generated id makes the outcome checkable, and the hold follows the job:
+ * - our insert landed: the job owns the hold and is enqueued as usual, so the caller gets its success;
+ * - another request holds the idempotency key: no job carries our hold, so release it and replay the winner;
+ * - confirmed absent: release the hold and fail;
+ * - unknown (the lookup failed): keep the hold and alarm, since refunding a job that exists would mint credits.
  */
-async function releaseIfJobAbsent(hold: CreditHold, jobId: string, ownerId: string, deps: VideoJobDeps) {
-  let landed: boolean;
+async function recoverFailedCreate(error: unknown, failed: FailedCreate, deps: VideoJobDeps): Promise<CreateRecovery> {
+  if (failed.idempotencyKey && isDuplicateKeyError(error)) {
+    const winner = await findKeyHolder(failed, failed.idempotencyKey, deps);
+    if (winner?.id === failed.jobId) return { outcome: 'landed', job: winner };
+    if (winner) {
+      await releaseHold(failed, deps);
+      return { outcome: 'replay', result: replayOrReject(winner, failed.request) };
+    }
+  }
+
+  let landed: IGenerationJobDocument | null;
   try {
-    landed = (await deps.repository.findById(jobId)) !== null;
+    landed = await deps.repository.findById(failed.jobId);
   } catch (lookupError) {
     deps.logger.error('video_job_create_ambiguous', {
-      jobId,
-      ownerId,
-      reservedCredits: hold.reservedCredits,
+      jobId: failed.jobId,
+      ownerId: failed.ownerId,
+      reservedCredits: failed.hold?.reservedCredits ?? 0,
       error: lookupError,
     });
-    return;
+    return { outcome: 'failed' };
   }
-  if (landed) return;
+  if (landed) return { outcome: 'landed', job: landed };
+  await releaseHold(failed, deps);
+  return { outcome: 'failed' };
+}
+
+// A failed lookup falls back to resolving the create by its id, which decides who owns the hold either way.
+async function findKeyHolder(failed: FailedCreate, idempotencyKey: string, deps: VideoJobDeps) {
+  try {
+    return await deps.repository.findByIdempotencyKey(failed.ownerType, failed.ownerId, idempotencyKey);
+  } catch (lookupError) {
+    deps.logger.warn('video job idempotency key lookup failed', { jobId: failed.jobId, error: lookupError });
+    return null;
+  }
+}
+
+async function releaseHold({ hold, jobId, ownerId }: FailedCreate, deps: VideoJobDeps) {
+  if (!hold) return;
   await runCleanup(deps, { jobId, ownerId }, () => releaseCreditHold(hold, deps.credits));
 }
 
+// Key-sorted JSON, so the comparison matches what survives a Mongo round trip: an undefined field equals an
+// absent one, and key order is irrelevant.
+const canonicalJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, nested: unknown) =>
+    nested && typeof nested === 'object' && !Array.isArray(nested)
+      ? Object.fromEntries(Object.entries(nested).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : nested
+  );
+
 const replayOrReject = (existing: IGenerationJobDocument, request: VideoGenerationRequest): CreateVideoJobResult =>
-  isDeepStrictEqual(existing.payload.request, request)
+  canonicalJson(existing.payload.request) === canonicalJson(request)
     ? { ok: true, job: existing, created: false }
     : {
         ok: false,

@@ -178,6 +178,16 @@ describe('createVideoJob', () => {
     expect(holdCredits).toHaveBeenCalledTimes(1);
   });
 
+  it('replays a stored request that differs only by an undefined field, as after a Mongo round trip', async () => {
+    const { deps, repository } = makeDeps();
+    const first = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
+    if (!first.ok) throw new Error('expected the first call to succeed');
+    const stored = repository.jobs.get(first.job.id)!;
+    stored.payload.request = { ...stored.payload.request, audio: undefined };
+    const second = await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
+    expect(second).toMatchObject({ ok: true, created: false, job: { id: first.job.id } });
+  });
+
   it('rejects a reused idempotency key with a different request', async () => {
     const { deps } = makeDeps();
     await createVideoJob({ user, request: validRequest, source: 'api', idempotencyKey: 'k1' }, deps);
@@ -213,16 +223,55 @@ describe('createVideoJob', () => {
       expect(result.job.id).toBe(create.mock.calls[0][0].id);
     });
 
-    it('keeps the hold when the insert landed before the error: onTerminal owns it', async () => {
-      const { deps, repository } = makeDeps();
+    const insertThenThrow = (repository: ReturnType<typeof makeDeps>['repository'], error: Error) => {
       const realCreate = repository.createJob.bind(repository);
-      vi.spyOn(repository, 'createJob').mockImplementationOnce(async jobInput => {
+      return vi.spyOn(repository, 'createJob').mockImplementationOnce(async jobInput => {
         await realCreate(jobInput);
-        throw new Error('ack lost');
+        throw error;
       });
-      await expect(createVideoJob(keyless, deps)).rejects.toThrow('ack lost');
-      expect(repository.jobs.size).toBe(1);
+    };
+
+    it('succeeds when the insert landed before the error: the job owns the hold and is enqueued', async () => {
+      const { deps, repository } = makeDeps();
+      insertThenThrow(repository, new Error('ack lost'));
+      const result = await createVideoJob(keyless, deps);
+      const [stored] = [...repository.jobs.values()];
+      expect(result).toMatchObject({ ok: true, created: true, job: { id: stored.id, state: 'pending' } });
+      expect(deps.enqueue).toHaveBeenCalledWith(stored.id, 0);
       expect(releaseCreditHold).not.toHaveBeenCalled();
+    });
+
+    it('takes the enqueue-failure path when a landed job then cannot be queued', async () => {
+      const { deps, repository } = makeDeps({
+        enqueue: vi.fn(async () => {
+          throw new Error('SQS down');
+        }),
+      });
+      insertThenThrow(repository, new Error('ack lost'));
+      await expect(createVideoJob(keyless, deps)).rejects.toThrow('SQS down');
+      const [stored] = [...repository.jobs.values()];
+      expect(stored).toMatchObject({ state: 'failed', error: { code: 'enqueue_failed' } });
+      expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    });
+
+    it('treats a duplicate-key error raised by its own landed insert as success, not a lost race', async () => {
+      const { deps, repository } = makeDeps();
+      insertThenThrow(repository, Object.assign(new Error('E11000 on retry'), { code: 11000 }));
+      const result = await createVideoJob({ ...keyless, idempotencyKey: 'k1' }, deps);
+      const [stored] = [...repository.jobs.values()];
+      expect(result).toMatchObject({ ok: true, created: true, job: { id: stored.id } });
+      expect(deps.enqueue).toHaveBeenCalledWith(stored.id, 0);
+      expect(releaseCreditHold).not.toHaveBeenCalled();
+    });
+
+    it('resolves a duplicate-key error by id when the key lookup fails', async () => {
+      const { deps, repository } = makeDeps();
+      vi.spyOn(repository, 'findByIdempotencyKey')
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(new Error('read failed'));
+      vi.spyOn(repository, 'createJob').mockRejectedValueOnce(Object.assign(new Error('E11000'), { code: 11000 }));
+      await expect(createVideoJob({ ...keyless, idempotencyKey: 'k1' }, deps)).rejects.toThrow('E11000');
+      expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     });
 
     it('releases the hold once when the job is confirmed absent', async () => {
