@@ -215,3 +215,25 @@ describe('useDataLakeWizardStore - optional step opt-ins', () => {
     expect(useDataLakeWizardStore.getState().optionalSteps).toEqual({ preview: true, taxonomy: false });
   });
 });
+
+describe('useDataLakeWizardStore - GitHub repository picker', () => {
+  afterEach(() => useDataLakeWizardStore.setState({ gitHubRepoPickerLakeId: null }));
+
+  it('opens for a lake id and closes back to null', () => {
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+
+    useDataLakeWizardStore.getState().openGitHubRepoPicker('lake1');
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBe('lake1');
+
+    useDataLakeWizardStore.getState().closeGitHubRepoPicker();
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+  });
+
+  // The picker is mounted inside the manager: left set, it would reappear on the next manager open.
+  it('closes with the manager', () => {
+    useDataLakeWizardStore.getState().openManager('mine', 'lake1');
+    useDataLakeWizardStore.getState().openGitHubRepoPicker('lake1');
+    useDataLakeWizardStore.getState().closeManager();
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+  });
+});

@@ -2,12 +2,11 @@ import { LinearProgress } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import { useCompleteLakeGitHubConnect } from '@client/app/hooks/data/githubLake';
+import { useAuthorizeLakeGitHubConnect } from '@client/app/hooks/data/githubLake';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import {
   clearGitHubLakeConnectHandoff,
   readGitHubLakeConnectHandoff,
-  saveGitHubLakeConnectHandoff,
 } from '@client/app/utils/githubLakeConnectHandoff';
 import { getServerErrorField } from '@client/app/utils/error';
 import { getGitHubLakeCallbackBootSearch } from '@client/app/utils/githubLakeCallbackSearch';
@@ -15,13 +14,15 @@ import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@c
 
 /**
  * Where the data-lake GitHub App returns the browser, from its install page and from its OAuth
- * authorize page. Finishes the connect started by GitHubConnectAction, then lands on the lake in
- * the manager. Renders no UI of its own.
+ * authorize page. An authorize return exchanges its code for the lake id, then opens the repository
+ * picker (GitHubRepositoryPickerModal, mounted in the data-lake manager); every other return just
+ * reopens the picker or reports why the flow could not continue. Renders no UI of its own.
  */
 const GitHubLakeCallbackPage = () => {
   const navigate = useNavigate();
   const openManager = useDataLakeWizardStore(s => s.openManager);
-  const complete = useCompleteLakeGitHubConnect();
+  const openGitHubRepoPicker = useDataLakeWizardStore(s => s.openGitHubRepoPicker);
+  const authorize = useAuthorizeLakeGitHubConnect();
   // GitHub's `code` is single-use, so a second run (StrictMode, a re-render) must never re-post it.
   const handled = useRef(false);
 
@@ -42,46 +43,43 @@ const GitHubLakeCallbackPage = () => {
     const handoff = readGitHubLakeConnectHandoff();
     const step = resolveGitHubLakeCallbackStep(search, handoff);
 
-    const finish = (dataLakeId?: string) => {
+    const land = (dataLakeId: string | undefined, openPicker: boolean) => {
       clearGitHubLakeConnectHandoff();
       navigate({ to: '/' });
-      if (dataLakeId) openManager('mine', dataLakeId);
+      if (!dataLakeId) return;
+      openManager('mine', dataLakeId);
+      if (openPicker) openGitHubRepoPicker(dataLakeId);
     };
 
     switch (step.kind) {
       case 'cancelled':
         toast.error('GitHub connection cancelled.');
-        finish(handoff?.dataLakeId);
+        land(handoff?.dataLakeId, false);
         return;
       case 'failed':
         toast.error(step.message);
-        finish(handoff?.dataLakeId);
+        land(handoff?.dataLakeId, false);
+        return;
+      case 'resume':
+        if (step.notice) toast.info(step.notice);
+        land(step.dataLakeId, true);
         return;
       case 'authorize':
-        try {
-          saveGitHubLakeConnectHandoff(step.handoff);
-        } catch {
-          // The authorize return would arrive without its installation id and could only fail.
-          toast.error('Could not continue the GitHub connection: this browser blocked session storage.');
-          finish(step.handoff.dataLakeId);
-          return;
-        }
-        window.location.assign(step.authorizeUrl);
-        return;
-      case 'complete':
-        complete.mutate(
-          { state: step.state, code: step.code, installationId: step.installationId },
+        authorize.mutate(
+          { state: step.state, code: step.code },
           {
-            onSuccess: connection =>
-              toast.success(`Connected ${connection.repositoryFullName}. Its first sync is queued.`),
-            // The server's reason is the actionable part: install policy, no unbound repository, expired state.
-            onError: (e: unknown) => toast.error(getServerErrorField(e) || 'Could not connect the GitHub repository.'),
-            onSettled: () => finish(step.dataLakeId),
+            onSuccess: ({ dataLakeId }) => land(dataLakeId, true),
+            // The server's reason is the actionable part: an expired/mismatched state, a lake that
+            // can no longer take a connection.
+            onError: (e: unknown) => {
+              toast.error(getServerErrorField(e) || 'Could not connect GitHub.');
+              land(step.dataLakeId, false);
+            },
           }
         );
         return;
     }
-  }, [navigate, openManager, complete]);
+  }, [navigate, openManager, openGitHubRepoPicker, authorize]);
 
   return <LinearProgress data-testid="github-lake-callback-progress" />;
 };
