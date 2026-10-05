@@ -11,18 +11,18 @@ const CREDITS_MODELS = MONITORED_MODELS;
 const RUNS_PER_MODEL = 2;
 const CREDITS_PROMPT = 'What is the capital of France?';
 
-// `fallback` is the fallback-note text when another model answered; its credits are kept out of
-// the average, so `credits` is null on those runs.
+// `fallback` is the fallback-note text when another model answered; its credits and duration are
+// kept out of the averages, so `credits` is null on those runs.
 type CreditsRun = { model: string; duration: number; credits: number | null; fallback: string | null };
 
 function buildCreditsSummary(runs: CreditsRun[]): ModelCreditsData[] {
   return CREDITS_MODELS.map(model => {
     const modelRuns = runs.filter(r => r.model === model);
     const successful = modelRuns.filter(r => r.duration > 0);
+    // A fallback reply timed another model, so it stays out of this model's average.
+    const timed = successful.filter(r => !r.fallback);
     const avgDuration =
-      successful.length > 0
-        ? (successful.reduce((sum, r) => sum + r.duration, 0) / successful.length).toFixed(2)
-        : null;
+      timed.length > 0 ? (timed.reduce((sum, r) => sum + r.duration, 0) / timed.length).toFixed(2) : null;
     const creditsRuns = modelRuns.filter(r => r.credits !== null);
     const avgCredits =
       creditsRuns.length > 0
