@@ -21,14 +21,19 @@ import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } fro
  */
 export function pyodideSandboxWorkerBody(): void {
   const DEFAULT_PYODIDE_BASE_URL = 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/';
-  const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn'];
+  const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'scikit-learn'];
+  // Import name -> distribution name, for the micropip backstop.
   const PACKAGE_NAME_MAP: Record<string, string> = {
-    'scikit-learn': 'sklearn',
-    sklearn: 'sklearn',
+    sklearn: 'scikit-learn',
   };
 
   interface PyodideInterface {
     loadPackage: (packages: string | string[]) => Promise<void>;
+    loadPackagesFromImports: (
+      code: string,
+      options?: { messageCallback?: (message: string) => void }
+    ) => Promise<unknown[]>;
+    loadedPackages: Record<string, string>;
     pyimport: (name: string) => { install: (pkg: string) => Promise<void> };
     runPythonAsync: (
       code: string
@@ -107,24 +112,35 @@ builtins._capture_plot = _capture_plot
 `);
   }
 
-  async function loadPackages(packages: string[]): Promise<void> {
+  /**
+   * Load what the code imports before any of it runs. Pyodide's own import scan (an AST walk,
+   * so dotted and nested imports count) is the primary path; the caller's `packages` list is a
+   * micropip backstop for anything it does not resolve.
+   */
+  async function loadPackages(code: string, packages: string[]): Promise<void> {
     if (!pyodide) return;
+    const runtime = pyodide;
 
-    const micropip = pyodide.pyimport('micropip');
+    try {
+      await runtime.loadPackagesFromImports(code, {
+        messageCallback: message => {
+          if (message && message.trim()) post({ type: 'executing', message });
+        },
+      });
+    } catch (error) {
+      // Not fatal: an import that is still missing fails at execution with a clear error.
+      console.warn('[PyodideWorker] loadPackagesFromImports failed:', error);
+    }
 
-    const packagesToLoad = packages.filter(pkg => {
-      const normalizedPkg = PACKAGE_NAME_MAP[pkg] || pkg;
-      return (
-        SUPPORTED_PACKAGES.some(supported => supported === pkg || PACKAGE_NAME_MAP[supported] === normalizedPkg) &&
-        !loadedPackages.has(normalizedPkg)
-      );
-    });
+    const micropip = runtime.pyimport('micropip');
+    const packagesToLoad = packages
+      .map(pkg => PACKAGE_NAME_MAP[pkg] || pkg)
+      .filter(pkg => SUPPORTED_PACKAGES.includes(pkg) && !loadedPackages.has(pkg) && !(pkg in runtime.loadedPackages));
 
     for (const pkg of packagesToLoad) {
-      const pyodidePkgName = PACKAGE_NAME_MAP[pkg] || pkg;
       try {
-        await micropip.install(pyodidePkgName);
-        loadedPackages.add(pyodidePkgName);
+        await micropip.install(pkg);
+        loadedPackages.add(pkg);
       } catch (error) {
         console.warn(`[PyodideWorker] Failed to load package ${pkg}:`, error);
       }
@@ -143,10 +159,10 @@ builtins._capture_plot = _capture_plot
     try {
       post({
         type: 'executing',
-        message: packages.length > 0 ? `Loading packages: ${packages.join(', ')}` : 'Executing...',
+        message: packages.length > 0 ? `Loading packages: ${packages.join(', ')}` : 'Preparing...',
       });
 
-      await loadPackages(packages);
+      await loadPackages(code, packages);
 
       if (cancelled) {
         const cancelResult: ExecutionResult = {
@@ -166,6 +182,7 @@ builtins._capture_plot = _capture_plot
         }
       };
       pyodide.globals.set('_stream_output', streamOutput);
+      post({ type: 'executing', message: 'Running...' });
 
       const indentedCode = code
         .split('\n')

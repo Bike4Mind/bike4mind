@@ -18,11 +18,19 @@ function makeContext({
   memberOf = [],
   enabled = true,
   withAdapters = true,
-}: { organizationId?: string; memberOf?: string[]; enabled?: boolean; withAdapters?: boolean } = {}): ToolContext {
+  apiKeyId,
+}: {
+  organizationId?: string;
+  memberOf?: string[];
+  enabled?: boolean;
+  withAdapters?: boolean;
+  apiKeyId?: string;
+} = {}): ToolContext {
   return {
     userId: 'u1',
     user: { id: 'u1' },
     organizationId,
+    apiKeyId,
     logger,
     statusUpdate: vi.fn().mockResolvedValue(undefined),
     db: {
@@ -54,6 +62,7 @@ describe('create_data_lake', () => {
       'u1',
       expect.objectContaining({ name: 'Research Notes', slug: 'research-notes', description: 'Q3 work' }),
       expect.anything(),
+      undefined,
       undefined
     );
     expect(createDataLakeMock.mock.calls[0][1].fileTagPrefix).toMatch(/:$/);
@@ -61,6 +70,26 @@ describe('create_data_lake', () => {
     expect(result).toContain('DRAFT');
     expect(result).toContain('personal');
     expect(result).toContain('save_content_to_data_lake');
+  });
+
+  it('attributes a key-driven create to the API key, keeping the owner as on-behalf-of', async () => {
+    createDataLakeMock.mockResolvedValue({ id: 'lake9', name: 'Notes' });
+
+    await run(makeContext({ apiKeyId: 'key1' }), { name: 'Notes' });
+
+    expect(createDataLakeMock.mock.calls[0][4]).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key1',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('passes no audit principal for a session create, so the audit falls back to the user', async () => {
+    createDataLakeMock.mockResolvedValue({ id: 'lake9', name: 'Notes' });
+
+    await run(makeContext(), { name: 'Notes' });
+
+    expect(createDataLakeMock.mock.calls[0][4]).toBeUndefined();
   });
 
   it('scopes the lake to the active org when the caller is a member', async () => {

@@ -172,7 +172,7 @@ const SERPAPI_MAX_ATTEMPTS = 2;
 const SERPAPI_RETRY_DELAY_MS = 500;
 /**
  * How long the lead provider gets before the backup is started alongside it (sooner if the lead
- * fails first). Just past SerpAPI's normal response time in production: answers come back in about
+ * fails or comes back empty first). Just past SerpAPI's normal response time in production: answers come back in about
  * 1s typically and 3s at the 90th percentile, while a stalled request usually never answers.
  */
 export const WEB_SEARCH_HEDGE_DELAY_MS = 3_000;
@@ -822,8 +822,9 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
 /**
  * Resolve the active web-search provider, or null when none is configured. Precedence:
  *   - explicit admin choice ('serpapi' | 'searxng') forces that provider (null if it's unconfigured)
- *   - 'auto' (default): SearXNG if a URL is configured (admin setting or SEARXNG_BASE_URL env),
- *     else SerpAPI if a Serper key is set, else null.
+ *   - 'auto' (default): SerpAPI if a Serper key is set, else SearXNG if a URL is configured (admin
+ *     setting or SEARXNG_BASE_URL env), else null. SerpAPI stays first so a deployed SearXNG never
+ *     changes the lead unless an admin opts in; SearXNG-only self-host installs still get search.
  * Mirrored by computeToolAvailability in serverConfig.ts so the picker's gating matches the tool.
  */
 export async function resolveWebSearchProvider(
@@ -856,15 +857,15 @@ function pickPrimaryProvider(
     return serperKey ? createSerpApiProvider(adapters) : null;
   }
   // auto
-  if (searxngUrl) return createSearxngProvider(searxngUrl);
   if (serperKey) return createSerpApiProvider(adapters);
+  if (searxngUrl) return createSearxngProvider(searxngUrl);
   return null;
 }
 
 /**
  * Returns [lead, backup] for the chat tool's hedged search. The lead is exactly what
- * resolveWebSearchProvider picks: the admin's WebSearchProvider choice, or under 'auto' SearXNG
- * when configured, else SerpAPI. The backup is the other provider when it is configured too. An
+ * resolveWebSearchProvider picks: the admin's WebSearchProvider choice, or under 'auto' SerpAPI
+ * when a key is set, else SearXNG. The backup is the other provider when it is configured too. An
  * unconfigured explicit choice yields no lead at all; it is never quietly replaced by the other.
  */
 export async function resolveWebSearchProviders(

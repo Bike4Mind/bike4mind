@@ -29,7 +29,8 @@ import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/No
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { isDraftLake, lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
 import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
+import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
 /**
  * Which lakes the in-chat surface is scoped to: a trigger in the tree card's header opening the
@@ -53,7 +54,7 @@ import type { ManageableDataLakeConfig } from '@bike4mind/common';
  * needs exactly one. Surfacing it per row wants a `driveConnected` flag on the list projection.
  */
 export interface DataLakeLakePickerProps {
-  lakes: ManageableDataLakeConfig[] | undefined;
+  lakes: RetrievabilityLabeledDataLake[] | undefined;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
@@ -120,7 +121,7 @@ const fileCountLabel = (n: number) => `${n} ${n === 1 ? 'file' : 'files'}`;
 interface LakeGroup {
   key: string;
   label: string;
-  lakes: ManageableDataLakeConfig[];
+  lakes: RetrievabilityLabeledDataLake[];
 }
 
 /**
@@ -134,10 +135,10 @@ interface LakeGroup {
  * carries, so two owners sharing a display name share a header. A stable owner key on the list
  * projection (listDataLakes.ts toManageableConfig) is what would separate them.
  */
-const groupLakesByOwner = (lakes: ManageableDataLakeConfig[]): LakeGroup[] => {
-  const own: ManageableDataLakeConfig[] = [];
-  const byOwner = new Map<string, ManageableDataLakeConfig[]>();
-  const unknownOwner: ManageableDataLakeConfig[] = [];
+const groupLakesByOwner = (lakes: RetrievabilityLabeledDataLake[]): LakeGroup[] => {
+  const own: RetrievabilityLabeledDataLake[] = [];
+  const byOwner = new Map<string, RetrievabilityLabeledDataLake[]>();
+  const unknownOwner: RetrievabilityLabeledDataLake[] = [];
   for (const lake of lakes) {
     if (lake.isOwn !== false) own.push(lake);
     else if (lake.ownerDisplayName) {
@@ -438,6 +439,10 @@ export default function DataLakeLakePicker({
                               sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
                             />
                           </Tooltip>
+                        )}
+                        {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
+                        {isUnsearchable(lake) && (
+                          <UnsearchableLakeIcon lake={lake} testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
                         )}
                         {typeof count === 'number' && (
                           <Typography level="body-xs" sx={COUNT_SX} aria-label={fileCountLabel(count)}>

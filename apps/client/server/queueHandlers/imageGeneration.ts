@@ -9,6 +9,7 @@ import {
   organizationRepository,
   questRepository,
   Session,
+  sessionRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -32,7 +33,11 @@ export const getImageGeneration = (): ImageGenerationService => {
   if (!_imageGeneration) {
     _imageGeneration = new ImageGenerationService({
       db: {
-        sessions: Session,
+        // findById stays on the model (unchanged reads); the counter lives on the repository.
+        sessions: {
+          findById: Session.findById.bind(Session),
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+        },
         quests: questRepository,
         connections: Connection,
         adminSettings: adminSettingsRepository,

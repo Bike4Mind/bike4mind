@@ -33,7 +33,8 @@ import {
   XAI_IMAGE_MODELS,
   GEMINI_IMAGE_MODELS,
   isGPTImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
+  clampImageQualityForModel,
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
@@ -78,6 +79,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
+import { recordGeneratedImages } from './recordGeneratedImages';
 import { fromZodError } from 'zod-validation-error';
 import {
   OMITTED_QUALITY_TIER,
@@ -112,7 +114,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
   if (!isGPTImageModel(model)) return quality;
   if (!quality) return OMITTED_QUALITY_TIER;
-  return quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
+  return clampImageQualityForModel(model, quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality);
 }
 
 export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
@@ -142,6 +144,8 @@ interface IImageGenerationServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -270,7 +274,7 @@ export class ImageGenerationService {
     // drops the field rather than erroring). Resolved before billing so credits/promptMeta
     // key off the model actually used.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
     const session = await this.db.sessions.findById(sessionId);
@@ -1500,6 +1504,8 @@ export class ImageGenerationService {
         promptMeta: quest.promptMeta,
         creditsUsed: quest.creditsUsed,
       });
+
+      await recordGeneratedImages(this.db.sessions, sessionId, imagePaths.length, logger);
 
       if (this.invokeSessionAutoNaming) {
         await this.invokeSessionAutoNaming(sessionId, userId);

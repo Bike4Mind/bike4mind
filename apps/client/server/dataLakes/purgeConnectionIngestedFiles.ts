@@ -43,8 +43,7 @@ type PurgeableConnectionFile = Parameters<typeof dataLakeService.purgeDataLakeCo
  * the public-lake browse route) drift stale after a disconnect until some unrelated batch happens
  * to recompute them.
  *
- * On failure, logs it, runs `restore` best-effort (the caller's undo of its disable) and rethrows the
- * purge error, never the restore's.
+ * On failure, logs and rethrows the purge error.
  */
 export async function purgeConnectionIngestedFiles(
   lake: IDataLakeDocument,
@@ -53,26 +52,17 @@ export async function purgeConnectionIngestedFiles(
     connectionId: string;
     label: string;
     logger: PurgeConnectionLogger;
-    restore?: () => Promise<unknown>;
     sliceSize?: number;
   }
 ): Promise<{ remaining: boolean }> {
-  const { connectionId, label, logger, restore, sliceSize } = opts;
+  const { connectionId, label, logger, sliceSize } = opts;
   try {
     const found = await findFiles(sliceSize === undefined ? undefined : sliceSize + 1);
     const files = sliceSize === undefined ? found : found.slice(0, sliceSize);
     await sweep(lake, files, logger);
     return { remaining: files.length < found.length };
   } catch (error) {
-    const ids = { connectionId, dataLakeId: lake.id };
-    logger.error(`${label}: purge failed`, { ...ids, error });
-    if (restore) {
-      try {
-        await restore();
-      } catch (restoreError) {
-        logger.error(`${label}: could not re-enable after a failed purge`, { ...ids, restoreError });
-      }
-    }
+    logger.error(`${label}: purge failed`, { connectionId, dataLakeId: lake.id, error });
     throw error;
   }
 }

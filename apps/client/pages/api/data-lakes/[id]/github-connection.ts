@@ -5,7 +5,7 @@ import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepositor
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeConnectUrls,
-  disconnectGitHubLakeConnection,
+  requestGitHubLakeDisconnect,
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
   toGitHubLakeConnectionResponse,
@@ -32,9 +32,10 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
  * POST   /api/data-lakes/:id/github-connection -> { installUrl, authorizeUrl } (starts the connect; see
  *        buildGitHubLakeConnectUrls for when the callback page needs authorizeUrl. The page then
  *        completes the flow via POST /api/data-lakes/github-callback)
- * DELETE /api/data-lakes/:id/github-connection -> { installationRetained } (purges what the
- *        connection ingested and 409s while a sync is live - see disconnectGitHubLakeConnection,
- *        and releaseGitHubLakeConnection for when the App stays installed)
+ * DELETE /api/data-lakes/:id/github-connection -> 202 { success, queued } (disables the connection
+ *        and queues the purge of what it ingested, 409 while a sync is live; the row stays, reading
+ *        `disconnecting`, until the purge releases it - see requestGitHubLakeDisconnect), or 204
+ *        when the lake has no connection
  *
  * Mirrors drive-connection.ts: GET answers a personal lake with a null connection (it genuinely has
  * none), so a 404 always means the lake is missing or the caller is not an org owner/manager. POST
@@ -79,9 +80,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     await verifyOrgAccess(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
     if (!conn) {
-      return res.json({ installationRetained: false });
+      return res.status(204).send();
     }
-    return res.json(await disconnectGitHubLakeConnection(lake, conn, req.logger));
+    const { queued } = await requestGitHubLakeDisconnect(conn, req.logger);
+    return res.status(202).json({ success: true, queued });
   });
 
 export const config = {

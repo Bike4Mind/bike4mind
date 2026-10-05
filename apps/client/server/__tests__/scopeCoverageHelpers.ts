@@ -30,3 +30,14 @@ export function methodBlocks(source: string): Array<{ method: string; body: stri
     body: source.slice(index, starts[i + 1]?.index ?? source.length),
   }));
 }
+
+/**
+ * The ADMIN API-key gate an admin-scoped route must declare. Matches it wherever it sits in the
+ * baseApi options (routes mix in `auth: true`, `rateLimit`, etc.), but pins the array to exactly
+ * `[ApiKeyScope.ADMIN]` so a route that swaps in a weaker/other scope is not accepted as "gated".
+ * A trailing comma is allowed so a wrapped single-element array still reads as gated.
+ *
+ * Shared by adminApiKeyScopeCoverage.test.ts (which pins the accepted/rejected shapes) and
+ * secretRotationsApiKeyScopeCoverage.test.ts.
+ */
+export const ADMIN_GATE = /requiredScopes:\s*\[\s*ApiKeyScope\.ADMIN\s*,?\s*\]/;

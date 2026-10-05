@@ -23,6 +23,17 @@ import {
 } from './kimiNativeTools';
 import { normalizeOpenAIFinishReason } from '../stopReason';
 
+/**
+ * Sent when Kimi is asked to continue after a tool result with no tools offered (base.ts
+ * drops them at the tool-call limit). Without it Kimi writes its next tool call out as
+ * visible text and never answers.
+ */
+const TOOLS_UNAVAILABLE_NUDGE =
+  'Tools are no longer available. Using the tool results above, answer the original request now in plain text. Do not write any tool call.';
+
+/** Raw tool-call text in any of the shapes Kimi emits; never an answer. */
+const RAW_TOOL_CALL_TEXT = /<\|tool_call|<function[=_]|<invoke\b/;
+
 /** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
 interface MoonshotMessage {
   content?: string;
@@ -73,6 +84,16 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
    * getPayload. See kimiNativeTools.
    */
   private nativeToolStream = new KimiNativeToolStream();
+
+  /**
+   * The round in flight: the reasoning and prose the model produced, used by
+   * promoteReasoningTail to spot a reasoning-only turn. Reset in getPayload.
+   */
+  private roundReasoning = '';
+  private roundProse = '';
+
+  /** Whether the round in flight called a tool; a tool-call round is never a reasoning-only answer. */
+  private roundCalledTool = false;
 
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
@@ -173,6 +194,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         return typeof m.content === 'string' ? m.content !== '' : m.content !== null && m.content !== undefined;
       });
 
+    if (formattedMessages[formattedMessages.length - 1]?.role === 'tool' && !options.tools?.length) {
+      formattedMessages.push({ role: 'user', content: TOOLS_UNAVAILABLE_NUDGE });
+    }
+
     const body: Record<string, unknown> = {
       messages: formattedMessages,
       // Bedrock's ceiling for both ids, and the parameter is required by the
@@ -202,6 +227,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     this.isInThinkingBlock = false;
     this.reasoningEscaper = createThinkMarkerEscaper();
     this.nativeToolStream = new KimiNativeToolStream();
+    this.roundReasoning = '';
+    this.roundProse = '';
+    this.roundCalledTool = false;
 
     return {
       modelId: model,
@@ -275,6 +303,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // as the whole answer and never run the tool.
       const toolCalls = Array.isArray(payload.tool_calls) ? payload.tool_calls : [];
       if (toolCalls.length > 0) {
+        this.roundCalledTool = true;
         for (const [toolIndex, call] of toolCalls.entries()) {
           const idx = call.index ?? toolIndex;
           if (opts.streaming) {
@@ -347,6 +376,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const escapedReasoning = this.reasoningEscaper.push(reasoning);
           const chunkText = this.isInThinkingBlock ? escapedReasoning : `<think>${escapedReasoning}`;
           this.isInThinkingBlock = true;
+          this.roundReasoning += reasoning;
           choices.push({ status: ChoiceStatus.STREAM, index, chunkText, toolArguments: false, ...usageForIndex });
           continue;
         }
@@ -360,6 +390,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
           const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
           const think = safe + (choice.finish_reason ? this.nativeToolStream.flush() : '');
+          this.roundReasoning += think;
+          // A marker that never parsed into a call still means a tool was attempted.
+          if (nativeCalls.length > 0 || this.nativeToolStream.sawMarker) this.roundCalledTool = true;
           choices.push({
             status: ChoiceStatus.END,
             statusEndReason: endReason,
@@ -390,6 +423,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         }
 
         // Prose, or the close of an open `reasoning_content` block.
+        this.roundProse += content;
         if (this.isInThinkingBlock && content) {
           this.isInThinkingBlock = false;
           choices.push({
@@ -425,6 +459,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
         const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
+        this.roundReasoning += think;
+        // The gate above saw a marker, so a tool was attempted even when none parsed.
+        this.roundCalledTool = true;
         let usageAttached = false;
         if (think) {
           choices.push({
@@ -451,6 +488,11 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         continue;
       }
 
+      // The inline <reasoning> envelope is reasoning, not prose; counting it as prose would
+      // hide a reasoning-only turn from promoteReasoningTail.
+      const envelope = /<reasoning>([\s\S]*?)<\/reasoning>/g;
+      this.roundReasoning += reasoning + [...content.matchAll(envelope)].map(m => m[1]).join('');
+      this.roundProse += content.replace(envelope, '').replace(/<\/?reasoning>/g, '');
       const chunkText = (reasoning ? `<think>${reasoning}</think>` : '') + convertTags(content);
       choices.push({ status: ChoiceStatus.END, statusEndReason: endReason, index, chunkText, ...usageForIndex });
     }
@@ -460,8 +502,47 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // output budget on the monologue reached the user as a reasoning trace ending at
     // </think>, with nothing marking it as cut off.
     const stopReason = normalizeOpenAIFinishReason(response.choices?.[0]?.finish_reason);
+    // First choice only, like stopReason above: Bedrock returns a single choice for Kimi, and
+    // the round state tracked for promotion is not per choice.
+    if (response.choices?.[0]?.finish_reason === 'stop') this.promoteReasoningTail(choices);
 
     return { done: true, chunk: { model, choices, ...(stopReason ? { stopReason } : {}) } };
+  }
+
+  /**
+   * Kimi sometimes ends a turn with `finish_reason: stop` and its whole answer inside
+   * `<reasoning>`, nothing after it. The monologue renders as a collapsed thought and
+   * the user is left with a blank turn, so the last reasoning paragraph is also shown
+   * as the visible answer. Never for `length` (a cut-off monologue is not an answer)
+   * or a round that called a tool or already wrote prose.
+   */
+  private promoteReasoningTail(choices: ICompletionResponseChunk['choices']): void {
+    if (this.roundCalledTool || this.roundProse.trim() || hasNativeToolMarker(this.roundReasoning)) return;
+    const tail = escapeThinkMarkers(
+      this.roundReasoning
+        .split(/\n\s*\n/)
+        .map(p => p.trim())
+        .filter(Boolean)
+        .pop() ?? ''
+    );
+    if (!tail || RAW_TOOL_CALL_TEXT.test(tail)) return;
+
+    // A still-open `reasoning_content` block must be closed first or the answer renders inside it.
+    const closeOpenThink = this.isInThinkingBlock ? `${this.reasoningEscaper.flush()}</think>` : '';
+    this.isInThinkingBlock = false;
+    this.roundProse += tail;
+
+    const target = [...choices].reverse().find(c => c.index === 0 && !c.tool && 'chunkText' in c);
+    if (target && 'chunkText' in target) {
+      target.chunkText = (target.chunkText ?? '') + closeOpenThink + tail;
+      return;
+    }
+    choices.push({
+      status: ChoiceStatus.END,
+      statusEndReason: ChoiceEndReason.STOP,
+      index: 0,
+      chunkText: closeOpenThink + tail,
+    });
   }
 
   /**

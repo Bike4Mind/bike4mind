@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
+import { UNSEARCHABLE_LAKE_REASON } from './lakeRetrievability';
+import { DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
 import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -398,7 +400,57 @@ describe('DataLakeLakePicker', () => {
   });
 });
 
+describe('DataLakeLakePicker - unsearchable lakes', () => {
+  const lakes = [
+    lake({ id: 'a', name: 'Mine', retrievable: true }),
+    lake({ id: 'b', name: 'Unlabeled' }),
+    lake({ id: 'c', name: 'Private', retrievable: false, status: 'active', canPreauthorize: true }),
+  ];
+
+  it('marks only an explicit retrievable === false row', () => {
+    renderPicker({ lakes });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-unsearchable-c')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-a')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-b')).not.toBeInTheDocument();
+  });
+
+  it('explains the marker on hover', async () => {
+    renderPicker({ lakes });
+    openMenu();
+
+    fireEvent.mouseOver(screen.getByTestId('datalake-lake-picker-unsearchable-c'));
+    await waitFor(() =>
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'Chat cannot search this lake with your current access. You can still browse it.'
+      )
+    );
+    expect(UNSEARCHABLE_LAKE_REASON).toBe(
+      'Chat cannot search this lake with your current access. You can still browse it.'
+    );
+  });
+
+  it('keeps an unsearchable row selectable, since selection also scopes the browse tree', () => {
+    const onChange = vi.fn();
+    renderPicker({ lakes, onChange });
+    openMenu();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-c'));
+    expect(onChange).toHaveBeenCalledWith(['c']);
+  });
+});
+
 describe('DataLakeLakePicker - draft marker', () => {
+  it('gives a labelled draft the draft reason, not an access reason its owner would misread', async () => {
+    renderPicker({ lakes: [lake({ id: 'd', name: 'My draft', status: 'draft', retrievable: false })] });
+    openMenu();
+
+    fireEvent.mouseOver(screen.getByTestId('datalake-lake-picker-unsearchable-d'));
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(DRAFT_LAKE_TOOLTIP));
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent(UNSEARCHABLE_LAKE_REASON);
+  });
+
   it('marks draft and status-less user lakes, not built-ins', () => {
     renderPicker({
       lakes: [

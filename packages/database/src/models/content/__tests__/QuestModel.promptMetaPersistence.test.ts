@@ -198,6 +198,7 @@ const FULL_PROMPT_META = {
   warnings: ['a warning'],
   generatedAt: '2026-07-30T00:00:00.000Z',
   finishReason: 'end_turn',
+  replyChoices: { offered: true, status: 'invalid', reason: 'too_few' },
   artifacts: [{ type: 'html', content: '<div />', metadata: { source: 'tool_result' }, timestamp: new Date() }],
   toolHealth: [
     {

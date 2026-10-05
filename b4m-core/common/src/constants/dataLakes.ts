@@ -420,6 +420,23 @@ export interface DataLakeConfig {
 }
 
 /**
+ * Opt-in row label on GET /api/data-lakes (`?includeRetrievability=true`), never set by the list
+ * projections. The one authoritative statement of its contract:
+ * - `retrievable`: whether chat retrieval searches this lake for the CALLER (always the caller, even
+ *   when `?preauthorizableFor` relabels `canPreauthorize`). With `&sessionId=` naming one of the
+ *   caller's own sessions, it also counts that session's still-managed pre-authorizations, i.e.
+ *   whether chat searches the lake in that session once the session's scope includes it. Any other
+ *   session id is treated as no session. Drafts read `false`.
+ * - Absent means unknown (not requested, or the scope was unresolved or degraded) and must be
+ *   treated as searchable.
+ */
+export interface DataLakeRetrievabilityLabel {
+  retrievable?: boolean;
+}
+
+export type RetrievabilityLabeledDataLake = ManageableDataLakeConfig & DataLakeRetrievabilityLabel;
+
+/**
  * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
  * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
  * fields per lake and only when `canManage` holds for the requesting caller.

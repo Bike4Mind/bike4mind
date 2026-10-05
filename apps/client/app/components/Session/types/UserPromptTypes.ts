@@ -85,6 +85,7 @@ export interface ReplyContainerProps {
   attachmentList?: IChatHistoryItem['attachmentList'];
   /** Navigation intents from navigate_view tool (inline action buttons) */
   navigationIntents?: IChatHistoryItem['navigationIntents'];
+  suggestedChoices?: IChatHistoryItem['suggestedChoices'];
   /** Per-file warnings for attachments that did not arrive intact (also stated to the model) */
   attachmentNotices?: IChatHistoryItem['attachmentNotices'];
   /** Requested-vs-delivered counts for the same turn; heads the notices banner */

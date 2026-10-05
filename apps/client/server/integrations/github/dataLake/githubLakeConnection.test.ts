@@ -21,6 +21,9 @@ const h = vi.hoisted(() => ({
   ghConnSetEnabledForLake: vi.fn(),
   ghConnRecordLastError: vi.fn(),
   ghConnDisableIfNoLiveSyncClaim: vi.fn(),
+  ghConnMarkDisconnecting: vi.fn(),
+  ghConnCancelDisconnect: vi.fn(),
+  ghConnTouchDisconnect: vi.fn(),
   fabFilesFindByGitHubConnectionIdInDataLake: vi.fn(),
   purgeConnectionIngestedFiles: vi.fn(),
   driveConnFindByDataLakeIdAny: vi.fn(),
@@ -56,6 +59,9 @@ vi.mock('@bike4mind/database', async importOriginal => {
       setEnabledForLake: h.ghConnSetEnabledForLake,
       recordLastError: h.ghConnRecordLastError,
       disableIfNoLiveSyncClaim: h.ghConnDisableIfNoLiveSyncClaim,
+      markDisconnecting: h.ghConnMarkDisconnecting,
+      cancelDisconnect: h.ghConnCancelDisconnect,
+      touchDisconnect: h.ghConnTouchDisconnect,
     },
     fabFileRepository: {
       ...actual.fabFileRepository,
@@ -75,7 +81,7 @@ import {
   buildGitHubLakeConnectUrls,
   releaseGitHubLakeConnection,
   releaseGitHubLakeConnectionForLake,
-  disconnectGitHubLakeConnection,
+  requestGitHubLakeDisconnect,
   revokeGitHubLakeConnection,
   disableGitHubConnectionForLake,
   enableGitHubConnectionForLake,
@@ -84,7 +90,7 @@ import {
   REVOKE_PURGE_SLICE_SIZE,
 } from './githubLakeConnection';
 import type { GitHubLakeAppConfig, GitHubLakeInstallation, GitHubLakeRepository } from './lakeAppClient';
-import type { IOrgGitHubLakeConnectionDocument } from '@bike4mind/common';
+import { GITHUB_DISCONNECT_STALL_MS, type IOrgGitHubLakeConnectionDocument } from '@bike4mind/common';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), log: vi.fn() } as never;
 const USER = { id: 'user-1', isAdmin: false };
@@ -148,6 +154,8 @@ describe('toGitHubLakeConnectionResponse', () => {
       lastSyncedAt,
       syncStale: false,
       fileCount: 5,
+      disconnecting: false,
+      disconnectStalled: false,
     });
   });
 
@@ -160,7 +168,22 @@ describe('toGitHubLakeConnectionResponse', () => {
       defaultBranch: null,
       lastSyncedAt: null,
       syncStale: false,
+      disconnecting: false,
+      disconnectStalled: false,
     });
+  });
+
+  it('reads disconnecting true but not stalled right after the stamp', () => {
+    const conn = { ...base, disconnectRequestedAt: new Date() } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ disconnecting: true, disconnectStalled: false });
+  });
+
+  it('reads disconnectStalled once the stamp is older than GITHUB_DISCONNECT_STALL_MS', () => {
+    const conn = {
+      ...base,
+      disconnectRequestedAt: new Date(Date.now() - GITHUB_DISCONNECT_STALL_MS - 1000),
+    } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ disconnecting: true, disconnectStalled: true });
   });
 
   // @bike4mind/database is mocked above with importOriginal and only overrides specific repository
@@ -589,78 +612,83 @@ describe('releaseGitHubLakeConnection', () => {
   });
 });
 
-describe('disconnectGitHubLakeConnection', () => {
-  const LAKE = { id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:lake1' } as never;
-  const FILES = [{ id: 'f1' }];
-  let calls: string[];
+describe('requestGitHubLakeDisconnect', () => {
+  const STAMP = new Date('2026-01-01T00:00:00.000Z');
 
   beforeEach(() => {
     vi.clearAllMocks();
-    calls = [];
-    h.getGitHubLakeAppConfig.mockReturnValue(CONFIG);
-    h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
-    h.fabFilesFindByGitHubConnectionIdInDataLake.mockResolvedValue(FILES);
-    h.ghConnDisableIfNoLiveSyncClaim.mockImplementation(async () => (calls.push('disable'), { wasEnabled: true }));
-    h.purgeConnectionIngestedFiles.mockImplementation(
-      async (_lake, findFiles: (limit?: number) => Promise<unknown>) => {
-        calls.push('purge');
-        await findFiles();
-        return { remaining: false };
-      }
-    );
-    h.deleteInstallation.mockImplementation(async () => void calls.push('uninstall'));
-    h.ghConnRelease.mockImplementation(async () => (calls.push('release'), true));
-    h.ghConnSetEnabledForLake.mockImplementation(async () => (calls.push('enable'), true));
+    h.ghConnMarkDisconnecting.mockResolvedValue({ stamp: STAMP, created: true, previousEnabled: true });
+    h.sendToQueue.mockResolvedValue(undefined);
   });
 
-  it('disables, purges the connection s files, then releases', async () => {
-    await expect(disconnectGitHubLakeConnection(LAKE, CONNECTION, logger)).resolves.toEqual({
-      installationRetained: false,
+  it('marks the connection disconnecting, then enqueues the revoke message', async () => {
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).resolves.toEqual({ queued: true });
+    expect(h.ghConnMarkDisconnecting).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', {
+      connectionId: 'conn1',
+      installationId: 42,
     });
-    expect(calls).toEqual(['disable', 'purge', 'uninstall', 'release']);
-    expect(h.ghConnDisableIfNoLiveSyncClaim).toHaveBeenCalledWith('conn1', 'orgA');
-    expect(h.fabFilesFindByGitHubConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:lake1', {
-      includeDeleted: true,
-    });
-    expect(h.purgeConnectionIngestedFiles).toHaveBeenCalledWith(
-      LAKE,
-      expect.any(Function),
-      expect.objectContaining({ connectionId: 'conn1', logger })
-    );
   });
 
-  it('409s while a sync claim is live, touching nothing', async () => {
-    h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue(null);
-    await expect(disconnectGitHubLakeConnection(LAKE, CONNECTION, logger)).rejects.toMatchObject({
-      statusCode: 409,
-    });
-    expect(h.purgeConnectionIngestedFiles).not.toHaveBeenCalled();
-    expect(h.ghConnRelease).not.toHaveBeenCalled();
+  it('declines a second enqueue while a prior disconnect is still fresh', async () => {
+    const conn = { ...CONNECTION, disconnectRequestedAt: new Date() };
+    await expect(requestGitHubLakeDisconnect(conn, logger)).resolves.toEqual({ queued: false });
+    expect(h.ghConnMarkDisconnecting).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('keeps the row when the purge fails, and hands the purge a re-enable restore', async () => {
-    h.purgeConnectionIngestedFiles.mockRejectedValue(new Error('storage blip'));
-    await expect(disconnectGitHubLakeConnection(LAKE, CONNECTION, logger)).rejects.toThrow('storage blip');
-    expect(h.deleteInstallation).not.toHaveBeenCalled();
-    expect(h.ghConnRelease).not.toHaveBeenCalled();
-    await h.purgeConnectionIngestedFiles.mock.calls[0][2].restore();
-    expect(h.ghConnSetEnabledForLake).toHaveBeenCalledWith('lake1', true);
+  it('re-marks and re-enqueues once a pending disconnect has gone stalled', async () => {
+    const conn = {
+      ...CONNECTION,
+      disconnectRequestedAt: new Date(Date.now() - GITHUB_DISCONNECT_STALL_MS - 1000),
+    };
+    await expect(requestGitHubLakeDisconnect(conn, logger)).resolves.toEqual({ queued: true });
+    expect(h.ghConnMarkDisconnecting).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.sendToQueue).toHaveBeenCalled();
   });
 
-  it('passes no restore for an already-disabled (archived) connection', async () => {
-    h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue({ wasEnabled: false });
-    await disconnectGitHubLakeConnection(LAKE, CONNECTION, logger);
-    expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
+  it('409s when a sync claim is live, without enqueuing', async () => {
+    h.ghConnMarkDisconnecting.mockResolvedValue(null);
+    h.ghConnFindById.mockResolvedValue(CONNECTION);
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('forwards the limit the purge finder is called with to the fab file finder', async () => {
-    await disconnectGitHubLakeConnection(LAKE, CONNECTION, logger);
-    const findFiles = h.purgeConnectionIngestedFiles.mock.calls[0][1] as (limit?: number) => Promise<unknown>;
-    await findFiles(5);
-    expect(h.fabFilesFindByGitHubConnectionIdInDataLake).toHaveBeenLastCalledWith('conn1', 'datalake:lake1', {
-      includeDeleted: true,
-      limit: 5,
-    });
+  it('returns queued false when a concurrent DELETE stamped a fresh disconnect first', async () => {
+    h.ghConnMarkDisconnecting.mockResolvedValue(null);
+    h.ghConnFindById.mockResolvedValue({ ...CONNECTION, disconnectRequestedAt: new Date() });
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).resolves.toEqual({ queued: false });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a mark it created when the enqueue fails, and rethrows the enqueue error', async () => {
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    h.ghConnCancelDisconnect.mockResolvedValue(true);
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toThrow('sqs down');
+    expect(h.ghConnCancelDisconnect).toHaveBeenCalledWith('conn1', 'orgA', STAMP, true);
+  });
+
+  it('restores enabled: false when rolling back a mark on an already-paused connection', async () => {
+    h.ghConnMarkDisconnecting.mockResolvedValue({ stamp: STAMP, created: true, previousEnabled: false });
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    h.ghConnCancelDisconnect.mockResolvedValue(true);
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toThrow('sqs down');
+    expect(h.ghConnCancelDisconnect).toHaveBeenCalledWith('conn1', 'orgA', STAMP, false);
+  });
+
+  it('does not roll back a re-stamp it did not create', async () => {
+    h.ghConnMarkDisconnecting.mockResolvedValue({ stamp: STAMP, created: false, previousEnabled: true });
+    h.sendToQueue.mockRejectedValue(new Error('sqs down'));
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toThrow('sqs down');
+    expect(h.ghConnCancelDisconnect).not.toHaveBeenCalled();
+  });
+
+  it('rethrows the enqueue error, not the rollback error, and logs the rollback failure', async () => {
+    const enqueueError = new Error('sqs down');
+    h.sendToQueue.mockRejectedValue(enqueueError);
+    h.ghConnCancelDisconnect.mockRejectedValue(new Error('mongo down'));
+    await expect(requestGitHubLakeDisconnect(CONNECTION, logger)).rejects.toBe(enqueueError);
+    expect(logger.error).toHaveBeenCalled();
   });
 });
 
@@ -675,6 +703,7 @@ describe('revokeGitHubLakeConnection', () => {
     h.ghConnFindByInstallationId.mockResolvedValue([CONNECTION]);
     h.fabFilesFindByGitHubConnectionIdInDataLake.mockResolvedValue([]);
     h.ghConnDisableIfNoLiveSyncClaim.mockResolvedValue({ wasEnabled: true });
+    h.ghConnTouchDisconnect.mockResolvedValue(true);
     h.purgeConnectionIngestedFiles.mockResolvedValue({ remaining: false });
     h.deleteInstallation.mockResolvedValue(undefined);
     h.ghConnRelease.mockResolvedValue(true);
@@ -721,11 +750,13 @@ describe('revokeGitHubLakeConnection', () => {
   it('disconnects (disable, purge, release) when the connection and its lake both still exist', async () => {
     await revokeGitHubLakeConnection({ connectionId: 'conn1', installationId: 42 }, logger);
     expect(h.ghConnDisableIfNoLiveSyncClaim).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.ghConnTouchDisconnect).toHaveBeenCalledWith('conn1');
     expect(h.purgeConnectionIngestedFiles).toHaveBeenCalledWith(
       LAKE,
       expect.any(Function),
       expect.objectContaining({ connectionId: 'conn1', logger, sliceSize: REVOKE_PURGE_SLICE_SIZE })
     );
+    expect(h.purgeConnectionIngestedFiles.mock.calls[0][2].restore).toBeUndefined();
     expect(h.ghConnRelease).toHaveBeenCalledWith(CONNECTION.id, CONNECTION.organizationId);
   });
 

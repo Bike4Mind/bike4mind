@@ -281,7 +281,7 @@ const STOP_REASON_LABEL = {
 /** When a run actually began, falling back to when it was queued - the time its history row shows. */
 const runStartedAt = (run: IDataLakeResearchRunDocument): Date | string => run.startedAt ?? run.createdAt;
 
-const formatWhen = (value: Date | string | null | undefined): string => {
+export const formatWhen = (value: Date | string | null | undefined): string => {
   if (!value) return 'not yet';
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return 'unknown';
@@ -410,6 +410,35 @@ const runOutcomeSummary = (run: IDataLakeResearchRunDocument): string => {
     if (count > 0) parts.push(`${count} ${label}`);
   }
   return parts.join(' \u00b7 ');
+};
+
+/**
+ * Every bucket a candidate can only reach after a successful score: must stay in sync with the
+ * post-judgment branches of `executeResearchRun` (b4m-core/services/src/dataLakeResearchService).
+ * Keyed like `DROP_REASON_LABEL`, so a new `ResearchRunTotals` field fails the build until it is
+ * placed here or excluded.
+ */
+const JUDGED_BUCKETS: Record<
+  Exclude<keyof ResearchRunTotals, 'searchHits' | 'filteredBySource' | 'judgeFailed' | 'notJudged'>,
+  true
+> = {
+  belowRelevance: true,
+  fetchFailed: true,
+  proposed: true,
+  duplicatePending: true,
+  alreadyInLake: true,
+  suppressedByTombstone: true,
+  unusableSource: true,
+};
+
+/** Names the judge model on a run's meta line, or null when the judge never ran. */
+const judgeLabel = (run: IDataLakeResearchRunDocument): string | null => {
+  if (!run.judgeModel) return null;
+  const { totals } = run;
+  const judged = Object.keys(JUDGED_BUCKETS).some(key => totals[key as keyof ResearchRunTotals] > 0);
+  if (judged) return `judged by ${run.judgeModel}`;
+  if (totals.judgeFailed > 0) return `judge ${run.judgeModel} unavailable`;
+  return null;
 };
 
 /**
@@ -977,11 +1006,10 @@ export function DataLakeResearchPanel({
                   <Typography level="body-xs" data-testid="datalake-research-run-config">
                     {runConfigLabel(run, configById)}
                   </Typography>
-                  <Typography level="body-xs" textColor="text.tertiary">
-                    {`${formatWhen(runStartedAt(run))} \u00b7 ${formatSpend(run.spentMicroUsd)}`}
-                    {run.judgeModel && (run.totals.proposed > 0 || run.totals.belowRelevance > 0)
-                      ? ` \u00b7 judged by ${run.judgeModel}`
-                      : ''}
+                  <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-research-run-when">
+                    {[formatWhen(runStartedAt(run)), formatSpend(run.spentMicroUsd), judgeLabel(run)]
+                      .filter(Boolean)
+                      .join(' \u00b7 ')}
                   </Typography>
                 </Stack>
                 {run.error && (

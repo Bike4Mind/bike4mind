@@ -20,6 +20,10 @@ import { uniqBy } from 'lodash';
  * @param data - The data object to write or delete, must contain an 'id' field
  * @param options - Configuration options
  * @param options.keysAllowedToCreate - Array of query key paths where new items can be created
+ * @param options.canCreateAt - Extra gate on the create-path insert, consulted per matched queryKey.
+ *   Defaults to always-allow. Use this when a queryKey can carry a filter fragment (e.g. the sidebar's
+ *   Content/Origin filters) that `data` might not satisfy - without it, a live write/create event
+ *   would splice `data` into a filtered cache regardless of whether it matches that filter.
  *
  * @example
  * // Update a session in all relevant query caches
@@ -36,6 +40,7 @@ export const updateAllQueryData = <
   data: T,
   options: {
     keysAllowedToCreate: Array<string[]>;
+    canCreateAt?: (queryKey: readonly unknown[], data: T) => boolean;
   } = { keysAllowedToCreate: [] }
 ) => {
   const collectionQueryKeys = queryClient
@@ -72,6 +77,7 @@ const updateAllQueryDataAsync = <
   data: T,
   options: {
     keysAllowedToCreate: Array<string[]>;
+    canCreateAt?: (queryKey: readonly unknown[], data: T) => boolean;
   },
   collectionQueryKeys: (readonly unknown[])[]
 ) => {
@@ -120,7 +126,10 @@ export const updateSingleQueryDataFast = <
   queryKey: readonly unknown[],
   type: 'write' | 'delete',
   data: T,
-  options: { keysAllowedToCreate: Array<string[]> }
+  options: {
+    keysAllowedToCreate: Array<string[]>;
+    canCreateAt?: (queryKey: readonly unknown[], data: T) => boolean;
+  }
 ) => {
   // Fallback-aware timestamp getter (prefers updatedAt, falls back to lastUpdated)
   const getTs = (obj: any): number | null => {
@@ -133,7 +142,9 @@ export const updateSingleQueryDataFast = <
     currentData => {
       if (!currentData) return;
 
-      const allowCreate = options.keysAllowedToCreate.some(key => isEqualOrSubKey(key, [...queryKey] as string[]));
+      const allowCreate =
+        options.keysAllowedToCreate.some(key => isEqualOrSubKey(key, [...queryKey] as string[])) &&
+        (options.canCreateAt?.(queryKey, data) ?? true);
 
       // Pre-calculate timestamp once instead of in loops.
       const newUpdatedAt = getTs(data);

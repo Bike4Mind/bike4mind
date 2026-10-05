@@ -304,7 +304,11 @@ async function createNotebookResponse(dbUser: any, slackUserId: string, customNa
       })}`;
 
     const ability = { can: () => true };
-    const newSession = await createSession(dbUser.id, { name: notebookName }, ability as any);
+    const newSession = await createSession(
+      dbUser.id,
+      { name: notebookName, origin: { channel: 'slack' } },
+      ability as any
+    );
 
     // Update user's slack settings
     const slackSettings = dbUser.slackSettings || {};

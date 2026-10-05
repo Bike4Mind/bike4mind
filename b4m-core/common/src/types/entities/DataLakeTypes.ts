@@ -2,6 +2,7 @@ import type { LakeInconsistencyScanSummary } from '../../constants/corpusInconsi
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
+import type { LakeManageRung } from './LakeConfigChangeEventTypes';
 
 // ── Data Lake Status ────────────────────────────────────────────────────────
 
@@ -746,6 +747,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * or created by the caller) so the count cannot confirm a lake the caller could not see.
        */
       callerMaySeeAllLakes?: boolean;
+      /**
+       * Only read with `restrictToTags`. Orgs the caller holds admin rights in (pre-resolved via
+       * `findIdsWithAdminRights`). Their lakes count as already visible, matching browse's org-admin
+       * arm, so a non-member org admin is not told nothing was excluded. Widens visibility only,
+       * never reach.
+       */
+      administeredOrgIds?: string[];
     }
   ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
@@ -1176,6 +1184,21 @@ export interface IDataLakeBatch {
   /** Set only when a terminal status was reached by something other than normal completion (e.g. 'reconciler'). */
   completionReason?: BatchCompletionReason;
 
+  /**
+   * The manage rung that let the uploader open this batch, resolved at the create gate where the
+   * full access context (platform admin, administered orgs) is known. The upload History row is
+   * written later from a queue handler that only has the uploader's id, so without this an org or
+   * platform admin's upload would record as `system`. Absent on batches created before it existed
+   * and on server-created batches (Drive, GitHub); those fall back to a grant-resolved rung.
+   */
+  uploaderManageRung?: LakeManageRung;
+  /**
+   * Set once, by the first caller to write this batch's `upload-files` History row. A
+   * `completed_with_errors` batch can be reopened and finalized again (`reopenFinalizedWithErrors`),
+   * and History rows are never rewritten, so this is what keeps it to one row per batch.
+   */
+  uploadHistoryRecordedAt?: Date;
+
   /** Opted into background AI tag suggestion at batch-create time. Never true in append mode. */
   wantsTaxonomy?: boolean;
   /** Background AI-tagging phase; see `TaxonomyStatus`. */
@@ -1282,6 +1305,12 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * Advisory: updateFileStatus already stamped `false` with the status, so a lost write here only
    * leaves the entry uncounted. Call after a guarded incrementCounters that returned a batch. */
   markFailureCounted(batchId: string, fabFileId: string, counted: boolean): Promise<void>;
+  /**
+   * Claim the right to write this batch's `upload-files` History row: stamps
+   * `uploadHistoryRecordedAt` only if it is still absent. True for the single winner; false once a
+   * row has been claimed, which is what stops a reopened and re-finalized batch writing a second one.
+   */
+  claimUploadHistory(batchId: string): Promise<boolean>;
   incrementCounter(batchId: string, field: BatchCounterField, amount?: number): Promise<IDataLakeBatchDocument | null>;
   /**
    * Drive-ingest-only: atomically record a skipped driveFileId (into `skippedDriveFileIds`) and

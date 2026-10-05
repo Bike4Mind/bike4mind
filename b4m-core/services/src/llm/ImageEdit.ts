@@ -29,7 +29,7 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
   isGPTImageModel,
   MAX_REFERENCE_IMAGES,
   supportsImageEdit,
@@ -72,6 +72,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
+import { recordGeneratedImages } from './recordGeneratedImages';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -108,6 +109,8 @@ interface IImageEditServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -194,7 +197,7 @@ export class ImageEditService {
     // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
     // promptMeta is built, so the persisted model matches what actually renders and bills.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
@@ -425,7 +428,9 @@ export class ImageEditService {
     // silently turn a valid request into an opaque image. Resolved before billing so
     // credits key off the model actually used.
     const model =
-      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
+      background === 'transparent' && rejectsTransparentBackground(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -787,6 +792,8 @@ export class ImageEditService {
         status: quest.status,
         creditsUsed: quest.creditsUsed,
       });
+
+      await recordGeneratedImages(this.db.sessions, sessionId, 1, logger);
 
       // Remove prompt loading message on the client
       await clientMessageSender.sendToClient(userId, wsEndpoint, {

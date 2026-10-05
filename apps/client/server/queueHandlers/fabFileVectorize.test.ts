@@ -237,9 +237,12 @@ describe('fabFileVectorize handler - convergence kill switch (#1676)', () => {
 
     await dispatch(makeEvent(convergencePayload), {} as never, mockLogger);
 
-    expect(h.fabFileUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'ff1', chunkStallReason: 'vectorizePaused', isVectorizing: false })
-    );
+    expect(h.fabFileUpdate).toHaveBeenCalledTimes(1);
+    expect(h.fabFileUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'ff1',
+      chunkStallReason: 'vectorizePaused',
+      isVectorizing: false,
+    });
     // Embedding is gated: neither the chunk load nor the provider call runs.
     expect(fabFileChunkRepository.findById as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
     expect(h.getVector).not.toHaveBeenCalled();
@@ -635,6 +638,26 @@ describe('fabFileVectorize handler - notification failures are non-fatal (human 
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'vectorizedFiles');
   });
 
+  it('clears the stale duplicate-name error on completion with exactly { id, error: null }', async () => {
+    h.findAccessibleById.mockResolvedValue({
+      ...unvectorizedFile('batch-1'),
+      error: 'Knowledge in the workbench with the fileName a.txt already exists',
+    });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).toHaveBeenCalledTimes(1);
+    expect(h.fabFileUpdate.mock.calls[0][0]).toStrictEqual({ id: 'ff1', error: null });
+  });
+
+  it('leaves an unrelated file error alone on completion', async () => {
+    h.findAccessibleById.mockResolvedValue({ ...unvectorizedFile('batch-1'), error: 'something else broke' });
+
+    await dispatch(makeEvent(payload), {} as never, mockLogger);
+
+    expect(h.fabFileUpdate).not.toHaveBeenCalled();
+  });
+
   it('#2027: notifies Slack on completion, and a rejection does not prevent the batch claim/increment', async () => {
     h.findAccessibleById.mockResolvedValue(unvectorizedFile('batch-1'));
     h.notifySlackIndexingComplete.mockRejectedValue(new Error('slack unreachable'));
@@ -916,11 +939,16 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     // even match. Writing both in one `update` is what makes that state unrepresentable, and it is
     // also what lets the file-complete stamp DETECT a mid-ingest credential change (the file's
     // chunks then declare two models) instead of flattening it to whichever message finished last.
+    h.selfHostOpenSearchEnabled.mockReturnValue(false);
+
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', vector: [0.1, 0.2, 0.3], embeddingModel: 'text-embedding-3-small' })
-    );
+    expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+    });
   });
 
   it('never calls indexChunks when self-host OpenSearch is disabled', async () => {
@@ -949,9 +977,13 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
-    );
+    expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+      retrievalIndexModel: 'text-embedding-3-small',
+    });
   });
 
   it('confirms residency only for the chunks the index actually accepted', async () => {
@@ -961,9 +993,12 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.confirmRetrievalIndexed).toHaveBeenCalledWith([], 'text-embedding-3-small');
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
-    );
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+      retrievalIndexModel: 'text-embedding-3-small',
+    });
   });
 
   it('records confirmed residency after a successful index write', async () => {
@@ -1019,9 +1054,12 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
 
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'amazon.titan-embed-text-v2:0' })
-    );
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'amazon.titan-embed-text-v2:0',
+      retrievalIndexModel: 'amazon.titan-embed-text-v2:0',
+    });
     expect(h.stampChunkEmbeddingModel).toHaveBeenCalledWith(
       expect.anything(),
       'amazon.titan-embed-text-v2:0',
@@ -1055,9 +1093,12 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     await dispatch(makeEvent(payload), {} as never, mockLogger);
 
     expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
-    );
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+      retrievalIndexModel: 'text-embedding-3-small',
+    });
   });
 
   it('a terminal spend denial on a later message is consumed, leaving the earlier residency in place', async () => {
@@ -1084,9 +1125,12 @@ describe('fabFileVectorize handler - self-host OpenSearch dual-write', () => {
     expect(h.stampChunkEmbeddingModel).not.toHaveBeenCalled();
     // Only the first message wrote chunks; the residency it recorded is all a later removal has.
     expect(h.chunkUpdate).toHaveBeenCalledTimes(1);
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', retrievalIndexModel: 'text-embedding-3-small' })
-    );
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+      retrievalIndexModel: 'text-embedding-3-small',
+    });
   });
 });
 
@@ -1249,9 +1293,11 @@ describe('fabFileVectorize handler - second embedding space refusal', () => {
 
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).resolves.toBeUndefined();
 
-    expect(h.chunkUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'c1', embeddingModel: 'text-embedding-3-small' })
-    );
+    expect(h.chunkUpdate.mock.calls[0][0]).toStrictEqual({
+      id: 'c1',
+      vector: [0.1, 0.2, 0.3],
+      embeddingModel: 'text-embedding-3-small',
+    });
   });
 
   it('proceeds when the resolved model is the space the file is already in', async () => {
