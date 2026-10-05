@@ -17,6 +17,7 @@ import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
 import { armGenerationCallback, resolveGenerationCallback } from '@server/generationCallback/armGenerationCallback';
+import { assertReferenceImagesSupported } from '@server/utils/assertReferenceImagesSupported';
 
 const handler = nextRouteForContract(generateImageContract).post(async (req, res) => {
   const body = req.validated;
@@ -39,6 +40,8 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     responseFormat: body.response_format,
     promptPreview: body.prompt.substring(0, 100) + '...',
   });
+
+  assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
 
   const { sessionId: reqSessionId, sessionName, callbackUrl, ...invokeParams } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
