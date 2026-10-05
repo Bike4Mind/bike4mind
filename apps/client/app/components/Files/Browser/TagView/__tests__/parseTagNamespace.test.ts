@@ -243,6 +243,19 @@ describe('countTagPaths', () => {
     expect(rows['acme:legal']).toEqual({ tag: 'acme:legal', count: 1, fileCount: 1 });
   });
 
+  // Same rows the server counter's suite pins for these tags - keep the two agreeing.
+  it('expands tags with empty segments the way the server counter does', () => {
+    const rows = countTagPaths([['acme::x', 'acme:legal:']]).sort((a, b) => a.tag.localeCompare(b.tag));
+
+    expect(rows).toEqual([
+      { tag: 'acme', count: 0, fileCount: 1 },
+      { tag: 'acme:', count: 0, fileCount: 1 },
+      { tag: 'acme::x', count: 1, fileCount: 1 },
+      { tag: 'acme:legal', count: 0, fileCount: 1 },
+      { tag: 'acme:legal:', count: 1, fileCount: 1 },
+    ]);
+  });
+
   it('returns nothing for files with no tags', () => {
     expect(countTagPaths([[], []])).toEqual([]);
   });

@@ -60,7 +60,8 @@ const NOT_META_TAG = { $not: META_TAG_REGEX };
 
 /**
  * Aggregation expression: `$$this` (a tag name) expanded to itself and every ancestor path,
- * splitting on `:` exactly as buildTagTree does - `a:b:c` gives `['a', 'a:b', 'a:b:c']`.
+ * splitting on `:` exactly as buildTagTree does - `a:b:c` gives `['a', 'a:b', 'a:b:c']`. Use it as
+ * the `in` of a `$map` that keeps the default `this` binding (no `as:`).
  */
 const TAG_SELF_AND_ANCESTOR_PATHS = {
   $let: {

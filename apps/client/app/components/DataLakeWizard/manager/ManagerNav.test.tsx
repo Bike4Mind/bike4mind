@@ -146,6 +146,6 @@ describe('ManagerNav lake tree counts', () => {
     );
 
     // Summing the four leaves read 12.
-    expect(screen.getByTestId('datalake-manager-node-legal')).toHaveTextContent('3');
+    expect(screen.getByTestId('datalake-manager-node-legal')).toHaveTextContent(/^Legal3$/);
   });
 });

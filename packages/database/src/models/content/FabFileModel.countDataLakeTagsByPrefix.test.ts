@@ -97,6 +97,22 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
       expect(await rowOf('acme:legal:a')).toEqual({ tag: 'acme:legal:a', count: 1, fileCount: 1 });
     });
 
+    // Splits like buildTagTree and countTagPaths (whose suite pins the same rows), so an empty
+    // segment yields the same paths on the server and the client.
+    it('expands tags with empty segments into the same paths the client tree builds', async () => {
+      await makeFile({ tags: ['acme::x', 'acme:legal:'] });
+
+      const counts = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:']);
+
+      expect(sortedByTag(counts)).toEqual([
+        { tag: 'acme', count: 0, fileCount: 1 },
+        { tag: 'acme:', count: 0, fileCount: 1 },
+        { tag: 'acme::x', count: 1, fileCount: 1 },
+        { tag: 'acme:legal', count: 0, fileCount: 1 },
+        { tag: 'acme:legal:', count: 1, fileCount: 1 },
+      ]);
+    });
+
     it('keeps the meta-tag and out-of-prefix tags out of the ancestor rows', async () => {
       await makeFile({ tags: ['datalake:acme:handbook', 'invoices:2024', 'acme:legal'] });
 
