@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  serverRefusalMessage: (error: { serverMessage?: string }) => error.serverMessage,
   useApplyCorpusAction: () => ({ mutate: h.mutate, isPending: h.applyPending.value }),
   useLakeFileTags: (...args: unknown[]) => h.lakeTags(...args),
 }));
@@ -122,6 +123,33 @@ describe('FindingCorpusActions', () => {
       retireFabFileId: 'file-a',
       note: undefined,
     });
+  });
+
+  it('moves the other side when the same document is chosen as kept and retired', () => {
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-keep-file-b')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-retire-file-a')).getByRole('radio')).toBeChecked();
+    expect(screen.getByTestId('finding-corpus-confirm-btn')).toBeEnabled();
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-retire-file-b')).getByRole('radio'));
+    expect(within(screen.getByTestId('finding-corpus-supersede-keep-file-a')).getByRole('radio')).toBeChecked();
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+
+    expect(h.mutate.mock.calls[0][0].body).toMatchObject({ keepFabFileId: 'file-a', retireFabFileId: 'file-b' });
+  });
+
+  it('shows a server refusal inline in the supersede dialog and clears it on a new choice', () => {
+    h.mutate.mockImplementationOnce((_vars, options) => options.onError({ serverMessage: 'would create a cycle' }));
+    renderActions();
+
+    fireEvent.click(screen.getByTestId('finding-corpus-supersede-btn'));
+    fireEvent.click(screen.getByTestId('finding-corpus-confirm-btn'));
+    expect(screen.getByTestId('finding-corpus-supersede-error')).toHaveTextContent('would create a cycle');
+
+    fireEvent.click(within(screen.getByTestId('finding-corpus-supersede-keep-file-b')).getByRole('radio'));
+    expect(screen.queryByTestId('finding-corpus-supersede-error')).not.toBeInTheDocument();
   });
 
   it('blocks a retag until the current tags have loaded, then posts the complete edited set', () => {
