@@ -1635,9 +1635,9 @@ export interface IDataLakeSpendResponse {
    * Lifetime research spend attributed to this lake, in USD, summed from UsageEvent rows
    * carrying { dataLakeId, feature: 'operations' } across all time. Separate from the
    * ingestion-only lifetime meter above (which is reserve-first and stored on the lake).
-   * Included in the UI's displayed lifetime total and per-lake budget percentage, so a
-   * research run's cost is visible alongside ingestion spend. Not enforced by the ingestion
-   * spend gate, which reads only the embedding meter.
+   * Included in the UI's displayed lifetime total, and shown on its own line beside the
+   * per-lake budget bar because that budget caps INGESTION only. Not enforced by the
+   * ingestion spend gate, which reads only the embedding meter.
    */
   researchLifetimeUsd: number;
   spendEnabled: boolean;
