@@ -24,6 +24,11 @@ import { FallbackInfoSchema } from './llm';
  */
 export const SimplifiedChatRequestSchema = z.object({
   sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
+  // Force a brand-new notebook for this turn, regardless of auth mode. Mutually exclusive with
+  // `sessionId` - sending both is a 422. It never reads or writes `lastNotebookId`, so it cannot
+  // reopen (or repoint) the notebook the human last had open. The new notebook's id is returned
+  // as `sessionId`, so a caller continues the conversation by passing that back.
+  newConversation: z.boolean().optional(),
   message: z.string(),
   // Billing target. When set, the turn is billed to this organization's credit pool - but only
   // after the handler validates the caller actually belongs to it (never trusted as-is; see
@@ -147,6 +152,12 @@ export const ChatAckSchema = z.object({
   message_received: z.boolean(),
   timestamp: z.string(),
   model: z.string(),
+  // The notebook/session this turn was recorded in. Present on both the async ACK and the
+  // `wait: true` body. When the request carried no `sessionId` (an API-key caller, or
+  // `newConversation: true`), this is a freshly created notebook's id - pass it back as the
+  // request's `sessionId` to continue that conversation. A JWT caller with no `sessionId`
+  // gets back the notebook they last had open, unchanged.
+  sessionId: z.string().optional(),
   message: z.string().optional(),
   // Present unconditionally on the `wait: true` body, carrying the quest's own value -
   // same as the polled quest (`GET /api/v1/quests/{id}`). Absent only on the immediate async

@@ -141,6 +141,26 @@ describe('tool handlers', () => {
     expect(result.notebookId).toBe('resolved-nb');
   });
 
+  it('send_message prefers the sessionId echoed on the chat response over a quest re-fetch', async () => {
+    const getQuest = vi.fn();
+    const client = mockClient({
+      sendChat: vi.fn().mockResolvedValue({
+        id: 'q1',
+        status: 'done',
+        response: null,
+        responses: ['hello'],
+        model: 'gpt',
+        sessionId: 'echoed-nb',
+      }),
+      getQuest,
+    });
+
+    const result = await sendMessage(client, { message: 'hi' });
+
+    expect(result.notebookId).toBe('echoed-nb');
+    expect(getQuest).not.toHaveBeenCalled();
+  });
+
   it('search_knowledge_base wraps the score array in a results object', async () => {
     const client = mockClient({
       searchKnowledgeBase: vi.fn().mockResolvedValue([{ sessionId: 's1', maxSimilarity: 0.9, matchingMessages: 1 }]),

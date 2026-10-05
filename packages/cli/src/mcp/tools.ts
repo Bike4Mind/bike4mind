@@ -80,7 +80,12 @@ const createNotebookShape = {
 
 const sendMessageShape = {
   message: z.string().describe('The message to send'),
-  notebookId: z.string().optional().describe('Notebook to send to; defaults to the most recent'),
+  notebookId: z
+    .string()
+    .optional()
+    .describe(
+      'Notebook to send to; omit to start a new notebook (its id is returned as notebookId, pass it back to continue the thread)'
+    ),
   model: z.string().optional().describe('Model id to use; defaults to the instance default'),
   systemPrompt: z
     .string()
@@ -157,10 +162,10 @@ export async function sendMessage(
   const res = await client.sendChat(args);
   const questId = res.id;
 
-  // The chat response omits the session id, so when the server auto-selected the
-  // notebook (none supplied) resolve it from the quest - best-effort, since the
-  // reply already succeeded and the id is a convenience for continuing the thread.
-  let notebookId = args.notebookId;
+  // The chat response echoes the notebook it recorded the turn in; when the caller supplied one
+  // this is simply that id. Fall back to the quest only if the response somehow omitted it -
+  // best-effort, since the reply already succeeded and the id is a convenience for continuing.
+  let notebookId = args.notebookId ?? res.sessionId;
   if (!notebookId) {
     try {
       notebookId = (await client.getQuest(questId)).sessionId;

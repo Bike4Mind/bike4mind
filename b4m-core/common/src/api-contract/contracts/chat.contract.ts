@@ -37,7 +37,13 @@ export const chatContract = defineEndpoint({
     'fires outside the process try/catch that would classify it onto a quest. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
-    'Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'Authenticate with an API key (`b4m_live_`) or a JWT. ' +
+    'Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller ' +
+    'that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, ' +
+    'and `newConversation: true` forces a new notebook for any auth mode; both return the new ' +
+    'id as `sessionId`, so the caller can continue the conversation by passing it back. A ' +
+    'first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. ' +
+    'Sending `sessionId` and `newConversation` together is a 422.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -68,7 +74,10 @@ export const chatContract = defineEndpoint({
         '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
         '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
-        'body. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 ' +
+        'body. The body also carries `sessionId`, the notebook the turn was recorded in - for an ' +
+        'API-key caller that sent none (or any caller sending `newConversation: true`), that is the ' +
+        "freshly created notebook's id; pass it back as the request's `sessionId` to continue. " +
+        'Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 ' +
         'carrying the same `errorCode` vocabulary.',
       schema: ChatAckSchema,
       pollResult: {
@@ -104,9 +113,19 @@ export const chatContract = defineEndpoint({
         },
       },
     },
-    400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
+    400: {
+      description:
+        'The request was rejected before a turn was created: a supplied `model` is unknown, disabled ' +
+        'or not a chat model; or no usable default chat model is configured and none was supplied.',
+      schema: ApiErrorSchema,
+    },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
-    422: { description: 'Request body failed schema validation.', schema: ApiErrorSchema },
+    422: {
+      description:
+        'Request body failed schema validation, or `sessionId` and `newConversation: true` were sent ' +
+        'together (they are mutually exclusive).',
+      schema: ApiErrorSchema,
+    },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {

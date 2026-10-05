@@ -739,7 +739,9 @@ const newSession = await response.json();`,
     max_tokens: 1000
   })
 });
-const result = await response.json();`,
+const result = await response.json();
+// A fresh notebook was created; pass this back as sessionId to continue it.
+const sessionId = result.sessionId;`,
       aiChatSync: `const response = await fetch('/api/chat', {
   method: 'POST',
   headers: {
@@ -752,7 +754,9 @@ const result = await response.json();`,
     wait: true
   })
 });
-const result = await response.json();`,
+const result = await response.json();
+// A fresh notebook was created; pass this back as sessionId to continue it.
+const sessionId = result.sessionId;`,
       questStatus: `const response = await fetch('/api/v1/quests/quest_123', {
   method: 'GET',
   headers: {
@@ -814,7 +818,9 @@ data = {
 }
 
 response = requests.post('/api/chat', headers=headers, json=data)
-result = response.json()`,
+result = response.json()
+# A fresh notebook was created; pass this back as sessionId to continue it.
+session_id = result['sessionId']`,
       aiChatSync: `import requests
 
 headers = {
@@ -829,7 +835,9 @@ data = {
 }
 
 response = requests.post('/api/chat', headers=headers, json=data)
-result = response.json()`,
+result = response.json()
+# A fresh notebook was created; pass this back as sessionId to continue it.
+session_id = result['sessionId']`,
       questStatus: `import requests
 
 headers = {
@@ -900,8 +908,11 @@ ai_response = response.json()`,
                 <Typography level="body-sm" sx={{ color: 'text.primary' }}>
                   Use your API key to authenticate requests by adding it to the <code>X-API-Key</code> header. The{' '}
                   <code>/api/chat</code> endpoint supports both asynchronous (returns quest ID for tracking) and
-                  synchronous modes (add <code>&quot;wait&quot;: true</code> to get the response immediately). Sessions
-                  automatically use your most recent notebook if no <code>sessionId</code> is provided.
+                  synchronous modes (add <code>&quot;wait&quot;: true</code> to get the response immediately). Pass{' '}
+                  <code>sessionId</code> to continue an existing notebook. An API key that omits it starts a new
+                  notebook (named <code>API chat - ...</code>) and returns its id as <code>sessionId</code> - pass that
+                  back to continue the conversation. Add <code>&quot;newConversation&quot;: true</code> to force a new
+                  notebook. (First-party browser requests still fall back to your most recent notebook.)
                 </Typography>
               </Box>
             </Alert>
