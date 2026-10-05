@@ -109,7 +109,7 @@ export default function ActivatePage() {
             <Typography level="body-lg" sx={{ color: 'text.secondary', mb: 1 }}>
               Your device has been successfully authorized.
             </Typography>
-            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+            <Typography level="body-sm" sx={{ color: 'text.tertiary' }} data-testid="activate-success-return-text">
               You can close this window and return to {verifyMutation.data.device_info.client_name}.
             </Typography>
           </CardContent>
@@ -254,6 +254,9 @@ export default function ActivatePage() {
           </Alert>
 
           {/* Action Buttons */}
+          {/* The approve step does not name the client yet: /verify returns client_name, but it is
+              only shown on the success screen above, after consent has already been given. Until
+              this block shows it, the user approves without seeing which app they are approving. */}
           <Stack direction="row" spacing={2}>
             <Button
               onClick={handleApprove}

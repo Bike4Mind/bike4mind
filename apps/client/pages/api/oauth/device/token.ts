@@ -56,8 +56,6 @@ const handler = baseApi({ auth: false })
     // RFC 8628 s3.4: the code may only be redeemed by the client it was issued to. Consent is
     // given for one app, so letting another redeem the code would spend it on something the user
     // did not approve. Checked before any poll bookkeeping so a mismatched client advances no state.
-    // NOTE: /verify returns client_name for the approval screen, but activate.tsx does not yet show
-    // it before the approve step - until it does, the user is consenting without seeing which app.
     if ((authorization.clientId ?? LEGACY_DEVICE_CLIENT_ID) !== client_id) {
       return res.status(400).json({
         error: 'invalid_grant',

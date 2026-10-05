@@ -98,15 +98,34 @@ describe('POST /api/oauth/device/token client binding', () => {
     expect(res.body?.access_token).toBe('a.jwt');
   });
 
-  it('refuses a code issued to another client, without advancing poll state', async () => {
-    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-cli'));
+  it.each([
+    ['b4m-cli', 'b4m-desktop'],
+    ['b4m-desktop', 'b4m-cli'],
+  ])('refuses a code issued to %s when %s redeems it, without advancing poll state', async (issuedTo, redeemer) => {
+    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor(issuedTo));
+
+    const res = await call(redeemer);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_grant');
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+
+  // The binding has to be the first thing the handler decides, or a mismatched client still learns
+  // whether a code exists and still spends its poll budget. These two rows would each take a
+  // different branch (expired_token, slow_down) if the check ran later, so they pin its placement.
+  it.each([
+    ['an expired code', { expiresAt: new Date(Date.now() - 1000) }],
+    ['a code polled a moment ago', { lastPolledAt: new Date(), pollCount: 3 }],
+  ])('answers invalid_grant for %s issued to another client', async (_label, overrides) => {
+    (h.findByDeviceCode as Mock).mockResolvedValue({ ...approvedFor('b4m-cli'), ...overrides });
 
     const res = await call('b4m-desktop');
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
     expect(h.update).not.toHaveBeenCalled();
-    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('reads a row predating the clientId field as the CLI', async () => {
@@ -116,7 +135,12 @@ describe('POST /api/oauth/device/token client binding', () => {
 
     vi.clearAllMocks();
     (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor(undefined));
-    expect((await call('b4m-desktop')).statusCode).toBe(400);
+    const res = await call('b4m-desktop');
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_grant');
+    expect(h.update).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('rejects a client_id that is not on the allowlist', async () => {
