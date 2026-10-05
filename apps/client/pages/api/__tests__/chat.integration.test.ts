@@ -38,6 +38,7 @@ const {
   mockSystemPromptText,
   mockCreateSession,
   mockFindByIdAndUpdate,
+  mockDeleteSession,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
@@ -55,6 +56,8 @@ const {
   // The lastNotebookId write on the JWT most-recent fallback: asserted NOT to run for
   // API-key / newConversation callers.
   mockFindByIdAndUpdate: vi.fn(),
+  // Cleanup of a notebook this request opened when invoke rejects the turn (unknown model).
+  mockDeleteSession: vi.fn(),
   // What process() leaves on itself, rather than on the quest: the disclosed text is never
   // persisted. Holds a value only for the tests that opt in.
   mockSystemPromptText: { value: undefined as unknown },
@@ -183,6 +186,12 @@ vi.mock('@bike4mind/database', async orig => {
         findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
       },
     },
+    // Removes a notebook this request opened when invoke rejects the turn; createSession itself is
+    // stubbed (above), so this is the only session-repository edge the handler touches.
+    sessionRepository: {
+      ...(actual.sessionRepository as object),
+      delete: (...a: unknown[]) => mockDeleteSession(...a),
+    },
   };
 });
 
@@ -203,7 +212,7 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import handler from '../chat';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, BadRequestError } from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -263,6 +272,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockCreateSession.mockResolvedValue({ id: 'new-session' });
     mockFindByIdAndUpdate.mockResolvedValue(undefined);
+    mockDeleteSession.mockResolvedValue(undefined);
     // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
     mockResolveDefaultChatModel.mockImplementation(
       async ({ configuredModel }: { configuredModel?: string | null }) => ({
@@ -939,6 +949,44 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       const name = (mockCreateSession.mock.calls[0][1] as { name: string }).name;
       expect(name).toMatch(/^API chat - /);
+    });
+
+    // A rejected organization must not have already minted a notebook: resolveActiveOrg runs
+    // BEFORE session resolution, so a 403/404 leaves no empty "API chat - ..." behind in the list.
+    it('does not create a notebook when the requested org is rejected (403)', async () => {
+      const orgId = new Types.ObjectId().toHexString();
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      mockOrgFindAccessibleById.mockResolvedValue(null); // caller is not a member
+      const { req, res } = fire({ body: { message: 'hi', organizationId: orgId } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    // invoke rejects a caller-supplied model (unknown/disabled) before it creates the quest; the
+    // notebook this request opened must be removed, not left as an orphan in the notebook list.
+    it('removes the notebook it opened when invoke rejects the turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      mockInvoke.mockRejectedValueOnce(new BadRequestError('Invalid model: "gpt-4o-typo" is not available'));
+      const { req, res } = fire({ body: { message: 'hi', model: 'gpt-4o-typo' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockCreateSession).toHaveBeenCalledTimes(1);
+      expect(mockDeleteSession).toHaveBeenCalledWith('new-session');
+    });
+
+    // A notebook the caller explicitly targeted is NOT ours to delete when the turn is rejected.
+    it('does not delete an explicitly supplied notebook when invoke rejects the turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      withOpenNotebook();
+      mockInvoke.mockRejectedValueOnce(new BadRequestError('Invalid model: "nope" is not available'));
+      const { req, res } = fire({ body: { message: 'hi', sessionId: 'explicit-sess', model: 'nope' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(mockDeleteSession).not.toHaveBeenCalled();
     });
   });
 });
