@@ -16,9 +16,16 @@ export async function runGenerationJobSweep(
 ): Promise<{ requeued: number }> {
   const overdueBefore = new Date(deps.now().getTime() - (options.overdueMs ?? SWEEP_OVERDUE_MS));
   const stalled = await deps.repository.findStalled(overdueBefore, options.limit ?? SWEEP_LIMIT);
+  let requeued = 0;
   for (const job of stalled) {
-    await deps.enqueue(job.id, 0);
+    try {
+      await deps.enqueue(job.id, 0);
+      requeued += 1;
+    } catch (error) {
+      // One bad send must not strand the rest of the batch; the job stays stalled and the next sweep retries it.
+      deps.logger.error('generation_job_sweep_enqueue_failed', { jobId: job.id, error });
+    }
   }
-  if (stalled.length > 0) deps.logger.warn('generation job sweep re-enqueued stalled jobs', { count: stalled.length });
-  return { requeued: stalled.length };
+  if (requeued > 0) deps.logger.warn('generation job sweep re-enqueued stalled jobs', { count: requeued });
+  return { requeued };
 }

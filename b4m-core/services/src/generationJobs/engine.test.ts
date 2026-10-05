@@ -94,8 +94,10 @@ describe('GenerationJobEngine', () => {
 
     expect(await t.engine.step(job.id)).toBe('advanced'); // submit
     expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 5);
+    t.advance(5_000); // each message is delivered when its SQS delay elapses
     expect(await t.engine.step(job.id)).toBe('advanced'); // poll: still running
     expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 10);
+    t.advance(10_000);
     expect(await t.engine.step(job.id)).toBe('advanced'); // poll: done
     expect(await t.engine.step(job.id)).toBe('terminal'); // store
 
@@ -118,12 +120,56 @@ describe('GenerationJobEngine', () => {
   it('marks the submit attempt before calling the provider', async () => {
     const t = setup();
     const job = await t.create();
+    let observedSubmitAttemptedAt: Date | null | undefined;
     vi.mocked(t.handler.submit).mockImplementationOnce(async () => {
-      expect(t.repository.jobs.get(job.id)!.submitAttemptedAt).toBeTruthy();
+      observedSubmitAttemptedAt = t.repository.jobs.get(job.id)!.submitAttemptedAt;
       return { next: 'running', payload } satisfies StepResult;
     });
     await t.engine.step(job.id);
-    expect(t.handler.submit).toHaveBeenCalledTimes(1);
+    expect(observedSubmitAttemptedAt).toEqual(t.now());
+    expect(t.repository.jobs.get(job.id)!.state).toBe('running');
+  });
+
+  it('an orphaned submit is alarmed and settled as orphaned_submit even when a cancel was requested', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const job = await t.create({ submitAttemptedAt: new Date('2026-10-05T23:59:00Z'), cancelRequested: true });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.error?.code).toBe('orphaned_submit');
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a message delivered well before nextPollAt is dropped without forking a second chain', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running', pollCount: 2, nextPollAt: new Date(t.now().getTime() + 60_000) });
+    expect(await t.engine.step(job.id)).toBe('skipped');
+    const after = t.repository.jobs.get(job.id)!;
+    expect(after.state).toBe('running');
+    expect(after.pollCount).toBe(2);
+    expect(after.leaseUntil).toBeNull();
+    expect(t.handler.poll).not.toHaveBeenCalled();
+    expect(t.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('a message delivered within the early-delivery grace proceeds normally', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running', nextPollAt: new Date(t.now().getTime() + 1_500) });
+    t.results.poll.push({ next: 'poll_again' });
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.handler.poll).toHaveBeenCalledTimes(1);
+    expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 10);
+  });
+
+  it('does not enqueue when the advancing commit finds the job gone', async () => {
+    const t = setup();
+    const job = await t.create();
+    vi.mocked(t.handler.submit).mockImplementationOnce(async () => {
+      t.repository.jobs.delete(job.id);
+      return { next: 'running', payload } satisfies StepResult;
+    });
+    expect(await t.engine.step(job.id)).toBe('skipped');
+    expect(t.enqueue).not.toHaveBeenCalled();
   });
 
   it('a pending job with a submit attempt already recorded fails as orphaned_submit without resubmitting', async () => {
@@ -156,6 +202,7 @@ describe('GenerationJobEngine', () => {
     expect(after.attempts).toBe(1);
     expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 5);
 
+    t.advance(5_000);
     t.results.submit.push({ next: 'running', payload });
     expect(await t.engine.step(job.id)).toBe('advanced');
     expect(t.handler.submit).toHaveBeenCalledTimes(2);
@@ -185,6 +232,26 @@ describe('GenerationJobEngine', () => {
     expect(await t.engine.step(job.id)).toBe('terminal');
     expect(t.repository.jobs.get(job.id)!.error?.code).toBe('provider_timeout');
     expect(t.handler.cancelAtProvider).toHaveBeenCalled();
+  });
+
+  it('a storing job past its deadline still stores and succeeds: the output is already paid for', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'storing' });
+    t.advance(21 * 60_000);
+    t.results.store.push({ next: 'succeeded', payload });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.state).toBe('succeeded');
+    expect(t.repository.jobs.get(job.id)!.error).toBeUndefined();
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(t.handler.onTerminal).mock.calls[0][0].state).toBe('succeeded');
+  });
+
+  it('releases the lease before throwing for a kind with no handler', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.repository.jobs.get(job.id)!.kind = 'unknown' as IGenerationJob['kind'];
+    await expect(t.engine.step(job.id)).rejects.toThrow("no generation job handler registered for kind 'unknown'");
+    expect(t.repository.jobs.get(job.id)!.leaseUntil).toBeNull();
   });
 
   it('blocked is terminal with content_blocked and still runs onTerminal', async () => {

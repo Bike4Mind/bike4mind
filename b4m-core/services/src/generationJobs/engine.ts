@@ -9,6 +9,9 @@ import type { GenerationJobEngineDeps, GenerationJobHandler, StepOutcome, StepRe
 
 const isTerminal = (state: GenerationJobState) => TERMINAL_GENERATION_JOB_STATES.includes(state);
 
+// SQS delayed delivery can land slightly early; dropping an on-time message would stall the job until the sweep.
+const EARLY_DELIVERY_GRACE_MS = 2000;
+
 const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
 
 /**
@@ -34,9 +37,22 @@ export class GenerationJobEngine {
     const job = await this.deps.repository.acquireLease(jobId, now, new Date(now.getTime() + this.deps.leaseMs));
     if (!job) return 'skipped';
     const handler = this.handlers.get(job.kind);
-    if (!handler) throw new Error(`no generation job handler registered for kind '${job.kind}'`);
+    if (!handler) {
+      await this.deps.repository.commit(job.id, {});
+      throw new Error(`no generation job handler registered for kind '${job.kind}'`);
+    }
 
     if (isTerminal(job.state)) return this.finishTerminal(job, handler);
+
+    // Checked before cancel and deadline so neither can suppress the orphan alarm.
+    if (job.state === 'pending' && job.submitAttemptedAt) {
+      this.deps.logger.error('generation_job_orphaned_submit', {
+        jobId: job.id,
+        kind: job.kind,
+        submitAttemptedAt: job.submitAttemptedAt,
+      });
+      return this.apply(job, handler, orphaned('A previous submit attempt ended without a recorded provider job'));
+    }
 
     // Storing means the provider already produced (and billed) the output, so a cancel no longer saves anything.
     if (job.cancelRequested && job.state !== 'storing') {
@@ -46,7 +62,15 @@ export class GenerationJobEngine {
         error: { code: 'cancelled', message: 'Cancelled by the user' },
       });
     }
-    if (now > job.deadlineAt) {
+
+    // An early or duplicate delivery would otherwise fork a second, permanent message chain for the job.
+    if (job.nextPollAt && now.getTime() < new Date(job.nextPollAt).getTime() - EARLY_DELIVERY_GRACE_MS) {
+      await this.deps.repository.commit(job.id, {});
+      return 'skipped';
+    }
+
+    // Storing is exempt: the output is already paid for, and the store step stays bounded by MAX_STEP_ATTEMPTS.
+    if (job.state !== 'storing' && now > job.deadlineAt) {
       if (job.state === 'running') await this.bestEffortCancel(job, handler);
       return this.toTerminal(job, handler, {
         state: 'failed',
@@ -71,14 +95,6 @@ export class GenerationJobEngine {
   // A provider job created by a submit we cannot see would bill without ever being polled, so any submit whose
   // outcome is unknown fails the job rather than risk a duplicate. See GenerationJobHandler.submit.
   private async submit(job: IGenerationJobDocument, handler: GenerationJobHandler): Promise<StepResult> {
-    if (job.submitAttemptedAt) {
-      this.deps.logger.error('generation_job_orphaned_submit', {
-        jobId: job.id,
-        kind: job.kind,
-        submitAttemptedAt: job.submitAttemptedAt,
-      });
-      return orphaned('A previous submit attempt ended without a recorded provider job');
-    }
     await this.deps.repository.markSubmitAttempted(job.id, this.deps.now());
     try {
       return await handler.submit(job);
@@ -138,6 +154,7 @@ export class GenerationJobEngine {
   ): Promise<StepOutcome> {
     const nextPollAt = new Date(this.deps.now().getTime() + delaySeconds * 1000);
     const committed = await this.deps.repository.commit(job.id, { ...update, nextPollAt });
+    if (!committed) return 'skipped';
     await this.deps.enqueue(job.id, delaySeconds);
     await this.safeNotify(committed);
     return 'advanced';

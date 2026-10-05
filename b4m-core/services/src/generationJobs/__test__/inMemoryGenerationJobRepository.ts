@@ -17,6 +17,10 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
   const jobs = new Map<string, IGenerationJobDocument>();
   let sequence = 0;
   const isTerminal = (job: IGenerationJob) => TERMINAL_GENERATION_JOB_STATES.includes(job.state);
+  // Every write bumps updatedAt, like Mongoose timestamps:true on updateOne / findOneAndUpdate.
+  const touch = (job: IGenerationJobDocument) => {
+    job.updatedAt = now();
+  };
   const clone = (job: IGenerationJobDocument | undefined) => (job ? structuredClone(job) : null);
 
   const repository = {
@@ -60,12 +64,15 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       const leasable = !isTerminal(job) || !job.terminalHandledAt;
       if (!free || !leasable) return null;
       job.leaseUntil = leaseUntil;
+      touch(job);
       return structuredClone(job);
     },
 
     async markSubmitAttempted(id: string, at: Date) {
       const job = jobs.get(id);
-      if (job) job.submitAttemptedAt = at;
+      if (!job) return;
+      job.submitAttemptedAt = at;
+      touch(job);
     },
 
     async commit(id: string, update: GenerationJobCommit) {
@@ -81,6 +88,7 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       const job = jobs.get(id);
       if (!job || isTerminal(job)) return null;
       job.cancelRequested = true;
+      touch(job);
       return structuredClone(job);
     },
 
@@ -88,12 +96,15 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       const job = jobs.get(id);
       if (!job || !isTerminal(job) || job.terminalHandlingClaimedAt) return false;
       job.terminalHandlingClaimedAt = at;
+      touch(job);
       return true;
     },
 
     async markTerminalHandled(id: string, at: Date) {
       const job = jobs.get(id);
-      if (job) job.terminalHandledAt = at;
+      if (!job) return;
+      job.terminalHandledAt = at;
+      touch(job);
     },
 
     async findStalled(overdueBefore: Date, limit: number) {
