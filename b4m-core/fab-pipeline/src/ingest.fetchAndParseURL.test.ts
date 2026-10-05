@@ -11,6 +11,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  APP_NAME: 'TestApp',
+  WEBSITE_URL: 'https://example.test',
+}));
 
 import { fetchAndParseURL } from './ingest';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
@@ -106,7 +111,9 @@ describe('fetchAndParseURL redirect handling', () => {
 
     await fetchAndParseURL(PUBLIC_URL, { logger });
 
-    expect(axiosGet.mock.calls[0][1].headers['User-Agent']).toMatch(/compatible;/);
+    expect(axiosGet.mock.calls[0][1].headers['User-Agent']).toBe(
+      'Mozilla/5.0 (compatible; TestApp/1.0; +https://example.test)'
+    );
   });
 
   it('gives up after too many redirects instead of looping', async () => {
