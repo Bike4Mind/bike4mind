@@ -167,20 +167,24 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
   });
 
   it('marks which cited files of an open finding are superseded in the resolved lake', async () => {
+    // `c` is cited only by the closed row and `d` only by the second open row, so a dropped
+    // open-only filter (c reaches the lookup) and a page-wide mapping (f1 would also get `d`) both fail.
     h.listByLake.mockResolvedValue([
       { id: 'f1', status: 'open', sources: [{ fabFileId: 'a' }, { fabFileId: 'b' }] },
-      { id: 'f2', status: 'resolved', sources: [{ fabFileId: 'b' }] },
+      { id: 'f2', status: 'resolved', sources: [{ fabFileId: 'c' }] },
+      { id: 'f3', status: 'open', sources: [{ fabFileId: 'd' }, { fabFileId: 'e' }] },
     ]);
-    h.listLakeSupersededIds.mockResolvedValue(['b']);
+    h.listLakeSupersededIds.mockResolvedValue(['b', 'c', 'd']);
 
     const { json, done } = invoke();
     await done;
 
     // One batched read for the page, scoped to the resolved lake id and to OPEN rows only.
     expect(h.listLakeSupersededIds).toHaveBeenCalledTimes(1);
-    expect(h.listLakeSupersededIds).toHaveBeenCalledWith(['a', 'b'], 'lakeDoc1');
+    expect(h.listLakeSupersededIds).toHaveBeenCalledWith(['a', 'b', 'd', 'e'], 'lakeDoc1');
     const [{ data }] = json.mock.calls[0];
-    expect(data.map((row: { supersededFabFileIds: string[] }) => row.supersededFabFileIds)).toEqual([['b'], []]);
+    // The closed row stays [] even though its file is ruled in the lake.
+    expect(data.map((row: { supersededFabFileIds: string[] }) => row.supersededFabFileIds)).toEqual([['b'], [], ['d']]);
   });
 
   it('reports hasMore, and trims the lookahead row, when the queue outruns the page', async () => {
