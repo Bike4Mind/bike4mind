@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { Logger } from '@bike4mind/observability';
 
 const h = vi.hoisted(() => ({
@@ -53,6 +50,7 @@ vi.mock('sst', () => ({
 
 import {
   dispatchQuestCallback,
+  GENERATION_CALLBACK_REDISPATCH_HORIZON_MS,
   GENERATION_CALLBACK_STALE_DISPATCH_MS,
   redispatchStaleQuestCallback,
 } from './dispatchQuestCallback';
@@ -150,7 +148,11 @@ describe('dispatchQuestCallback', () => {
 });
 
 describe('redispatchStaleQuestCallback', () => {
-  const criteria = { dispatchedBefore: new Date('2026-01-01T00:00:00Z'), maxRedispatches: 3 };
+  const criteria = {
+    dispatchedBefore: new Date('2026-01-01T00:00:00Z'),
+    dispatchedAfter: new Date('2025-12-29T00:00:00Z'),
+    maxRedispatches: 3,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -162,7 +164,7 @@ describe('redispatchStaleQuestCallback', () => {
     h.reclaimStaleCallbackDispatch.mockResolvedValue('quest_quest-1_event');
     h.sendMessage.mockResolvedValue('message-id-1');
 
-    await redispatchStaleQuestCallback('quest-1', criteria, makeLogger());
+    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBe(true);
 
     expect(h.reclaimStaleCallbackDispatch).toHaveBeenCalledWith('quest-1', criteria);
     expect(h.claimCallbackDispatch).not.toHaveBeenCalled();
@@ -175,7 +177,7 @@ describe('redispatchStaleQuestCallback', () => {
   it('does not send when the reclaim matched nothing (inside the window, or another sweep won)', async () => {
     h.reclaimStaleCallbackDispatch.mockResolvedValue(null);
 
-    await redispatchStaleQuestCallback('quest-1', criteria, makeLogger());
+    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBe(false);
 
     expect(h.sendMessage).not.toHaveBeenCalled();
   });
@@ -185,34 +187,20 @@ describe('redispatchStaleQuestCallback', () => {
     h.sendMessage.mockRejectedValue(new Error('SQS is down'));
     h.releaseCallbackDispatch.mockResolvedValue(undefined);
 
-    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBeUndefined();
+    await expect(redispatchStaleQuestCallback('quest-1', criteria, makeLogger())).resolves.toBe(false);
 
     expect(h.releaseCallbackDispatch).toHaveBeenCalledWith('quest-1', 'quest_quest-1_event');
   });
 });
 
 describe('GENERATION_CALLBACK_STALE_DISPATCH_MS', () => {
-  // The window is derived from these constants, so pin them to the queue they mirror: a retry or
-  // visibility bump in infra alone would otherwise let the sweep race a delivery still retrying.
-  const queuesSource = readFileSync(
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../infra/queues.ts'),
-    'utf8'
-  );
-  const queueBlock = queuesSource.match(/new sst\.aws\.Queue\('generationCallbackQueue',\s*\{[\s\S]*?\n\}\);/)?.[0];
-
-  it('finds the generationCallbackQueue declaration in infra/queues.ts', () => {
-    expect(queueBlock).toBeDefined();
-  });
-
-  it('mirrors the queue retry count and visibility timeout', () => {
-    expect(queueBlock).toMatch(new RegExp(`retry: ${GENERATION_CALLBACK_MAX_RECEIVE_COUNT},`));
-    expect(queueBlock).toMatch(
-      new RegExp(`visibilityTimeout: '${GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC / 60} minutes'`)
-    );
-  });
-
+  // The queue constants are pinned to infra/queues.ts in sqsDelivery.test.ts.
   it('outlasts every receive the queue can still make', () => {
     const longestDeliveryMs = GENERATION_CALLBACK_MAX_RECEIVE_COUNT * GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC * 1000;
     expect(GENERATION_CALLBACK_STALE_DISPATCH_MS).toBeGreaterThan(longestDeliveryMs);
+  });
+
+  it('leaves room for reclaims before the re-send horizon', () => {
+    expect(GENERATION_CALLBACK_REDISPATCH_HORIZON_MS).toBeGreaterThan(GENERATION_CALLBACK_STALE_DISPATCH_MS);
   });
 });

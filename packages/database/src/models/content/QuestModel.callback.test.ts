@@ -351,8 +351,13 @@ describe('questRepository.findUndispatchedCallbacks', () => {
 });
 
 describe('stale dispatched callbacks', () => {
-  const WINDOW_MS = 15 * 60 * 1000;
-  const criteria = () => ({ dispatchedBefore: new Date(Date.now() - WINDOW_MS), maxRedispatches: 3 });
+  const WINDOW_MS = 6 * 60 * 60 * 1000;
+  const HORIZON_MS = 72 * 60 * 60 * 1000;
+  const criteria = () => ({
+    dispatchedBefore: new Date(Date.now() - WINDOW_MS),
+    dispatchedAfter: new Date(Date.now() - HORIZON_MS),
+    maxRedispatches: 3,
+  });
 
   async function dispatchedQuest(dispatchedAgoMs: number, redispatchCount?: number) {
     const quest = await Quest.create(seed({ status: 'done' }));
@@ -373,11 +378,12 @@ describe('stale dispatched callbacks', () => {
   }
 
   describe('questRepository.findStaleDispatchedCallbacks', () => {
-    it('matches only dispatched claims past the window with reclaims left', async () => {
+    it('matches only dispatched claims between the window and the horizon with reclaims left', async () => {
       const stale = await dispatchedQuest(WINDOW_MS + 60_000);
       const reclaimedOnce = await dispatchedQuest(WINDOW_MS + 60_000, 2);
       await dispatchedQuest(WINDOW_MS - 60_000); // still inside the delivery window
       await dispatchedQuest(WINDOW_MS + 60_000, 3); // reclaims used up
+      await dispatchedQuest(HORIZON_MS + 60_000); // past the re-send horizon
 
       const pending = await Quest.create(seed({ status: 'done' }));
       await questRepository.armCallback(pending._id.toString(), CALLBACK);
@@ -431,6 +437,13 @@ describe('stale dispatched callbacks', () => {
       const after = await questRepository.findCallbackById(id);
       expect(after!.dispatchedAt).toEqual(before!.dispatchedAt);
       expect(after!.redispatchCount).toBeUndefined();
+    });
+
+    it('does not touch a claim past the re-send horizon', async () => {
+      const id = await dispatchedQuest(HORIZON_MS + 60_000);
+
+      await expect(questRepository.reclaimStaleCallbackDispatch(id, criteria())).resolves.toBeNull();
+      expect((await questRepository.findCallbackById(id))!.redispatchCount).toBeUndefined();
     });
 
     it('stops once the reclaims are used up', async () => {

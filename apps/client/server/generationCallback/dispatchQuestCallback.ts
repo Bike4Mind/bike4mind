@@ -2,10 +2,6 @@ import { questRepository, type StaleCallbackDispatchCriteria } from '@bike4mind/
 import type { Logger } from '@bike4mind/observability';
 import { SQSService } from '@bike4mind/utils';
 import { Resource } from 'sst';
-import {
-  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
-  GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
-} from '@server/queueHandlers/sqsDelivery';
 import type { GenerationCallbackMessage } from './messages';
 
 /**
@@ -20,14 +16,20 @@ export function getGenerationCallbackQueueUrl(): string | undefined {
 }
 
 /**
- * How long a claim stays `dispatched` before the sweep treats its queue message as lost. Every
- * receive hides the message for the visibility timeout, so a delivery still retrying is at most
- * this old; the margin covers receive latency and Lambda throttling. Shorter would race a live
- * message with a second one, which at-least-once delivery does not excuse.
+ * How long a claim stays `dispatched` before the sweep treats its queue message as lost. The
+ * receive retries bound only the time after a message is first received, not how long it waits
+ * behind a backlog (the consumer is concurrency-capped, and a slow webhook endpoint stalls it), so
+ * a message still queued is indistinguishable from a lost one by age alone. A lost message is rare
+ * and latency-insensitive, so the window is set far past any plausible backlog: re-enqueueing a
+ * backlogged message would add load to the queue that is already behind.
  */
-const STALE_DISPATCH_MARGIN_MS = 5 * 60 * 1000;
-export const GENERATION_CALLBACK_STALE_DISPATCH_MS =
-  GENERATION_CALLBACK_MAX_RECEIVE_COUNT * GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC * 1000 + STALE_DISPATCH_MARGIN_MS;
+export const GENERATION_CALLBACK_STALE_DISPATCH_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Oldest claim the sweep will re-send. Without it, the first runs after deploy would deliver
+ * completions weeks old to a caller that has long stopped waiting.
+ */
+export const GENERATION_CALLBACK_REDISPATCH_HORIZON_MS = 72 * 60 * 60 * 1000;
 
 /**
  * Stale-dispatch reclaims allowed per arm. A message lost once is re-enqueued; one the handler
@@ -54,22 +56,22 @@ export async function dispatchQuestCallback(questId: string, logger: Logger): Pr
 
 /**
  * Re-enqueue a callback stuck at `dispatched` whose message was lost (see
- * reclaimStaleCallbackDispatch). The questTimeoutSweep backstop is the only caller. Same
- * never-throws and release-on-failure contract as dispatchQuestCallback.
+ * reclaimStaleCallbackDispatch). Same never-throws and release-on-failure contract as
+ * dispatchQuestCallback. Resolves true only when a message was actually sent.
  */
 export async function redispatchStaleQuestCallback(
   questId: string,
   criteria: StaleCallbackDispatchCriteria,
   logger: Logger
-): Promise<void> {
-  await enqueueClaimedCallback(questId, logger, () => questRepository.reclaimStaleCallbackDispatch(questId, criteria));
+): Promise<boolean> {
+  return enqueueClaimedCallback(questId, logger, () => questRepository.reclaimStaleCallbackDispatch(questId, criteria));
 }
 
 async function enqueueClaimedCallback(
   questId: string,
   logger: Logger,
   claim: () => Promise<string | null>
-): Promise<void> {
+): Promise<boolean> {
   let claimedEventId: string | null = null;
   try {
     const queueUrl = getGenerationCallbackQueueUrl();
@@ -77,21 +79,23 @@ async function enqueueClaimedCallback(
     // a deployment that dropped the queue after arming; leave the callback as it is, not claimed.
     if (!queueUrl) {
       logger.warn('generationCallbackQueue not configured; leaving callback unclaimed', { questId });
-      return;
+      return false;
     }
     claimedEventId = await claim();
-    if (!claimedEventId) return;
+    if (!claimedEventId) return false;
 
     const message: GenerationCallbackMessage = { questId, eventId: claimedEventId };
     await new SQSService().sendMessage(queueUrl, message);
     logger.info('Generation callback dispatched', { questId });
+    return true;
   } catch (error) {
     logger.error('Failed to dispatch generation callback; the sweep will retry it', { questId, error });
-    if (!claimedEventId) return;
+    if (!claimedEventId) return false;
     await questRepository
       .releaseCallbackDispatch(questId, claimedEventId)
       .catch(releaseError =>
         logger.error('Failed to release generation callback claim', { questId, error: releaseError })
       );
+    return false;
   }
 }

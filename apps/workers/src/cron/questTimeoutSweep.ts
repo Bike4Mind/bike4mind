@@ -30,6 +30,7 @@ import { resolveQuestTimeoutRecovery, QUEST_TIMEOUT_THRESHOLD_MS } from '@server
 import {
   dispatchQuestCallback,
   GENERATION_CALLBACK_MAX_REDISPATCHES,
+  GENERATION_CALLBACK_REDISPATCH_HORIZON_MS,
   GENERATION_CALLBACK_STALE_DISPATCH_MS,
   redispatchStaleQuestCallback,
 } from '@server/generationCallback/dispatchQuestCallback';
@@ -130,15 +131,20 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   }
 
   // Not gated on having stuck quests: a missed callback is independent of timeout recovery.
-  const callbacksRedispatched = (await redispatchMissedCallbacks(nowMs)) + (await redispatchStaleCallbacks(nowMs));
+  const callbacksRedispatched = await redispatchMissedCallbacks(nowMs);
+  const staleCallbacksReenqueued = await redispatchStaleCallbacks(nowMs);
 
   logger.info('[QuestTimeoutSweep] Sweep complete', {
     candidates: staleQuests.length,
     recovered,
     callbacksRedispatched,
+    staleCallbacksReenqueued,
   });
   await metric('TimeoutSweepRecovered', recovered);
   await metric('TimeoutSweepCallbacksRedispatched', callbacksRedispatched);
+  // Its own metric: a message lost after its claim is a different failure from a claim never made,
+  // and its rate is the one worth alerting on.
+  await metric('TimeoutSweepStaleCallbacksReenqueued', staleCallbacksReenqueued);
 
   return { status: 'OK', recovered };
 }
@@ -162,22 +168,27 @@ async function redispatchMissedCallbacks(nowMs: number): Promise<number> {
   }
 }
 
-/** Backstop for generation callbacks claimed `dispatched` whose queue message was lost. */
+/**
+ * Backstop for generation callbacks claimed `dispatched` whose queue message was lost. Returns the
+ * re-sends that actually went out, not the candidates read.
+ */
 async function redispatchStaleCallbacks(nowMs: number): Promise<number> {
   try {
     const criteria = {
       dispatchedBefore: new Date(nowMs - GENERATION_CALLBACK_STALE_DISPATCH_MS),
+      dispatchedAfter: new Date(nowMs - GENERATION_CALLBACK_REDISPATCH_HORIZON_MS),
       maxRedispatches: GENERATION_CALLBACK_MAX_REDISPATCHES,
     };
     const questIds = await questRepository.findStaleDispatchedCallbacks({
       ...criteria,
       limit: CALLBACK_BACKSTOP_LIMIT,
     });
+    let reenqueued = 0;
     for (const questId of questIds) {
       logger.warn('[QuestTimeoutSweep] Re-enqueueing generation callback stuck at dispatched', { questId });
-      await redispatchStaleQuestCallback(questId, criteria, logger);
+      if (await redispatchStaleQuestCallback(questId, criteria, logger)) reenqueued++;
     }
-    return questIds.length;
+    return reenqueued;
   } catch (err) {
     logger.error('[QuestTimeoutSweep] Stale generation callback backstop failed', { err });
     return 0;

@@ -845,14 +845,20 @@ export const TERMINAL_QUEST_STATUSES: readonly NonNullable<IChatHistoryItemDocum
 export type StaleCallbackDispatchCriteria = {
   /** Claims made before this are past every delivery the queue could still be retrying. */
   dispatchedBefore: Date;
+  /** Claims made before this are too old to re-send: the caller has stopped waiting for them. */
+  dispatchedAfter: Date;
   /** Reclaims allowed per arm; a callback that has used them all is left for a human. */
   maxRedispatches: number;
 };
 
-function staleCallbackDispatchFilter({ dispatchedBefore, maxRedispatches }: StaleCallbackDispatchCriteria) {
+function staleCallbackDispatchFilter({
+  dispatchedBefore,
+  dispatchedAfter,
+  maxRedispatches,
+}: StaleCallbackDispatchCriteria) {
   return {
     'callback.state': 'dispatched',
-    'callback.dispatchedAt': { $lt: dispatchedBefore },
+    'callback.dispatchedAt': { $lt: dispatchedBefore, $gte: dispatchedAfter },
     // $not rather than $lt, so a callback never reclaimed (field absent) also matches.
     'callback.redispatchCount': { $not: { $gte: maxRedispatches } },
   };
@@ -1336,7 +1342,8 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
 
   /**
    * The `dispatched -> dispatched` re-claim of a callback whose queue message is gone: its claim
-   * is older than every delivery the queue could still be retrying, and it has reclaims left. The
+   * is older than every delivery the queue could still be retrying but not past the re-send
+   * horizon, and it has reclaims left. The
    * same atomic shape as claimCallbackDispatch, so concurrent sweeps re-enqueue it once: moving
    * `dispatchedAt` forward takes the callback out of the stale window. Returns the claimed event
    * id, kept so the receiver dedupes a redelivery, or null when nothing matched.

@@ -21,7 +21,8 @@ vi.mock('@bike4mind/database', () => ({
 vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
   dispatchQuestCallback: (...args: unknown[]) => mockDispatchQuestCallback(...args),
   redispatchStaleQuestCallback: (...args: unknown[]) => mockRedispatchStaleQuestCallback(...args),
-  GENERATION_CALLBACK_STALE_DISPATCH_MS: 15 * 60 * 1000,
+  GENERATION_CALLBACK_STALE_DISPATCH_MS: 6 * 60 * 60 * 1000,
+  GENERATION_CALLBACK_REDISPATCH_HORIZON_MS: 72 * 60 * 60 * 1000,
   GENERATION_CALLBACK_MAX_REDISPATCHES: 3,
 }));
 
@@ -77,7 +78,7 @@ describe('questTimeoutSweep cron', () => {
     mockFindUndispatchedCallbacks.mockResolvedValue([]);
     mockFindStaleDispatchedCallbacks.mockResolvedValue([]);
     mockDispatchQuestCallback.mockResolvedValue(undefined);
-    mockRedispatchStaleQuestCallback.mockResolvedValue(undefined);
+    mockRedispatchStaleQuestCallback.mockResolvedValue(true);
   });
 
   it('returns zero recovered when no stuck quests exist', async () => {
@@ -276,17 +277,42 @@ describe('questTimeoutSweep cron', () => {
     const [opts] = mockFindStaleDispatchedCallbacks.mock.calls[0];
     expect(opts.limit).toBe(100);
     expect(opts.maxRedispatches).toBe(3);
-    const windowMs = 15 * 60 * 1000;
+    const windowMs = 6 * 60 * 60 * 1000;
     expect(Date.now() - opts.dispatchedBefore.getTime()).toBeGreaterThanOrEqual(windowMs);
     expect(Date.now() - opts.dispatchedBefore.getTime()).toBeLessThan(windowMs + 60_000);
+    const horizonMs = 72 * 60 * 60 * 1000;
+    expect(Date.now() - opts.dispatchedAfter.getTime()).toBeGreaterThanOrEqual(horizonMs);
+    expect(Date.now() - opts.dispatchedAfter.getTime()).toBeLessThan(horizonMs + 60_000);
 
     expect(mockRedispatchStaleQuestCallback).toHaveBeenCalledWith(
       'q-stuck',
-      { dispatchedBefore: opts.dispatchedBefore, maxRedispatches: 3 },
+      { dispatchedBefore: opts.dispatchedBefore, dispatchedAfter: opts.dispatchedAfter, maxRedispatches: 3 },
       expect.anything()
     );
     expect(mockDispatchQuestCallback).toHaveBeenCalledWith('q-missed', expect.anything());
-    expect(metricValue('TimeoutSweepCallbacksRedispatched')).toBe(2);
+    expect(metricValue('TimeoutSweepCallbacksRedispatched')).toBe(1);
+    expect(metricValue('TimeoutSweepStaleCallbacksReenqueued')).toBe(1);
+  });
+
+  it('counts only the stale re-sends that actually went out', async () => {
+    mockFindStaleDispatchedCallbacks.mockResolvedValue(['q-sent', 'q-lost-race']);
+    mockRedispatchStaleQuestCallback.mockImplementation(async (questId: string) => questId === 'q-sent');
+
+    await handler();
+
+    expect(mockRedispatchStaleQuestCallback).toHaveBeenCalledTimes(2);
+    expect(metricValue('TimeoutSweepStaleCallbacksReenqueued')).toBe(1);
+  });
+
+  it('still runs the stale-dispatch backstop when the pending backstop read fails', async () => {
+    mockFindUndispatchedCallbacks.mockRejectedValue(new Error('cannot reach primary'));
+    mockFindStaleDispatchedCallbacks.mockResolvedValue(['q-stuck']);
+
+    const result = await handler();
+
+    expect(result).toEqual({ status: 'OK', recovered: 0 });
+    expect(mockRedispatchStaleQuestCallback).toHaveBeenCalledWith('q-stuck', expect.anything(), expect.anything());
+    expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
   });
 
   it('still runs the pending backstop when the stale-dispatch read fails', async () => {
