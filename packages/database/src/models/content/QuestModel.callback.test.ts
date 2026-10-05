@@ -349,3 +349,106 @@ describe('questRepository.findUndispatchedCallbacks', () => {
     expect(limited).toEqual([older._id.toString(), middle._id.toString()]);
   });
 });
+
+describe('stale dispatched callbacks', () => {
+  const WINDOW_MS = 15 * 60 * 1000;
+  const criteria = () => ({ dispatchedBefore: new Date(Date.now() - WINDOW_MS), maxRedispatches: 3 });
+
+  async function dispatchedQuest(dispatchedAgoMs: number, redispatchCount?: number) {
+    const quest = await Quest.create(seed({ status: 'done' }));
+    const id = quest._id.toString();
+    await questRepository.armCallback(id, CALLBACK);
+    await questRepository.claimCallbackDispatch(id);
+    // Raw write, as backdate() above: the claim stamps dispatchedAt with "now".
+    await Quest.collection.updateOne(
+      { _id: quest._id },
+      {
+        $set: {
+          'callback.dispatchedAt': new Date(Date.now() - dispatchedAgoMs),
+          ...(redispatchCount !== undefined && { 'callback.redispatchCount': redispatchCount }),
+        },
+      }
+    );
+    return id;
+  }
+
+  describe('questRepository.findStaleDispatchedCallbacks', () => {
+    it('matches only dispatched claims past the window with reclaims left', async () => {
+      const stale = await dispatchedQuest(WINDOW_MS + 60_000);
+      const reclaimedOnce = await dispatchedQuest(WINDOW_MS + 60_000, 2);
+      await dispatchedQuest(WINDOW_MS - 60_000); // still inside the delivery window
+      await dispatchedQuest(WINDOW_MS + 60_000, 3); // reclaims used up
+
+      const pending = await Quest.create(seed({ status: 'done' }));
+      await questRepository.armCallback(pending._id.toString(), CALLBACK);
+
+      const delivered = await dispatchedQuest(WINDOW_MS + 60_000);
+      const eventId = (await questRepository.findCallbackById(delivered))!.eventId;
+      await questRepository.recordCallbackAttempt(delivered, eventId, { state: 'delivered', statusCode: 200 });
+
+      const ids = await questRepository.findStaleDispatchedCallbacks({ ...criteria(), limit: 10 });
+
+      expect(ids.sort()).toEqual([stale, reclaimedOnce].sort());
+    });
+
+    it('sorts oldest claim first and respects the limit', async () => {
+      const newest = await dispatchedQuest(WINDOW_MS + 60_000);
+      const oldest = await dispatchedQuest(WINDOW_MS + 180_000);
+      const middle = await dispatchedQuest(WINDOW_MS + 120_000);
+
+      await expect(questRepository.findStaleDispatchedCallbacks({ ...criteria(), limit: 10 })).resolves.toEqual([
+        oldest,
+        middle,
+        newest,
+      ]);
+      await expect(questRepository.findStaleDispatchedCallbacks({ ...criteria(), limit: 2 })).resolves.toEqual([
+        oldest,
+        middle,
+      ]);
+    });
+  });
+
+  describe('questRepository.reclaimStaleCallbackDispatch', () => {
+    it('returns the original event id, moves dispatchedAt to now and counts the reclaim', async () => {
+      const id = await dispatchedQuest(WINDOW_MS + 60_000);
+      const before = await questRepository.findCallbackById(id);
+
+      const eventId = await questRepository.reclaimStaleCallbackDispatch(id, criteria());
+
+      expect(eventId).toBe(before!.eventId);
+      const after = await questRepository.findCallbackById(id);
+      expect(after!.state).toBe('dispatched');
+      expect(after!.redispatchCount).toBe(1);
+      expect(Date.now() - after!.dispatchedAt!.getTime()).toBeLessThan(60_000);
+    });
+
+    it('does not touch a claim still inside the delivery window', async () => {
+      const id = await dispatchedQuest(WINDOW_MS - 60_000);
+      const before = await questRepository.findCallbackById(id);
+
+      await expect(questRepository.reclaimStaleCallbackDispatch(id, criteria())).resolves.toBeNull();
+
+      const after = await questRepository.findCallbackById(id);
+      expect(after!.dispatchedAt).toEqual(before!.dispatchedAt);
+      expect(after!.redispatchCount).toBeUndefined();
+    });
+
+    it('stops once the reclaims are used up', async () => {
+      const id = await dispatchedQuest(WINDOW_MS + 60_000, 3);
+
+      await expect(questRepository.reclaimStaleCallbackDispatch(id, criteria())).resolves.toBeNull();
+    });
+
+    it('under 5 concurrent reclaims of one stale callback, exactly one succeeds', async () => {
+      const id = await dispatchedQuest(WINDOW_MS + 60_000);
+      const shared = criteria();
+
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () => questRepository.reclaimStaleCallbackDispatch(id, shared))
+      );
+
+      expect(results.filter(Boolean)).toHaveLength(1);
+      expect((await questRepository.findCallbackById(id))!.redispatchCount).toBe(1);
+    });
+  });
+});
