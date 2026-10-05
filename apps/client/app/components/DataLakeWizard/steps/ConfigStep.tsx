@@ -22,7 +22,8 @@ import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dat
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
 import { slugifyDataLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
-import { useDataLakeSlugPreview, useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { activeOrgId, useDataLakeSlugPreview, useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { canReuseRecoverableLake } from '@client/app/hooks/data/dataLakeUploadPipeline';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
@@ -48,9 +49,16 @@ export default function ConfigStep() {
   // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
   // on the source step; they appear here read-only in the summary. Create mode asks the server,
   // because a lake (even a deleted one) already holding the slug pushes the new one to "-1";
-  // slugify is only the fallback while that loads or if it fails.
-  const slugPreview = useDataLakeSlugPreview(config.name, !targetLake && !!config.name);
-  const slug = targetLake ? targetLake.slug : (slugPreview.data ?? slugifyDataLakeName(config.name));
+  // slugify is only the fallback while that loads or if it fails. A retry that will restore the
+  // lake a failed attempt archived (same rule as resolveCreateModeLake) keeps that lake's slug.
+  const recoverableLake = useDataLakeWizardStore(s => s.recoverableLake);
+  const reusedLake = canReuseRecoverableLake(recoverableLake, submittedTagPrefix(config.tagPrefix), activeOrgId())
+    ? recoverableLake
+    : null;
+  const slugPreview = useDataLakeSlugPreview(config.name, !targetLake && !reusedLake && !!config.name);
+  const slug = targetLake
+    ? targetLake.slug
+    : (reusedLake?.slug ?? slugPreview.data ?? slugifyDataLakeName(config.name));
 
   // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
   // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).

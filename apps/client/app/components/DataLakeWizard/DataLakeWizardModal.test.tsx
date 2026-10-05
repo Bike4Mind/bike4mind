@@ -39,6 +39,7 @@ const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fi
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
   useDataLakeSlugPreview: () => ({ data: undefined }),
   usePromoteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));

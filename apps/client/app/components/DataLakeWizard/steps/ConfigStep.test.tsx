@@ -19,6 +19,7 @@ const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fi
 const slugPreview = vi.hoisted(() => ({ current: undefined as string | undefined }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
   useDataLakeSlugPreview: () => ({ data: slugPreview.current }),
 }));
 
@@ -210,6 +211,28 @@ describe('ConfigStep - identity summary', () => {
     // A lake (possibly deleted) already holds "legal-contracts", so create would mint "-1".
     slugPreview.current = 'legal-contracts-1';
     seedConfig({ name: 'Legal Contracts' });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts-1')).toBeInTheDocument();
+  });
+
+  it('keeps the slug of the lake a same-prefix retry will restore, not the preview that counts it as taken', () => {
+    // A failed attempt archived "legal-contracts"; the server preview counts it and says "-1".
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts', tagPrefix: 'legal:' });
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts')).toBeInTheDocument();
+    expect(screen.queryByText('legal-contracts-1')).not.toBeInTheDocument();
+  });
+
+  it('shows the server preview once the prefix changes, since that retry creates a fresh lake', () => {
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts', tagPrefix: 'other:' });
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
 
     renderStep();
 
