@@ -65,6 +65,36 @@ describe('SelfHostWorker', () => {
     expect(() => worker.registerQueueHandler('q', 'http://sqs/q', vi.fn(), { batchSize })).toThrow('batchSize');
   });
 
+  it('reports the 24h no-deadline sentinel when no runBudgetMs is registered', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const dispatch = vi.fn().mockResolvedValue(undefined);
+    drainOnce(worker, [makeMessage()]);
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch);
+
+    worker.start();
+
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    const [, context] = dispatch.mock.calls[0];
+    expect(context.getRemainingTimeInMillis()).toBe(24 * 60 * 60 * 1000);
+    worker.stop();
+  });
+
+  it('reports a deadline bounded by runBudgetMs when the handler is registered with one', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const dispatch = vi.fn().mockResolvedValue(undefined);
+    drainOnce(worker, [makeMessage()]);
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch, { runBudgetMs: 60_000 });
+
+    worker.start();
+
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    const [, context] = dispatch.mock.calls[0];
+    const remaining = context.getRemainingTimeInMillis();
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(60_000);
+    worker.stop();
+  });
+
   it('deletes a message after the handler succeeds', async () => {
     const worker = new SelfHostWorker(mockLogger);
     const dispatch = vi.fn().mockResolvedValue(undefined);

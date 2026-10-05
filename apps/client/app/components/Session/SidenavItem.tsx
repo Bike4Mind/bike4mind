@@ -5,6 +5,7 @@ import {
   useCopySessionAsMarkdown,
   useDeleteSession,
   useDownloadSession,
+  useMoveSession,
   useExportSessionToExcel,
   useExportSessionToWord,
   useExportSessionToHtml,
@@ -15,7 +16,7 @@ import {
 } from '@client/app/hooks/data/sessions';
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
-import { ISessionDocument, ISessionFavoriteItem, InviteType } from '@bike4mind/common';
+import { ISessionDocument, ISessionFavoriteItem, InviteType, type WorkspaceSurface } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import CloseIcon from '@mui/icons-material/Close';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
@@ -72,6 +73,9 @@ import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { useTriggerProactiveMessages } from '@client/app/hooks/data/agentProactiveMessaging';
 import { useSessionUnreadCount } from '@client/app/hooks/useUnreadProactiveMessages';
 import { green, greenAlpha } from '@client/app/utils/themes/colors';
+import { useWorkspaceTargets } from '@client/app/hooks/useWorkspaceTargets';
+import WorkspaceTargetMenuItems from '@client/app/components/Session/WorkspaceTargetMenuItems';
+import MoveSessionConfirmModal from '@client/app/components/Session/MoveSessionConfirmModal';
 
 /**
  * Classify message count into two tiers:
@@ -126,6 +130,9 @@ const SessionSidenavItem: FC<{
   const [openNotebookCurationModal, toggleNotebookCurationModal] = useToggle();
   const { openModal } = useProjectAddToModal();
   const cloneSession = useCloneSession();
+  const moveSession = useMoveSession();
+  const { current: currentWorkspace, copyTargets, moveTargets } = useWorkspaceTargets(session);
+  const [pendingMove, setPendingMove] = useState<WorkspaceSurface | null>(null);
   const copySessionAsMarkdown = useCopySessionAsMarkdown();
   const downloadSession = useDownloadSession();
   const exportToExcel = useExportSessionToExcel();
@@ -177,6 +184,7 @@ const SessionSidenavItem: FC<{
   const isProcessing =
     downloadSession.isPending ||
     cloneSession.isPending ||
+    moveSession.isPending ||
     summarizeSession.isPending ||
     updateSessionTags.isPending ||
     deleteSession.isPending ||
@@ -216,6 +224,30 @@ const SessionSidenavItem: FC<{
   const handleCloneSession = useCallback(() => {
     cloneSession.mutate(session.id);
   }, [cloneSession, session.id]);
+
+  // Picking the session's own workspace is a plain clone; any other names its destination.
+  const handleCloneInto = useCallback(
+    (target: WorkspaceSurface) => {
+      cloneSession.mutate(
+        target.id === currentWorkspace?.id ? session.id : { sessionId: session.id, targetSurface: target.id }
+      );
+    },
+    [cloneSession, currentWorkspace, session.id]
+  );
+
+  const handleMoveConfirm = useCallback(async () => {
+    if (!pendingMove) return;
+    try {
+      await moveSession.mutateAsync({ sessionId: session.id, targetSurface: pendingMove.id });
+      // The open notebook just left the workspace being viewed: follow it to its new home.
+      if (isSelected) navigate({ href: pendingMove.sessionHref(session.id) });
+    } catch {
+      // useMoveSession already reports the failure.
+    }
+    setPendingMove(null);
+  }, [pendingMove, moveSession, session.id, isSelected, navigate]);
+
+  const handleMoveCancel = useCallback(() => setPendingMove(null), []);
 
   const handleDownloadSession = useCallback(() => {
     downloadSession.mutate(session);
@@ -298,6 +330,39 @@ const SessionSidenavItem: FC<{
   const handleCloseSessionModal = useCallback(() => {
     setOpenSessionModal(false);
   }, []);
+
+  // Rendered in both menu variants (header dropdown and row menu).
+  const workspaceMenuItems = (
+    <>
+      {copyTargets.length > 1 ? (
+        <WorkspaceTargetMenuItems
+          label="Clone into"
+          targets={copyTargets}
+          currentId={currentWorkspace?.id}
+          testIdPrefix="session-menu-clone-into"
+          onSelect={handleCloneInto}
+          disabled={cloneSession.isPending}
+        />
+      ) : (
+        <MenuItem
+          onClick={handleCloneSession}
+          className="sidenav-item-menuitem-clone"
+          data-testid="sidenav-item-menuitem-clone"
+        >
+          <FolderCopyIcon /> {t('notebooks.clone')}
+        </MenuItem>
+      )}
+      {moveTargets.length > 0 && (
+        <WorkspaceTargetMenuItems
+          label="Move to"
+          targets={moveTargets}
+          testIdPrefix="session-menu-move-to"
+          onSelect={setPendingMove}
+          disabled={moveSession.isPending}
+        />
+      )}
+    </>
+  );
 
   const ShareModal = useMemo(
     () =>
@@ -512,9 +577,7 @@ const SessionSidenavItem: FC<{
                   </MenuItem>
                 </>
               )}
-              <MenuItem onClick={handleCloneSession} className="sidenav-item-menuitem-clone">
-                <FolderCopyIcon /> {t('notebooks.clone')}
-              </MenuItem>
+              {workspaceMenuItems}
               <MenuItem onClick={handleDownloadSession} className="sidenav-item-menuitem-download">
                 <DownloadIcon /> {t('notebooks.download')}
               </MenuItem>
@@ -854,9 +917,7 @@ const SessionSidenavItem: FC<{
                     </MenuItem>
                   </>
                 )}
-                <MenuItem onClick={handleCloneSession} className="sidenav-item-menuitem-clone">
-                  <FolderCopyIcon /> {t('notebooks.clone')}
-                </MenuItem>
+                {workspaceMenuItems}
                 <MenuItem onClick={handleDownloadSession} className="sidenav-item-menuitem-download">
                   <DownloadIcon /> {t('notebooks.download')}
                 </MenuItem>
@@ -962,6 +1023,15 @@ const SessionSidenavItem: FC<{
         forwardButtonText="Delete"
         backwardButtonText="Cancel"
         loading={deleteSession.isPending}
+      />
+      <MoveSessionConfirmModal
+        open={!!pendingMove}
+        sessionName={displayName}
+        from={currentWorkspace}
+        to={pendingMove}
+        loading={moveSession.isPending}
+        onConfirm={handleMoveConfirm}
+        onCancel={handleMoveCancel}
       />
       {openNotebookCurationModal && (
         <NotebookCurationModal

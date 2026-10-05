@@ -445,7 +445,6 @@ const processScrape = async (
       logger?.info(`🔗 [LINKS_EXTRACTED] Found ${links.length} total links to analyze`);
 
       researchTask.discoveredLinks ||= [];
-      researchTask.discoveredLinks.forEach(l => (l.status = 'pending'));
       const stats = {
         added: 0,
         updated: 0,
@@ -487,6 +486,9 @@ const processScrape = async (
   await Promise.all(urls.map((url, index) => sequential(async () => scrapeUrl(url, index + 1))));
 
   await queueRunner.close();
+
+  // process() re-reads the task after this returns, so in-memory discoveredLinks would be lost.
+  await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
 };
 
 /**

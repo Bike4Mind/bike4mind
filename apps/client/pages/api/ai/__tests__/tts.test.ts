@@ -37,6 +37,7 @@ vi.mock('@server/middlewares/defineNextRoute', () => ({
 
 vi.mock('@bike4mind/common', () => ({
   UnprocessableEntityError,
+  DEFAULT_TTS_PROVIDER: 'openai',
   synthesizeSpeechContract: { method: 'post', path: '/api/ai/tts', auth: 'apiKeyOrJwt', responses: {} },
   TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },

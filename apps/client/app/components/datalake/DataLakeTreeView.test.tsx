@@ -134,6 +134,31 @@ describe('DataLakeTreeView nodes', () => {
     expect(screen.getByText('No matches')).toBeTruthy();
   });
 
+  describe('nodeDisplay overrides', () => {
+    // books is shown as "Zulu Lake" with 9 members: both its alpha rank (by segment: first) and
+    // its count rank (by fileCount 3: second) move once search/sort read what the row shows.
+    const nodeDisplay = (node: { segment: string }) =>
+      node.segment === 'books' ? { label: 'Zulu Lake', count: 9 } : undefined;
+    const nodes = () => screen.getAllByTestId(/^datalake-node-/).map(el => el.dataset.testid);
+
+    it('sorts by the shown count and the shown label', () => {
+      renderTree({ nodeDisplay });
+      expect(nodes()).toEqual(['datalake-node-books', 'datalake-node-zebra', 'datalake-node-news']);
+      fireEvent.click(screen.getByTestId('datalake-sort-toggle'));
+      expect(nodes()).toEqual(['datalake-node-news', 'datalake-node-zebra', 'datalake-node-books']);
+    });
+
+    it('search matches the shown label as well as the segment', async () => {
+      renderTree({ nodeDisplay });
+      const searchInput = screen.getByTestId('datalake-search').querySelector('input')!;
+      await userEvent.type(searchInput, 'zulu l');
+      expect(nodes()).toEqual(['datalake-node-books']);
+      await userEvent.clear(searchInput);
+      await userEvent.type(searchInput, 'boo');
+      expect(nodes()).toEqual(['datalake-node-books']);
+    });
+  });
+
   it('navigates into a node via the chrome row', () => {
     const { onNavigate } = renderTree();
     fireEvent.click(screen.getByTestId('datalake-node-books'));

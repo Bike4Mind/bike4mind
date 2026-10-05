@@ -11,6 +11,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  APP_NAME: 'TestApp',
+  WEBSITE_URL: 'https://example.test',
+}));
 
 import { fetchAndParseURL } from './ingest';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
@@ -99,6 +104,16 @@ describe('fetchAndParseURL redirect handling', () => {
     // HTTPS_PROXY/HTTP_PROXY from the environment by default and installs its own agent, which
     // displaces ours - so the pin above would silently stop applying wherever a proxy env var is set.
     expect(axiosGet.mock.calls[0][1]).toMatchObject({ proxy: false });
+  });
+
+  it('sends a descriptive User-Agent instead of the axios default', async () => {
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    await fetchAndParseURL(PUBLIC_URL, { logger });
+
+    expect(axiosGet.mock.calls[0][1].headers['User-Agent']).toBe(
+      'Mozilla/5.0 (compatible; TestApp/1.0; +https://example.test)'
+    );
   });
 
   it('gives up after too many redirects instead of looping', async () => {

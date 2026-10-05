@@ -142,12 +142,14 @@ re-deciding per endpoint:
 | Malformed JSON body | `400` | - |
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
-| Valid key, missing scope | `403` | - |
+| Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
+| Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | No provider key configured for this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Rate limit exceeded | `429` | - |
 | Response payload exceeds the platform ceiling | `413` | - (the body carries `fileUrl`) |
 | Referenced resource does not exist | `404` | - |

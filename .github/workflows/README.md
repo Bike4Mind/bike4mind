@@ -49,47 +49,11 @@ For detailed setup instructions, security considerations, and troubleshooting, s
 
 ## What's New Modal Generation
 
-The What's New modal system generates user-facing announcements from daily deployments. It uses a scheduled daily batching approach to prevent notification fatigue during hotfix cycles.
-
-### Workflows
-
-#### `generate-whats-new-modal-staging.yml`
-- **Schedule**: Daily at 9am UTC (3am CST / 4am EST)
-- **Environment**: Staging (dev)
-- **Branch**: `main`
-- **Purpose**: Batches all merged PRs from the last 24 hours into a single modal
-- **Status**: ✅ Active
-
-#### `generate-whats-new-modal-production.yml`
-- **Schedule**: Daily at 10am UTC (2am PST / 5am EST)
-- **Environment**: Production
-- **Branch**: `prod`
-- **Purpose**: Batches all merged PRs from the last 24 hours into a single modal
-- **Status**: ⏸️ Temporarily Disabled (will be enabled after staging validation)
-
-### Architecture
-
-1. **Scheduled Daily Execution**: Workflows run on cron schedule instead of per-PR triggers
-2. **PR Batching**: Queries GitHub Pull Requests API for all merged PRs to target branch from last 24 hours
-3. **Smart Filtering**: Excludes noise (deps updates, typos, CI changes, docs-only) to focus on user-facing changes
-4. **Early Exit**: If no user-facing PRs found in 24-hour window, workflow exits gracefully (no-op)
-5. **Data Collection**: Gathers PR details, commits, and generates changelog context
-6. **SQS Queue**: Sends batched payload to AWS SQS for Lambda processing
-7. **Modal Generation**: Lambda handler generates user-friendly modal using AI with date-based titles
-
-### Dependencies
-
-- **GitHub Secrets** (required):
-  - `WHATS_NEW_AWS_ACCESS_KEY_ID`: AWS IAM access key
-  - `WHATS_NEW_AWS_SECRET_ACCESS_KEY`: AWS IAM secret key
-  - `WHATS_NEW_QUEUE_URL`: SQS queue URL for modal generation
-
-- **AWS Resources**:
-  - SQS Queue: Receives modal generation requests
-  - Lambda Function: Processes requests and generates modals
-  - CloudWatch: Logs and metrics
-
-For detailed operational documentation, see [`/docs/operations/whats-new-automation.md`](/docs/operations/whats-new-automation.md).
+This used to run as scheduled GitHub Actions workflows (`generate-whats-new-modal-staging.yml`,
+`generate-whats-new-modal-production.yml`, `generate-whats-new-modal-reusable.yml`), which have
+since been removed. The batching, filtering, and PR/commit collection they did now run as an
+SST cron job instead: see `infra/cron.ts` (`whatsNewGenerationCron`) and
+`apps/client/server/services/whatsNewDataCollector.ts`.
 
 ## Fork Behavior
 
@@ -106,7 +70,6 @@ Many workflows in this repository include a repository check (`github.repository
 
 The following workflows include repository checks and will not execute in forks:
 
-- ✅ **What's New Modal Generation** (staging & production)
 - ✅ **Security Scans** (`security-scan.yml`)
 - ✅ **Package Publishing** (`release.yaml`, `snapshot-publish.yaml`)
 - ✅ **Fork Sync Operations** (`fork-sync.yml`)

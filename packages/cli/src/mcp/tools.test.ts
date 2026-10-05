@@ -3,6 +3,7 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { B4mApiClient } from './b4mApiClient';
+import { NotAuthenticatedError } from '../auth/ApiClient';
 import {
   TOOL_NAMES,
   registerTools,
@@ -12,6 +13,7 @@ import {
   sendMessage,
   searchKnowledgeBase,
   generateSoundEffect,
+  textToSpeech,
 } from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
@@ -28,6 +30,7 @@ describe('TOOL_NAMES', () => {
       'list_files',
       'get_file',
       'generate_sound_effect',
+      'text_to_speech',
     ]);
   });
 });
@@ -140,6 +143,26 @@ describe('tool handlers', () => {
     expect(result.notebookId).toBe('resolved-nb');
   });
 
+  it('send_message prefers the sessionId echoed on the chat response over a quest re-fetch', async () => {
+    const getQuest = vi.fn();
+    const client = mockClient({
+      sendChat: vi.fn().mockResolvedValue({
+        id: 'q1',
+        status: 'done',
+        response: null,
+        responses: ['hello'],
+        model: 'gpt',
+        sessionId: 'echoed-nb',
+      }),
+      getQuest,
+    });
+
+    const result = await sendMessage(client, { message: 'hi' });
+
+    expect(result.notebookId).toBe('echoed-nb');
+    expect(getQuest).not.toHaveBeenCalled();
+  });
+
   it('search_knowledge_base wraps the score array in a results object', async () => {
     const client = mockClient({
       searchKnowledgeBase: vi.fn().mockResolvedValue([{ sessionId: 's1', maxSimilarity: 0.9, matchingMessages: 1 }]),
@@ -214,6 +237,112 @@ describe('tool handlers', () => {
       audioBase64: Buffer.from('abc').toString('base64'),
     });
   });
+
+  it('text_to_speech returns the saved file URL and actual fallback provider', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: {
+          audio: 'YWJj',
+          format: 'mp3',
+          contentType: 'audio/mpeg',
+          saved: true,
+          fabFileId: 'fab1',
+          fileUrl: 'https://signed.example/audio.mp3',
+          provider: 'elevenlabs',
+          fallbackFrom: 'openai',
+        },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello', provider: 'openai' });
+
+    expect(result.structuredContent).toEqual({
+      saved: true,
+      provider: 'elevenlabs',
+      fallbackFrom: 'openai',
+      format: 'mp3',
+      contentType: 'audio/mpeg',
+      byteLength: 3,
+      file: { id: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+    expect(result.content.some(item => item.type === 'audio')).toBe(false);
+  });
+
+  it('text_to_speech inlines the audio but reports the saved file id if a saved copy has no URL', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: { audio: 'YWJj', format: 'mp3', contentType: 'audio/mpeg', saved: true, fabFileId: 'fab1' },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.content).toContainEqual({ type: 'audio', data: 'YWJj', mimeType: 'audio/mpeg' });
+    expect(result.structuredContent).toMatchObject({
+      saved: true,
+      provider: 'openai',
+      byteLength: 3,
+      file: { id: 'fab1' },
+    });
+  });
+
+  it('text_to_speech forwards why a saved copy was skipped', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'audio',
+        data: {
+          audio: 'YWJj',
+          format: 'mp3',
+          contentType: 'audio/mpeg',
+          saved: false,
+          saveSkippedReason: 'storage_limit',
+        },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.content).toContainEqual({ type: 'audio', data: 'YWJj', mimeType: 'audio/mpeg' });
+    expect(result.structuredContent).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+  });
+
+  it('text_to_speech reports a too-large saved file by id when it has no URL', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'saved-too-large',
+        data: { provider: 'elevenlabs', fabFileId: 'fab1' },
+        fallbackFrom: 'openai',
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.structuredContent).toEqual({
+      saved: true,
+      provider: 'elevenlabs',
+      fallbackFrom: 'openai',
+      file: { id: 'fab1' },
+    });
+  });
+
+  it('text_to_speech returns a saved URL when the billed response is too large', async () => {
+    const client = mockClient({
+      synthesizeSpeech: vi.fn().mockResolvedValue({
+        kind: 'saved-too-large',
+        data: { provider: 'openai', fabFileId: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+      }),
+    });
+
+    const result = await textToSpeech(client, { text: 'Hello' });
+
+    expect(result.structuredContent).toEqual({
+      saved: true,
+      provider: 'openai',
+      file: { id: 'fab1', fileUrl: 'https://signed.example/audio.mp3' },
+    });
+  });
 });
 
 describe('registerTools', () => {
@@ -239,6 +368,21 @@ describe('registerTools', () => {
 
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({ notebooks: [], hasMore: false });
+  });
+
+  it('maps a no-credential failure to a structured isError naming B4M_API_KEY and b4m login', async () => {
+    const tools = collectTools(
+      mockClient({ listNotebooks: vi.fn().mockRejectedValue(new NotAuthenticatedError('Authentication failed')) })
+    );
+
+    const result = await tools.get('list_notebooks')!({ limit: 25 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text' });
+    const text = (result.content[0] as { type: 'text'; text: string }).text;
+    expect(text).toContain('B4M_API_KEY');
+    expect(text).toContain('b4m login');
+    expect(text).not.toContain('expired');
   });
 
   it('maps an API failure to a structured isError result naming the scope', async () => {
@@ -324,5 +468,60 @@ describe('registerTools', () => {
       type: 'text',
       text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
     });
+  });
+
+  it('text_to_speech maps a scope failure to an MCP error', async () => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ synthesizeSpeech: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get('text_to_speech')!({ text: 'Hello' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: "API key forbidden: check the key's scopes and account access (recommended scope: ai:generate)",
+    });
+  });
+
+  const ttsFailure = (status: number, data: Record<string, unknown>) =>
+    new AxiosError('request failed', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status,
+      statusText: '',
+      data,
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+
+  it.each(['provider_not_configured', 'provider_rejected'])(
+    'text_to_speech maps a 401 %s to a provider-key hint rather than b4m login',
+    async errorCode => {
+      const failure = ttsFailure(401, { error: 'No usable TTS provider', errorCode });
+      const tools = collectTools(mockClient({ synthesizeSpeech: vi.fn().mockRejectedValue(failure) }));
+
+      const result = await tools.get('text_to_speech')!({ text: 'Hello' });
+
+      expect(result.isError).toBe(true);
+      const [first] = result.content;
+      const text = first.type === 'text' ? first.text : '';
+      expect(text).toContain('No usable TTS provider');
+      expect(text).toContain('provider API key');
+      expect(text).not.toContain('b4m login');
+    }
+  );
+
+  it('text_to_speech surfaces the server message for insufficient credits', async () => {
+    const failure = ttsFailure(422, { error: 'Not enough credits for TTS', errorCode: 'insufficient_credits' });
+    const tools = collectTools(mockClient({ synthesizeSpeech: vi.fn().mockRejectedValue(failure) }));
+
+    const result = await tools.get('text_to_speech')!({ text: 'Hello' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({ type: 'text', text: 'Not enough credits for TTS' });
   });
 });

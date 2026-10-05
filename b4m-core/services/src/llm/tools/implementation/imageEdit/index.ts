@@ -10,7 +10,7 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
@@ -34,6 +34,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
+import { recordGeneratedImages } from '../../../recordGeneratedImages';
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -259,6 +260,7 @@ async function updateQuestAndReturnMarkdown(storedImagePath: string, context: To
 
   // Update the quest's images array
   await context.statusUpdate({ images: [storedImagePath] });
+  await recordGeneratedImages(context.db.sessions, context.sessionId, 1, context.logger);
   return 'Successfully edited image';
 }
 
@@ -342,7 +344,7 @@ Please select a supported edit model in your image settings modal.`;
       // Step any gpt-image-2 edit model down to gpt-image-1.5 when transparency is
       // requested: gpt-image-2 rejects background: 'transparent' outright, and the
       // client's own default edit model is gpt-image-2, so this is reachable by default.
-      if (background === 'transparent' && isGPTImage2Model(editModel)) {
+      if (background === 'transparent' && rejectsTransparentBackground(editModel)) {
         editModel = ImageModels.GPT_IMAGE_1_5;
       }
       // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.

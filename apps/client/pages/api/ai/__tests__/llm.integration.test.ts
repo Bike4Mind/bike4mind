@@ -289,6 +289,58 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('agentIds stamped on a newly created session (GH #2600)', () => {
+    const getOrCreateArgs = () => mockGetOrCreateSession.mock.calls[0][0] as { agentIds?: string[] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards agentIds to getOrCreateSession and keeps it out of invoke()', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { agentIds: ['a1', 'a2'] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(getOrCreateArgs().agentIds).toEqual(['a1', 'a2']);
+      // Session-creation input, never a completion parameter.
+      expect(invokedBody()).not.toHaveProperty('agentIds');
+    });
+
+    // Rejected at the route, beside the deniedTools check, before a session is created or dispatched.
+    it('rejects a non-array agentIds (422) before creating a session', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { agentIds: 'x' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().code).toBe('AGENT_IDS_INVALID');
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('rejects an agentIds array with a non-string element', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { agentIds: ['ok', 1] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().code).toBe('AGENT_IDS_INVALID');
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('audit attribution of a tool-driven lake write', () => {
+    const invokedApiKeyId = () => (mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId;
+
+    it('hands invoke() the authenticating key id', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(invokedApiKeyId()).toBe('k1');
+    });
+
+    it('ignores a client-supplied apiKeyId, so a browser caller cannot forge one', async () => {
+      const { req, res } = fire({ apiKey: null, body: { apiKeyId: 'forged' } });
+      await handler(req, res);
+      expect(invokedApiKeyId()).toBeUndefined();
+    });
+  });
+
   it('leaves JWT/browser callers unaffected (200, no api key)', async () => {
     const { req, res } = fire({ apiKey: null });
     await handler(req, res);

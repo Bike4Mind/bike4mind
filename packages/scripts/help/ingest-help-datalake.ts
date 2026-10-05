@@ -3,7 +3,7 @@
  * Bootstrap driver for the `system-help` data-lake mirror.
  *
  * The mirror itself lives in `ingestHelpDatalake.ts`, shared with the scheduled re-sync cron
- * (apps/client/server/cron/helpDatalakeIngest.ts). This script is the one-off per environment:
+ * (apps/workers/src/cron/helpDatalakeIngest.ts). This script is the one-off per environment:
  * it is what CREATES the lake, and the lake's `createdByUserId` is what the cron then reuses as
  * the file owner, so `--userId` must be a system/admin account whose effective LLM keys can keep
  * embedding after this run.

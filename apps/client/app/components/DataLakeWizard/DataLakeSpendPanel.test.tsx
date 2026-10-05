@@ -73,6 +73,7 @@ describe('DataLakeSpendPanel', () => {
     renderPanel({
       summary: baseSummary({
         embeddingSpendMicroUsd: 5_000_000,
+        researchLifetimeUsd: 0,
         ledger: {
           ...emptyLedger,
           byModel: [
@@ -94,6 +95,7 @@ describe('DataLakeSpendPanel', () => {
     renderPanel({
       summary: baseSummary({
         embeddingSpendMicroUsd: 5_000_000,
+        researchLifetimeUsd: 1,
         ledger: {
           ...emptyLedger,
           byFeature: [

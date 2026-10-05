@@ -115,6 +115,105 @@ describe('Slack Error Integration', () => {
       );
     });
 
+    it('parses a raw-JSON Fargate line so the real message and severity reach the deduplicator', async () => {
+      // Fargate containers (ChatCompletion) write the logger's raw JSON with no Lambda
+      // `ts\treqId\tLEVEL\t` prefix, so a positional parse must not fall through to the
+      // generic `source: 'AWS'` bucket and lose the actual error.
+      const fargateError = JSON.stringify({
+        severity: 'error',
+        message: 'Drain window expired with in-flight quests',
+        questId: 'q-1',
+      });
+
+      const event = createMockCloudWatchEvent([
+        {
+          id: 'event-fargate',
+          timestamp: 1704067200000,
+          message: fargateError,
+        },
+      ]);
+
+      await notifyEventLogsToSlack({
+        event,
+        stage: 'production',
+        slackUrl: 'https://hooks.slack.com/test',
+      });
+
+      expect(mockHandleErrorNotification).toHaveBeenCalledWith(
+        'Drain window expired with in-flight quests',
+        'error',
+        expect.objectContaining({
+          severity: 'error',
+          message: 'Drain window expired with in-flight quests',
+          questId: 'q-1',
+        }),
+        expect.any(Object),
+        expect.any(Object),
+        'production',
+        'https://hooks.slack.com/test'
+      );
+    });
+
+    it('does not drop a parsed line whose payload has no message field', async () => {
+      // The Fargate filter matches on `severity`, which can appear without a `message`; an
+      // undefined message must fall back to the raw line rather than throw and drop the post.
+      const noMessage = JSON.stringify({ severity: 'error', code: 'E_DRAIN' });
+
+      const event = createMockCloudWatchEvent([
+        {
+          id: 'event-no-message',
+          timestamp: 1704067200000,
+          message: noMessage,
+        },
+      ]);
+
+      await notifyEventLogsToSlack({
+        event,
+        stage: 'production',
+        slackUrl: 'https://hooks.slack.com/test',
+      });
+
+      expect(mockHandleErrorNotification).toHaveBeenCalledWith(
+        noMessage,
+        'error',
+        expect.objectContaining({ severity: 'error', code: 'E_DRAIN' }),
+        expect.any(Object),
+        expect.any(Object),
+        'production',
+        'https://hooks.slack.com/test'
+      );
+    });
+
+    it('forwards a Lambda task-timeout line with fallback error severity', async () => {
+      // The "kills" subscription matches runtime timeout lines that carry no ERROR token;
+      // they are unstructured but must still reach Slack as errors, not be dropped.
+      const timeoutMessage = '2024-01-01T10:00:00.000Z\treq-1\tTask timed out after 900.00 seconds';
+
+      const event = createMockCloudWatchEvent([
+        {
+          id: 'event-timeout-kill',
+          timestamp: 1704067200000,
+          message: timeoutMessage,
+        },
+      ]);
+
+      await notifyEventLogsToSlack({
+        event,
+        stage: 'production',
+        slackUrl: 'https://hooks.slack.com/test',
+      });
+
+      expect(mockHandleErrorNotification).toHaveBeenCalledWith(
+        timeoutMessage,
+        'error',
+        { source: 'AWS' },
+        expect.any(Object),
+        expect.any(Object),
+        'production',
+        'https://hooks.slack.com/test'
+      );
+    });
+
     it('should route throttling exceptions to separate webhook', async () => {
       const throttlingError =
         '2024-01-01T10:00:00.000Z\trequest-id\tERROR\t{"severity":"error","message":"ThrottlingException: Rate exceeded"}';

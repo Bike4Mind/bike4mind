@@ -140,7 +140,7 @@ describe('DELETE /api/google-drive/disconnect', () => {
     // healthy while their next ingest silently fails.
     expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'credential_error' }));
     expect(h.updateHealth).toHaveBeenCalledWith('conn2', expect.objectContaining({ status: 'credential_error' }));
-    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 2 });
+    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 2, affectedPersonalConnections: 0 });
   });
 
   it('leaves a connection holding a DIFFERENT token of the same user alone', async () => {
@@ -151,25 +151,41 @@ describe('DELETE /api/google-drive/disconnect', () => {
     const { res, json } = makeRes();
     await run(res);
     expect(h.updateHealth).not.toHaveBeenCalled();
-    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0 });
+    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
   });
 
-  it('flags nothing when only an access token was stored to revoke', async () => {
-    // Revoking a lone access token kills that token and nothing downstream, so no org connection is
-    // affected - and captureOrgCredential cannot have made one without a refresh token anyway.
-    h.userFindById.mockResolvedValue(stored({ refreshToken: undefined as unknown as string }));
-    h.findByConnectedBy.mockResolvedValue([{ id: 'conn1', organizationId: 'orgA' }]);
+  it('flags every personal connection (no organizationId) of the user, even one storing no token', async () => {
+    // A personal connection keeps no credential of its own - it syncs on the user's live grant, which
+    // this disconnect removes outright - so it stops regardless of which token (if any) was revoked.
+    h.findByConnectedBy.mockResolvedValue([{ id: 'conn1', organizationId: undefined }]);
     const { res, json } = makeRes();
     await run(res);
-    expect(h.findByConnectedBy).not.toHaveBeenCalled();
-    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0 });
+    expect(h.updateHealth).toHaveBeenCalledWith('conn1', expect.objectContaining({ status: 'credential_error' }));
+    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0, affectedPersonalConnections: 1 });
+  });
+
+  it('flags personal connections but not org ones when only an access token was stored to revoke', async () => {
+    // Revoking a lone access token kills that token and nothing downstream for an org copy - one
+    // cannot exist without a refresh token (readUserDriveCredential requires one) - but a personal
+    // connection has no token of its own and stops either way.
+    h.userFindById.mockResolvedValue(stored({ refreshToken: undefined as unknown as string }));
+    h.findByConnectedBy.mockResolvedValue([
+      { id: 'conn1', organizationId: 'orgA' },
+      { id: 'conn2', organizationId: undefined },
+    ]);
+    const { res, json } = makeRes();
+    await run(res);
+    expect(h.findByConnectedBy).toHaveBeenCalledWith('u1');
+    expect(h.updateHealth).not.toHaveBeenCalledWith('conn1', expect.anything());
+    expect(h.updateHealth).toHaveBeenCalledWith('conn2', expect.objectContaining({ status: 'credential_error' }));
+    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0, affectedPersonalConnections: 1 });
   });
 
   it('reports zero affected connections when none borrowed the credential', async () => {
     const { res, json } = makeRes();
     await run(res);
     expect(h.updateHealth).not.toHaveBeenCalled();
-    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0 });
+    expect(json).toHaveBeenCalledWith({ affectedOrgConnections: 0, affectedPersonalConnections: 0 });
   });
 
   it('rejects a user with no Google Drive connection', async () => {

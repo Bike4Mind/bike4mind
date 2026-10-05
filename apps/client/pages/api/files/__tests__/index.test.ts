@@ -16,6 +16,7 @@ const mockRefs = vi.hoisted(() => ({
   deleteManyArgs: undefined as unknown[] | undefined,
   updateManyArgs: undefined as unknown[] | undefined,
   updateManyOptions: undefined as unknown,
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -30,7 +31,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
 const fabFileDocs = vi.hoisted(() => [{ filePath: 'a/one.png' }, { filePath: 'b/two.png' }]);
@@ -146,6 +147,31 @@ describe('GET /api/files', () => {
   });
 });
 
+describe('GET /api/files - scope gate', () => {
+  it('requires files:read or files:write at the baseApi route gate', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read', 'files:write'] });
+  });
+
+  it('rejects a files:write-only key with a 403 before touching search', async () => {
+    mockRefs.searchArgs = undefined;
+    const { req, res } = invokeGet();
+    (req as any).apiKeyInfo = { keyId: 'k', scopes: ['files:write'] };
+
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/files:read is required/);
+
+    expect(mockRefs.searchArgs).toBeUndefined();
+  });
+
+  it('allows a files:read key through the gate on the happy path', async () => {
+    const { req, res } = invokeGet();
+    (req as any).apiKeyInfo = { keyId: 'k', scopes: ['files:read'] };
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.searchArgs?.[0]).toBe('user-1');
+  });
+});
+
 function invokeDelete() {
   const { req, res } = createMocks({ method: 'DELETE', url: '/api/files' });
   (req as any).user = { id: 'user-1' };
@@ -200,5 +226,14 @@ describe('DELETE /api/files', () => {
     await mockRefs.deleteHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(204);
+  });
+
+  it('rejects a files:read-only key with a 403 before touching deleteMany', async () => {
+    const { req, res } = invokeDelete();
+    (req as any).apiKeyInfo = { keyId: 'k', scopes: ['files:read'] };
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/files:write is required/);
+
+    expect(mockRefs.deleteManyArgs).toBeUndefined();
   });
 });

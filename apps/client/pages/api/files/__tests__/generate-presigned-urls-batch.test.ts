@@ -15,11 +15,14 @@ const h = vi.hoisted(() => ({
   batchFindById: vi.fn(),
   appendFiles: vi.fn(),
   s3ClientConfigs: [] as unknown[],
+  baseApiOptions: undefined as unknown,
 }));
 
-// Callable chain routed by req.method, same shape as the batches lifecycle test.
+// Callable chain routed by req.method, same shape as the batches lifecycle test. Captures the
+// options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
       use: () => chain,
@@ -141,6 +144,10 @@ describe('POST /api/files/generate-presigned-urls-batch - S3 client config', () 
     // Without this, getSignedUrl signs in a checksum of the empty sign-time body, which then
     // mismatches whatever the browser actually PUTs.
     expect(h.s3ClientConfigs[0]).toMatchObject({ requestChecksumCalculation: 'WHEN_REQUIRED' });
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });
 

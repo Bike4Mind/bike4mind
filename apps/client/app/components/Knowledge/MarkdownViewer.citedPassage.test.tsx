@@ -213,4 +213,45 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
     expect(marked[0].textContent).toContain('The accrual rate is');
     expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
   });
+
+  it('marks the right block after LaTeX bracket delimiters are rewritten', () => {
+    // Regression guard: the cited passage holds `\( \)`, which the viewer rewrites in the document,
+    // so the passage must keep going through the same rewrite or it can no longer be located.
+    const doc = [
+      'Holidays accrue monthly.',
+      '',
+      '\\[ r = \\frac{18}{12} \\]',
+      '',
+      'The accrual rate is \\( r \\) days.',
+      '',
+      'Sabbaticals are separate.',
+    ].join('\n');
+    const { container } = render(
+      <TestWrapper>
+        <MarkdownViewer content={doc} citedPassage={'The accrual rate is \\( r \\) days.'} />
+      </TestWrapper>
+    );
+
+    const marked = Array.from(container.querySelectorAll('[data-cited]'));
+    expect(marked).toHaveLength(1);
+    expect(marked[0].textContent).toContain('The accrual rate is');
+    expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+  });
+});
+
+describe('MarkdownViewer cited passage clipped inside a LaTeX span', () => {
+  const MATH_DOC = 'Area is \\( \\pi r^2 \\) for a circle of radius r.';
+  it.each([
+    ['opening delimiter without its closer', 'Area is \\( \\pi r^2'],
+    ['closing delimiter without its opener', '\\pi r^2 \\) for a circle'],
+    ['the whole span', 'Area is \\( \\pi r^2 \\) for a circle'],
+  ])('anchors a passage with %s', (_label, passage) => {
+    const { container } = render(
+      <TestWrapper>
+        <MarkdownViewer content={MATH_DOC} citedPassage={passage} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+    expect(container.querySelectorAll('[data-cited]').length).toBeGreaterThan(0);
+  });
 });

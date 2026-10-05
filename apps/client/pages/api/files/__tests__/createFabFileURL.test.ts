@@ -4,12 +4,17 @@ const h = vi.hoisted(() => ({
   fabFileCreate: vi.fn(),
   createFabFileByUrl: vi.fn(),
   logEvent: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
-// `.use` is not the subject here, so the middleware itself is dropped rather than run.
+// `.use` is not the subject here, so the middleware itself is dropped rather than run. Captures
+// the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ use: () => ({ post: (h: unknown) => h }) }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { use: () => ({ post: (h: unknown) => h }) };
+  },
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: h.logEvent }));
@@ -81,5 +86,9 @@ describe('POST /api/files/createFabFileURL', () => {
       mimeType: 'text/plain',
       fileUrl: 'https://example.test/page',
     });
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

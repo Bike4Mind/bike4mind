@@ -20,6 +20,9 @@ import {
   getCurrentPathFromContext,
   getViewSummaryForLLM,
   isNavigableFeaturePath,
+  applyReplyChoices,
+  REPLY_CHOICES_GUIDANCE,
+  stripChoicesFromReplies,
   ReasoningEffort,
   ICacheStrategy,
   generateAnonymousSessionId,
@@ -109,6 +112,7 @@ import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedRep
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
@@ -122,6 +126,7 @@ import {
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -178,7 +183,7 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
-import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
 import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
   unionPreauthorizedLakeAccess,
@@ -1909,6 +1914,10 @@ export class ChatCompletionProcess {
     let finalQuest: IChatHistoryItemDocument | null = null;
     let cancelWatcherInterval: NodeJS.Timeout | null = null;
     let streamingHeartbeatInterval: NodeJS.Timeout | null = null;
+    // Replaced once the turn's deliverable baselines exist; until then nothing can have answered.
+    let clearStaleFallbackInfoIfNoAnswer = () => {
+      quest.fallbackInfo = null;
+    };
 
     try {
       const abilityStartTime = Date.now();
@@ -1995,6 +2004,12 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      // Whether REPLY_CHOICES_GUIDANCE ships this turn. Decided here, ahead of the history fetch,
+      // because history re-attaches stored choices only when the guidance is offered (see
+      // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
+      // Research Mode is excluded because its early return never reaches applyReplyChoices.
+      const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
       // Read at every denylist site below instead of `session.disabledTools`: the final pass after
       // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
       const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
@@ -2650,6 +2665,7 @@ export class ChatCompletionProcess {
         // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
         // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
         model: modelInfo.id,
+        includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
@@ -2902,6 +2918,7 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
@@ -3070,6 +3087,13 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
+      // Research Mode runs its configurations in parallel over one tool list, so a shared budget
+      // would let one configuration's searches cap another's.
+      const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+      if (allTools && !isResearchMode) {
+        allTools = webSearchBudget.apply(allTools);
+      }
+
       // Local (Ollama) models are small and easily confused by tools they weren't
       // asked to use - they pick the wrong one or loop. Restrict them to the tools
       // the user explicitly enabled, dropping the auto/admin-added extras
@@ -3181,10 +3205,26 @@ export class ChatCompletionProcess {
         const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
           tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
         );
-        const excludedByAccessCount =
-          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
-            : narrowedAccess?.excludedByAccessCount;
+        // Both ways a named lake drops out of scope, measured only where the session named one:
+        // gate-excluded (above), and draft - retrieval is active-only, so a draft narrows to
+        // nothing; counted over the identity-named tags that did not survive into lakeScope.
+        // Independent reads, so they run together.
+        const namesALake = accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags);
+        const [excludedByAccessCount, notServingCount] = namesALake
+          ? await Promise.all([
+              this.getDataLakeAccessContext().then(accessContext =>
+                measureIdentityNamedExclusion(accessContext, identityTagsToMeasure, {
+                  callerMaySeeAllLakes: this.user?.isAdmin === true,
+                })
+              ),
+              countNotServingNamedLakes(
+                this.db.dataLakes,
+                this.user.id,
+                datalakeTagsFrom(session.retrievalTags ?? []).filter(tag => !lakeScope.includes(tag)),
+                this.logger
+              ),
+            ])
+          : [narrowedAccess?.excludedByAccessCount, undefined];
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
         // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
@@ -3192,6 +3232,8 @@ export class ChatCompletionProcess {
         // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
           excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
+        const notServingLakes =
+          notServingCount !== undefined ? { count: notServingCount, reason: 'draft' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3199,6 +3241,7 @@ export class ChatCompletionProcess {
           dataLakeTags: [],
           lakeScope,
           ...(excludedLakes ? { excludedLakes } : {}),
+          ...(notServingLakes ? { notServingLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
@@ -3418,6 +3461,9 @@ export class ChatCompletionProcess {
               },
             ]
           : [],
+        // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
+        // withheld with the other auto-offers - see replyChoicesOffered.
+        replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
         toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
@@ -4205,6 +4251,7 @@ export class ChatCompletionProcess {
         chunkCount = 0;
         quest.promptMeta!.performance!.firstChunkTime = undefined;
         quest.promptMeta!.performance!.firstTokenTime = undefined;
+        webSearchBudget.reset();
       };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
@@ -4316,7 +4363,7 @@ export class ChatCompletionProcess {
       startCancellationWatcher();
 
       // Check if Research Mode is enabled and handle parallel processing
-      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
+      if (isResearchMode) {
         logger.info(
           `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
         );
@@ -4393,6 +4440,8 @@ export class ChatCompletionProcess {
       // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
       // so no hop re-selects a model that just failed.
       const triedModelIds = new Set<string>([modelInfo.id]);
+      // Why the REQUESTED model failed; later hops fail for their own reasons, which would misattribute.
+      let primaryFailureReason: string | undefined;
       let overloadRetryCount = 0;
       let overloadRetriesExhausted = false;
       let toolPairingRetried = false;
@@ -4414,6 +4463,30 @@ export class ChatCompletionProcess {
           .map(slot => visibleReplyText(slot))
           .join('')
           .trim().length;
+
+      const producedNonTextDeliverable = () =>
+        (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+        (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart);
+
+      // Re-snapshotted at each fallback hop: a deliverable the failed primary produced must not
+      // count as the fallback's answer.
+      let imageCountAtFallbackHop = imageCountAtTurnStart;
+      let pendingActionAtFallbackHop = pendingActionAtTurnStart;
+      const producedDeliverableSinceFallbackHop = () =>
+        (quest.images?.length ?? 0) > imageCountAtFallbackHop ||
+        (quest.pendingAction != null && quest.pendingAction !== pendingActionAtFallbackHop);
+
+      // A fallback hop can be selected (fallbackInfo set) and then end with nothing to show
+      // for it: the user stops it before it streams (an aborted backend resolves rather than
+      // throws, so this reaches the success path with status 'stopped'), or it runs to a
+      // 'done' status with only hidden output (unterminated <think>, or max_tokens cut before
+      // any prose). Gate on the absence of an answer, not on status, so a turn that answered
+      // nothing never reports "answered by <fallback>".
+      clearStaleFallbackInfoIfNoAnswer = () => {
+        if (countVisibleChars(quest.replies) === 0 && !producedDeliverableSinceFallbackHop()) {
+          quest.fallbackInfo = null;
+        }
+      };
 
       // Rapid reply handoff: initialize handoff variables outside streaming callback
       let handOff = false;
@@ -4890,6 +4963,7 @@ export class ChatCompletionProcess {
               // Update to the fallback model
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
+              primaryFailureReason ??= sanitizeTelemetryError(lastError);
               fallbackAttempt++;
               triedModelIds.add(currentModel.id);
 
@@ -4909,6 +4983,7 @@ export class ChatCompletionProcess {
                 // an Ollama pull on a self-hosted one.
                 primaryModelBackend: modelInfo.backend,
                 fallbackModelBackend: currentModel.backend,
+                reason: primaryFailureReason,
                 timestamp: Date.now(),
               };
 
@@ -4935,6 +5010,8 @@ export class ChatCompletionProcess {
 
               // Clear previous replies for retry
               resetStreamStateForRetry();
+              imageCountAtFallbackHop = quest.images?.length ?? 0;
+              pendingActionAtFallbackHop = quest.pendingAction;
               // Continue the loop with the new model
               continue;
             } catch (fallbackError) {
@@ -4958,15 +5035,36 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
+        // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
+        const replyChoicesOutcome = applyReplyChoices(quest);
+        // The system-prompt budget can evict the guidance after it was requested (lowest priority in
+        // systemPromptSources.ts), so `offered` reads what was actually delivered.
+        const replyChoicesDelivered =
+          quest.promptMeta?.context?.systemPromptDetails?.some(
+            detail => detail.name === 'reply_choices' && detail.wasIncluded
+          ) ?? false;
+        if (quest.promptMeta) {
+          quest.promptMeta.replyChoices = {
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            ...replyChoicesOutcome,
+          };
+        }
+        if (replyChoicesOutcome.status === 'invalid') {
+          logger.warn('[ReplyChoices] Choices block failed validation; no buttons shown', {
+            questId,
+            model: currentModel.id,
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            reason: replyChoicesOutcome.reason,
+          });
+        }
 
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: quest.status === 'stopped',
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
-          producedNonTextDeliverable:
-            (quest.images?.length ?? 0) > imageCountAtTurnStart ||
-            (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart),
+          producedNonTextDeliverable: producedNonTextDeliverable(),
         });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
@@ -5739,6 +5837,7 @@ export class ChatCompletionProcess {
         }
 
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
 
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
@@ -5994,6 +6093,7 @@ export class ChatCompletionProcess {
         }
 
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
 
         timer.phase('save');
 
@@ -6099,6 +6199,7 @@ export class ChatCompletionProcess {
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
         quest.status = successStatus();
+        clearStaleFallbackInfoIfNoAnswer();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
@@ -6150,13 +6251,18 @@ export class ChatCompletionProcess {
       if (stoppedByUser) {
         logger.log(`Chat completion was stopped by user for quest ${questId}`);
         quest.status = 'stopped';
+        // Same rule as the success path, so an abort that rejects and one that resolves persist alike.
+        clearStaleFallbackInfoIfNoAnswer();
         finalQuest = await saveQuest(quest);
         return;
       }
       const setErrorReply = (message: string) => {
-        const visiblePartial = (streamedRepliesBeforeError ?? [])
-          .map(r => visibleReplyText(r))
-          .filter(text => text.length > 0);
+        // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
+        // slot with no separator - otherwise an unterminated block swallows the appended error as
+        // "part of the block", and once the error is the last slot the client no longer reads the
+        // earlier slot's block at all, leaking the raw JSON.
+        const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
+        const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
         quest.replies = combined;
         quest.reply = combined.join('');
@@ -6164,6 +6270,8 @@ export class ChatCompletionProcess {
       setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
+      // A turn can switch models and still fail; no model answered it, so it must not claim one did.
+      quest.fallbackInfo = null;
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.

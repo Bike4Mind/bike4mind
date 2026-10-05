@@ -1,7 +1,15 @@
 import { isAxiosError } from 'axios';
-import { ApiClient } from '../auth/ApiClient.js';
+import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
+import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
-import type { ChatHistoryItemType, QuestErrorCode } from '@bike4mind/common';
+import {
+  ttsBase64ResponseSchema,
+  ttsResponseTooLargeSchema,
+  supportedVoiceGenerationVendor,
+  type ChatHistoryItemType,
+  type QuestErrorCode,
+  type TTSRequest,
+} from '@bike4mind/common';
 
 /**
  * A Bike4Mind notebook (session) as returned by the REST API. Only the fields the
@@ -29,6 +37,9 @@ export interface ChatWaitResponse {
   id: string;
   status: string;
   model?: string;
+  // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
+  // caller sending `newConversation: true`) gets a freshly created notebook's id here.
+  sessionId?: string;
   // The wait path returns the reply in `responses`; the scalar `response` is null.
   response?: string | null;
   responses?: string[];
@@ -182,7 +193,10 @@ export class B4mApiClient {
     systemPrompt?: string;
   }): Promise<ChatWaitResponse> {
     return this.client.post<ChatWaitResponse>('/api/chat', {
-      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      // No notebookId means "start a fresh conversation": without newConversation a JWT caller
+      // would post into the user's last-opened notebook (the very context bleed this endpoint was
+      // fixed to remove for API keys). The new notebook's id comes back in the response.
+      ...(args.notebookId ? { sessionId: args.notebookId } : { newConversation: true }),
       message: args.message,
       ...(args.model ? { model: args.model } : {}),
       ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
@@ -258,6 +272,30 @@ export class B4mApiClient {
     }
   }
 
+  async synthesizeSpeech(args: Omit<TTSRequest, 'encoding'>) {
+    try {
+      const response: unknown = await this.client.post('/api/ai/tts', { ...args, encoding: 'base64' });
+      return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(response) };
+    } catch (error) {
+      if (isAxiosError(error) && error.response?.status === 413) {
+        // The billed audio is only reachable through its FabFile, so keep the id even
+        // when no signed URL was minted. A substitution rides only the header here.
+        const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
+        if (oversized.success && oversized.data.saved && oversized.data.fabFileId) {
+          const fallbackFrom = supportedVoiceGenerationVendor.safeParse(
+            error.response.headers?.['x-b4m-tts-provider-fallback-from']
+          );
+          return {
+            kind: 'saved-too-large' as const,
+            data: { ...oversized.data, fabFileId: oversized.data.fabFileId },
+            ...(fallbackFrom.success ? { fallbackFrom: fallbackFrom.data } : {}),
+          };
+        }
+      }
+      throw error;
+    }
+  }
+
   async listProjects(args: {
     search?: string;
     limit: number;
@@ -313,9 +351,17 @@ export class B4mApiClient {
  * gap that may not be the cause.
  */
 export function mapApiError(error: unknown, baseURL: string, scope?: string): string {
+  // No credential at all: name both fixes instead of "log in again".
+  if (error instanceof NotAuthenticatedError) {
+    return 'not authenticated: no credential configured (set B4M_API_KEY or run `b4m login`)';
+  }
   if (isAxiosError(error)) {
     const status = error.response?.status;
     if (status === 401) {
+      // A provider-key failure also wears a 401 (e.g. /api/ai/tts); re-authenticating
+      // to Bike4Mind would not fix it, so surface the server's message instead.
+      const providerKeyMessage = providerKeyFailureMessage(error.response?.data);
+      if (providerKeyMessage) return providerKeyMessage;
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
@@ -402,4 +448,10 @@ function extractServerMessage(data: unknown): string | undefined {
     if (typeof record.message === 'string') return record.message;
   }
   return undefined;
+}
+
+function providerKeyFailureMessage(data: unknown): string | undefined {
+  if (!isProviderKeyFailure(data)) return undefined;
+  const base = extractServerMessage(data) ?? 'the AI provider could not be used';
+  return `${base} (configure or fix the provider API key in Bike4Mind; this is not a Bike4Mind login problem)`;
 }

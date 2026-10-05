@@ -67,6 +67,7 @@ import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor
 import CitableSources from './CitableSources';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import ReplyChoiceButtons from './ReplyChoiceButtons';
 import ReplyAccessories from './ReplyAccessories';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
@@ -609,6 +610,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         pendingAction={messageData.pendingAction}
         attachmentList={messageData.attachmentList}
         navigationIntents={messageData.navigationIntents}
+        suggestedChoices={messageData.suggestedChoices}
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
@@ -1159,6 +1161,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   pendingAction,
   attachmentList,
   navigationIntents,
+  suggestedChoices,
   attachmentNotices,
   attachmentDelivery,
   uiSideEffects,
@@ -1433,6 +1436,20 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // the reply body rather than under it - which also means a reply that is nothing
   // BUT suggestions still needs the body to exist to hold them.
   const navSuggestions = completed && navigationIntents && navigationIntents.length > 0 ? navigationIntents : null;
+  // Choices need a persisted turn in a session: a click records the pick against both ids.
+  const choiceButtons =
+    completed && suggestedChoices?.options.length && messageId && currentSessionId ? (
+      <ReplyChoiceButtons questId={messageId} sessionId={currentSessionId} suggestedChoices={suggestedChoices} />
+    ) : null;
+  // One row for both, shared by the two render paths below so they cannot drift.
+  const replyActions =
+    navSuggestions || choiceButtons ? (
+      <NavigationButtons
+        navigationIntents={navSuggestions ?? []}
+        leading={choiceButtons}
+        label={choiceButtons ? 'Your call' : undefined}
+      />
+    ) : null;
 
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
@@ -1523,7 +1540,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
           {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
-          {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
+          {replyActions}
         </>
       ) : (
         <>
@@ -1797,7 +1814,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                     )}
 
                     {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
-                    {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
+                    {replyActions}
                   </Typography>
                 </Box>
               )}

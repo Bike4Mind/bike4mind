@@ -256,6 +256,7 @@ export function useCreateLakeFromDrive() {
         // Carried onto this path too: the fileless Drive create has its own Complete screen, and a
         // lake born draft serves nothing whether its files arrive by upload or by Drive (#3222).
         lakeStatus,
+        lakeId: dataLakeId,
         // Clear any error from a prior attempt so a retry starts clean.
         errorMessage: undefined,
         errorKind: undefined,

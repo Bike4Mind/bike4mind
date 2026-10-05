@@ -454,7 +454,7 @@ The `web_search` tool (and `deep_research`) can run against a self-hosted [SearX
    docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
    ```
 
-Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
+Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` leads with SerpAPI when a key is set (`SerperKey` in Admin > API Keys) and otherwise uses SearXNG, so a SearXNG-only install needs no extra setting; with both configured, the other provider is the backup. Set it to `serpapi` or `searxng` to lead with that provider (an unconfigured choice disables search rather than switching providers). The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
 
 ### Reading pages: web_fetch and Firecrawl
 
@@ -990,3 +990,42 @@ Rollback requires draining the executor first. Do not switch the app back to Lam
 The worker records health snapshots for active data lakes at 06:00 UTC, using the same bounded sweep as hosted deployments and without CloudWatch metrics. It does not run this sweep at startup. Starting after the daily boundary waits until the next day; a delayed timer runs only the latest due slot, with at most one scheduled attempt per UTC day. An overlapping run consumes the slot without starting another sweep. Shutdown waits up to the worker's existing 20-second grace period; a sweep still running then is abandoned. Completed lakes keep their snapshots, while unvisited lakes retain their older check timestamps and sort first at the next 06:00 UTC run. A restart after today's boundary does not retry that day's missed snapshots.
 
 Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
+
+### Daily telemetry retention
+
+The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
+
+There is no bootstrap run. Starting after 03:00 waits for the next day; starting exactly at 03:00 runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown waits within the worker's existing grace period. This remains a single-worker schedule, without a distributed lock or a promise to finish after shutdown grace expires.
+
+Database failures reject the run. Successful earlier batches remain cleaned; the next scheduled run retries the remaining eligible rows. Repeating a completed cleanup makes no further changes. This does not delete Quests, remove every type of telemetry, or change the model's existing record-selection policy.
+
+Focused tests use disposable Mongo, exact retention boundaries and an injected later-batch write failure. CI also runs the retention tests with `TZ=America/New_York` set before Node starts, covering a daylight-saving transition. They establish persisted application effects, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
+TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+```
+
+## Daily API-key usage baselines
+
+The single local worker calculates usage baselines at 02:00 UTC using the existing calculator and Mongo repositories. It processes keys whose stored status is active, using their own user's usage logs from the inclusive trailing 30-day window. It preserves the existing averages, common IPs/endpoints and UTC peak-hour calculation. Keys without usage are skipped; existing baselines on skipped or inactive keys remain unchanged. This does not change key authorization, expiry enforcement or rate limits.
+
+There is no bootstrap run. A start after 02:00 waits until the next day; an exact 02:00 start runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown uses the existing bounded worker grace period. There is no distributed scheduling lock or completion guarantee beyond that grace period.
+
+A failed key does not prevent processing the others. The local task rejects after any per-key errors so the worker records a failed run, then retries on the next daily slot. Global query failures also reject. Successfully persisted baselines remain intact; failed writes leave their prior baseline for retry. The hosted adapter keeps its existing success/error responses and per-key counts.
+
+Verification exercises the actual calculator and disposable Mongo, including user/key isolation, time boundaries, repeat results and write-failure recovery. This is application-level proof, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/apiKeyBaselineCalculation.test.ts src/selfhost/apiKeyBaselineCalculation.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/apiKeyBaselineCalculation.e2e.test.ts
+```
+
+## Notebook submission errors
+
+The notebook curation endpoint requires the configured local event queue to accept each start event. A missing queue URL or rejected enqueue reaches the API's existing error response instead of returning 202. The requirement is per call: the background session groomer publishes the same event with the default best-effort delivery, as do all other background enrichment events. The hosted publisher contract is unchanged.
+
+A 202 response establishes broker acceptance only. The current local worker still lacks the notebook start-event route and curation consumer, so this change does not establish export completion. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
+
+Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.

@@ -22,12 +22,14 @@ import {
   App,
   TrustLocationSelector,
   FolderTrustPrompt,
+  McpApprovalPrompt,
   RewindSelector,
   SessionSelector,
   EnvironmentPicker,
   ModelPicker,
 } from './components';
-import type { PermissionResponse, EnvChoice, FolderTrustChoice } from './components';
+import type { PermissionResponse, EnvChoice, FolderTrustChoice, McpApprovalChoice } from './components';
+import type { PendingMcpApproval } from './storage/ConfigStore';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
@@ -171,6 +173,7 @@ import {
   createWorkItemTools,
 } from './tools';
 import { WorkItemsClient } from './api/WorkItemsClient.js';
+import { PostEditDiagnostics } from './diagnostics/PostEditDiagnostics.js';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
 import { checkForUpdate } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
@@ -238,6 +241,8 @@ interface CliState {
   trustLocationSelector: TrustLocationSelectorState | null;
   /** Startup folder-trust prompt for an untrusted project shipping b4m files. */
   folderTrustPrompt: { projectRoot: string } | null;
+  /** Startup approval prompt for repo MCP servers whose exact definition is unapproved. */
+  mcpApprovalPrompt: { projectRoot: string; servers: PendingMcpApproval[] } | null;
   rewindSelector: RewindSelectorState | null;
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
@@ -298,6 +303,7 @@ function CliApp() {
     permissionPrompt: null,
     trustLocationSelector: null,
     folderTrustPrompt: null,
+    mcpApprovalPrompt: null,
     rewindSelector: null,
     sessionSelector: null,
     orchestrator: null,
@@ -325,10 +331,12 @@ function CliApp() {
   // flow, env picker) don't re-show it. A ref (not React state) so it survives
   // init()'s stable closure.
   const folderTrustResolvedRef = useRef(false);
+  const mcpApprovalResolvedRef = useRef(false);
   const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
+  const postEditDiagnosticsRef = useRef(new PostEditDiagnostics({ workspaceRoot: process.cwd() }));
 
   // Use Zustand store for UI state. The session is the single source of truth;
   // handlers read the latest value via `useCliStore.getState().session` and
@@ -543,6 +551,30 @@ function CliApp() {
         }));
         return;
       }
+
+      // MCP definition gate: repo MCP servers in a trusted project spawn only once
+      // their exact definition is approved. Prompt once on a TTY, before
+      // McpManager is built, so approved servers start this launch; otherwise
+      // they stay off and we warn.
+      const pendingMcp = state.configStore.getPendingMcpApprovals();
+      if (
+        pendingMcp.length > 0 &&
+        !mcpApprovalResolvedRef.current &&
+        Boolean(process.stdin.isTTY) &&
+        Boolean(process.stdout.isTTY)
+      ) {
+        mcpApprovalResolvedRef.current = true;
+        setState(prev => ({
+          ...prev,
+          mcpApprovalPrompt: {
+            projectRoot: state.configStore.getProjectRealPath() ?? process.cwd(),
+            servers: pendingMcp,
+          },
+          config,
+        }));
+        return;
+      }
+      if (!mcpApprovalResolvedRef.current) state.configStore.warnPendingMcpApprovals();
 
       // Load additional directories from config and --add-dir flag
       const configDirs = await state.configStore.getAdditionalDirectories();
@@ -830,6 +862,7 @@ function CliApp() {
       const agentContext: AgentContext = {
         currentAgent: null,
         observationQueue: [],
+        onFileChanged: filePath => postEditDiagnosticsRef.current.enqueue(filePath),
       };
 
       // Build CLI tools, MCP/agent/context stores, the subagent orchestrator,
@@ -1596,6 +1629,7 @@ function CliApp() {
       todoStore: todoStoreRef.current,
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
+      postEditDiagnostics: postEditDiagnosticsRef.current,
       workflowStores: {
         decisionStore: decisionStoreRef.current,
         blockerStore: blockerStoreRef.current,
@@ -3874,6 +3908,36 @@ function CliApp() {
               setState(prev => ({ ...prev, folderTrustPrompt: null }));
               init().catch(err => {
                 console.error('\n❌ Initialization failed:', err instanceof Error ? err.message : String(err), '\n');
+                exit();
+              });
+            }
+          })();
+        }}
+      />
+    );
+  }
+
+  if (state.mcpApprovalPrompt) {
+    const { projectRoot, servers } = state.mcpApprovalPrompt;
+    return (
+      <McpApprovalPrompt
+        projectRoot={projectRoot}
+        servers={servers}
+        onSelect={(choice: McpApprovalChoice) => {
+          void (async () => {
+            try {
+              if (choice === 'approve') {
+                await state.configStore.approveMcpServers(servers);
+                console.log('\nApproved. Starting these MCP servers; a changed definition will ask again.\n');
+              } else {
+                console.log('\nThese MCP servers stay off this session. You will be asked again next launch.\n');
+              }
+            } catch (err) {
+              console.error('\nCould not save MCP approval:', err instanceof Error ? err.message : String(err), '\n');
+            } finally {
+              setState(prev => ({ ...prev, mcpApprovalPrompt: null }));
+              init().catch(err => {
+                console.error('\nInitialization failed:', err instanceof Error ? err.message : String(err), '\n');
                 exit();
               });
             }
