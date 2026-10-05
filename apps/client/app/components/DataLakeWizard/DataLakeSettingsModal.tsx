@@ -750,7 +750,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         <Input
           value={requiredUserTag}
           onChange={e => setRequiredUserTag(e.target.value)}
-          placeholder="e.g. Opti"
+          placeholder="e.g. LegalTeam"
           data-testid="datalake-settings-usertag"
         />
         <FormHelperText data-testid="datalake-settings-usertag-help">
