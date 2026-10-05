@@ -337,6 +337,221 @@ describe('ChatService queued messages', () => {
     ]);
   });
 
+  /**
+   * "Send now": the explicit exception to the rule the rest of this file pins down.
+   *
+   * Stopping a reply normally hands the queue BACK, because a stop usually means the user
+   * changed their mind about the thing they were queueing against. Here they said the
+   * opposite, so the message goes out - and the interrupt and the promotion have to be one
+   * step, or the give-back races the send and the text is either lost or sent twice.
+   */
+  describe('send now', () => {
+    const queuedId = (result: Awaited<ReturnType<ChatService['send']>>) =>
+      result.ok && result.queued ? result.message.id : '';
+
+    it('interrupts the live reply and runs the queued message next', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'first');
+      await waitForEvent('start');
+      await waitForPost(1);
+      // Partial text from the turn that is about to be interrupted.
+      streamFor(0).write(frame({ type: 'content', text: 'half an answer' }));
+      const queued = await service.send(id, 'actually, this instead');
+
+      service.sendQueuedNow(id, queuedId(queued));
+
+      await waitForPost(2);
+      await waitForEvent('start', 1);
+
+      expect(service.queuedMessages(id)).toEqual([]);
+      // Nothing came back to the composer: that is the whole difference from a plain stop.
+      expect(queueEvents.some(event => event.returned)).toBe(false);
+      expect(queueEvents.at(-1)?.sent?.message).toMatchObject({ role: 'user', content: 'actually, this instead' });
+
+      const session = await service.getSession(id);
+      expect(session?.messages.map(message => [message.role, message.content])).toEqual([
+        ['user', 'first'],
+        // Interrupted, not discarded - what the turn had already produced stays, exactly as
+        // for an ordinary stop.
+        ['assistant', 'half an answer'],
+        ['user', 'actually, this instead'],
+        ['assistant', ''],
+      ]);
+    });
+
+    it('sends the named message and leaves the rest of the queue in order', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'first');
+      await waitForEvent('start');
+      await waitForPost(1);
+
+      // A relay sits in front of what the user typed, so the head is NOT the message they
+      // mean. Promoting by id rather than FIFO is what gets this right.
+      queue.enqueueRelay(id, 'from the other conversation', {
+        fromSessionId: 'sender',
+        fromTitle: 'Sender',
+        hops: 1,
+      });
+      const mine = await service.send(id, 'mine, and urgently');
+
+      service.sendQueuedNow(id, queuedId(mine));
+      await waitForPost(2);
+      await waitForEvent('start', 1);
+
+      // The relay is untouched and still waiting its turn, which comes when this one ends.
+      expect(service.queuedMessages(id).map(message => [message.text, Boolean(message.relay)])).toEqual([
+        ['from the other conversation', true],
+      ]);
+      const session = await service.getSession(id);
+      expect(session?.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([
+        'first',
+        'mine, and urgently',
+      ]);
+    });
+
+    it('refuses to fire a relayed message as if the user had written it', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'first');
+      await waitForEvent('start');
+      await waitForPost(1);
+      queue.enqueueRelay(id, 'from the other conversation', {
+        fromSessionId: 'sender',
+        fromTitle: 'Sender',
+        hops: 1,
+      });
+      const relayed = service.queuedMessages(id)[0];
+
+      service.sendQueuedNow(id, relayed?.id ?? '');
+
+      // Nothing interrupted and nothing promoted: another conversation's words jumping this
+      // user's turn is not something they asked for.
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(service.queuedMessages(id).map(message => message.text)).toEqual(['from the other conversation']);
+    });
+
+    it('is a no-op when the turn finished first', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'first');
+      await waitForEvent('start');
+      const queued = await service.send(id, 'typed ahead');
+
+      // The reply ends on its own between the click and the IPC arriving, draining the queue
+      // the ordinary way. The click that follows must not send a second copy.
+      await finishReply(0);
+      await waitForEvent('start', 1);
+      service.sendQueuedNow(id, queuedId(queued));
+
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(post).toHaveBeenCalledTimes(2);
+      const session = await service.getSession(id);
+      expect(session?.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([
+        'first',
+        'typed ahead',
+      ]);
+    });
+
+    it('ignores a second click while the first is still unwinding', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'first');
+      await waitForEvent('start');
+      await waitForPost(1);
+      const queued = await service.send(id, 'typed ahead');
+
+      service.sendQueuedNow(id, queuedId(queued));
+      // Same message, and the message is already out of the queue by now: a second promotion
+      // would have nothing to promote, and must not disturb the one in flight.
+      service.sendQueuedNow(id, queuedId(queued));
+
+      await waitForPost(2);
+      await waitForEvent('start', 1);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(post).toHaveBeenCalledTimes(2);
+      const session = await service.getSession(id);
+      expect(session?.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([
+        'first',
+        'typed ahead',
+      ]);
+    });
+
+    it('hands a promoted message back when its own turn is refused', async () => {
+      const { id } = await service.createSession();
+      await service.send(id, 'first');
+      await waitForEvent('start');
+      await waitForPost(1);
+      const queued = await service.send(id, 'typed ahead');
+
+      // Signed out between the click and the promoted turn: it is out of the queue by then, so
+      // it has to be handed back explicitly or it evaporates with the error.
+      apiClient = null;
+      service.sendQueuedNow(id, queuedId(queued));
+      await vi.waitUntil(() => queueEvents.at(-1)?.returned !== undefined, { timeout: 2000, interval: 5 });
+
+      const returned = queueEvents.at(-1)?.returned;
+      expect(returned?.reason).toBe('refused');
+      expect(returned?.messages.map(message => message.text)).toEqual(['typed ahead']);
+      expect(service.queuedMessages(id)).toEqual([]);
+    });
+
+    /**
+     * A turn parked at the approval gate is interrupted exactly as the stop button interrupts
+     * it: the abort settles the pending request as a DENY (see ApprovalGate.request) and the
+     * turn unwinds. That is an interrupt, not an answer given on the user's behalf - denying
+     * ends the turn, where approving would carry it on and run the tool.
+     */
+    it('interrupts a turn parked at the approval gate, denying what it was asking for', async () => {
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-sendnow-root-')));
+      const gated = new ChatService({
+        store,
+        access: { list: async () => [root] } as unknown as AccessStore,
+        approvals: new ApprovalGate(),
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        queue,
+        getApiClient: () => apiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit: event => events.push(event),
+      });
+
+      const { id } = await gated.createSession();
+      await gated.setApprovalMode(id, 'ask');
+      await gated.send(id, 'what is on port 3000?');
+      await waitForEvent('start');
+      streamFor(0).write(
+        frame({ type: 'tool_use', tools: [{ id: 'call_1', name: 'bash_execute', arguments: '{"command":"echo hi"}' }] })
+      );
+      streamFor(0).write(frame('[DONE]'));
+      await vi.waitUntil(
+        () => events.some(event => (event.type === 'tool-start' || event.type === 'tool-end') && event.call.approvalId),
+        { timeout: 3000, interval: 5 }
+      );
+
+      const queued = await gated.send(id, 'never mind, do this');
+      gated.sendQueuedNow(id, queuedId(queued));
+
+      await waitForPost(2);
+      await waitForEvent('start', 1);
+      expect(gated.queuedMessages(id)).toEqual([]);
+      expect(queueEvents.some(event => event.returned)).toBe(false);
+      const session = await gated.getSession(id);
+      expect(session?.messages.filter(message => message.role === 'user').map(message => message.content)).toEqual([
+        'what is on port 3000?',
+        'never mind, do this',
+      ]);
+    });
+
+    it('does nothing without a queue configured', () => {
+      const plain = new ChatService({
+        store,
+        access: { list: async () => [] } as unknown as AccessStore,
+        logger: { debug: vi.fn(), warn: vi.fn() },
+        getApiClient: () => apiClient,
+        getEnvironmentUrl: () => 'http://localhost:3000',
+        emit: event => events.push(event),
+      });
+      expect(() => plain.sendQueuedNow('no-such-session', 'no-such-id')).not.toThrow();
+    });
+  });
+
   it('refuses a message that could never be sent rather than queueing it', async () => {
     const { id } = await service.createSession();
     await service.send(id, 'first');

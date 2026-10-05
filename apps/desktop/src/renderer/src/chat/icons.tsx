@@ -261,6 +261,16 @@ export function ArrowUpIcon() {
   );
 }
 
+/** Send a queued message now: the skip-ahead shape, a chevron run up against a bar. */
+export function SkipAheadIcon() {
+  return (
+    <Glyph>
+      <path d="M4.5 4.25 8.75 8 4.5 11.75" />
+      <path d="M11.5 4v8" />
+    </Glyph>
+  );
+}
+
 /** Updates: an arrow into a tray, which is the shape every installer has used for decades. */
 export function DownloadIcon() {
   return (

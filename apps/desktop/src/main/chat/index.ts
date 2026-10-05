@@ -386,6 +386,9 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
     service.cancelQueued(sessionId, queuedId)
   );
+  ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
+    service.sendQueuedNow(sessionId, queuedId)
+  );
   ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
     approvals.resolve(approvalId, answer)
   );

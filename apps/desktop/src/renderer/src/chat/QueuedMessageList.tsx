@@ -2,7 +2,7 @@ import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { ChatQueuedMessage } from '@shared/chat';
-import { CloseIcon } from './icons';
+import { CloseIcon, SkipAheadIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { queuedPreview } from './queuedMessages';
 
@@ -20,9 +20,18 @@ import { queuedPreview } from './queuedMessages';
 export function QueuedMessageList({
   messages,
   onCancel,
+  onSendNow,
+  canSendNow = false,
 }: {
   messages: readonly ChatQueuedMessage[];
   onCancel: (queuedId: string) => void;
+  /** Interrupt the live reply and run this one next. Omitted where there is nothing to interrupt. */
+  onSendNow?: (queuedId: string) => void;
+  /**
+   * Whether a reply is actually running. Without one the control would have nothing to cut in
+   * front of: the queue is about to drain by itself, so "now" and "wait" mean the same thing.
+   */
+  canSendNow?: boolean;
 }) {
   if (messages.length === 0) return null;
 
@@ -77,6 +86,23 @@ export function QueuedMessageList({
             <Typography level="body-xs" textColor="text.tertiary" sx={{ flexShrink: 0 }}>
               +{message.attachments.length}
             </Typography>
+          )}
+
+          {/* Never on a relay: jumping the user's own turn with another conversation's words is
+              not something they asked for. Main refuses it too - this is so the row agrees. */}
+          {canSendNow && onSendNow && !message.relay && (
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              sx={{ alignSelf: 'flex-start' }}
+              onClick={() => onSendNow(message.id)}
+              aria-label="Stop the reply and send this message now"
+              title="Send now"
+              data-testid="composer-send-now-queued-btn"
+            >
+              <SkipAheadIcon />
+            </IconButton>
           )}
 
           <IconButton

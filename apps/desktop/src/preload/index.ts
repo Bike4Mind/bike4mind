@@ -96,6 +96,8 @@ const api: DesktopApi = {
     getQueuedMessages: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatGetQueued, sessionId),
     cancelQueuedMessage: (sessionId: string, queuedId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatCancelQueued, sessionId, queuedId),
+    sendQueuedMessageNow: (sessionId: string, queuedId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatSendQueuedNow, sessionId, queuedId),
     onQueueChanged: listener => {
       const handler = (_event: unknown, queueEvent: ChatQueueEvent) => listener(queueEvent);
       ipcRenderer.on(IPC_CHANNELS.chatQueueChanged, handler);
