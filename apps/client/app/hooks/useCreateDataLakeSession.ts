@@ -47,7 +47,7 @@ export default function useCreateDataLakeSession() {
           // adoption rehydrates the workbench FROM the session's knowledgeIds, so a file added
           // client-side after creation loses that race on slower adoption paths.
           ...(extras?.knowledgeIds?.length ? { knowledgeIds: extras.knowledgeIds } : {}),
-          // Agents attached on /new, as useGenerateNewSession sends them: send clears the
+          // Agents attached on /new, as useCreateNewSession sends them: send clears the
           // workbench, so a session born without them runs every later turn agentless.
           ...(workBenchAgents.length ? { agentIds: workBenchAgents.map(a => a.id) } : {}),
           ...(routerProjectId ? { projectId: routerProjectId } : {}),
