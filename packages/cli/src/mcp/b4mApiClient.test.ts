@@ -81,6 +81,26 @@ describe('B4mApiClient', () => {
     expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB' });
   });
 
+  it('forwards dataLakeId on create only when set', async () => {
+    mockPost.mockResolvedValue({ id: 'n1' });
+    await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });
+    expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB', dataLakeId: 'lake-1' });
+  });
+
+  it('lists data lakes with flat limit/cursor params and maps next_cursor', async () => {
+    mockGet.mockResolvedValue({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], next_cursor: 'c2' });
+    const result = await client.listDataLakes({ limit: 10, cursor: 'c1' });
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/data-lakes', { params: { limit: 10, cursor: 'c1' } });
+    expect(result).toEqual({ data: [{ id: 'l1', name: 'Lake', slug: 'lake' }], nextCursor: 'c2' });
+  });
+
+  it('omits cursor when listing the first page of data lakes', async () => {
+    mockGet.mockResolvedValue({ data: [], next_cursor: null });
+    const result = await client.listDataLakes({ limit: 25 });
+    expect(mockGet).toHaveBeenCalledWith('/api/v1/data-lakes', { params: { limit: 25 } });
+    expect(result).toEqual({ data: [], nextCursor: null });
+  });
+
   it('sends a chat message with wait:true and maps notebookId to sessionId', async () => {
     mockPost.mockResolvedValue({ id: 'q1', status: 'complete' });
     await client.sendChat({ notebookId: 'nb1', message: 'hi', model: 'gpt' });

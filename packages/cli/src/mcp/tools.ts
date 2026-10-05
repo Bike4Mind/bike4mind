@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { PROMPT_TEXT_MAX } from '@bike4mind/common';
-import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
+import { B4mApiClient, mapApiError, type QuestResponse, type RawDataLake, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -30,13 +30,14 @@ export const TOOL_META: ToolMeta[] = [
     name: 'create_notebook',
     title: 'Create notebook',
     description:
-      'Create a new notebook, optionally inside a project. Defaults the name to "New Notebook" when omitted.',
+      'Create a new notebook, optionally inside a project or grounded in a data lake (dataLakeId, see list_lakes). Defaults the name to "New Notebook" when omitted.',
     scope: 'notebooks:write',
   },
   {
     name: 'send_message',
     title: 'Send message',
-    description: 'Send a chat message and wait for the assistant reply.',
+    description:
+      'Send a chat message and wait for the assistant reply; returns the cited sources (citables) the answer was grounded in.',
     scope: 'ai:chat',
   },
   {
@@ -44,6 +45,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Search knowledge base',
     description: "Semantic search across the caller's notebooks.",
     scope: 'notebooks:read',
+  },
+  {
+    name: 'list_lakes',
+    title: 'List data lakes',
+    description:
+      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it.",
+    scope: 'datalake:read',
   },
   { name: 'list_files', title: 'List files', description: "Search the caller's files.", scope: 'files:read' },
   {
@@ -76,6 +84,10 @@ const getNotebookShape = {
 const createNotebookShape = {
   name: z.string().optional().describe('Name for the new notebook'),
   projectId: z.string().optional().describe('Project to create the notebook in'),
+  dataLakeId: z
+    .string()
+    .optional()
+    .describe("Data lake id or slug to ground the notebook in (see list_lakes); seeds the lake's retrieval defaults"),
 };
 
 const sendMessageShape = {
@@ -98,6 +110,11 @@ const searchKnowledgeBaseShape = {
   query: z.string().describe('The search query'),
   limit: z.number().int().min(1).max(100).default(10).describe('Maximum results to return'),
   minSimilarity: z.number().min(0).max(1).optional().describe('Minimum cosine similarity threshold'),
+};
+
+const listLakesShape = {
+  limit: z.number().int().min(1).max(100).default(25).describe('Maximum lakes to return'),
+  cursor: z.string().optional().describe('Pass back nextCursor from the previous page'),
 };
 
 const listFilesShape = {
@@ -140,6 +157,18 @@ function notebookSummary(n: RawNotebook) {
   };
 }
 
+function lakeSummary(l: RawDataLake) {
+  return {
+    id: l.id,
+    name: l.name,
+    slug: l.slug,
+    description: l.description ?? undefined,
+    built_in: l.built_in,
+    status: l.status,
+    file_count: l.file_count,
+  };
+}
+
 export async function listNotebooks(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
   const { data, hasMore } = await client.listNotebooks(args);
   return { notebooks: data.map(notebookSummary), hasMore };
@@ -149,7 +178,10 @@ export async function getNotebook(client: B4mApiClient, args: { notebookId: stri
   return client.getNotebook(args.notebookId);
 }
 
-export async function createNotebook(client: B4mApiClient, args: { name?: string; projectId?: string }) {
+export async function createNotebook(
+  client: B4mApiClient,
+  args: { name?: string; projectId?: string; dataLakeId?: string }
+) {
   // POST /api/sessions/create hard-requires a name; default to the web app's
   // convention when the caller omits one so a nameless create still succeeds.
   return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
@@ -162,23 +194,30 @@ export async function sendMessage(
   const res = await client.sendChat(args);
   const questId = res.id;
 
-  // The chat response echoes the notebook it recorded the turn in; when the caller supplied one
-  // this is simply that id. Fall back to the quest only if the response somehow omitted it -
-  // best-effort, since the reply already succeeded and the id is a convenience for continuing.
-  let notebookId = args.notebookId ?? res.sessionId;
-  if (!notebookId) {
-    try {
-      notebookId = (await client.getQuest(questId)).sessionId;
-    } catch {
-      notebookId = undefined;
-    }
+  // The wait body carries no citables, so re-fetch the quest for them; it also backs the
+  // notebookId should the response omit the echoed sessionId. Best-effort: the reply already
+  // succeeded, so a failed fetch only costs the citables (and that fallback id).
+  let quest: QuestResponse | undefined;
+  try {
+    quest = await client.getQuest(questId);
+  } catch {
+    quest = undefined;
   }
+  const notebookId = args.notebookId ?? res.sessionId ?? quest?.sessionId;
+  // Drop `metadata`: it can carry `fullContext` passage text that would bloat the MCP client's context.
+  const citables = (quest?.promptMeta?.citables ?? []).map(c => ({
+    id: c.id,
+    type: c.type,
+    title: c.title,
+    url: c.url,
+    description: c.description,
+  }));
 
   // The completed quest carries the assistant reply in `responses` (a string
   // array); the scalar `response` is null on the wait path, so prefer `responses`.
   const reply = res.responses && res.responses.length > 0 ? res.responses.join('\n\n') : (res.response ?? '');
 
-  return { notebookId, questId, reply, model: res.model };
+  return { notebookId, questId, reply, model: res.model, citables };
 }
 
 export async function searchKnowledgeBase(
@@ -187,6 +226,11 @@ export async function searchKnowledgeBase(
 ) {
   const results = await client.searchKnowledgeBase(args);
   return { results };
+}
+
+export async function listLakes(client: B4mApiClient, args: { limit: number; cursor?: string }) {
+  const { data, nextCursor } = await client.listDataLakes(args);
+  return { lakes: data.map(lakeSummary), nextCursor };
 }
 
 export async function listFiles(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
@@ -332,6 +376,12 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       inputSchema: searchKnowledgeBaseShape,
     },
     args => run('notebooks:read', () => searchKnowledgeBase(client, args))
+  );
+
+  server.registerTool(
+    'list_lakes',
+    { title: meta('list_lakes').title, description: meta('list_lakes').description, inputSchema: listLakesShape },
+    args => run('datalake:read', () => listLakes(client, args))
   );
 
   server.registerTool(

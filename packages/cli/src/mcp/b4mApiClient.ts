@@ -52,6 +52,17 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
+  promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
+  [key: string]: unknown;
+}
+
+export interface RawCitable {
+  id: string;
+  type: string;
+  title: string;
+  url?: string;
+  description?: string;
   [key: string]: unknown;
 }
 
@@ -101,6 +112,18 @@ export interface GeneratedSound {
   fabFileId?: string;
   fileName?: string;
   fileUrl?: string;
+}
+
+/** A data lake as returned by GET /api/v1/data-lakes (`DataLakeResource`, snake_case). */
+export interface RawDataLake {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  built_in?: boolean;
+  status?: string;
+  file_count?: number;
+  [key: string]: unknown;
 }
 
 export interface RawProject {
@@ -171,11 +194,26 @@ export class B4mApiClient {
     return this.client.get<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`);
   }
 
-  async createNotebook(args: { name?: string; projectId?: string }): Promise<RawNotebook> {
+  async createNotebook(args: { name?: string; projectId?: string; dataLakeId?: string }): Promise<RawNotebook> {
     return this.client.post<RawNotebook>('/api/sessions/create', {
       ...(args.name ? { name: args.name } : {}),
       ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.dataLakeId ? { dataLakeId: args.dataLakeId } : {}),
     });
+  }
+
+  /**
+   * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
+   * `{ data, next_cursor }` body), so `toList` does not apply.
+   */
+  async listDataLakes(args: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ data: RawDataLake[]; nextCursor: string | null }> {
+    const result = await this.client.get<{ data: RawDataLake[]; next_cursor: string | null }>('/api/v1/data-lakes', {
+      params: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
   }
 
   async sendChat(args: {
