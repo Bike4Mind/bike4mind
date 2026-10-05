@@ -109,22 +109,72 @@ export async function createVideoJob(input: CreateVideoJobInput, deps: VideoJobD
       questId: input.questId,
     });
   } catch (error) {
-    if (hold) await releaseCreditHold(hold, deps.credits);
-    // A concurrent request with the same key won the unique index: answer as its replay.
+    // A concurrent request with the same key won the unique index: no job carries this hold, so return it
+    // and answer as the winner's replay.
     if (input.idempotencyKey && isDuplicateKeyError(error)) {
+      if (hold) await runCleanup(deps, { ownerId }, () => releaseCreditHold(hold, deps.credits));
       const winner = await deps.repository.findByIdempotencyKey(ownerType, ownerId, input.idempotencyKey);
       if (winner) return replayOrReject(winner, request);
+      throw error;
     }
+    if (hold) await releaseIfJobAbsent(hold, { ownerType, ownerId, idempotencyKey: input.idempotencyKey }, deps);
     throw error;
   }
 
   try {
     await deps.enqueue(job.id, 0);
   } catch (error) {
-    await failUnqueuedJob(job, hold, deps);
+    await runCleanup(deps, { jobId: job.id, ownerId }, () => failUnqueuedJob(job, hold, deps));
     throw error;
   }
   return { ok: true, job, created: true };
+}
+
+/** Runs a cleanup step on a path that is already failing, so its own error never masks the original one. */
+async function runCleanup(
+  deps: VideoJobDeps,
+  context: { jobId?: string; ownerId: string },
+  cleanup: () => Promise<void>
+) {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    deps.logger.error('video_job_create_cleanup_failed', { ...context, error: cleanupError });
+  }
+}
+
+/**
+ * A non-duplicate createJob error is ambiguous: the insert may have landed before the error (e.g. a lost ack).
+ * If the job exists, its onTerminal owns the hold (the sweeper picks it up via nextPollAt), so releasing here
+ * would refund twice. Release only when the job is confirmed absent; when that cannot be confirmed, keep the
+ * hold and alarm for manual repair. Without an idempotency key there is no unique field to look the job up by.
+ */
+async function releaseIfJobAbsent(
+  hold: CreditHold,
+  lookup: { ownerType: CreditHold['ownerType']; ownerId: string; idempotencyKey?: string },
+  deps: VideoJobDeps
+) {
+  const { ownerType, ownerId, idempotencyKey } = lookup;
+  const reportAmbiguous = (lookupError?: unknown) =>
+    deps.logger.error('video_job_create_ambiguous', {
+      idempotencyKey,
+      ownerId,
+      reservedCredits: hold.reservedCredits,
+      error: lookupError,
+    });
+  if (!idempotencyKey) {
+    reportAmbiguous();
+    return;
+  }
+  let landed: boolean;
+  try {
+    landed = (await deps.repository.findByIdempotencyKey(ownerType, ownerId, idempotencyKey)) !== null;
+  } catch (lookupError) {
+    reportAmbiguous(lookupError);
+    return;
+  }
+  if (landed) return;
+  await runCleanup(deps, { ownerId }, () => releaseCreditHold(hold, deps.credits));
 }
 
 const replayOrReject = (existing: IGenerationJobDocument, request: VideoGenerationRequest): CreateVideoJobResult =>

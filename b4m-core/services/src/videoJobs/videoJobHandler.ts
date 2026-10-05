@@ -19,6 +19,7 @@ import {
   type VideoProviderContext,
 } from '@bike4mind/utils/videoProviders';
 import { releaseCreditHold, settleCreditHold, type CreditLedgerEntry } from '../creditService/creditHold';
+import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { GenerationJobHandler, StepResult } from '../generationJobs/types';
 import { VIDEO_JOB_MAX_WALL_CLOCK_MS, type VideoJobDeps } from './types';
 
@@ -48,9 +49,10 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     return provider;
   };
 
+  // Every provider call goes through here, so this is the last boundary before an unusable key reaches a provider.
   const contextFor = async (job: IGenerationJobDocument): Promise<VideoProviderContext | null> => {
     const apiKey = await deps.resolveApiKey(job.payload.providerId, job.requestedBy);
-    if (!apiKey) return null;
+    if (!apiKey || apiKey === EXPIRED_KEY_SENTINEL) return null;
     return { apiKey, logger: deps.logger, now: () => deps.now() };
   };
 
@@ -60,7 +62,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     return handle ? { provider: job.payload.providerId, data: handle.data } : null;
   };
 
-  const settle = async (job: IGenerationJobDocument): Promise<number> => {
+  const settle = async (job: IGenerationJobDocument) => {
     const { request } = job.payload;
     const caps = getVideoModelCapabilities(request.model);
     // Capability validation pinned the requested duration to what the model produces; prefer what it reports.
@@ -81,18 +83,30 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
           deps.credits
         )
       : 0;
-    await deps.recordUsage({
-      job,
-      creditsCharged: charged,
-      costUsd: estimateVideoCostUsd(caps, billed),
-      durationSeconds: billed.durationSeconds,
-    });
-    return charged;
+    await markSettled(job, charged);
+    // Usage is reporting only: the credits already moved, so a failure here must not hold up terminal handling.
+    try {
+      await deps.recordUsage({
+        job,
+        creditsCharged: charged,
+        costUsd: estimateVideoCostUsd(caps, billed),
+        durationSeconds: billed.durationSeconds,
+      });
+    } catch (error) {
+      deps.logger.error('video_job_record_usage_failed', { jobId: job.id, creditsCharged: charged, error });
+    }
   };
 
-  const release = async (job: IGenerationJobDocument): Promise<number> => {
+  const release = async (job: IGenerationJobDocument) => {
     if (job.creditHold) await releaseCreditHold(job.creditHold, deps.credits);
-    return 0;
+    await markSettled(job, 0);
+  };
+
+  // Written right after credits move, before anything else can fail, so a manual repair of a stuck terminal claim
+  // (the engine's reportUnclaimable) can tell "settled, but markTerminalHandled was lost" from "never settled".
+  // Must stay in sync with createVideoJob's failUnqueuedJob.
+  const markSettled = async (job: IGenerationJobDocument, settledCredits: number) => {
+    await deps.repository.commit(job.id, { settledCredits });
   };
 
   return {
@@ -163,8 +177,8 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
 
     async store(job) {
       const { payload } = job;
-      // A re-run after a crash between saving and committing: the save already happened.
-      if (payload.output) return { next: 'succeeded', payload: withoutProviderOutput(payload) };
+      // Not idempotent: the output is only persisted by the terminal commit, so a crash after saving and before
+      // that commit re-runs this step and stores a duplicate file (bounded by MAX_STEP_ATTEMPTS).
       const ctx = await contextFor(job);
       if (!ctx) return noApiKey(job);
       if (!payload.providerOutput) return fail('provider_error', 'storing without provider output');
@@ -207,14 +221,16 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       const provider = deps.providers.get(job.payload.providerId);
       if (!handle || !provider?.cancel) return;
       const ctx = await contextFor(job);
-      if (ctx) await provider.cancel(handle, ctx);
+      if (!ctx) {
+        deps.logger.warn('video_job_cancel_no_key', { jobId: job.id, providerId: job.payload.providerId });
+        return;
+      }
+      await provider.cancel(handle, ctx);
     },
 
     async onTerminal(job) {
-      const settledCredits = job.state === 'succeeded' ? await settle(job) : await release(job);
-      // Lets a manual repair of a stuck terminal claim (the engine's reportUnclaimable) tell "settled, but
-      // markTerminalHandled was lost" from "never settled". Must stay in sync with createVideoJob's failUnqueuedJob.
-      await deps.repository.commit(job.id, { settledCredits });
+      if (job.state === 'succeeded') await settle(job);
+      else await release(job);
     },
   };
 }

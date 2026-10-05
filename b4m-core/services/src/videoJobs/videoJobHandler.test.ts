@@ -12,6 +12,7 @@ import { createInMemoryGenerationJobRepository } from '../generationJobs/__test_
 import { GenerationJobEngine } from '../generationJobs/engine';
 import { MAX_STEP_ATTEMPTS } from '../generationJobs/backoff';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
+import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
 import { createVideoJobHandler } from './videoJobHandler';
 import type { CreateVideoJobResult, VideoJobDeps } from './types';
@@ -327,6 +328,52 @@ describe('video job end to end with the test provider', () => {
     });
   });
 
+  it('treats the expired-key sentinel as a missing key and never calls the provider', async () => {
+    const submit = vi.fn<VideoProvider['submit']>();
+    const t = setup({
+      resolveApiKey: async () => EXPIRED_KEY_SENTINEL,
+      providers: createVideoProviderRegistry([stubProvider({ submit })]),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      error: { code: 'provider_error', message: 'No API key configured for test' },
+    });
+    expect(submit).not.toHaveBeenCalled();
+  });
+
+  it('does not poll with a key that expired after submit', async () => {
+    const poll = vi.fn<VideoProvider['poll']>();
+    const resolveApiKey = vi
+      .fn<VideoJobDeps['resolveApiKey']>()
+      .mockResolvedValueOnce('key')
+      .mockResolvedValue(EXPIRED_KEY_SENTINEL);
+    const t = setup({ resolveApiKey, providers: createVideoProviderRegistry([stubProvider({ poll })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(poll).not.toHaveBeenCalled();
+  });
+
+  it('warns instead of cancelling at the provider when no usable key resolves', async () => {
+    const cancel = vi.fn<NonNullable<VideoProvider['cancel']>>(async () => undefined);
+    const resolveApiKey = vi
+      .fn<VideoJobDeps['resolveApiKey']>()
+      .mockResolvedValueOnce('key')
+      .mockResolvedValue(EXPIRED_KEY_SENTINEL);
+    const t = setup({ resolveApiKey, providers: createVideoProviderRegistry([stubProvider({ cancel })]) });
+    const warn = vi.spyOn(t.deps.logger, 'warn');
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    if (!created.ok) throw new Error('expected creation to succeed');
+    await t.engine.step(created.job.id); // submit -> running
+    await t.engine.requestCancel(created.job.id);
+    await t.runToCompletion();
+    expect(t.jobOf(created).state).toBe('cancelled');
+    expect(cancel).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('video_job_cancel_no_key', { jobId: created.job.id, providerId: 'test' });
+  });
+
   it('cancels at the provider when a running job is cancelled', async () => {
     const cancel = vi.fn<NonNullable<VideoProvider['cancel']>>(async () => undefined);
     const t = setup({ providers: createVideoProviderRegistry([stubProvider({ cancel })]) });
@@ -349,21 +396,44 @@ describe('video job end to end with the test provider', () => {
     expect(t.deps.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
   });
 
-  it('a store re-run after a crash between save and commit does not save twice', async () => {
+  it('store is not idempotent: a re-run after a crash before the terminal commit saves again', async () => {
     const t = setup();
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    const pending = t.jobOf(created);
+    // The provider finished, but no output was ever committed: every store run must fetch and save.
+    const storing = structuredClone({
+      ...pending,
+      state: 'storing' as const,
+      payload: {
+        ...pending.payload,
+        providerOutput: {
+          kind: 'inline' as const,
+          base64: Buffer.from('clip').toString('base64'),
+          contentType: 'video/mp4',
+        },
+      },
+    });
+    const handler = createVideoJobHandler(t.deps);
+    const first = await handler.store(structuredClone(storing));
+    const rerun = await handler.store(structuredClone(storing));
+    expect(first).toMatchObject({ next: 'succeeded', payload: { output: { location: 'files', bytes: 4 } } });
+    expect(rerun).toMatchObject({ next: 'succeeded' });
+    expect(t.deps.saveToFiles).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists the settlement marker even when recording usage fails', async () => {
+    const t = setup({
+      recordUsage: vi.fn(async () => {
+        throw new Error('metrics down');
+      }),
+    });
+    const error = vi.spyOn(t.deps.logger, 'error');
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
     const job = t.jobOf(created);
-    // Simulate: output persisted but the terminal commit never happened.
-    Object.assign(job, {
-      state: 'storing',
-      terminalHandledAt: null,
-      terminalHandlingClaimedAt: null,
-      leaseUntil: null,
-    });
-    const handler = createVideoJobHandler(t.deps);
-    const result = await handler.store(structuredClone(job));
-    expect(result).toMatchObject({ next: 'succeeded', payload: { output: job.payload.output } });
-    expect(t.deps.saveToFiles).toHaveBeenCalledTimes(1);
+    expect(job.settledCredits).toBe(job.creditHold?.reservedCredits);
+    expect(job.terminalHandledAt).toBeTruthy();
+    expect(settleCreditHold).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith('video_job_record_usage_failed', expect.objectContaining({ jobId: job.id }));
   });
 });
