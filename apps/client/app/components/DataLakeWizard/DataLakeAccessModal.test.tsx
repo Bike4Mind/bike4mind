@@ -225,6 +225,46 @@ describe('DataLakeAccessModal', () => {
     );
   });
 
+  it('truncates an unresolved API key id in the Reader cell instead of letting it overflow the next column', () => {
+    const keyId = '6650f1c2a9b3e4d5f6071829';
+    viewState = loaded({
+      ...fullView,
+      history: [{ ...fullView.history[0]!, principalKind: 'apiKey', principalId: keyId, principalName: undefined }],
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    const reader = screen.getByTestId('datalake-access-history-reader');
+    expect(reader).toHaveTextContent(keyId);
+    expect(reader).toHaveAttribute('title', keyId);
+    const style = getComputedStyle(reader);
+    expect(style.whiteSpace).toBe('nowrap');
+    expect(style.overflow).toBe('hidden');
+    expect(style.textOverflow).toBe('ellipsis');
+  });
+
+  it('truncates unresolved principal and granter ids in the grants table', () => {
+    const principalId = '6650f1c2a9b3e4d5f607182a';
+    const grantedByUserId = '6650f1c2a9b3e4d5f607182b';
+    viewState = loaded({
+      ...fullView,
+      grants: [
+        { ...fullView.grants[0]!, principalId, principalName: undefined, grantedByUserId, grantedByName: undefined },
+      ],
+    });
+    render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });
+    for (const [testId, id] of [
+      ['datalake-access-grant-principal', principalId],
+      ['datalake-access-grant-granted-by', grantedByUserId],
+    ] as const) {
+      const cell = screen.getByTestId(testId);
+      expect(cell).toHaveTextContent(id);
+      expect(cell).toHaveAttribute('title', id);
+      const style = getComputedStyle(cell);
+      expect(style.whiteSpace).toBe('nowrap');
+      expect(style.overflow).toBe('hidden');
+      expect(style.textOverflow).toBe('ellipsis');
+    }
+  });
+
   it('drops the window qualification when the history was not truncated', () => {
     viewState = loaded({ ...fullView, historyTruncated: false, windowStartsAt: undefined });
     render(<DataLakeAccessModal lake={lake} onClose={vi.fn()} />, { wrapper: Wrapper });

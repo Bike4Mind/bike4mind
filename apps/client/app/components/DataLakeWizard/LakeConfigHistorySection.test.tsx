@@ -267,6 +267,22 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getByText(/for Grace Hopper/)).toBeInTheDocument();
   });
 
+  it('truncates an unresolved API key id in the Who cell instead of letting it overflow the next column', () => {
+    const keyId = '6650f1c2a9b3e4d5f6071829';
+    renderSection({
+      view: view({
+        entries: [entry({ principalKind: 'apiKey', principalId: keyId, principalName: undefined })],
+      }),
+    });
+    const who = screen.getByTestId('datalake-config-history-who');
+    expect(who).toHaveTextContent(keyId);
+    expect(who).toHaveAttribute('title', keyId);
+    const style = getComputedStyle(who);
+    expect(style.whiteSpace).toBe('nowrap');
+    expect(style.overflow).toBe('hidden');
+    expect(style.textOverflow).toBe('ellipsis');
+  });
+
   it('renders a long system prompt in the fingerprint form and NEVER the prompt text', () => {
     const secret = 'you are a helpful assistant with privileged instructions';
     renderSection({
