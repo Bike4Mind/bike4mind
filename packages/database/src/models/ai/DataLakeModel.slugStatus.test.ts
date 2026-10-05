@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { DataLakeStatus, IDataLake } from '@bike4mind/common';
-import { dataLakeRepository } from './DataLakeModel';
+import { DataLakeModel, dataLakeRepository } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 /**
@@ -45,6 +45,14 @@ describe('DataLakeRepository slug lookups skip deleted and purging lakes', () =>
     expect((await dataLakeRepository.findBySlug('own', [ORG]))?.id).toBe(own.id);
     expect((await dataLakeRepository.findBySlug('orgless'))?.id).toBe(orgless.id);
     expect((await dataLakeRepository.findBySlugAmongIds('own', [own.id]))?.id).toBe(own.id);
+  });
+
+  it('a legacy lake with no status field still resolves by slug', async () => {
+    // Raw insert: the repository would stamp a status, and $nin must keep matching rows without one.
+    const { insertedId } = await DataLakeModel.collection.insertOne({ ...lake('legacy', 'active'), status: undefined });
+    await DataLakeModel.collection.updateOne({ _id: insertedId }, { $unset: { status: '' } });
+
+    expect((await dataLakeRepository.findBySlug('legacy'))?.id).toBe(insertedId.toString());
   });
 
   it('a deleted own-org lake falls through to an org-less lake sharing its slug', async () => {

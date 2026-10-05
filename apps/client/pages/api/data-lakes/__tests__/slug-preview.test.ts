@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, ForbiddenError } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   captured: {} as { get?: (req: unknown, res: unknown) => Promise<unknown> },
@@ -47,12 +47,23 @@ describe('GET /api/data-lakes/slug-preview', () => {
     expect(h.previewDataLakeSlug).not.toHaveBeenCalled();
   });
 
-  it.each([{}, { name: '' }, { name: '  ' }, { name: ['a', 'b'] }])('400s on a bad name %j', async query => {
-    await expect(get(query).done).rejects.toBeInstanceOf(BadRequestError);
-  });
+  it.each([{}, { name: '' }, { name: '  ' }, { name: ['a', 'b'] }, { name: '!!!' }])(
+    '400s on a bad name %j',
+    async query => {
+      await expect(get(query).done).rejects.toBeInstanceOf(BadRequestError);
+      expect(h.previewDataLakeSlug).not.toHaveBeenCalled();
+    }
+  );
 
   it('400s on a repeated organizationId', async () => {
     await expect(get({ name: 'x', organizationId: ['a', 'b'] }).done).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it('404s on an org the caller cannot use, before computing any slug', async () => {
+    h.resolveActiveOrg.mockRejectedValue(new NotFoundError('Organization not found.'));
+
+    await expect(get({ name: 'x-lake', organizationId: 'org-x' }).done).rejects.toBeInstanceOf(NotFoundError);
+    expect(h.previewDataLakeSlug).not.toHaveBeenCalled();
   });
 
   it('resolves the org like create and returns only the slug', async () => {
