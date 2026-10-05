@@ -38,6 +38,5 @@ export const sessionDeleteContract = defineEndpoint({
   codeSample: {
     authToken: 'b4m_live_<key>',
     streaming: false,
-    body: {},
   },
 });

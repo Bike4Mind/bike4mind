@@ -61,7 +61,7 @@ const deleteHandler = nextRouteForContract(sessionDeleteContract).delete(async (
 
   await logEvent({ userId, type: SessionEvents.DELETE_SESSION, metadata: { sessionId: id } }, { ability: req.ability });
 
-  return res.json({ newLastNotebookId: newLastNotebook?.id || null });
+  return res.json({ newLastNotebookId: newLastNotebook?.id ?? null });
 });
 
 // PUT used to be unscoped: any valid API key could call it (undocumented), including
