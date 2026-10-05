@@ -115,7 +115,7 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
 // what every other test here expects.
-const { tagCountsState, uncategorizedState } = vi.hoisted(() => ({
+const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => ({
   tagCountsState: {
     tagCounts: [] as { tag: string; count: number }[],
     total: 0,
@@ -130,7 +130,9 @@ const { tagCountsState, uncategorizedState } = vi.hoisted(() => ({
     lakeIds: [] as Array<string | null>,
     total: undefined as number | undefined,
     isError: false,
+    isLoading: undefined as boolean | undefined,
   },
+  articleParams: [] as Array<{ tags?: string[] } | null | undefined>,
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -154,12 +156,13 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     if (enabled && lakeId) uncategorizedState.lakeIds.push(lakeId);
     return {
       data: { data: uncategorizedState.files, total: uncategorizedState.total },
-      isLoading: false,
+      isLoading: uncategorizedState.isLoading ?? false,
       isError: uncategorizedState.isError,
     };
   },
   // id query (deep-link) resolves to a file; tag query resolves empty.
-  useGetDataLakeArticles: (params?: { id?: string } | null) => {
+  useGetDataLakeArticles: (params?: { id?: string; tags?: string[] } | null) => {
+    articleParams.push(params);
     return {
       data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
       isLoading: false,
@@ -887,6 +890,8 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       uncategorizedState.isError = false;
       uncategorizedState.total = undefined;
       uncategorizedState.lakeIds = [];
+      uncategorizedState.isLoading = false;
+      articleParams.length = 0;
     });
     afterEach(() => {
       tagCountsState.uncategorizedFileCounts = {};
@@ -943,6 +948,29 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       nav(['lakea', U]);
 
       expect(tree()).toHaveAttribute('data-uncategorized-count', '3');
+    });
+
+    it('shows the tree loading while the opened bucket is still fetching', () => {
+      uncategorizedState.isLoading = true;
+      renderExplorer();
+      nav(['lakea', U]);
+
+      expect(tree()).toHaveAttribute('data-loading', 'true');
+    });
+
+    it('a closed row shows the tag-count figure, not a cached fetched total', () => {
+      uncategorizedState.total = 3;
+      renderExplorer();
+      nav(['lakea']);
+
+      expect(tree()).toHaveAttribute('data-uncategorized-count', '1');
+    });
+
+    it('skips the leaf articles fetch in a lake folder that holds only its bucket', () => {
+      renderExplorer();
+      nav(['lakea']);
+
+      expect(articleParams.some(p => p?.tags?.includes('lakea'))).toBe(false);
     });
 
     it('keeps the bucket open at count 0 in the merged view, with its depth and lake id', () => {

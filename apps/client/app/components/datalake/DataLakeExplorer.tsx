@@ -434,6 +434,7 @@ export default function DataLakeExplorer({
   // Each lake owns its Uncategorized bucket (members with no tag under its prefix): at the root
   // when one lake is scoped, otherwise inside that lake's folder. The merged root has none, and a
   // multi-lake scope offers none. Count and files come from the per-lake figure and route.
+  // A lake whose prefix is shared with another lake or nested under one resolves to no lake here, so its bucket is reached by selecting that lake in the picker.
   const isUncategorizedOpen = breadcrumb[breadcrumb.length - 1] === UNCATEGORIZED_KEY;
   const folderPath = isUncategorizedOpen ? breadcrumb.slice(0, -1) : breadcrumb;
   const bucketLake = soleSelectedLake ?? (selectedLakes.length === 0 ? lakeForPath(folderPath) : undefined) ?? null;
@@ -465,8 +466,11 @@ export default function DataLakeExplorer({
 
   // The bucket's key is synthetic, not a tag, so it must never become a leafTag: joining it would
   // fire an articles query for a tag no file carries and render its empty result as the bucket.
+  const bucketPinnedHere = uncategorized?.depth !== undefined && uncategorized.count > 0;
   const leafTag =
-    !isUncategorizedOpen && breadcrumb.length > 0 && (currentNodes.length === 0 || (currentNode?.ownFileCount ?? 0) > 0)
+    !isUncategorizedOpen &&
+    breadcrumb.length > 0 &&
+    ((currentNodes.length === 0 && !bucketPinnedHere) || (currentNode?.ownFileCount ?? 0) > 0)
       ? breadcrumb.join(':')
       : null;
 

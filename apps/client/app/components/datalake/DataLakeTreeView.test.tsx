@@ -335,6 +335,11 @@ describe('DataLakeTreeView uncategorized bucket', () => {
     expect(screen.getByText('No matches')).toBeTruthy();
   });
 
+  it('draws the root bucket at an empty path below a seeded root (leafMinDepth is a ceiling)', () => {
+    renderTree({ uncategorized, breadcrumb: [], leafMinDepth: 1 });
+    expect(screen.getByTestId('datalake-node-uncategorized')).toBeTruthy();
+  });
+
   it('opens the bucket via the synthetic breadcrumb key and lists its files', () => {
     const { onNavigate } = renderTree({ uncategorized });
     fireEvent.click(screen.getByTestId('datalake-node-uncategorized'));

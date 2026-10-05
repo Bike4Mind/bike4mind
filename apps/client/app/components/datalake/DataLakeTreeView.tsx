@@ -119,8 +119,9 @@ export interface DataLakeTreeViewProps {
     count?: number;
     /**
      * Breadcrumb length of the folder that holds the row. Unset keeps the root bucket (at
-     * leafMinDepth); set, the row appears only in that folder, for a bucket owned by one lake
-     * among several.
+     * leafMinDepth). Set, the row is drawn at that depth; the host decides WHICH folder by
+     * passing the prop only where the row belongs (the chat tree passes it only at a lake's
+     * own folder).
      */
     depth?: number;
     renderRow: (count: number, onOpen: () => void) => ReactNode;
