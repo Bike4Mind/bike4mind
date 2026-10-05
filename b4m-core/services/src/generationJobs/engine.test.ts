@@ -1,0 +1,272 @@
+import { describe, expect, it, vi } from 'vitest';
+import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
+import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
+import { GenerationJobEngine } from './engine';
+import type { GenerationJobHandler, StepResult } from './types';
+
+const payload = {
+  request: {
+    model: 'test-video',
+    mode: 'text_to_video',
+    prompt: 'p',
+    durationSeconds: 4,
+    aspectRatio: '16:9',
+    resolution: '720p',
+  },
+  providerId: 'test',
+} as IGenerationJob['payload'];
+
+const LEASE_MS = 330_000;
+
+const setup = () => {
+  let clock = new Date('2026-10-06T00:00:00Z');
+  const now = () => clock;
+  const repository = createInMemoryGenerationJobRepository({ now });
+  const enqueue = vi.fn(async (_jobId: string, _delay: number) => undefined);
+  const notify = vi.fn(async () => undefined);
+  const results: Record<'submit' | 'poll' | 'store', Array<StepResult | Error>> = { submit: [], poll: [], store: [] };
+  const take = (step: 'submit' | 'poll' | 'store') => async () => {
+    const next = results[step].shift();
+    if (!next) throw new Error(`no scripted ${step} result`);
+    if (next instanceof Error) throw next;
+    return next;
+  };
+  const handler: GenerationJobHandler = {
+    kind: 'video',
+    maxWallClockMs: 20 * 60_000,
+    submit: vi.fn(take('submit')),
+    poll: vi.fn(take('poll')),
+    store: vi.fn(take('store')),
+    cancelAtProvider: vi.fn(async () => undefined),
+    onTerminal: vi.fn(async () => undefined),
+  };
+  const logger = new Logger({ metadata: { test: 'engine' } });
+  const engine = new GenerationJobEngine({
+    repository,
+    handlers: [handler],
+    enqueue,
+    notify,
+    now,
+    logger,
+    leaseMs: LEASE_MS,
+  });
+  const create = (overrides: Partial<IGenerationJob> = {}) =>
+    repository.createJob({
+      kind: 'video',
+      ownerType: CreditHolderType.User,
+      ownerId: 'u1',
+      requestedBy: 'u1',
+      source: 'studio',
+      state: 'pending',
+      payload,
+      pollCount: 0,
+      attempts: 0,
+      cancelRequested: false,
+      deadlineAt: new Date(clock.getTime() + 20 * 60_000),
+      creditHold: null,
+      ...overrides,
+    });
+  return {
+    engine,
+    repository,
+    handler,
+    enqueue,
+    notify,
+    results,
+    create,
+    logger,
+    now,
+    advance: (ms: number) => (clock = new Date(clock.getTime() + ms)),
+  };
+};
+
+const errorLogsNamed = (spy: ReturnType<typeof vi.spyOn>, name: string) =>
+  spy.mock.calls.filter(call => call[0] === name);
+
+describe('GenerationJobEngine', () => {
+  it('runs submit -> poll -> store -> succeeded, one step per message, then settles once', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.results.submit.push({ next: 'running', payload: { ...payload, providerHandle: { provider: 'test', data: {} } } });
+    t.results.poll.push({ next: 'poll_again', progress: 0.5 }, { next: 'storing', payload });
+    t.results.store.push({ next: 'succeeded', payload });
+
+    expect(await t.engine.step(job.id)).toBe('advanced'); // submit
+    expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 5);
+    expect(await t.engine.step(job.id)).toBe('advanced'); // poll: still running
+    expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 10);
+    expect(await t.engine.step(job.id)).toBe('advanced'); // poll: done
+    expect(await t.engine.step(job.id)).toBe('terminal'); // store
+
+    const final = t.repository.jobs.get(job.id)!;
+    expect(final.state).toBe('succeeded');
+    expect(final.terminalHandledAt).toBeTruthy();
+    expect(final.leaseUntil).toBeNull();
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+    expect(t.notify).toHaveBeenCalled();
+  });
+
+  it('duplicate message while leased is a no-op', async () => {
+    const t = setup();
+    const job = await t.create();
+    await t.repository.acquireLease(job.id, new Date('2026-10-06T00:00:00Z'), new Date('2026-10-06T00:05:30Z'));
+    expect(await t.engine.step(job.id)).toBe('skipped');
+    expect(t.handler.submit).not.toHaveBeenCalled();
+  });
+
+  it('marks the submit attempt before calling the provider', async () => {
+    const t = setup();
+    const job = await t.create();
+    vi.mocked(t.handler.submit).mockImplementationOnce(async () => {
+      expect(t.repository.jobs.get(job.id)!.submitAttemptedAt).toBeTruthy();
+      return { next: 'running', payload } satisfies StepResult;
+    });
+    await t.engine.step(job.id);
+    expect(t.handler.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('a pending job with a submit attempt already recorded fails as orphaned_submit without resubmitting', async () => {
+    const t = setup();
+    const job = await t.create({ submitAttemptedAt: new Date('2026-10-05T23:59:00Z') });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.handler.submit).not.toHaveBeenCalled();
+    expect(t.repository.jobs.get(job.id)!.error?.code).toBe('orphaned_submit');
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('a submit with an unknown outcome fails as orphaned_submit immediately', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const job = await t.create();
+    t.results.submit.push(new Error('socket hang up'));
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.error?.code).toBe('orphaned_submit');
+    expect(errorLogsNamed(errorSpy, 'generation_job_orphaned_submit')).toHaveLength(1);
+  });
+
+  it('a definitive submit rejection clears the attempt and retries with backoff', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.results.submit.push({ next: 'retry', reason: 'HTTP 429' });
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    const after = t.repository.jobs.get(job.id)!;
+    expect(after.state).toBe('pending');
+    expect(after.submitAttemptedAt).toBeNull();
+    expect(after.attempts).toBe(1);
+    expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 5);
+
+    t.results.submit.push({ next: 'running', payload });
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.handler.submit).toHaveBeenCalledTimes(2);
+    expect(t.repository.jobs.get(job.id)!.state).toBe('running');
+  });
+
+  it('fails with provider_error after MAX_STEP_ATTEMPTS transient retries', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running', attempts: 4 });
+    t.results.poll.push({ next: 'retry', reason: 'HTTP 503' });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.error?.code).toBe('provider_error');
+  });
+
+  it('an unexpected throw in poll is treated as a transient retry', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    t.results.poll.push(new Error('ECONNRESET'));
+    expect(await t.engine.step(job.id)).toBe('advanced');
+    expect(t.repository.jobs.get(job.id)!.attempts).toBe(1);
+  });
+
+  it('fails with provider_timeout past the deadline and cancels at the provider', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    t.advance(21 * 60_000);
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.error?.code).toBe('provider_timeout');
+    expect(t.handler.cancelAtProvider).toHaveBeenCalled();
+  });
+
+  it('blocked is terminal with content_blocked and still runs onTerminal', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    t.results.poll.push({
+      next: 'blocked',
+      error: { code: 'content_blocked', message: 'policy' },
+      rawProviderError: { x: 1 },
+    });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.state).toBe('blocked');
+    expect(t.repository.jobs.get(job.id)!.rawProviderError).toEqual({ x: 1 });
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['pending', 'running'] as const)('cancel requested while %s cancels', async state => {
+    const t = setup();
+    const job = await t.create({ state });
+    await t.engine.requestCancel(job.id);
+    expect(t.enqueue).toHaveBeenLastCalledWith(job.id, 0);
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.state).toBe('cancelled');
+    expect(t.handler.cancelAtProvider).toHaveBeenCalledTimes(state === 'running' ? 1 : 0);
+  });
+
+  it('requestCancel on a terminal job returns null and enqueues nothing', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'succeeded' });
+    expect(await t.engine.requestCancel(job.id)).toBeNull();
+    expect(t.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('cancel requested while storing is ignored: the result is already paid for', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'storing', cancelRequested: true });
+    t.results.store.push({ next: 'succeeded', payload });
+    await t.engine.step(job.id);
+    expect(t.repository.jobs.get(job.id)!.state).toBe('succeeded');
+  });
+
+  it('re-runs onTerminal for a terminal job left unhandled', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'failed', error: { code: 'provider_error', message: 'x' } });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+    expect(t.repository.jobs.get(job.id)!.terminalHandledAt).toBeTruthy();
+  });
+
+  it('onTerminal is never run twice, even if the first run crashed after claiming', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const job = await t.create({ state: 'failed', error: { code: 'provider_error', message: 'x' } });
+    vi.mocked(t.handler.onTerminal).mockRejectedValueOnce(new Error('db down'));
+    await expect(t.engine.step(job.id)).rejects.toThrow('db down');
+    t.advance(400_000);
+    expect(await t.engine.step(job.id)).toBe('skipped');
+    expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+    expect(errorLogsNamed(errorSpy, 'generation_job_terminal_handling_stuck')).toHaveLength(1);
+    expect(t.repository.jobs.get(job.id)!.leaseUntil).toBeNull();
+  });
+
+  it('a fresh terminal-handling claim held by another run is skipped silently', async () => {
+    const t = setup();
+    const errorSpy = vi.spyOn(t.logger, 'error');
+    const job = await t.create({
+      state: 'failed',
+      error: { code: 'provider_error', message: 'x' },
+      terminalHandlingClaimedAt: t.now(),
+    });
+    t.advance(1_000);
+    expect(await t.engine.step(job.id)).toBe('skipped');
+    expect(t.handler.onTerminal).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(t.repository.jobs.get(job.id)!.leaseUntil).toBeNull();
+  });
+
+  it('a notify failure never fails the step', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.notify.mockRejectedValue(new Error('ws down'));
+    t.results.submit.push({ next: 'running', payload });
+    await expect(t.engine.step(job.id)).resolves.toBe('advanced');
+  });
+});
