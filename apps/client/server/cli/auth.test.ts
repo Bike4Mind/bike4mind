@@ -140,8 +140,16 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
       await expect(checkRateLimit(userId, 'cli')).rejects.toThrow(/Rate limit exceeded/);
     });
 
-    it('gives the desktop app the CLI cap even though its requests resolve to source: api', async () => {
+    it('carries the desktop app past the CLI cap, though its requests resolve to source: api', async () => {
       for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' });
+      }
+      // The point of the client cap: where 'cli' would now throw, the desktop keeps going.
+      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).resolves.toBeUndefined();
+    });
+
+    it('still stops the desktop app at its own cap', async () => {
+      for (let i = 0; i < 6000; i++) {
         await checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' });
       }
       await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(

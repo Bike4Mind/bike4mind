@@ -393,14 +393,21 @@ const JWT_RATE_LIMIT_DEFAULT = 100;
 const JWT_RATE_WINDOW_MS = 60 * 60_000; // 1 hour
 
 /**
- * First-party clients that run the CLI's client-side tool loop against the completions endpoint,
- * so one turn fans out into as many completions. They get the CLI cap; `source` itself, which
- * drives credit and analytics attribution, is left alone. Matched on the User-Agent the client
- * sets, like `resolveApiCompletionSource` does for `b4m-cli/`.
+ * Per-client caps, overriding the source cap for first-party clients that run a client-side
+ * tool loop against the completions endpoint - one turn fans out into one completion per tool
+ * round, so their ceiling has to be counted in rounds rather than turns.
+ *
+ * This only moves the ceiling. `source` is left alone, so credit and analytics still attribute
+ * the traffic to the surface it came from. Matched on the User-Agent the client sets, the same
+ * signal `resolveApiCompletionSource` uses for `b4m-cli/`.
  */
-const CLI_TIER_CLIENT = /^b4m-desktop\//i;
+const JWT_RATE_LIMIT_BY_CLIENT: ReadonlyArray<{ pattern: RegExp; limit: number }> = [
+  { pattern: /^b4m-desktop\//i, limit: 6000 },
+];
 
-function getJwtRateLimit(source?: CompletionSource): number {
+function getJwtRateLimit(source?: CompletionSource, client?: string): number {
+  const byClient = client && JWT_RATE_LIMIT_BY_CLIENT.find(entry => entry.pattern.test(client));
+  if (byClient) return byClient.limit;
   if (!source) return JWT_RATE_LIMIT_DEFAULT;
   return JWT_RATE_LIMIT_BY_SOURCE[source] ?? JWT_RATE_LIMIT_DEFAULT;
 }
@@ -436,7 +443,7 @@ export async function checkRateLimit(
 ): Promise<void> {
   const key = jwtRateLimitKey(userId, options.bucket);
   const adapters = { db: { caches: cacheRepository } };
-  const limit = getJwtRateLimit(options.client && CLI_TIER_CLIENT.test(options.client) ? 'cli' : source);
+  const limit = getJwtRateLimit(source, options.client);
 
   const current = await cacheService.get({ key }, { ...adapters, schema: z.coerce.number() });
   if (current === null) {
