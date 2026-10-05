@@ -130,8 +130,19 @@ export interface ChatToolCall {
    * against it however the user answered an earlier identical call.
    */
   approvalIrreversible?: boolean;
-  /** Set with `approvalId` on a shell call: what ticking "always" will cover, ready to display. */
+  /**
+   * Set with `approvalId` on a shell call: the SCOPE an "always" would grant, ready to display
+   * beside the buttons. Capped and with its paths abbreviated, because it is written from the
+   * command and a command can name any number of directories. Never a button label: the card
+   * names the action on the button and puts this next to it.
+   */
   approvalAlways?: string;
+  /**
+   * The same scope with nothing capped and no path shortened, for the card's tooltip. Set only
+   * when it differs from `approvalAlways` - an abbreviated path must not be the only account of
+   * what is being granted.
+   */
+  approvalAlwaysFull?: string;
   /**
    * Set with `approvalId` when the call can be allowed in more than one way, so the card draws
    * a split button rather than a plain "allow". The chosen option is folded into `input` before

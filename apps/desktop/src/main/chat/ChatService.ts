@@ -58,6 +58,7 @@ import {
   withCacheBreakpoints,
   type CompletionMessage,
 } from './completions';
+import { describeAlways } from './approvalScope';
 import { reasoningEffortFor } from './reasoningEffort';
 import { addUsage, foldUsage } from './streamEvents';
 import { findStaleResults, historyRounds, sentHistory, toolResultContent } from './contextPruning';
@@ -93,7 +94,6 @@ import {
   capOutput,
   outputCapFor,
   type ApprovalOption,
-  type ApprovalAlways,
   type ApprovalPrompt,
   type BrowserContext,
   type BrowserProvider,
@@ -2578,6 +2578,7 @@ export class ChatService {
     }
 
     const choice = prompt.choice ? { options: prompt.choice.options.map(toWireOption) } : undefined;
+    const alwaysScope = prompt.always ? describeAlways(prompt.always, context.workingDirectory) : undefined;
     const answer = await gate.request(
       sessionId,
       prompt.key,
@@ -2595,8 +2596,11 @@ export class ChatService {
             ...(prompt.diff ? { approvalDiff: prompt.diff } : {}),
             ...(prompt.diffs ? { approvalDiffs: prompt.diffs } : {}),
             ...(prompt.irreversible ? { approvalIrreversible: true } : {}),
-            ...(prompt.always && describeAlways(prompt.always)
-              ? { approvalAlways: describeAlways(prompt.always) }
+            ...(alwaysScope
+              ? {
+                  approvalAlways: alwaysScope.shown,
+                  ...(alwaysScope.full === alwaysScope.shown ? {} : { approvalAlwaysFull: alwaysScope.full }),
+                }
               : {}),
             ...(choice ? { approvalChoice: choice } : {}),
           },
@@ -3471,16 +3475,6 @@ function worktreePreamble(projectDirectory: string, workspace: { branch: string;
 interface ApprovalOutcome {
   settled?: ChatToolCall;
   input: Record<string, unknown>;
-}
-
-/** What ticking "always" on a shell card will cover, in the words the checkbox shows. */
-function describeAlways(always: ApprovalAlways): string | undefined {
-  const patterns = [...new Set(always.commands.map(command => command.pattern))];
-  if (patterns.length === 0 && always.directories.length === 0) return undefined;
-  const shown = patterns.slice(0, 3).map(pattern => `\`${pattern}\``);
-  if (patterns.length > 3) shown.push(`${patterns.length - 3} more`);
-  const directories = always.directories.map(directory => `${directory}/*`);
-  return `Always allow ${[...shown, ...directories].join(', ')} in this conversation`;
 }
 
 function findOption(prompt: ApprovalPrompt, optionId: string | undefined): ApprovalOption | undefined {

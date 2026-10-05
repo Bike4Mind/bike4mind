@@ -48,10 +48,59 @@ describe('ToolCallList', () => {
     expect(html).toContain('data-testid="chat-tool-deny"');
   });
 
+  /**
+   * The button says the action and nothing else. It used to carry the whole granted scope, so a
+   * command touching two directories gave the broadest choice on the card the widest button.
+   */
+  it('keeps the always-allow button to a fixed label and puts the scope beside it', () => {
+    const html = markup([
+      awaiting({
+        approvalAlways: '`ls *`, `head *`, ~/Javascript/*, ./*',
+        approvalAlwaysFull: '`ls *`, `head *`, /Users/jude/Javascript/*, /Users/jude/Javascript/bike4mind/*',
+      }),
+    ]);
+    const button = html.slice(html.indexOf('data-testid="chat-tool-approve-always"'));
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('Always allow');
+    expect(button.slice(0, button.indexOf('</button>'))).not.toContain('~/Javascript');
+
+    expect(html).toContain('data-testid="chat-tool-approval-scope"');
+    expect(html).toContain('~/Javascript/*');
+    expect(html).toContain('for the rest of this conversation');
+    // The abbreviated paths are not the only account of what is granted.
+    expect(html).toContain('/Users/jude/Javascript/bike4mind/*');
+  });
+
+  /** The fallback: a tool whose "always" covers no patterns and no directories. */
+  it('still offers always-allow when there is no scope to name', () => {
+    const html = markup([awaiting()]);
+    expect(html).toContain('data-testid="chat-tool-approve-always"');
+    expect(html).toContain('data-testid="chat-tool-approval-scope"');
+    expect(html).toContain('applies for the rest of this conversation');
+  });
+
   it('withholds "always" on a call that cannot be undone', () => {
     const html = markup([awaiting({ approvalIrreversible: true })]);
     expect(html).toContain('data-irreversible="true"');
     expect(html).not.toContain('data-testid="chat-tool-approve-always"');
+    // No standing grant to describe, so no line promising one.
+    expect(html).not.toContain('data-testid="chat-tool-approval-scope"');
+    expect(html).toContain('Delete it');
+    expect(html).toContain('Keep it');
+  });
+
+  /** The write variants keep their own wording either side of the restructured button row. */
+  it('keeps the diff wording for one file and for a patch across several', () => {
+    const diff = (path: string) => ({ path, operation: 'edit' as const, added: 1, removed: 0, lines: [] });
+
+    const one = markup([awaiting({ approvalDiff: diff('/a/one.ts') })]);
+    expect(one).toContain('Apply this edit?');
+    expect(one).toContain('Apply this change');
+    // Static markup escapes the apostrophe.
+    expect(one).toContain('Don&#x27;t change it');
+
+    const many = markup([awaiting({ approvalDiffs: [diff('/a/one.ts'), diff('/a/two.ts')] })]);
+    expect(many).toContain('Apply this patch to 2 files?');
+    expect(many).toContain('data-testid="chat-tool-approve-always"');
   });
 
   it('offers a running command a way out of the foreground', () => {
