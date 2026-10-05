@@ -53,7 +53,8 @@ export const exploreTool: ToolDefinition = {
       'points" section quoting verbatim the code you will need to change or copy a pattern from, ' +
       'so you can edit against it without reading those files again. Use it for exploration that would take many searches and reads, and call it several ' +
       'times in one reply with different questions to explore in parallel. When you already know ' +
-      'the file or symbol, use grep_search or file_read directly instead.',
+      'the file or symbol, use grep_search or file_read directly instead. Once you have delegated a ' +
+      'search, do not redo it yourself; use the report.',
     parameters: {
       type: 'object',
       properties: {
