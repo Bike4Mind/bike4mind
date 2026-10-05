@@ -1,7 +1,23 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IGenerationJobDocument, VideoProviderId } from '@bike4mind/common';
 
-vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'https://ws.example.test' } } }));
+const { queueLink, getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
+  queueLink: { mode: 'direct' as 'direct' | 'throws' },
+  getSourceQueueUrl: vi.fn(),
+  sendToQueue: vi.fn(),
+}));
+
+// A getter mirrors sst's Resource proxy, which throws when a key is not linked to the Lambda.
+vi.mock('sst', () => ({
+  Resource: {
+    websocket: { managementEndpoint: 'https://ws.example.test' },
+    get generationJobQueue(): { url: string } {
+      if (queueLink.mode === 'throws') throw new Error('generationJobQueue is not linked');
+      return { url: 'https://sqs.example.test/direct' };
+    },
+  },
+}));
+vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: vi.fn(),
   getGeneratedImageStorage: vi.fn(),
@@ -14,9 +30,9 @@ vi.mock('@bike4mind/auth', async importOriginal => {
     apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn(async () => ({})) },
   };
 });
-vi.mock('@server/utils/sqs', () => ({ sendToQueue: vi.fn() }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
 
-import { getVideoJobDeps, selectProviderKey, toJobUpdate, usableApiKey } from './wiring';
+import { enqueueGenerationJob, getVideoJobDeps, selectProviderKey, toJobUpdate, usableApiKey } from './wiring';
 
 const baseJob = {
   id: 'job1',
@@ -92,5 +108,34 @@ describe('toJobUpdate', () => {
       error: { code: 'provider_error', message: 'boom' },
     } as IGenerationJobDocument);
     expect(update.job).toMatchObject({ progress: 0.5, error: { code: 'provider_error', message: 'boom' } });
+  });
+});
+
+describe('enqueueGenerationJob queue URL resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queueLink.mode = 'direct';
+    getSourceQueueUrl.mockReturnValue('https://sqs.example.test/registry');
+  });
+
+  it('prefers the directly linked queue and passes the delay through unchanged', async () => {
+    await enqueueGenerationJob('job1', 30);
+    expect(sendToQueue).toHaveBeenCalledWith('https://sqs.example.test/direct', { jobId: 'job1' }, 30);
+    expect(getSourceQueueUrl).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the sourceQueueUrls registry when the queue is not linked directly', async () => {
+    queueLink.mode = 'throws';
+    await enqueueGenerationJob('job2', 0);
+    expect(sendToQueue).toHaveBeenCalledWith('https://sqs.example.test/registry', { jobId: 'job2' }, 0);
+  });
+
+  it('rejects loudly, without sending, when neither source resolves a URL', async () => {
+    queueLink.mode = 'throws';
+    getSourceQueueUrl.mockImplementation(() => {
+      throw new Error('Missing source queue URL for: generationJobQueue.');
+    });
+    await expect(enqueueGenerationJob('job3', 5)).rejects.toThrow('Missing source queue URL');
+    expect(sendToQueue).not.toHaveBeenCalled();
   });
 });
