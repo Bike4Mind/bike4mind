@@ -41,7 +41,7 @@ type DimensionBounds = { min: number; max: number; step?: number };
  * to fit, since using one and defaulting the other would distort the aspect ratio.
  *
  * An explicit pair outside the bounds is scaled as a unit until it fits (2048x1024 becomes
- * 1440x720), so the caller's aspect ratio survives; each axis is clamped only when no uniform
+ * 1440x736), so the caller's aspect ratio survives; each axis is clamped only when no uniform
  * scale can fit both, i.e. the ratio itself is wider than the bounds allow.
  *
  * With a `step`, each resolved dimension is rounded to the nearest multiple of it. That covers
@@ -76,6 +76,8 @@ function fitScale(width: number | undefined, height: number | undefined, bounds:
   if (width === undefined || height === undefined) return 1;
   const longer = Math.max(width, height);
   const shorter = Math.min(width, height);
+  // A non-positive side has no ratio to preserve; leave it to the per-axis clamp instead of dividing by zero.
+  if (shorter <= 0) return 1;
   if (longer > bounds.max) return bounds.max / longer;
   if (shorter < bounds.min) return bounds.min / shorter;
   return 1;

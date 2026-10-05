@@ -47,6 +47,17 @@ describe('resolveImageDimensions', () => {
     });
   });
 
+  it('falls back to per-axis clamping when a dimension is zero', () => {
+    expect(resolveImageDimensions({ width: 0, height: 768 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 256,
+      height: 768,
+    });
+    expect(resolveImageDimensions({ width: 0, height: 0 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 256,
+      height: 256,
+    });
+  });
+
   it('clamps each axis only when the ratio is wider than the bounds allow', () => {
     expect(resolveImageDimensions({ width: 4000, height: 400 }, BFL_DIMENSION_BOUNDS)).toEqual({
       width: 1440,
