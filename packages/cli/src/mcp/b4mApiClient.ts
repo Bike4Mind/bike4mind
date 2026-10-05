@@ -40,7 +40,8 @@ export interface ChatWaitResponse {
   // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
   // caller sending `newConversation: true`) gets a freshly created notebook's id here.
   sessionId?: string;
-  // The wait path returns the reply in `responses`; the scalar `response` is null.
+  // `response` is the visible answer text; `responses` is the raw reply slots. Older servers left
+  // `response` null on the wait path.
   response?: string | null;
   responses?: string[];
   // Failure classifier. A failed turn still resolves 200 with the explanation in the reply

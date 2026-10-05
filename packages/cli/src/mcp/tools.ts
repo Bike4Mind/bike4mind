@@ -188,8 +188,8 @@ export async function sendMessage(
     }
   }
 
-  // The completed quest carries the assistant reply in `responses` (a string
-  // array); the scalar `response` is null on the wait path, so prefer `responses`.
+  // The completed quest carries the raw reply slots in `responses` and the visible answer
+  // text in `response`. Older servers left `response` null on the wait path, so prefer `responses`.
   const reply = res.responses && res.responses.length > 0 ? res.responses.join('\n\n') : (res.response ?? '');
 
   return { notebookId, questId, reply, model: res.model };
