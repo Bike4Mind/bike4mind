@@ -453,7 +453,8 @@ export class ServerSubagentOrchestrator {
     // Filter parent's tools for the subagent, then merge in any opt-in tools the
     // agent explicitly requested (e.g. Lattice). Opt-in tools require an explicit
     // `allowedTools` match — they're never granted by the allow-all default — and
-    // are deduped against the parent set.
+    // are deduped against the parent set. The save tool's lake companions are not paired here:
+    // `allowedTools` is an explicit whitelist, which the agent paths never pair past (pairDataLakeTools).
     const filteredTools = selectSubagentTools(
       this.deps.parentTools,
       this.deps.optInTools ?? [],

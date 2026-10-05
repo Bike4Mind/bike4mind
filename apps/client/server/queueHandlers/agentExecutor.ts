@@ -69,6 +69,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
@@ -175,7 +176,9 @@ import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
   resolveTopLevelProfile,
   pickEffectiveMaxIterations,
-  pickEffectiveEnabledTools,
+  resolveInvocationEnabledTools,
+  hasApprover,
+  mcpSessionDisabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
 import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
@@ -1283,6 +1286,8 @@ async function processExecution(
           // parent belongs to. Distinct from `questId` above, which means different things per
           // dispatch lineage and must never be read as a Quest id (#1867).
           linkedQuestId: execution.linkedQuestId,
+          ...(execution.apiKeyId && { apiKeyId: execution.apiKeyId }),
+          ...(execution.scopeDeniedTools?.length && { scopeDeniedTools: execution.scopeDeniedTools }),
           query: info.task,
           model: info.model,
           approvedTools: [] as string[],
@@ -1524,6 +1529,8 @@ async function processExecution(
         questId: execution.questId,
         // See baseFields above - inherited so DAG-node audit rows link to the parent's turn.
         linkedQuestId: execution.linkedQuestId,
+        apiKeyId: execution.apiKeyId,
+        scopeDeniedTools: execution.scopeDeniedTools,
         spawnedByExecutionId: executionId,
         enableArtifacts: callerEnableArtifacts,
       },
@@ -1576,6 +1583,10 @@ async function processExecution(
       userId: execution.userId,
       user: user as IUserDocument,
       logger,
+      // The run's active account, already membership-checked at start; lake-creating tools scope to it.
+      organizationId: execution.organizationId,
+      // Attributes a lake write a tool drives to the key that started the run, as on the chat doors.
+      apiKeyId: execution.apiKeyId,
       // Generic retrieval exclusion (opt-in per session) - thread it here so the agent's
       // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
       // (an excluded file leaks + gets cited). Session is resolved above at execution start.
@@ -1628,6 +1639,7 @@ async function processExecution(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every agent-mode run: context.db.sessions was undefined here, so an agent
         // session's imageCount never moved even though the tools ran and the images landed on
@@ -1783,13 +1795,18 @@ async function processExecution(
     // default `enabledTools` when the payload doesn't pin them - that's how
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
-    const profileEnabledTools = orchestrationProfile
-      ? pickEffectiveEnabledTools(
-          startPayload?.enabledTools,
-          orchestrationProfile,
-          startPayload?.enabledToolsAreAmbient
-        )
-      : (startPayload?.enabledTools ?? []);
+    const profileEnabledTools = resolveInvocationEnabledTools({
+      isNewExecution,
+      persistedEnabledTools: execution.resolvedEnabledTools,
+      persistedProfileDeniedTools: execution.profileDeniedTools,
+      payloadEnabledTools: startPayload?.enabledTools,
+      payloadIsAmbient: startPayload?.enabledToolsAreAmbient,
+      profile: orchestrationProfile,
+      hasApprover: hasApprover(execution.connectionId),
+    });
+    if (isNewExecution) {
+      await agentExecutionRepository.persistResolvedEnabledTools(executionId, profileEnabledTools);
+    }
 
     // Lattice parity with chat_completion. Mirrors
     // `ChatCompletionProcess`'s `enableLattice` consumption: append the Lattice
@@ -1865,8 +1882,9 @@ async function processExecution(
     const resolvedToolNames = applySessionToolPolicy({
       toolNames: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
       session,
-      profileDeniedTools: orchestrationProfile?.deniedTools,
+      profileDeniedTools: orchestrationProfile?.deniedTools ?? execution.profileDeniedTools,
       hasAttachments: runHasAttachments(execution, session.knowledgeIds),
+      scopeDeniedTools: execution.scopeDeniedTools,
       logger,
     });
 
@@ -1880,7 +1898,11 @@ async function processExecution(
       // them to `toolNames`, which MCP tools never pass through, so a profile that denies
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
-      sessionDisabledTools: [...(session.disabledTools ?? []), ...(orchestrationProfile?.deniedTools ?? [])],
+      sessionDisabledTools: mcpSessionDisabledTools(
+        session.disabledTools,
+        orchestrationProfile?.deniedTools,
+        execution.profileDeniedTools
+      ),
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
@@ -3399,6 +3421,8 @@ async function processSubagentDispatch(
       userId: child.userId,
       user: user as IUserDocument,
       logger,
+      organizationId: child.organizationId,
+      apiKeyId: child.apiKeyId,
       // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
       // parent toolbelt). Session is resolved above from the child's sessionId.
       retrievalFilter: toRetrievalFilter(session),
@@ -3447,6 +3471,7 @@ async function processSubagentDispatch(
         organizations: organizationRepository,
         lakeAccessEvents: lakeAccessEventRepository,
         scopedSettings: scopedSettingsRepository,
+        ...lakeWriteToolDb,
         // Without this the image_generation/edit_image tools' recordGeneratedImages() silently
         // no-ops for every image a delegated subagent generates (same gap as the top-level path).
         sessions: { incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository) },
@@ -3540,7 +3565,7 @@ async function processSubagentDispatch(
       config: subagentToolConfig,
       // This site passes no `enabledTools`, so the denylist is the only thing standing between a
       // session-forbidden MCP tool and a dispatched subagent.
-      sessionDisabledTools: session.disabledTools,
+      sessionDisabledTools: [...(session.disabledTools ?? []), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
       // tools are excluded from the return), and that return is passed as the
