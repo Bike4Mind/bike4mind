@@ -113,10 +113,10 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
     'How the prompt is treated before it reaches the image model. `"auto"` (the default) resolves it ' +
       'against the session history, so a follow-up such as "make it darker" is rewritten to carry the ' +
       'previous subject and the prior image is fed back as input. `"literal"` skips that step: the ' +
-      'prompt is sent byte-for-byte, `intent` is `"fresh"`, `promptWasEnhanced` is `false`, and a ' +
-      'prior session image is carried forward only for models that cannot run without an input ' +
-      'image. Use `"literal"` when the prompt is already self-contained, for example when an agent or ' +
-      'pipeline builds it.'
+      "prompt is sent unchanged (apart from truncation to the model's prompt limit), `intent` is " +
+      '`"fresh"`, `promptWasEnhanced` is `false`, and a prior session image is carried forward only ' +
+      'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
+      'self-contained, for example when an agent or pipeline builds it.'
   ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;

@@ -64,8 +64,9 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
 
     const originalPrompt = body.prompt;
     // 'literal' callers own their prompt (agents, pipelines): skip the resolver entirely so the
-    // model receives it byte-for-byte; the 'fresh' intent also stops the prior image being carried
-    // forward, except for models that require an input image (ImageGeneration.ts).
+    // model receives it unchanged, bar ImageGeneration's truncation to the model's prompt limit; the
+    // 'fresh' intent also stops the prior image being carried forward, except for models that
+    // require an input image (ImageGeneration.ts).
     const shouldResolvePrompt = !!originalPrompt && promptResolution !== 'literal';
 
     // Resolve the prompt against session history (text + image). Runs whenever the session has any
