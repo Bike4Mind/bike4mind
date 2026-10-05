@@ -3,7 +3,7 @@ import crypto from 'crypto';
 /**
  * The outbound signed-webhook wire format, shared by every handler that POSTs to a
  * caller-owned endpoint (apps/workers/src/queueHandlers/webhookDelivery.ts,
- * queueHandlers/generationCallback.ts)
+ * apps/client/server/queueHandlers/generationCallback.ts)
  * so receivers verify all of them the same way. Changing a header name or the signed-string
  * layout breaks every integration already verifying it.
  */

@@ -68,7 +68,7 @@ function infraHandlers(): { file: string; handler: string }[] {
       const file = path.join(entry.parentPath, entry.name);
       return [...fs.readFileSync(file, 'utf8').matchAll(/handler:\s*['"`]([^'"`]+)['"`]/g)].map(([, handler]) => ({
         file: path.relative(REPO_ROOT, file),
-        handler,
+        handler: handler.replace(/^\.\//, ''),
       }));
     });
 }
