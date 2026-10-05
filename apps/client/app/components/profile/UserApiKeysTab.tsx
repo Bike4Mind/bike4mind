@@ -786,7 +786,7 @@ const aiResponse = await response.json();`,
       listSessions: `import requests
 
 headers = {
-    Authorization: 'Bearer ${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -795,7 +795,7 @@ sessions = response.json()`,
       createSession: `import requests
 
 headers = {
-    Authorization: 'Bearer ${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -806,7 +806,7 @@ new_session = response.json()`,
       aiChatSimple: `import requests
 
 headers = {
-    Authorization: 'Bearer ${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -822,7 +822,7 @@ result = response.json()`,
       aiChatSync: `import requests
 
 headers = {
-    Authorization: 'Bearer ${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -837,7 +837,7 @@ result = response.json()`,
       questStatus: `import requests
 
 headers = {
-    Authorization: 'Bearer ${sampleApiKey}'
+    'Authorization': 'Bearer ${sampleApiKey}'
 }
 
 response = requests.get('${origin}/api/v1/quests/quest_123', headers=headers)
@@ -845,7 +845,7 @@ quest = response.json()`,
       aiChat: `import requests
 
 headers = {
-    Authorization: 'Bearer ${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
