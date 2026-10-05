@@ -428,6 +428,17 @@ describe('mapApiError', () => {
     expect(msg).not.toContain('b4m login');
   });
 
+  it('falls back to generic provider text when a provider-key 401 carries no message', () => {
+    const msg = mapApiError(axiosError(401, { data: { errorCode: 'provider_rejected' } }), 'http://x');
+    expect(msg).toContain('the AI provider could not be used');
+    expect(msg).not.toContain('b4m login');
+  });
+
+  it('keeps the re-auth hint for a 401 with an unrelated errorCode', () => {
+    const msg = mapApiError(axiosError(401, { data: { error: 'nope', errorCode: 'unauthorized' } }), 'http://x');
+    expect(msg).toBe('authentication failed (run `b4m login` or set B4M_API_KEY)');
+  });
+
   it('maps NotAuthenticatedError to a no-credential message naming both fixes', () => {
     const msg = mapApiError(new NotAuthenticatedError('Authentication failed'), 'http://x');
     expect(msg).toBe('not authenticated: no credential configured (set B4M_API_KEY or run `b4m login`)');

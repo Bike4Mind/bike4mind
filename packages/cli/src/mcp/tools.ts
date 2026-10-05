@@ -140,7 +140,7 @@ const generateSoundEffectShape = {
 const textToSpeechShape = {
   ...ttsRequestSchema.omit({ encoding: true }).shape,
   text: ttsRequestSchema.shape.text.describe('Text to speak'),
-  provider: ttsRequestSchema.shape.provider.describe('Speech provider; defaults to OpenAI'),
+  provider: ttsRequestSchema.shape.provider.describe(`Speech provider; defaults to ${DEFAULT_TTS_PROVIDER}`),
   preview: ttsRequestSchema.shape.preview.describe('Skip saving a copy to the file browser'),
 };
 
@@ -280,10 +280,18 @@ function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
     });
   }
   const { audioBase64, ...meta } = outcome;
+  return inlineAudioResult(meta, audioBase64, outcome.contentType);
+}
+
+/**
+ * Metadata as JSON text plus the audio as an MCP `audio` block. The base64 stays
+ * out of structuredContent so a potentially large payload is not duplicated.
+ */
+function inlineAudioResult(meta: Record<string, unknown>, audioBase64: string, mimeType: string): CallToolResult {
   return {
     content: [
       { type: 'text', text: JSON.stringify(meta, null, 2) },
-      { type: 'audio', data: audioBase64, mimeType: outcome.contentType },
+      { type: 'audio', data: audioBase64, mimeType },
     ],
     structuredContent: meta,
   };
@@ -327,13 +335,7 @@ export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 
           saved: false,
           ...(result.saveSkippedReason ? { saveSkippedReason: result.saveSkippedReason } : {}),
         };
-  return {
-    content: [
-      { type: 'text', text: JSON.stringify(inlineMetadata, null, 2) },
-      { type: 'audio', data: result.audio, mimeType: result.contentType },
-    ],
-    structuredContent: inlineMetadata,
-  };
+  return inlineAudioResult(inlineMetadata, result.audio, result.contentType);
 }
 
 /**

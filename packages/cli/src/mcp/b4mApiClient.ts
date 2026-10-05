@@ -1,11 +1,11 @@
 import { isAxiosError } from 'axios';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
+import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
 import {
   ttsBase64ResponseSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
-  type ApiErrorCode,
   type ChatHistoryItemType,
   type QuestErrorCode,
   type TTSRequest,
@@ -441,19 +441,6 @@ function parseRetryAfterSeconds(value: unknown): number | undefined {
 }
 
 /** Pull a human-readable message out of a JSON error body (`error` or `message` field). */
-const PROVIDER_KEY_ERROR_CODES: ReadonlySet<string> = new Set([
-  'provider_not_configured',
-  'provider_rejected',
-] satisfies ApiErrorCode[]);
-
-function providerKeyFailureMessage(data: unknown): string | undefined {
-  if (!data || typeof data !== 'object') return undefined;
-  const { errorCode } = data as Record<string, unknown>;
-  if (typeof errorCode !== 'string' || !PROVIDER_KEY_ERROR_CODES.has(errorCode)) return undefined;
-  const base = extractServerMessage(data) ?? 'the AI provider could not be used';
-  return `${base} (configure or fix the provider API key in Bike4Mind; this is not a Bike4Mind login problem)`;
-}
-
 function extractServerMessage(data: unknown): string | undefined {
   if (data && typeof data === 'object') {
     const record = data as Record<string, unknown>;
@@ -461,4 +448,10 @@ function extractServerMessage(data: unknown): string | undefined {
     if (typeof record.message === 'string') return record.message;
   }
   return undefined;
+}
+
+function providerKeyFailureMessage(data: unknown): string | undefined {
+  if (!isProviderKeyFailure(data)) return undefined;
+  const base = extractServerMessage(data) ?? 'the AI provider could not be used';
+  return `${base} (configure or fix the provider API key in Bike4Mind; this is not a Bike4Mind login problem)`;
 }

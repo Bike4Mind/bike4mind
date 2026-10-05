@@ -117,6 +117,33 @@ describe('ApiClient.checkSessionValid', () => {
     expect(await client.checkSessionValid()).toBe(false);
   });
 
+  it('passes a provider-key 401 on the post-refresh retry through, not as a revoked session', async () => {
+    // The refreshed token is accepted, but the route 401s for a missing provider key; that
+    // must reach mapApiError intact rather than become "run /login".
+    let calls = 0;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls += 1;
+      if (calls === 1) return Promise.reject(make401(config));
+      return Promise.reject(
+        new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
+          status: 401,
+          statusText: 'Unauthorized',
+          data: { error: 'No TTS provider is configured', errorCode: 'provider_not_configured' },
+          headers: {},
+          config,
+        } as AxiosResponse)
+      );
+    }) as AxiosAdapter;
+    mockRefreshToken.mockResolvedValue({ access_token: 'fresh', refresh_token: 'refresh2', expires_in: 3600 });
+
+    const err = await rejection(client.post('/api/ai/tts', { text: 'hi' }));
+
+    expect(err).not.toBeInstanceOf(SessionRevokedError);
+    expect(err).toBeInstanceOf(AxiosError);
+    expect((err as AxiosError).response?.data).toMatchObject({ errorCode: 'provider_not_configured' });
+    expect(mockClearAuthTokens).not.toHaveBeenCalled();
+  });
+
   it('returns true when refresh fails with a 5xx - a transient outage, not a revocation', async () => {
     client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
       Promise.reject(make401(config))) as AxiosAdapter;
