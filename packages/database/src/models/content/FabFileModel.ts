@@ -29,7 +29,7 @@ import {
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import {
@@ -3163,6 +3163,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
+  }
+
+  async hardDeleteWithChunks(fabFileId: string): Promise<void> {
+    // Preserve the row as a retry locator unless its chunks are removed in the same commit.
+    await withTransaction(async () => {
+      await this.hardDeleteOneById(fabFileId);
+      await fabFileChunkRepository.deleteManyByFabFileId(fabFileId);
+    });
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {

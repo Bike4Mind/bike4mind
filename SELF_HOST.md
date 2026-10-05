@@ -1029,3 +1029,45 @@ The notebook curation endpoint requires the configured local event queue to acce
 A 202 response establishes broker acceptance only. The current local worker still lacks the notebook start-event route and curation consumer, so this change does not establish export completion. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
 
 Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.
+
+## Permanent data-lake cleanup
+
+The local worker consumes `dataLakeCleanupQueue` one message at a time. Configure `DATA_LAKE_CLEANUP_QUEUE` and its `DATA_LAKE_CLEANUP_QUEUE_DLQ` from `.env.selfhost.example`, then recreate the broker with the updated `elasticmq.conf`. Keep the broker's retained volume. The source queue redrives to its dedicated dead-letter queue after three deliveries; this consumer does not use the worker's default exhausted-message deletion policy. Other queues retain their existing policies.
+
+Run exactly one local worker. This path does not implement a distributed execution lease. A cleanup can take longer than the hosted twelve-minute visibility window, so the consumer renews that window every minute until dispatch settles. A renewal failure prevents acknowledgement, even if the cleanup subsequently completes; replay is idempotent. Shutdown waits only for the existing bounded grace period; it does not guarantee a full cleanup drain. If the process exits during cleanup, recovery relies on same-generation replay after visibility expires. Before maintenance or replay, verify the previous worker process has stopped, and do not start a second worker against the same queue.
+
+Cleanup atomically marks its exact purge generation as started before destructive effects. A failed enqueue may release an unstarted claim to the deleted list, but retains its identity so a delayed acknowledgement cannot bypass a newer request. Started cleanup stays `purging` after failure and cannot be restored. Restore rotates the generation so delayed keyed and unkeyed legacy messages cannot destroy a subsequently deleted lake. Legacy messages are admitted only while the lake has no keyed generation. Stale generations are refused without destructive effects; a permission failure on already-started work remains retryable for operator recovery.
+
+Stored objects are deleted before their file rows. File-row and chunk deletion commit in one Mongo transaction, preserving the row as a retry locator if the chunk write fails. Mongo must support transactions; the supplied Compose Mongo runs as a replica set. Optional connector, memory and retrieval-index cleanup retain their existing dependencies and failure behavior.
+
+### Explicit dead-letter replay
+
+Inspect and correct the failure before replaying one selected message. Preserve its complete body, including `purgeClaimId` and actor; do not create a new claim or manually mark a partly purged lake as deleted. A generation refused after restore or a newer purge is deliberately not replayable as the old request. The existing hosted DLQ admin UI is not newly wired for local queues by this change.
+
+With the previous worker stopped, use an endpoint and queue URLs reachable from the machine running these commands. This example receives one message, copies its original body to the source, and removes the dead-letter copy only after an accepted send. A failed send leaves the original available after its visibility timeout. Lost send acknowledgements can create a duplicate; the same-generation recovery checks still apply.
+
+```sh
+(
+set -e
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs receive-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --max-number-of-messages 1 --visibility-timeout 60 > cleanup-replay.json
+jq -e '.Messages | length == 1' cleanup-replay.json
+jq -r '.Messages[0].Body' cleanup-replay.json > cleanup-body.json
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs send-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE" --message-body file://cleanup-body.json &&
+  aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs delete-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' cleanup-replay.json)"
+)
+```
+
+Resume the single worker and verify the lake, file rows, chunks and exact stored objects are gone; another lake's objects must remain. Keep the payload private. Queue emptiness alone does not establish completed cleanup.
+
+Focused verification:
+
+```sh
+pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
+pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
+pnpm --filter @bike4mind/client test server/queueHandlers/dataLakeCleanup.test.ts
+# Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
+CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/client test:integration server/queueHandlers/dataLakeCleanup.e2e.test.ts
+```
+
+The external-service suite skips when its explicit endpoint/bucket are absent. Mongo fencing and transactional crash tests run independently. These are application-level controls, not current Kubernetes deployment acceptance.

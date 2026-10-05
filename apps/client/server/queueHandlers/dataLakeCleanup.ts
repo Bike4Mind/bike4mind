@@ -59,6 +59,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     logger.updateMetadata({ handler: 'dataLakeCleanup', dataLakeId, userId: actor.userId });
 
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
+      beginPurge: () => dataLakeRepository.beginPurgeExecution(dataLakeId, purgeClaimId),
+      deleteFileAndChunks: id => fabFileRepository.hardDeleteWithChunks(id),
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -155,7 +157,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         purgeClaimId: parsedClaimId,
         reason: err.message,
       });
-      if (parsedLakeId) await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
+      if (parsedLakeId) {
+        const released = await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
+        if (!released) {
+          const lake = await dataLakeRepository.findById(parsedLakeId);
+          // A retry can lose authorization after partial progress. Keep that generation recoverable.
+          if (lake?.purgeStartedAt && lake.purgeClaimId === parsedClaimId) throw err;
+        }
+      }
       return;
     }
     // Malformed payload (SyntaxError/ZodError): permanently invalid and unattributable - there is no

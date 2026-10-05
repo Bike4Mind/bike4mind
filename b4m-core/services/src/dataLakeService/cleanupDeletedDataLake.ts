@@ -20,6 +20,8 @@ import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface CleanupDeletedDataLakeAdapters {
+  beginPurge?: () => Promise<boolean>;
+  deleteFileAndChunks?: (id: string) => Promise<void>;
   db: {
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'delete' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'removeAllForLake'>;
@@ -150,6 +152,8 @@ export const cleanupDeletedDataLake = async (
   dataLakeId: string,
   {
     db,
+    beginPurge,
+    deleteFileAndChunks,
     retrievalIndex,
     shredMemory,
     releaseDriveConnection,
@@ -175,6 +179,10 @@ export const cleanupDeletedDataLake = async (
   // dlqRegistry) decorative, and DLQ replay is the whole recovery story for a stuck purge.
   if (existing.status !== 'purging' && existing.status !== 'deleted') {
     throw new BadRequestError('Data lake must be soft-deleted before cleanup');
+  }
+
+  if (beginPurge && !(await beginPurge())) {
+    throw new BadRequestError('Cleanup generation no longer owns this data lake');
   }
 
   await warnOnPrefixCollision(db, existing, logger);
@@ -216,26 +224,8 @@ export const cleanupDeletedDataLake = async (
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
   //
-  // Each file's row goes first and its own chunks immediately after, in the SAME iteration (#2583).
-  // Rows-then-chunks is the ordering that matters: chunks-then-row used to leave an interruption
-  // between the two stranding a ROW with a stale vectorizedChunkCount over zero real chunks -
-  // unretrievable, but every counter-based health surface reported it vectorized. This order fails
-  // the other, harmless way: an interruption orphans chunk rows, unreachable without their file
-  // (no chunk carries a lake or tag field). Nothing sweeps those yet - #2539 is a different
-  // population, chunks whose `fabFileId` is a serialized document rather than an id.
-  //
-  // PAIRING the two per id is what keeps the sweep retry-safe, and it is why this is not a bulk
-  // `hardDeleteByIds` followed by a separate chunk fan-out. `fileIds` is derived from the rows
-  // themselves, so once they are all gone a DLQ retry re-enters at `findIdsByDataLakeTag` with an
-  // EMPTY list and the chunk sweep becomes a permanent no-op - a whole lake's chunks leaked, with
-  // no id list left anywhere that names them. Paired, the ids this run has not reached yet are
-  // still resolvable on replay, so a run that dies mid-fan-out resumes where it stopped and the
-  // docstring's "a DLQ retry re-runs it" stays true. The irreducible window is one file wide.
-  //
-  // Chunked so a large lake doesn't fan out unbounded (Lambda timeout/memory); both writes are
-  // no-ops on already-purged data, so a replay over a partially-swept lake is harmless. Chunk
-  // deletion covers soft-deleted files too, since the id list is resolved before any hard delete.
-  //
+  // Production supplies an atomic row/chunk adapter, so a crash cannot lose the row that names
+  // remaining chunks. The fallback retains compatibility for callers without that adapter.
   // The findings sweep is GLOBAL (`deleteForPurgedDocuments`), not lake-scoped. These rows are
   // about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is no
   // exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other
@@ -303,8 +293,12 @@ export const cleanupDeletedDataLake = async (
           await storage.delete(currentKey);
         }
       }
-      await db.fabFiles.hardDeleteOneById(id);
-      await db.fabFileChunks.deleteManyByFabFileId(id);
+      if (deleteFileAndChunks) {
+        await deleteFileAndChunks(id);
+      } else {
+        await db.fabFiles.hardDeleteOneById(id);
+        await db.fabFileChunks.deleteManyByFabFileId(id);
+      }
     },
     async slice => {
       if (storage) {

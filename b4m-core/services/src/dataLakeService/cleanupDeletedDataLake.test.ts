@@ -421,3 +421,32 @@ describe('cleanupDeletedDataLake', () => {
     });
   });
 });
+
+describe('cleanup execution admission and atomic deletion adapter', () => {
+  it('refuses stale generation before index, storage or database effects', async () => {
+    const db = makeDb();
+    const beginPurge = vi.fn(async () => false);
+    const storage = { delete: vi.fn() };
+    await expect(cleanupDeletedDataLake(ADMIN, LAKE.id, { db, beginPurge, storage })).rejects.toThrow();
+    expect(db.fabFiles.findIdsByDataLakeTag).not.toHaveBeenCalled();
+    expect(storage.delete).not.toHaveBeenCalled();
+    expect(db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('uses the atomic deletion adapter after object removal and retains lake on failure', async () => {
+    const db = makeDb(['f1']);
+    const deleteFileAndChunks = vi.fn(async () => {
+      throw new Error('transaction aborted');
+    });
+    await expect(
+      cleanupDeletedDataLake(ADMIN, LAKE.id, {
+        db,
+        beginPurge: async () => true,
+        deleteFileAndChunks,
+      })
+    ).rejects.toThrow('transaction aborted');
+    expect(deleteFileAndChunks).toHaveBeenCalledWith('f1');
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+});

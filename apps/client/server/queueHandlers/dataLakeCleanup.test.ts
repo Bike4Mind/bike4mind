@@ -8,6 +8,7 @@ vi.mock('@server/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   cleanup: vi.fn(),
+  findById: vi.fn(),
   releasePurgingToDeleted: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
@@ -19,6 +20,7 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
+    findById: h.findById,
     releasePurgingToDeleted: h.releasePurgingToDeleted,
     stampLakeMemoryPurge: h.stampLakeMemoryPurge,
   },
@@ -268,4 +270,11 @@ describe('dataLakeCleanup consumer', () => {
     // Parsing the lake id is what failed, so there is no purge to release.
     expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
   });
+});
+
+it('retains a started current-generation authorization failure for DLQ recovery', async () => {
+  h.cleanup.mockRejectedValueOnce(new BadRequestError('permission changed'));
+  h.releasePurgingToDeleted.mockResolvedValueOnce(false);
+  h.findById.mockResolvedValueOnce({ purgeClaimId: 'claim-a', purgeStartedAt: new Date() });
+  await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('permission changed');
 });
