@@ -7,6 +7,7 @@ import type { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
 import type { TodoItem } from '../tools/writeTodosTool.js';
 import type { ModelInfo } from '@bike4mind/common';
+import { PostEditDiagnostics } from '../diagnostics/PostEditDiagnostics.js';
 
 /**
  * Boundary tests for the extracted turn lifecycle (issue #228, phase 2). They
@@ -70,6 +71,7 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     todoStore: null,
     decisionStore: null,
     blockerStore: null,
+    postEditDiagnostics: null,
     workflowStores: {
       decisionStore: { decisions: [] },
       blockerStore: { blockers: [] },
@@ -454,6 +456,64 @@ describe('runTurn', () => {
 
       const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
       expect(options.workflowReminder).toBeUndefined();
+    });
+  });
+
+  describe('post-edit diagnostics', () => {
+    type RunOptions = { drainFeedback?: (phase: 'turn' | 'final') => Promise<string | null> };
+    const workspaceRoot = '/workspace/project';
+
+    function diagnosticsCtx(enabled: boolean) {
+      const postEditDiagnostics = new PostEditDiagnostics({
+        workspaceRoot,
+        check: async files => files.map(filePath => ({ filePath, line: 1, column: 1, code: 'TS2322', message: 'bad' })),
+      });
+      const drained: Array<string | null> = [];
+      const run = vi.fn(async (_query: unknown, options?: unknown) => {
+        // Stand-in for an edit tool firing mid-turn, then the agent draining before its next request.
+        postEditDiagnostics.enqueue('src/a.ts');
+        const drain = (options as RunOptions).drainFeedback;
+        if (drain) drained.push(await drain('final'));
+        return makeResult();
+      });
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        configStore: {
+          get: vi.fn(async () => ({ preferences: { postEditDiagnostics: enabled } })),
+        } as unknown as TurnContext['configStore'],
+        postEditDiagnostics,
+      });
+      return { ctx, run, drained, postEditDiagnostics };
+    }
+
+    it('drains edits made during the turn into the agent when the preference is on', async () => {
+      seedSession([]);
+      const { ctx, drained } = diagnosticsCtx(true);
+
+      await runTurn('hello', ctx);
+
+      expect(drained).toHaveLength(1);
+      expect(drained[0]).toContain('src/a.ts:1:1 - TS2322: bad');
+    });
+
+    it('stops collecting once the turn ends', async () => {
+      seedSession([]);
+      const { ctx, postEditDiagnostics } = diagnosticsCtx(true);
+
+      await runTurn('hello', ctx);
+      postEditDiagnostics.enqueue('src/b.ts');
+
+      expect(await postEditDiagnostics.drain(1000)).toBeNull();
+    });
+
+    it('passes no drain and collects nothing when the preference is off', async () => {
+      seedSession([]);
+      const { ctx, run, postEditDiagnostics } = diagnosticsCtx(false);
+
+      await runTurn('hello', ctx);
+
+      expect((run.mock.calls[0][1] as RunOptions).drainFeedback).toBeUndefined();
+      expect(await postEditDiagnostics.drain(1000)).toBeNull();
     });
   });
 });
