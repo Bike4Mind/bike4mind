@@ -98,6 +98,8 @@ describe('B4mApiClient', () => {
     mockGet.mockResolvedValue({ data: [], next_cursor: null });
     const result = await client.listDataLakes({ limit: 25 });
     expect(mockGet).toHaveBeenCalledWith('/api/v1/data-lakes', { params: { limit: 25 } });
+    // toHaveBeenCalledWith treats `cursor: undefined` as absent; pin that the key is not sent at all.
+    expect(mockGet.mock.calls[0][1].params).not.toHaveProperty('cursor');
     expect(result).toEqual({ data: [], nextCursor: null });
   });
 
