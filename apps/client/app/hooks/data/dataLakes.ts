@@ -77,7 +77,7 @@ import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
  * Declared here rather than beside its first caller so all of them can read it without a
  * forward reference.
  */
-function serverRefusalMessage(error: unknown): string | undefined {
+export function serverRefusalMessage(error: unknown): string | undefined {
   if (!isAxiosError(error)) return undefined;
   return (error.response?.data as { error?: string } | undefined)?.error || undefined;
 }
