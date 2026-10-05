@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { Types } from 'mongoose';
 import {
   CreditHolderType,
   estimateVideoCostCredits,
@@ -88,9 +89,11 @@ export async function createVideoJob(input: CreateVideoJobInput, deps: VideoJobD
   }
 
   const now = deps.now();
+  const jobId = new Types.ObjectId().toHexString();
   let job: IGenerationJobDocument;
   try {
     job = await deps.repository.createJob({
+      id: jobId,
       kind: 'video',
       ownerType,
       ownerId,
@@ -117,7 +120,7 @@ export async function createVideoJob(input: CreateVideoJobInput, deps: VideoJobD
       if (winner) return replayOrReject(winner, request);
       throw error;
     }
-    if (hold) await releaseIfJobAbsent(hold, { ownerType, ownerId, idempotencyKey: input.idempotencyKey }, deps);
+    if (hold) await releaseIfJobAbsent(hold, jobId, ownerId, deps);
     throw error;
   }
 
@@ -146,35 +149,24 @@ async function runCleanup(
 /**
  * A non-duplicate createJob error is ambiguous: the insert may have landed before the error (e.g. a lost ack).
  * If the job exists, its onTerminal owns the hold (the sweeper picks it up via nextPollAt), so releasing here
- * would refund twice. Release only when the job is confirmed absent; when that cannot be confirmed, keep the
- * hold and alarm for manual repair. Without an idempotency key there is no unique field to look the job up by.
+ * would refund twice. The caller-generated id makes the outcome checkable: release only when the job is
+ * confirmed absent; when the lookup itself fails, keep the hold and alarm for manual repair.
  */
-async function releaseIfJobAbsent(
-  hold: CreditHold,
-  lookup: { ownerType: CreditHold['ownerType']; ownerId: string; idempotencyKey?: string },
-  deps: VideoJobDeps
-) {
-  const { ownerType, ownerId, idempotencyKey } = lookup;
-  const reportAmbiguous = (lookupError?: unknown) =>
+async function releaseIfJobAbsent(hold: CreditHold, jobId: string, ownerId: string, deps: VideoJobDeps) {
+  let landed: boolean;
+  try {
+    landed = (await deps.repository.findById(jobId)) !== null;
+  } catch (lookupError) {
     deps.logger.error('video_job_create_ambiguous', {
-      idempotencyKey,
+      jobId,
       ownerId,
       reservedCredits: hold.reservedCredits,
       error: lookupError,
     });
-  if (!idempotencyKey) {
-    reportAmbiguous();
-    return;
-  }
-  let landed: boolean;
-  try {
-    landed = (await deps.repository.findByIdempotencyKey(ownerType, ownerId, idempotencyKey)) !== null;
-  } catch (lookupError) {
-    reportAmbiguous(lookupError);
     return;
   }
   if (landed) return;
-  await runCleanup(deps, { ownerId }, () => releaseCreditHold(hold, deps.credits));
+  await runCleanup(deps, { jobId, ownerId }, () => releaseCreditHold(hold, deps.credits));
 }
 
 const replayOrReject = (existing: IGenerationJobDocument, request: VideoGenerationRequest): CreateVideoJobResult =>

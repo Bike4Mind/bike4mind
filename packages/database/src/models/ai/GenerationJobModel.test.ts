@@ -40,6 +40,21 @@ describe('GenerationJobRepository', () => {
     await GenerationJobModel.ensureIndexes();
   });
 
+  it('persists a job under a caller-supplied id', async () => {
+    const id = new mongoose.Types.ObjectId().toHexString();
+    const job = await generationJobRepository.createJob({ ...newJob(), id });
+    expect(job.id).toBe(id);
+    expect((await generationJobRepository.findById(id))?.ownerId).toBe('u1');
+  });
+
+  it('rejects a supplied id that is not a lowercase 24-hex ObjectId string', async () => {
+    const upper = new mongoose.Types.ObjectId().toHexString().toUpperCase();
+    for (const id of ['job1', '', upper]) {
+      await expect(generationJobRepository.createJob({ ...newJob(), id })).rejects.toThrow(/24-hex/);
+    }
+    expect(await GenerationJobModel.countDocuments()).toBe(0);
+  });
+
   it('acquires a lease on a non-terminal job', async () => {
     const job = await generationJobRepository.createJob(newJob());
     const leased = await generationJobRepository.acquireLease(job.id, t0, plus(330_000));

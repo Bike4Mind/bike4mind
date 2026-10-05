@@ -1,6 +1,8 @@
 import {
+  GENERATION_JOB_ID_PATTERN,
   TERMINAL_GENERATION_JOB_STATES,
   type GenerationJobCommit,
+  type GenerationJobCreateInput,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
@@ -26,8 +28,11 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
   const repository = {
     jobs,
 
-    async createJob(input: Omit<IGenerationJob, 'createdAt' | 'updatedAt'>) {
-      const id = `job${++sequence}`;
+    async createJob({ id: suppliedId, ...input }: GenerationJobCreateInput) {
+      if (suppliedId !== undefined && !GENERATION_JOB_ID_PATTERN.test(suppliedId)) {
+        throw new Error(`generation job id must be a lowercase 24-hex ObjectId string, got '${suppliedId}'`);
+      }
+      const id = suppliedId ?? `job${++sequence}`;
       const createdAt = now();
       // Mirrors the Mongoose schema defaults.
       const doc: IGenerationJobDocument = {

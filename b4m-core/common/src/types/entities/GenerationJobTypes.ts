@@ -121,8 +121,19 @@ export type GenerationJobCommit = Partial<
   >
 >;
 
+// A lowercase 24-hex ObjectId string; exact, so the stored id equals the supplied one.
+export const GENERATION_JOB_ID_PATTERN = /^[0-9a-f]{24}$/;
+
+export type GenerationJobCreateInput = Omit<IGenerationJob, 'createdAt' | 'updatedAt'> & {
+  /**
+   * Caller-generated id, so a create whose outcome is unknown (an error after the insert may have landed)
+   * can be resolved by looking the job up. Must match GENERATION_JOB_ID_PATTERN; anything else throws.
+   */
+  id?: string;
+};
+
 export interface IGenerationJobRepository extends IBaseRepository<IGenerationJobDocument> {
-  createJob(input: Omit<IGenerationJob, 'createdAt' | 'updatedAt'>): Promise<IGenerationJobDocument>;
+  createJob(input: GenerationJobCreateInput): Promise<IGenerationJobDocument>;
   findByIdempotencyKey(
     ownerType: IGenerationJob['ownerType'],
     ownerId: string,

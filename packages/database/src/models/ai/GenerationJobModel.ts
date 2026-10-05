@@ -1,11 +1,13 @@
 import mongoose, { Model, Schema } from 'mongoose';
 import {
   CreditHolderType,
+  GENERATION_JOB_ID_PATTERN,
   GENERATION_JOB_KINDS,
   GENERATION_JOB_SOURCES,
   GENERATION_JOB_STATES,
   TERMINAL_GENERATION_JOB_STATES,
   type GenerationJobCommit,
+  type GenerationJobCreateInput,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
@@ -71,8 +73,11 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
     super(jobModel);
   }
 
-  async createJob(input: Omit<IGenerationJob, 'createdAt' | 'updatedAt'>) {
-    const doc = await this.jobModel.create(input);
+  async createJob({ id, ...input }: GenerationJobCreateInput) {
+    if (id !== undefined && !GENERATION_JOB_ID_PATTERN.test(id)) {
+      throw new Error(`generation job id must be a lowercase 24-hex ObjectId string, got '${id}'`);
+    }
+    const doc = await this.jobModel.create(id === undefined ? input : { ...input, _id: id });
     return doc.toJSON() as IGenerationJobDocument;
   }
 

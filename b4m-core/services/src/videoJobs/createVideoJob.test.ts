@@ -189,7 +189,17 @@ describe('createVideoJob', () => {
   });
 
   describe('an ambiguous create failure', () => {
-    const keyed = { user, request: validRequest, source: 'api' as const, idempotencyKey: 'k1' };
+    // No idempotency key: the caller-generated job id alone resolves the outcome.
+    const keyless = { user, request: validRequest, source: 'api' as const };
+
+    it('passes a caller-generated ObjectId to createJob', async () => {
+      const { deps, repository } = makeDeps();
+      const create = vi.spyOn(repository, 'createJob');
+      const result = await createVideoJob(keyless, deps);
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ id: expect.stringMatching(/^[0-9a-f]{24}$/) }));
+      if (!result.ok) throw new Error('expected creation to succeed');
+      expect(result.job.id).toBe(create.mock.calls[0][0].id);
+    });
 
     it('keeps the hold when the insert landed before the error: onTerminal owns it', async () => {
       const { deps, repository } = makeDeps();
@@ -198,7 +208,7 @@ describe('createVideoJob', () => {
         await realCreate(jobInput);
         throw new Error('ack lost');
       });
-      await expect(createVideoJob(keyed, deps)).rejects.toThrow('ack lost');
+      await expect(createVideoJob(keyless, deps)).rejects.toThrow('ack lost');
       expect(repository.jobs.size).toBe(1);
       expect(releaseCreditHold).not.toHaveBeenCalled();
     });
@@ -206,34 +216,24 @@ describe('createVideoJob', () => {
     it('releases the hold once when the job is confirmed absent', async () => {
       const { deps, repository } = makeDeps();
       vi.spyOn(repository, 'createJob').mockRejectedValueOnce(new Error('write failed'));
-      await expect(createVideoJob(keyed, deps)).rejects.toThrow('write failed');
+      await expect(createVideoJob(keyless, deps)).rejects.toThrow('write failed');
+      expect(repository.jobs.size).toBe(0);
       expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     });
 
     it('keeps the hold and alarms when the lookup itself fails', async () => {
       const { deps, repository } = makeDeps();
       const error = vi.spyOn(deps.logger, 'error');
-      vi.spyOn(repository, 'createJob').mockRejectedValueOnce(new Error('write failed'));
-      vi.spyOn(repository, 'findByIdempotencyKey')
-        .mockResolvedValueOnce(null) // the pre-insert replay check
-        .mockRejectedValueOnce(new Error('read failed'));
-      await expect(createVideoJob(keyed, deps)).rejects.toThrow('write failed');
+      const create = vi.spyOn(repository, 'createJob').mockRejectedValueOnce(new Error('write failed'));
+      vi.spyOn(repository, 'findById').mockRejectedValueOnce(new Error('read failed'));
+      await expect(createVideoJob(keyless, deps)).rejects.toThrow('write failed');
       expect(releaseCreditHold).not.toHaveBeenCalled();
-      expect(error).toHaveBeenCalledWith(
-        'video_job_create_ambiguous',
-        expect.objectContaining({ idempotencyKey: 'k1', ownerId: 'u1', reservedCredits: expect.any(Number) })
-      );
-    });
-
-    it('keeps the hold and alarms without an idempotency key to look the job up by', async () => {
-      const { deps, repository } = makeDeps();
-      const error = vi.spyOn(deps.logger, 'error');
-      vi.spyOn(repository, 'createJob').mockRejectedValueOnce(new Error('write failed'));
-      await expect(createVideoJob({ user, request: validRequest, source: 'api' }, deps)).rejects.toThrow(
-        'write failed'
-      );
-      expect(releaseCreditHold).not.toHaveBeenCalled();
-      expect(error).toHaveBeenCalledWith('video_job_create_ambiguous', expect.objectContaining({ ownerId: 'u1' }));
+      expect(error).toHaveBeenCalledWith('video_job_create_ambiguous', {
+        jobId: create.mock.calls[0][0].id,
+        ownerId: 'u1',
+        reservedCredits: expect.any(Number),
+        error: expect.any(Error),
+      });
     });
 
     it('rethrows the original error when the release itself fails', async () => {
@@ -241,7 +241,7 @@ describe('createVideoJob', () => {
       const error = vi.spyOn(deps.logger, 'error');
       vi.spyOn(repository, 'createJob').mockRejectedValueOnce(new Error('write failed'));
       vi.mocked(releaseCreditHold).mockRejectedValueOnce(new Error('refund failed'));
-      await expect(createVideoJob(keyed, deps)).rejects.toThrow('write failed');
+      await expect(createVideoJob(keyless, deps)).rejects.toThrow('write failed');
       expect(error).toHaveBeenCalledWith('video_job_create_cleanup_failed', expect.objectContaining({ ownerId: 'u1' }));
     });
   });
