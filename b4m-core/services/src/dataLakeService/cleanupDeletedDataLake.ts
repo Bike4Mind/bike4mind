@@ -20,6 +20,8 @@ import { warnOnPrefixCollision } from './tagPrefixCollision';
 import { strictIndexRemove, type RetrievalIndexPort } from './ports';
 
 interface CleanupDeletedDataLakeAdapters {
+  purgeClaimId?: string;
+  // Optional for existing callers of the published service. Queue consumers must supply both adapters.
   beginPurge?: () => Promise<boolean>;
   deleteFileAndChunks?: (id: string) => Promise<void>;
   db: {
@@ -153,6 +155,7 @@ export const cleanupDeletedDataLake = async (
   {
     db,
     beginPurge,
+    purgeClaimId,
     deleteFileAndChunks,
     retrievalIndex,
     shredMemory,
@@ -168,7 +171,10 @@ export const cleanupDeletedDataLake = async (
     // Already gone - idempotent success.
     return;
   }
-  if (!(await resolveCanManageLake(existing, actor, { db }))) {
+  const resumesStartedGeneration =
+    beginPurge && purgeClaimId && existing.purgeStartedAt && existing.purgeClaimId === purgeClaimId;
+  // A started generation may have removed its own grants; its atomic claim still gates every retry.
+  if (!resumesStartedGeneration && !(await resolveCanManageLake(existing, actor, { db }))) {
     throw new BadRequestError('You do not have permission to clean up this data lake');
   }
   // 'purging' is the normal arrival state since #1744 - the route claims it at accept time, before
@@ -224,8 +230,8 @@ export const cleanupDeletedDataLake = async (
   // tagged mid-sweep - leaving its chunks behind and its index entry unrequested. It survives
   // this run instead, which is the recoverable direction.
   //
-  // Production supplies an atomic row/chunk adapter, so a crash cannot lose the row that names
-  // remaining chunks. The fallback retains compatibility for callers without that adapter.
+  // Production retains each row until its final chunk batch commits, keeping unfinished files resolvable.
+  // The fallback preserves the published service contract; it does not provide that recovery guarantee.
   // The findings sweep is GLOBAL (`deleteForPurgedDocuments`), not lake-scoped. These rows are
   // about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is no
   // exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other

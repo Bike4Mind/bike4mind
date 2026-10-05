@@ -65,4 +65,20 @@ describe('purge execution generation fencing', () => {
     expect(await dataLakeRepository.beginPurgeExecution(lake.id)).toBe(true);
     expect(await dataLakeRepository.releasePurgingToDeleted(lake.id)).toBe(false);
   });
+  it('refuses new claims and restore even if a started lake is marked deleted', async () => {
+    const lake = await createLake('started-deleted');
+    await dataLakeRepository.update({ id: lake.id, purgeStartedAt: new Date(), purgeClaimId: 'a' });
+    expect(await dataLakeRepository.claimPurging(lake.id, 'b')).toBe(false);
+    expect(await dataLakeRepository.claimRestoring(lake.id)).toBe(false);
+  });
+
+  it.each(['active', 'restoring'] as const)(
+    'atomically rejects execution while %s even with a matching claim',
+    async status => {
+      const lake = await createLake(`state-${status}`);
+      await dataLakeRepository.update({ id: lake.id, status, purgeClaimId: 'a' });
+      expect(await dataLakeRepository.beginPurgeExecution(lake.id, 'a')).toBe(false);
+      expect((await dataLakeRepository.findById(lake.id))?.purgeStartedAt).toBeUndefined();
+    }
+  );
 });

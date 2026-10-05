@@ -55,3 +55,49 @@ it('does not acknowledge a completed handler after visibility renewal failed', a
   await assertion;
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it('warns and does not register an absent queue', () => {
+  const registerQueueHandler = vi.fn();
+  const warn = vi.fn();
+  registerDataLakeCleanupQueue({ registerQueueHandler }, undefined, { warn });
+  expect(registerQueueHandler).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledOnce();
+});
+it('refuses a missing receipt before dispatch or renewal', async () => {
+  await expect(setup()[2]({ Records: [{}] }, {})).rejects.toThrow('no receipt');
+  expect(h.dispatch).not.toHaveBeenCalled();
+  expect(h.renew).not.toHaveBeenCalled();
+});
+it('clears the renewal timer when dispatch throws', async () => {
+  vi.useFakeTimers();
+  h.dispatch.mockRejectedValueOnce(new Error('cleanup failed'));
+  await expect(setup()[2]({ Records: [{ receiptHandle: 'receipt' }] }, {})).rejects.toThrow('cleanup failed');
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(h.renew).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+});
+it('waits for an in-flight renewal rejection after handler completion', async () => {
+  vi.useFakeTimers();
+  let finish!: () => void;
+  let rejectRenewal!: (error: Error) => void;
+  h.dispatch.mockImplementationOnce(
+    () =>
+      new Promise<void>(resolve => {
+        finish = resolve;
+      })
+  );
+  h.renew.mockImplementationOnce(
+    () =>
+      new Promise<void>((_, reject) => {
+        rejectRenewal = reject;
+      })
+  );
+  const work = setup()[2]({ Records: [{ receiptHandle: 'receipt' }] }, {});
+  const assertion = expect(work).rejects.toThrow('late renewal failed');
+  await vi.advanceTimersByTimeAsync(60_000);
+  finish();
+  await Promise.resolve();
+  rejectRenewal(new Error('late renewal failed'));
+  await assertion;
+  expect(vi.getTimerCount()).toBe(0);
+});

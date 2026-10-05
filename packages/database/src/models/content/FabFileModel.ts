@@ -3165,12 +3165,27 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
-  async hardDeleteWithChunks(fabFileId: string): Promise<void> {
-    // Preserve the row as a retry locator unless its chunks are removed in the same commit.
-    await withTransaction(async () => {
-      await this.hardDeleteOneById(fabFileId);
-      await fabFileChunkRepository.deleteManyByFabFileId(fabFileId);
-    });
+  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+    if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
+      throw new Error('Cleanup chunk batch size must be between 1 and 1000');
+    }
+    for (;;) {
+      const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+        .limit(chunkBatchSize + 1)
+        .lean();
+      const ids = chunks.slice(0, chunkBatchSize).map(chunk => chunk._id);
+      const removeBatch = () => FabFileChunk.deleteMany({ fabFileId, _id: { $in: ids } });
+      if (chunks.length > chunkBatchSize) {
+        // Keep the row as a retry locator while earlier chunk batches make partial progress.
+        await removeBatch();
+        continue;
+      }
+      await withTransaction(async () => {
+        await this.hardDeleteOneById(fabFileId);
+        await removeBatch();
+      });
+      return;
+    }
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {

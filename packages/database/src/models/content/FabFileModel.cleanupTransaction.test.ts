@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { KnowledgeType } from '@bike4mind/common';
 import { createMongoReplSet } from '../../__test__/createMongoServer';
-import { FabFile, FabFileChunk, fabFileRepository, fabFileChunkRepository } from './FabFileModel';
+import { FabFile, FabFileChunk, fabFileRepository } from './FabFileModel';
 
 let server: Awaited<ReturnType<typeof createMongoReplSet>>;
 beforeAll(async () => {
@@ -25,9 +25,9 @@ it('rolls back the file row when chunk deletion fails, then removes both on retr
     deletedAt: new Date(),
   });
   await FabFileChunk.create({ fabFileId: file.id, text: 'abc', tokenCount: 1 });
-  const deletion = vi
-    .spyOn(fabFileChunkRepository, 'deleteManyByFabFileId')
-    .mockRejectedValueOnce(new Error('crash between writes'));
+  const deletion = vi.spyOn(FabFileChunk, 'deleteMany').mockImplementationOnce(() => {
+    throw new Error('crash between writes');
+  });
   await expect(fabFileRepository.hardDeleteWithChunks(file.id)).rejects.toThrow('crash between writes');
   expect(await FabFile.collection.findOne({ _id: file._id })).not.toBeNull();
   expect(await FabFileChunk.countDocuments({ fabFileId: file.id })).toBe(1);
@@ -36,4 +36,42 @@ it('rolls back the file row when chunk deletion fails, then removes both on retr
   expect(await FabFile.collection.findOne({ _id: file._id })).toBeNull();
   expect(await FabFileChunk.countDocuments({ fabFileId: file.id })).toBe(0);
   await expect(fabFileRepository.hardDeleteWithChunks(file.id)).resolves.toBeUndefined();
+});
+
+it('bounds chunk batches, retains the retry locator after partial progress, and preserves other files', async () => {
+  const file = await FabFile.create({
+    userId: 'owner',
+    fileName: 'large.txt',
+    filePath: 'large.txt',
+    mimeType: 'text/plain',
+    type: KnowledgeType.FILE,
+    fileSize: 7,
+    status: 'complete',
+    deletedAt: new Date(),
+  });
+  const otherId = new mongoose.Types.ObjectId().toString();
+  await FabFileChunk.insertMany([
+    ...Array.from({ length: 7 }, (_, i) => ({ fabFileId: file.id, text: `chunk-${i}`, tokenCount: 1 })),
+    { fabFileId: otherId, text: 'unrelated', tokenCount: 1 },
+  ]);
+  const original = FabFileChunk.deleteMany.bind(FabFileChunk);
+  let calls = 0;
+  const deletion = vi.spyOn(FabFileChunk, 'deleteMany').mockImplementation((...args) => {
+    calls++;
+    if (calls === 2) throw new Error('later batch failed');
+    return original(...args);
+  });
+  await expect(fabFileRepository.hardDeleteWithChunks(file.id, 2)).rejects.toThrow('later batch failed');
+  expect(await FabFile.collection.findOne({ _id: file._id })).not.toBeNull();
+  expect(await FabFileChunk.countDocuments({ fabFileId: file.id })).toBe(5);
+  deletion.mockRestore();
+  const observed = vi.spyOn(FabFileChunk, 'deleteMany');
+  await fabFileRepository.hardDeleteWithChunks(file.id, 2);
+  expect(await FabFile.collection.findOne({ _id: file._id })).toBeNull();
+  expect(await FabFileChunk.countDocuments({ fabFileId: file.id })).toBe(0);
+  expect(await FabFileChunk.countDocuments({ fabFileId: otherId })).toBe(1);
+  expect(
+    observed.mock.calls.every(([filter]) => filter && Array.isArray(filter._id?.$in) && filter._id.$in.length <= 2)
+  ).toBe(true);
+  observed.mockRestore();
 });

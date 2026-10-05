@@ -8,6 +8,8 @@ vi.mock('@server/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   cleanup: vi.fn(),
+  beginPurgeExecution: vi.fn(),
+  hardDeleteWithChunks: vi.fn(),
   findById: vi.fn(),
   releasePurgingToDeleted: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
@@ -21,6 +23,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
     findById: h.findById,
+    beginPurgeExecution: h.beginPurgeExecution,
     releasePurgingToDeleted: h.releasePurgingToDeleted,
     stampLakeMemoryPurge: h.stampLakeMemoryPurge,
   },
@@ -34,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { hardDeleteWithChunks: h.hardDeleteWithChunks },
   fabFileChunkRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -224,6 +227,7 @@ describe('dataLakeCleanup consumer', () => {
   });
 
   it('releases an accepted purge its own guard refused, and says so at ERROR (#1744)', async () => {
+    h.releasePurgingToDeleted.mockResolvedValueOnce(true);
     // Was a silent WARN, which is precisely how an accepted, irreversible purge could vanish with no
     // user-visible trace. The release puts the lake back in the deleted list where its owner can
     // see it and retry, so the purge either completes or comes back - never neither.
@@ -270,11 +274,43 @@ describe('dataLakeCleanup consumer', () => {
     // Parsing the lake id is what failed, so there is no purge to release.
     expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
   });
-});
 
-it('retains a started current-generation authorization failure for DLQ recovery', async () => {
-  h.cleanup.mockRejectedValueOnce(new BadRequestError('permission changed'));
-  h.releasePurgingToDeleted.mockResolvedValueOnce(false);
-  h.findById.mockResolvedValueOnce({ purgeClaimId: 'claim-a', purgeStartedAt: new Date() });
-  await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('permission changed');
+  it('retains a started current-generation authorization failure for DLQ recovery', async () => {
+    h.cleanup.mockRejectedValueOnce(new BadRequestError('permission changed'));
+    h.releasePurgingToDeleted.mockResolvedValueOnce(false);
+    h.findById.mockResolvedValueOnce({ purgeClaimId: 'claim-a', purgeStartedAt: new Date() });
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('permission changed');
+  });
+
+  it.each([payload, legacyPayload])('wires the production claim and bounded deletion adapters', async input => {
+    h.cleanup.mockResolvedValueOnce(undefined);
+    await dispatch(makeEvent(input), {} as never, logger);
+    const options = h.cleanup.mock.calls[0][2];
+    expect(options.purgeClaimId).toBe('purgeClaimId' in input ? input.purgeClaimId : undefined);
+    await options.beginPurge();
+    expect(h.beginPurgeExecution).toHaveBeenCalledWith(
+      'lake1',
+      'purgeClaimId' in input ? input.purgeClaimId : undefined
+    );
+    await options.deleteFileAndChunks('f1');
+    expect(h.hardDeleteWithChunks).toHaveBeenCalledWith('f1');
+  });
+
+  it.each([{ purgeClaimId: 'claim-b', purgeStartedAt: new Date() }, { purgeClaimId: 'claim-a' }])(
+    'acknowledges a refused non-started or different generation',
+    async lake => {
+      h.cleanup.mockRejectedValueOnce(new BadRequestError('refused'));
+      h.releasePurgingToDeleted.mockResolvedValueOnce(false);
+      h.findById.mockResolvedValueOnce(lake);
+      await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+      expect(logger.warn).toHaveBeenCalled();
+    }
+  );
+
+  it('does not reread the lake after successfully releasing an unstarted generation', async () => {
+    h.cleanup.mockRejectedValueOnce(new BadRequestError('refused'));
+    h.releasePurgingToDeleted.mockResolvedValueOnce(true);
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.findById).not.toHaveBeenCalled();
+  });
 });
