@@ -41,8 +41,10 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
 }));
 
 // ---- Mock data hooks ----
+let mockModelInfo: Array<{ id: string; name: string }> = [];
+
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
-  useModelInfo: () => ({ data: [] }),
+  useModelInfo: () => ({ data: mockModelInfo }),
 }));
 
 vi.mock('@client/app/hooks/data/useModelStats', () => ({
@@ -73,7 +75,7 @@ vi.mock('@client/app/utils/aiSettingsUtils', () => ({
 }));
 
 vi.mock('./MetaDataChips', () => ({
-  default: () => null,
+  default: ({ label }: { label: string }) => <span data-testid="model-metadata-chip">{label}</span>,
 }));
 
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
@@ -372,5 +374,32 @@ describe('ImageGenerationModelSelectionModal - Quality select', () => {
     await act(async () => {});
 
     expect(qualityWrites()).toEqual([]);
+  });
+});
+
+describe('ImageGenerationModelSelectionModal - transparent background chip', () => {
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+    mockModelInfo = [];
+  });
+
+  const renderChipLabels = (model: string) => {
+    mockImageModel = model;
+    mockModelInfo = [{ id: model, name: model }];
+    const { queryAllByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+    return queryAllByTestId('model-metadata-chip').map(chip => chip.textContent);
+  };
+
+  it('flags a model that renders a real alpha channel', () => {
+    expect(renderChipLabels(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toContain('Transparent background');
+  });
+
+  it('does not flag gpt-image-2 or a provider that ignores the field', () => {
+    expect(renderChipLabels(ImageModels.GPT_IMAGE_2)).not.toContain('Transparent background');
+    expect(renderChipLabels(ImageModels.FLUX_PRO_1_1)).not.toContain('Transparent background');
   });
 });

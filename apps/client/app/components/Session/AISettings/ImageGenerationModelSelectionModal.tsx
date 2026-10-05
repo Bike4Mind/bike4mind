@@ -36,6 +36,7 @@ import {
   clampImageQualityForModel,
   isGPTImageModel,
   isGPTImage25Model,
+  supportsTransparentBackground,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -534,6 +535,14 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   )}
                   {selectedModelInfo.max_tokens && (
                     <MetadataChip label={`${selectedModelInfo.max_tokens} max`} mode={mode} variant="default" />
+                  )}
+                  {supportsTransparentBackground(selectedModel) && (
+                    <MetadataChip
+                      label="Transparent background"
+                      mode={mode}
+                      variant="purple"
+                      tooltip="Can render PNG/WebP images with a real transparent background - ask for a cutout, icon, sticker or logo with no backdrop."
+                    />
                   )}
                   {selectedModelInfo.contextWindow && (
                     <MetadataChip
