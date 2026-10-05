@@ -21,7 +21,9 @@ export type ILakeConnectorClaimDocument = ILakeConnectorClaim & IMongoDocument;
 
 export type LakeConnectorClaimHolder = Pick<ILakeConnectorClaim, 'kind' | 'connectionId' | 'claimedAt'>;
 
-export type LakeConnectorClaimResult = { acquired: true } | { acquired: false; holder: LakeConnectorClaimHolder };
+// holder is null when the claim kept changing hands between our insert and read (two tries).
+export type LakeConnectorClaimResult =
+  { acquired: true } | { acquired: false; holder: LakeConnectorClaimHolder | null };
 
 // No softDeletePlugin: a tombstone would keep the unique lakeId and block the next connect.
 const LakeConnectorClaimSchema = new Schema<ILakeConnectorClaimDocument>(
@@ -74,7 +76,12 @@ class LakeConnectorClaimRepository extends BaseRepository<ILakeConnectorClaimDoc
         };
       }
     }
-    throw new Error('Lake connector claim could not be acquired or read');
+    return { acquired: false, holder: null };
+  }
+
+  async findByLakeId(lakeId: string): Promise<LakeConnectorClaimHolder | null> {
+    const claim = await this.model.findOne({ lakeId }).lean();
+    return claim ? { kind: claim.kind, connectionId: claim.connectionId, claimedAt: claim.claimedAt } : null;
   }
 
   /** Compare-and-swap a stale holder out. False when another request took it over or released it first. */

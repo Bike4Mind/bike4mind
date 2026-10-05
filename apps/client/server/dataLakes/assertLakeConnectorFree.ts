@@ -1,4 +1,5 @@
 import {
+  type LakeConnectorClaimHolder,
   lakeConnectorClaimRepository,
   orgGitHubLakeConnectionRepository,
   orgGoogleDriveConnectionRepository,
@@ -31,22 +32,23 @@ const CONNECTORS: Record<LakeConnectorKind, LakeConnector> = {
 const CONNECTOR_KINDS = Object.keys(CONNECTORS) as LakeConnectorKind[];
 
 /**
- * One source per lake: throw a ConflictError naming the existing source when the lake is already
- * bound to any connector. Shared by every connector's connect route so the rule cannot drift, and
- * deliberately flag-free - a connector whose feature flag is off still owns the lake it is bound to.
- * Bound means a row exists, enabled or not: a disabled row still holds that model's per-lake unique
- * index, so the lake is not free.
+ * One source per lake, checked by rows: throw a ConflictError naming the existing source when the
+ * lake is already bound to any connector. The atomic rule is withLakeConnectorClaim; this check
+ * covers lakes bound before claims existed (row, no claim) and gives GitHub's connect a begin-time
+ * refusal before the user leaves for GitHub. Deliberately flag-free - a connector whose feature flag
+ * is off still owns the lake it is bound to. Bound means a row exists, enabled or not: a disabled row
+ * still holds that model's per-lake unique index, so the lake is not free.
  *
  * Every kind in CONNECTORS is checked unless exempted, so a route cannot forget one - but a new
  * connector model is only covered once it is added to CONNECTORS (and LakeConnectorKind) here.
  *
- * `except` skips the caller's own kind when its create already refuses a same-kind second claim with
- * a more specific message (Drive: the targetDataLakeId unique index -> "connected to a different
- * Drive folder"). It plays no part in same-folder reuse, which never reaches this guard.
+ * `except` skips the caller's own kind, which withLakeConnectorClaim passes because the claim and the
+ * kind's own per-lake unique index already refuse a same-kind second row. `includeClaim` also refuses
+ * a live claim (see isClaimLive), for a check run before the claim is attempted.
  */
 export async function assertLakeConnectorFree(
   lakeId: string,
-  options: { except?: LakeConnectorKind } = {}
+  options: { except?: LakeConnectorKind; includeClaim?: boolean } = {}
 ): Promise<void> {
   const checked = await Promise.all(
     CONNECTOR_KINDS.filter(kind => kind !== options.except).map(async kind => ({
@@ -58,10 +60,24 @@ export async function assertLakeConnectorFree(
   if (conflict) {
     throw new ConflictError(CONNECTORS[conflict.kind].conflictMessage);
   }
+  if (options.includeClaim) {
+    const holder = await lakeConnectorClaimRepository.findByLakeId(lakeId);
+    if (holder && (await isClaimLive(holder))) {
+      throw new ConflictError(CONNECTORS[holder.kind].conflictMessage);
+    }
+  }
 }
 
 // A claim younger than this may belong to a connect whose row is not written yet, so it is never taken over.
 export const CLAIM_GRACE_MS = 5 * 60 * 1000;
+
+// A failed best-effort release after a row delete can leave a live-looking claim for up to this window.
+async function isClaimLive(holder: LakeConnectorClaimHolder): Promise<boolean> {
+  return (
+    Date.now() - new Date(holder.claimedAt).getTime() <= CLAIM_GRACE_MS ||
+    Boolean(await CONNECTORS[holder.kind].findByIdAny(holder.connectionId))
+  );
+}
 
 // A second Drive folder on a Drive-claimed lake keeps the more specific message its route always gave.
 const SAME_KIND_CONFLICT: Partial<Record<LakeConnectorKind, string>> = {
@@ -84,9 +100,10 @@ export async function withLakeConnectorClaim<T>(
   const result = await lakeConnectorClaimRepository.tryAcquire({ lakeId, kind, connectionId });
   if (!result.acquired) {
     const { holder } = result;
-    const stale =
-      Date.now() - new Date(holder.claimedAt).getTime() > CLAIM_GRACE_MS &&
-      !(await CONNECTORS[holder.kind].findByIdAny(holder.connectionId));
+    if (!holder) {
+      throw new ConflictError('This data lake is being connected by another request. Try again.');
+    }
+    const stale = !(await isClaimLive(holder));
     const tookOver =
       stale && (await lakeConnectorClaimRepository.takeOver(lakeId, holder.connectionId, { kind, connectionId }));
     if (!tookOver) {

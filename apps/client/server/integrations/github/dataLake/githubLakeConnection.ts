@@ -131,7 +131,7 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
-  await assertLakeConnectorFree(lake.id);
+  await assertLakeConnectorFree(lake.id, { includeClaim: true });
   return { lakeId: lake.id, organizationId: lake.organizationId };
 }
 
@@ -259,7 +259,7 @@ export async function completeGitHubLakeConnection(params: {
       )
     );
   } catch (error) {
-    // Unique repositoryId / targetDataLakeId: a concurrent connect won the claim after our checks.
+    // Unique repositoryId / targetDataLakeId: another connect bound this repository or lake first.
     if (isDuplicateKeyError(error)) {
       throw new ConflictError('That repository or data lake was just connected by another request');
     }

@@ -56,6 +56,19 @@ describe('lakeConnectorClaimRepository.tryAcquire', () => {
   });
 });
 
+describe('lakeConnectorClaimRepository.findByLakeId', () => {
+  it("returns the lake's holder, and null for an unclaimed lake", async () => {
+    const lakeId = oid();
+    const connectionId = oid();
+    await lakeConnectorClaimRepository.tryAcquire({ lakeId, kind: 'googleDrive', connectionId });
+    expect(await lakeConnectorClaimRepository.findByLakeId(lakeId)).toMatchObject({
+      kind: 'googleDrive',
+      connectionId,
+    });
+    expect(await lakeConnectorClaimRepository.findByLakeId(oid())).toBeNull();
+  });
+});
+
 describe('lakeConnectorClaimRepository.takeOver', () => {
   it('swaps a holder out once; a second taker of the same stale holder loses', async () => {
     const lakeId = oid();

@@ -7,6 +7,7 @@ import { Logger } from '@bike4mind/observability';
 const h = vi.hoisted(() => ({
   claimTryAcquire: vi.fn(async () => ({ acquired: true })),
   claimRelease: vi.fn(async () => true),
+  claimFindByLakeId: vi.fn(),
   exchangeInstallerCode: vi.fn(),
   listInstallerVisibleRepositories: vi.fn(),
   revokeInstallerToken: vi.fn(),
@@ -29,6 +30,7 @@ const h = vi.hoisted(() => ({
   fabFilesFindByGitHubConnectionIdInDataLake: vi.fn(),
   purgeConnectionIngestedFiles: vi.fn(),
   driveConnFindByDataLakeIdAny: vi.fn(),
+  driveConnFindById: vi.fn(),
   sendToQueue: vi.fn(),
 }));
 
@@ -55,6 +57,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
       ...actual.lakeConnectorClaimRepository,
       tryAcquire: h.claimTryAcquire,
       releaseByConnectionId: h.claimRelease,
+      findByLakeId: h.claimFindByLakeId,
     },
     orgGitHubLakeConnectionRepository: {
       ...actual.orgGitHubLakeConnectionRepository,
@@ -76,6 +79,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
     },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
+      findById: h.driveConnFindById,
       findByDataLakeIdAny: h.driveConnFindByDataLakeIdAny,
     },
   };
@@ -96,6 +100,7 @@ import {
   GITHUB_LAKE_STATE_OPTIONS,
   REVOKE_PURGE_SLICE_SIZE,
 } from './githubLakeConnection';
+import { CLAIM_GRACE_MS } from '@server/dataLakes/assertLakeConnectorFree';
 import type { GitHubLakeAppConfig, GitHubLakeInstallation, GitHubLakeRepository } from './lakeAppClient';
 import { GITHUB_DISCONNECT_STALL_MS, type IOrgGitHubLakeConnectionDocument } from '@bike4mind/common';
 
@@ -232,6 +237,7 @@ describe('resolveConnectableLake', () => {
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
     h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
     h.driveConnFindByDataLakeIdAny.mockResolvedValue(null);
+    h.claimFindByLakeId.mockResolvedValue(null);
   });
 
   it('404s a missing lake', async () => {
@@ -273,6 +279,21 @@ describe('resolveConnectableLake', () => {
   it('409s when a Google Drive connection already feeds the lake', async () => {
     h.driveConnFindByDataLakeIdAny.mockResolvedValue({ id: 'existing-drive' });
     await expect(resolveConnectableLake(USER, 'lake1')).rejects.toThrow(/already connected to a Google Drive/i);
+  });
+
+  it('409s before the GitHub round-trip when a live Drive claim holds the lake (no row yet)', async () => {
+    h.claimFindByLakeId.mockResolvedValue({ kind: 'googleDrive', connectionId: 'd1', claimedAt: new Date() });
+    await expect(resolveConnectableLake(USER, 'lake1')).rejects.toThrow(/already connected to a Google Drive/i);
+  });
+
+  it('ignores a stale claim (past the grace window, connection row gone)', async () => {
+    h.claimFindByLakeId.mockResolvedValue({
+      kind: 'googleDrive',
+      connectionId: 'd1',
+      claimedAt: new Date(Date.now() - CLAIM_GRACE_MS - 1000),
+    });
+    h.driveConnFindById.mockResolvedValue(null);
+    await expect(resolveConnectableLake(USER, 'lake1')).resolves.toEqual({ lakeId: 'lake1', organizationId: 'orgA' });
   });
 
   it('resolves the lake and org id on a clean connectable lake', async () => {

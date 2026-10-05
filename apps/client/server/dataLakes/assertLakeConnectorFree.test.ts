@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   tryAcquire: vi.fn(),
   takeOver: vi.fn(),
   releaseByConnectionId: vi.fn(),
+  findByLakeId: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -18,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
     tryAcquire: h.tryAcquire,
     takeOver: h.takeOver,
     releaseByConnectionId: h.releaseByConnectionId,
+    findByLakeId: h.findByLakeId,
   },
 }));
 
@@ -68,6 +70,25 @@ describe('assertLakeConnectorFree', () => {
     await expect(assertLakeConnectorFree('lake1', { except: 'github' })).rejects.toThrow(
       /already connected to a Google Drive folder/i
     );
+  });
+
+  it('includeClaim refuses a live claim with no row yet, naming the holder kind', async () => {
+    h.findByLakeId.mockResolvedValue({ kind: 'googleDrive', connectionId: 'd1', claimedAt: new Date() });
+    await expect(assertLakeConnectorFree('lake1')).resolves.toBeUndefined();
+    await expect(assertLakeConnectorFree('lake1', { includeClaim: true })).rejects.toThrow(
+      /already connected to a Google Drive folder/i
+    );
+  });
+
+  it('includeClaim ignores a stale claim (past grace, connection row gone)', async () => {
+    h.findByLakeId.mockResolvedValue({
+      kind: 'github',
+      connectionId: 'g1',
+      claimedAt: new Date(Date.now() - CLAIM_GRACE_MS - 1000),
+    });
+    h.ghFindById.mockResolvedValue(null);
+    await expect(assertLakeConnectorFree('lake1', { includeClaim: true })).resolves.toBeUndefined();
+    expect(h.ghFindById).toHaveBeenCalledWith('g1');
   });
 
   it('names GitHub when the lake is bound to both kinds', async () => {
@@ -140,6 +161,13 @@ describe('withLakeConnectorClaim', () => {
     h.tryAcquire.mockResolvedValue(held('github', 1000));
     await expect(withLakeConnectorClaim('lake1', 'googleDrive', create)).rejects.toThrow(ConflictError);
     expect(h.takeOver).not.toHaveBeenCalled();
+  });
+
+  it('409s (not 500s) when the claim kept changing hands and no holder could be read', async () => {
+    h.tryAcquire.mockResolvedValue({ acquired: false, holder: null });
+    await expect(withLakeConnectorClaim('lake1', 'github', create)).rejects.toThrow(ConflictError);
+    expect(h.takeOver).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('409s when the takeover CAS loses to another request', async () => {
