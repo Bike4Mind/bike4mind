@@ -279,7 +279,13 @@ export default function GitHubRepositoryPickerModal() {
                               disabled={!!repo.boundTo}
                               label={
                                 <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-                                  <Typography level="body-sm">{repo.fullName}</Typography>
+                                  <Typography
+                                    level="body-sm"
+                                    textColor={repo.boundTo ? 'text.tertiary' : 'text.primary'}
+                                    data-testid={`github-repo-picker-name-${repo.id}`}
+                                  >
+                                    {repo.fullName}
+                                  </Typography>
                                   <Typography level="body-xs" color="neutral">
                                     @ {repo.defaultBranch}
                                   </Typography>
