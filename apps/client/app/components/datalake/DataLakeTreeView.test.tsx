@@ -448,6 +448,72 @@ describe('DataLakeTreeView v2 contract', () => {
     expect(opened.getAllByTestId(/^datalake-file-/).map(el => el.dataset.testid)).toEqual(['datalake-file-u1']);
   });
 
+  it('uncategorized.depth pins the bucket inside one folder, not at the root', () => {
+    const uncategorized = {
+      depth: 1,
+      files: [file('u1', 'loose.md', ['datalake:mine'])],
+      renderRow: (count: number, onOpen: () => void) => (
+        <ListItem>
+          <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
+            Uncategorized ({count})
+          </ListItemButton>
+        </ListItem>
+      ),
+    };
+    const root = renderTree({ uncategorized });
+    expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+    root.unmount();
+
+    const inFolder = renderTree({ breadcrumb: ['books'], uncategorized });
+    fireEvent.click(screen.getByTestId('datalake-node-uncategorized'));
+    expect(inFolder.onNavigate).toHaveBeenCalledWith(['books', UNCATEGORIZED_KEY]);
+    inFolder.unmount();
+
+    const opened = renderTree({ breadcrumb: ['books', UNCATEGORIZED_KEY], uncategorized });
+    expect(opened.getAllByTestId(/^datalake-file-/).map(el => el.dataset.testid)).toEqual(['datalake-file-u1']);
+    opened.unmount();
+
+    // A deeper folder is not the bucket's folder either.
+    renderTree({ breadcrumb: ['books', 'war'], uncategorized });
+    expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+  });
+
+  describe('uncategorized.depth edge cases', () => {
+    const row = (count: number, onOpen: () => void) => (
+      <ListItem>
+        <ListItemButton data-testid="datalake-node-uncategorized" onClick={onOpen}>
+          Uncategorized ({count})
+        </ListItemButton>
+      </ListItem>
+    );
+    const bucket = { depth: 1, files: [file('u1', 'loose.md', ['datalake:mine'])], renderRow: row };
+    // A lake folder whose members are all uncategorized: seeded as a childless, zero-count node.
+    const EMPTY_LAKE_TREE = buildTagTree([{ tag: 'books', count: 0 }]);
+
+    it('draws the bucket row in a childless folder instead of treating it as a leaf', () => {
+      const { onNavigate } = renderTree({ tree: EMPTY_LAKE_TREE, breadcrumb: ['books'], uncategorized: bucket });
+      fireEvent.click(screen.getByTestId('datalake-node-uncategorized'));
+      expect(onNavigate).toHaveBeenCalledWith(['books', UNCATEGORIZED_KEY]);
+    });
+
+    it('hides the row while searching and at count 0', async () => {
+      const zero = renderTree({ breadcrumb: ['books'], uncategorized: { ...bucket, count: 0 } });
+      expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+      zero.unmount();
+
+      renderTree({ breadcrumb: ['books'], uncategorized: bucket });
+      expect(screen.getByTestId('datalake-node-uncategorized')).toBeTruthy();
+      await userEvent.type(screen.getByTestId('datalake-search').querySelector('input')!, 'x');
+      expect(screen.queryByTestId('datalake-node-uncategorized')).toBeNull();
+    });
+
+    it('never treats a path ending in the bucket key as a leaf tag when no bucket is supplied', () => {
+      renderTree({ tree: EMPTY_LAKE_TREE, breadcrumb: ['books', UNCATEGORIZED_KEY] });
+      expect(screen.queryByTestId(/^datalake-file-/)).toBeNull();
+      expect(screen.queryByText('No articles found')).toBeNull();
+    });
+  });
+
   it('testIds overrides rename the container and error nodes', () => {
     renderTree({ isError: true, testIds: { container: 'datalake-manager-tree', error: 'datalake-manager-error' } });
     expect(screen.getByTestId('datalake-manager-tree')).toBeTruthy();

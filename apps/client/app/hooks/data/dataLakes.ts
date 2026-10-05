@@ -2078,12 +2078,6 @@ export interface DataLakeArticlesParams {
   limit?: number;
   sortBy?: 'fileName' | 'createdAt';
   sortDir?: 'asc' | 'desc';
-  /**
-   * The merged tree's Uncategorized bucket: lake members categorized under none of the caller's
-   * lake prefixes. Sized by `totalUncategorizedFileCount` on the tag-counts payload. For ONE
-   * lake's bucket use useGetDataLakeUncategorizedFiles - this route has no lake-scope parameter.
-   */
-  uncategorized?: boolean;
 }
 
 /** Response shape for the tag-counts endpoint. */
@@ -2123,12 +2117,6 @@ export interface DataLakeTagCountsResponse {
    * meta-tag contributes 0 there while its own row reads its full size.
    */
   totalLakeFileCount: number;
-  /**
-   * The merged (all-lakes) tree's bucket: distinct members categorized under NO accessible
-   * prefix. Not a sum of `uncategorizedFileCounts` - those judge each lake separately, so a file
-   * categorized in lake A but not in lake B is reachable under A's branch and must not appear.
-   */
-  totalUncategorizedFileCount: number;
 }
 
 /**
