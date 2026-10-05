@@ -1648,6 +1648,41 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology). Declared here rather than in
+// the overlay's contributeInfra so web can link it; the worker is re-exported via serverHandlerStubs.
+const libreoncologyAudioRenderQueueDLQ = new sst.aws.Queue('libreoncologyAudioRenderQueueDLQ', {});
+const libreoncologyAudioRenderQueue = new sst.aws.Queue('libreoncologyAudioRenderQueue', {
+  // Must exceed the worker timeout plus the 30s the worker's render claim outlives it, or a
+  // still-running render is redelivered.
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: libreoncologyAudioRenderQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.subscribe(
+  {
+    handler: 'apps/client/server/premium-generated/libreoncologyAudioRender.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Every job draws on the org's one ElevenLabs key, shared with live voice sessions, so unbounded
+    // fan-out would rate-limit the live product. 2 is the lowest value AWS accepts.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
+  }
+);
+
 export {
   // Queues
   fabFileChunkQueue,
@@ -1683,6 +1718,7 @@ export {
   agentContinuationQueue,
   optihashiRunCompletionQueue,
   bobRunQueue,
+  libreoncologyAudioRenderQueue,
   // DLQs
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
@@ -1720,6 +1756,7 @@ export {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
@@ -1754,4 +1791,5 @@ export {
   overwatchAnalyticsQueueSubscription,
   optihashiRunCompletionQueueSubscription,
   bobRunQueueSubscription,
+  libreoncologyAudioRenderQueueSubscription,
 };
