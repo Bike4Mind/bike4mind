@@ -76,6 +76,8 @@ export const dataLakeKeys = {
   gitHubConnection: (dataLakeId?: string) => ['lake-github-connection', dataLakeId] as const,
   /** Prefix of every lake's GitHub connection read. */
   gitHubConnectionRoot: ['lake-github-connection'] as const,
+  /** The repository picker's list for one lake's connect flow (GET .../github-connection/repositories). */
+  gitHubRepositoryChoices: (dataLakeId?: string) => ['lake-github-repository-choices', dataLakeId] as const,
   /** One lake's derived health report (GET /api/data-lakes/:id/health), #1666. */
   health: (dataLakeId: string) => ['dataLakeHealth', dataLakeId] as const,
   /** Invalidation prefix covering every lake's health - used when a batch finishes ingesting, which
