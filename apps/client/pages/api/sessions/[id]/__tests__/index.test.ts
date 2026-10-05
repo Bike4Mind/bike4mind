@@ -99,7 +99,7 @@ vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
 }));
 
 import handler from '../index';
-import { ApiKeyScope, SessionEvents } from '@bike4mind/common';
+import { ApiKeyScope, ConcurrencyConflictError, NotFoundError, SessionEvents } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
@@ -189,6 +189,13 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
         expect(res._getStatusCode()).toBe(200);
       }
     );
+
+    it('404s a session not visible to the caller', async () => {
+      mockGetSession.mockRejectedValue(new NotFoundError('Session not found'));
+      const { req, res } = fire({ method: 'GET' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+    });
 
     it('403s a key with neither notebooks scope before the handler runs', async () => {
       keyWithScopes([ApiKeyScope.AI_CHAT]);
@@ -376,6 +383,17 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ newLastNotebookId: null });
+    });
+
+    it('maps a mid-cascade ConcurrencyConflictError to the 409 the contract documents', async () => {
+      mockDeleteSession.mockRejectedValue(new ConcurrencyConflictError('FabFile'));
+      const { req, res } = fire({ method: 'DELETE' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(409);
+      expect(mockLogEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: SessionEvents.DELETE_SESSION }),
+        expect.anything()
+      );
     });
 
     it('403s a notebooks:read-only key before the handler runs', async () => {

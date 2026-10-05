@@ -13,10 +13,10 @@ export const sessionGetContract = defineEndpoint({
   operationId: 'getSession',
   summary: 'Get a session',
   description:
-    'Reads one of your sessions (called a "notebook" in the product UI): its name, attached ' +
-    'knowledge files, tags, and retrieval settings. Use it to confirm what a `PUT` on the same ' +
-    'path stored. A session you do not own, or one that was deleted, is `404`. An API key needs ' +
-    '`notebooks:read` or `notebooks:write`.',
+    'Reads a session you own or that was shared with you (called a "notebook" in the product UI): ' +
+    'its name, attached knowledge files, tags, and retrieval settings. Use it to confirm what a ' +
+    '`PUT` on the same path stored. A session not visible to you, or one that was deleted, is ' +
+    '`404`. An API key needs `notebooks:read` or `notebooks:write`.',
   tags: ['Sessions'],
   auth: 'apiKeyOrJwt',
   // WRITE_NOTEBOOKS is accepted too so a key that creates and updates sessions can read back
