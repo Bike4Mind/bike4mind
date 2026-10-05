@@ -31,6 +31,12 @@ describe('generationJob dispatch', () => {
     expect(step).not.toHaveBeenCalled();
   });
 
+  it('drops a non-JSON body instead of throwing', async () => {
+    const raw = { Records: [{ body: 'not json {' }] } as unknown as SQSEvent;
+    await expect(dispatch(raw, context)).resolves.toBeUndefined();
+    expect(step).not.toHaveBeenCalled();
+  });
+
   it('lets an engine error propagate so SQS redelivers', async () => {
     step.mockRejectedValueOnce(new Error('db down'));
     await expect(dispatch(event({ jobId: 'job1' }), context)).rejects.toThrow('db down');

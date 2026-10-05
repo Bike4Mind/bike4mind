@@ -25,9 +25,10 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { fabFilesService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
-import { createVideoJobHandler, type VideoJobDeps } from '@bike4mind/services/videoJobs';
+import { createVideoJobHandler, EXPIRED_KEY_SENTINEL, type VideoJobDeps } from '@bike4mind/services/videoJobs';
 import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
+import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -46,11 +47,11 @@ const SAVE_FAILURE_PATTERNS = {
 
 /**
  * Maps the raw value of a provider key to one a provider call may use. getEffectiveLLMApiKeys answers an
- * expired per-user key with the literal 'expired' sentinel (a truthy string, so it would otherwise reach the
+ * expired per-user key with EXPIRED_KEY_SENTINEL (a truthy string, so it would otherwise reach the
  * provider as a bearer token); a missing or empty key is null or ''.
  */
 export const usableApiKey = (raw: string | null | undefined): string | null => {
-  if (!raw || raw === 'expired') return null;
+  if (!raw || raw === EXPIRED_KEY_SENTINEL) return null;
   return raw;
 };
 
@@ -120,16 +121,19 @@ const resolveApiKey: VideoJobDeps['resolveApiKey'] = async (providerId, userId) 
 };
 
 // Owner-only on purpose: the image becomes provider input, and a shared file is not the requester's to send out.
-const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, fileId) => {
+export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, fileId) => {
+  // The id is caller-supplied; a malformed one would throw a CastError from the query instead of reading as missing.
+  if (!isValidObjectId(fileId)) return null;
   const fabFile = await fabFileRepository.findByIdAndUserId(fileId, userId);
-  if (!fabFile?.filePath || !fabFile.mimeType?.startsWith('image/')) return null;
+  if (!fabFile || fabFile.deletedAt) return null;
+  if (!fabFile.filePath || !fabFile.mimeType?.startsWith('image/')) return null;
   // Same upload moderation gate as every other FabFile read: a pending or blocked image is not sent to a provider.
   if (!isImageServeable(fabFile)) return null;
   const bytes = await getFilesStorage().download(fabFile.filePath);
   return { bytes, mimeType: fabFile.mimeType };
 };
 
-const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType }) => {
+export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType }) => {
   const jobTag = `job:${jobId}`;
   // A re-run after a lost commit must not store a second copy.
   const existing = await fabFileRepository.findOne({

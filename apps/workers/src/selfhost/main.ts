@@ -162,7 +162,8 @@ async function main() {
   }
 
   // Required in the manifest (unlike the callback queue above): a video job accepted with no consumer
-  // would hold credits until the sweeper fails it.
+  // would hold credits until the sweeper fails it. Unlike Lambda there is no hard timeout here, so the
+  // lease/visibility ordering in infra/queues.ts relies on provider and storage call timeouts.
   worker.registerQueueHandler('generationJobQueue', Resource.generationJobQueue.url, generationJobDispatch, {
     visibilityTimeoutSec: GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
     maxReceiveCount: GENERATION_JOB_MAX_RECEIVE_COUNT,

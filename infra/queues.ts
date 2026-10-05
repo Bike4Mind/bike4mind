@@ -1141,7 +1141,9 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
 // and the engine lease (apps/client/server/generationJobs/wiring.ts LEASE_MS) must stay ordered:
 // timeout (5 min) < lease (5.5 min) < visibility (6 min), so a running step is never redelivered or
-// overlapped by another worker.
+// overlapped by another worker. That ordering holds because Lambda enforces the timeout; the self-host
+// runner (apps/workers/src/selfhost/main.ts) has no hard kill, so there it relies on provider and storage
+// call timeouts and its own runBudgetMs is only advisory.
 const generationJobDLQ = new sst.aws.Queue('generationJobDLQ', {});
 const generationJobQueue = new sst.aws.Queue('generationJobQueue', {
   visibilityTimeout: '6 minutes',
@@ -1173,6 +1175,10 @@ const generationJobQueueSubscription = generationJobQueue.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
+    },
+    concurrency: {
+      // Store steps hold up to 256MB of output and providers rate-limit.
+      reserved: 5,
     },
   },
   SINGLE_RECORD_BATCH
