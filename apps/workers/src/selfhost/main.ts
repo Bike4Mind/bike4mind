@@ -37,6 +37,7 @@ import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
 } from '@server/queueHandlers/sqsDelivery';
 
 /**
@@ -150,8 +151,7 @@ async function main() {
   const generationCallbackQueueUrl = Resource.generationCallbackQueue?.url;
   if (generationCallbackQueueUrl) {
     worker.registerQueueHandler('generationCallbackQueue', generationCallbackQueueUrl, generationCallbackDispatch, {
-      // Matches hosted's 2-minute visibilityTimeout (infra/queues.ts).
-      visibilityTimeoutSec: 120,
+      visibilityTimeoutSec: GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
       maxReceiveCount: GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
     });
   } else {
