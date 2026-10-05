@@ -46,8 +46,9 @@ export const generateImageContract = defineEndpoint({
     '`"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. ' +
     'The prompt is resolved against the session history first, so a follow-up such as "make it darker" ' +
     'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. ' +
-    '`referenceImageFabFileIds` (gpt-image models only) passes up to 4 already-uploaded images as style ' +
-    'anchors, after the input image taken from `fabFileIds`. Credits are checked when the render runs, so ' +
+    '`referenceImageFabFileIds` passes up to 4 already-uploaded images as style anchors, after the input ' +
+    'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
+    'rejected with a 400 rather than ignored. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-image` ' +
     'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,
@@ -64,7 +65,10 @@ export const generateImageContract = defineEndpoint({
       schema: GenerateImageResponseSchema,
       pollResult: imageQuestPollResult,
     },
-    400: { description: `The ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`, schema: ApiErrorSchema },
+    400: {
+      description: `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`,
+      schema: ApiErrorSchema,
+    },
     404: {
       description:
         'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +

@@ -140,6 +140,13 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
+| `text_to_speech` | Synthesize speech from text; return a saved file URL or inline audio | `ai:generate` |
+
+`text_to_speech` accepts `text` and optional provider, voice, model, format, and voice settings. It uses the scoped `/api/ai/tts` route and spends generation credits. Set `preview: true` to skip saving a copy. The result takes one of three shapes:
+
+- **Saved with a URL** - `saved: true` and `file: { id, fileUrl }`, the signed download URL.
+- **Inline audio** - an MCP audio block plus metadata. If a copy was saved but no URL could be signed, the metadata reports `saved: true` and `file: { id }`; if no copy was saved, it reports `saved: false` and, when the route says why (e.g. a full storage quota versus `preview: true`), a `saveSkippedReason`.
+- **Too large to inline** - no audio block; `saved: true` and `file: { id }` (with `fileUrl` when one was signed), so the billed audio is still reachable through the file.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 

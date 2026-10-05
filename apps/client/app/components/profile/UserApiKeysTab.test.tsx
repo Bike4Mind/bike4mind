@@ -183,6 +183,24 @@ describe('UserApiKeysTab - callback signing secret', () => {
     expect(screen.getByDisplayValue('whsec_fresh123')).toBeInTheDocument();
   });
 
+  it('shows a runnable test snippet that uses this origin and a Bearer header without repeating the key', () => {
+    h.keys = [activeKey];
+    renderTab();
+
+    fireEvent.click(screen.getByText('Create API Key'));
+    fireEvent.change(screen.getByTestId('api-key-name-input').querySelector('input')!, {
+      target: { value: 'New key' },
+    });
+    fireEvent.click(screen.getByTestId('api-key-create-btn'));
+
+    const snippet = screen.getByTestId('api-key-created-snippet').textContent!;
+    expect(snippet).toContain(`${window.location.origin}/api/chat`);
+    expect(snippet).toContain('-H "Authorization: Bearer $B4M_API_KEY"');
+    expect(snippet).not.toContain('X-API-Key');
+    expect(snippet).not.toContain('your-deployment.example.com');
+    expect(snippet).not.toContain('b4m_live_newkey123');
+  });
+
   it('does not render a signing secret block when the create response lacks one', () => {
     h.createResult = { key: 'b4m_live_newkey123' };
     h.keys = [activeKey];

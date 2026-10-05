@@ -67,8 +67,9 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
    * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
    * OpenAI receives them in this order - which matters, because a mask always applies to the
    * first image in the array. fabFile ids rather than URLs so the existing access +
-   * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
-   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
+   * moderation gates (findAccessibleInIds, isImageServeable) still apply. gpt-image only: the
+   * public endpoints reject them for any other model (assertReferenceImagesSupported) and the
+   * services drop them as a backstop. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
    * why the cap is 4 and not OpenAI's 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
@@ -156,7 +157,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
    * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
    * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
+   * apply. gpt-image only: the public endpoint rejects them for BFL and Gemini
+   * (assertReferenceImagesSupported). Repeated ids collapse to one anchor. See
    * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),

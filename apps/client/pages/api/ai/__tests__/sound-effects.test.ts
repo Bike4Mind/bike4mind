@@ -403,7 +403,7 @@ describe('POST /api/ai/sound-effects', () => {
       id: 'org1',
       currentCredits: 10000,
       maxCreditsPerMember: 40,
-      userDetails: [{ id: 'u1', usedCredits: 20 }],
+      userDetails: [{ id: 'u1', usedCredits: 20, periodStart: new Date() }],
       users: [{ userId: 'u1' }],
     });
 

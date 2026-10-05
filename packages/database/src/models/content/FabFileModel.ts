@@ -29,7 +29,7 @@ import {
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import {
@@ -1088,6 +1088,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const docs = await this.fabFileModel
       .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsByIds') } })
       .select('_id')
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
+  /**
+   * Existence including soft-deleted rows - see IFabFileRepository.findExistingIdsIncludingDeletedByIds
+   * for which of the two probes a caller wants. `includeDeleted` is what makes the difference: the
+   * plugin's pre('find') hook otherwise scopes this to `deletedAt: null`.
+   */
+  async findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsIncludingDeletedByIds') } })
+      .select('_id')
+      .setOptions({ includeDeleted: true })
       .lean<{ _id: unknown }[]>();
     return docs.map(d => String(d._id));
   }
@@ -3165,6 +3179,35 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return fabFileIds;
   }
 
+  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+    if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
+      throw new Error('Cleanup chunk batch size must be between 1 and 1000');
+    }
+    for (;;) {
+      const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+        .limit(chunkBatchSize + 1)
+        .lean();
+      const ids = chunks.slice(0, chunkBatchSize).map(chunk => chunk._id);
+      const removeBatch = () => FabFileChunk.deleteMany({ fabFileId, _id: { $in: ids } });
+      if (chunks.length > chunkBatchSize) {
+        // Keep the row as a retry locator while earlier chunk batches make partial progress.
+        await removeBatch();
+        continue;
+      }
+      const completed = await withTransaction(async () => {
+        // Include chunks committed between the candidate read and transaction start.
+        const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+          .limit(chunkBatchSize + 1)
+          .lean();
+        if (finalChunks.length > chunkBatchSize) return false;
+        await this.hardDeleteOneById(fabFileId);
+        await FabFileChunk.deleteMany({ fabFileId, _id: { $in: finalChunks.map(chunk => chunk._id) } });
+        return true;
+      });
+      if (completed) return;
+    }
+  }
+
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {
     // findOneAndDelete, not deleteMany: it is the delete and the claim in one round trip, so of two
     // concurrent purges of the same document exactly one is told it did the deleting.
@@ -3459,6 +3502,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // object-style inclusion projection on a sub-path does not.
     const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
     return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
+  }
+
+  async listLakeSupersededIds(fabFileIds: string[], dataLakeId: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    const docs = await this.fabFileModel
+      .find({
+        _id: { $in: usableObjectIds(fabFileIds, 'FabFileModel.listLakeSupersededIds') },
+        'supersededInLakes.dataLakeId': dataLakeId,
+      })
+      .select('_id')
+      .lean();
+    return docs.map(doc => String(doc._id));
   }
 }
 

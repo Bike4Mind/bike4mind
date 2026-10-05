@@ -395,9 +395,9 @@ You can also run any MCP server via npx or custom executables:
 
 #### Serve Bike4Mind itself as an MCP server (`b4m mcp serve`)
 
-The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises nine tools (`list_notebooks`, `get_notebook`, `create_notebook`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
+The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises ten tools (`list_notebooks`, `get_notebook`, `create_notebook`, `send_message`, `search_knowledge_base`, `list_lakes`, `list_files`, `get_file`, `generate_sound_effect`, `text_to_speech`) plus four resource templates (`b4m://notebook/{id}`, `b4m://file/{id}`, `b4m://project/{id}`, `b4m://artifact/{id}`), each listable and readable as JSON, and `b4m://agent-quest` - the credential-free manifest for The Open Door, the onboarding quest for agents.
 
-To get answers grounded in a data lake, call `list_lakes`, then `create_notebook { dataLakeId }` with a lake's id, then `send_message { notebookId }` on that notebook: the result carries the `reply` plus the `citables` it was grounded in. `list_lakes` needs a key with `datalake:read` (and data lakes enabled on the instance), and a key used with a lake must be bound to that lake.
+To get answers grounded in a data lake, call `list_lakes`, then `create_notebook { dataLakeId }` with a lake's id, then `send_message { notebookId }` on that notebook: the result carries the `reply` plus the `citables` it was grounded in. `list_lakes` needs a key with `datalake:read` (and data lakes enabled on the instance).
 
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process

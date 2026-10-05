@@ -105,6 +105,7 @@ describe('create_data_lake', () => {
     const result = await run(makeContext({ organizationId: 'org-x', memberOf: ['org1'] }), { name: 'Team' });
 
     expect(result).toContain('could not be created in the active organization');
+    expect(result).not.toContain('from chat');
     expect(result).toContain('Data Lakes manager');
     expect(result).not.toMatch(/not a member|does not belong/i);
     expect(createDataLakeMock).not.toHaveBeenCalled();

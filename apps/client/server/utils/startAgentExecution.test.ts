@@ -61,6 +61,7 @@ vi.mock('@server/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
+import { ApiKeyScope, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
 import { startAgentExecution, sweepMemoSize } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from './headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
@@ -295,6 +296,33 @@ describe('startAgentExecution', () => {
     );
 
     expect(mockCreateExecution).toHaveBeenCalledWith(expect.objectContaining({ approvedTools: ['web_search'] }));
+  });
+
+  it('derives the scope denials from the key and persists them so every invocation re-applies them', async () => {
+    await startAgentExecution(
+      input({ userId: 'scoped-key', apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] } }),
+      logger
+    );
+    await startAgentExecution(
+      input({ userId: 'writer', apiKeyInfo: { keyId: 'k2', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session' }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_TOOL_NAMES]);
+    expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
+    expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('scopeDeniedTools');
+  });
+
+  it('persists the authenticating key so the executor can attribute lake writes to it', async () => {
+    await startAgentExecution(
+      input({ userId: 'keyed', apiKeyInfo: { keyId: 'key-1', scopes: [ApiKeyScope.DATALAKE_WRITE] } }),
+      logger
+    );
+    await startAgentExecution(input({ userId: 'session' }), logger);
+
+    expect(mockCreateExecution.mock.calls[0][0].apiKeyId).toBe('key-1');
+    expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('apiKeyId');
   });
 
   it('ignores the dispatch payload on an interactive run, which can approve per-tool instead', async () => {

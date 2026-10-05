@@ -58,6 +58,8 @@ export interface SessionToolPolicyInput {
    * end the user experiences as "the agent can't see my file".
    */
   hasAttachments: boolean;
+  /** The caller's credential-scope denials (`AgentExecution.scopeDeniedTools`); always subtracted. */
+  scopeDeniedTools?: readonly string[];
   logger?: PolicyLogger;
 }
 
@@ -67,9 +69,9 @@ export interface SessionToolPolicyInput {
  * either the profile or the session - is never silently overridden.
  */
 export function applySessionToolPolicy(input: SessionToolPolicyInput): string[] {
-  const { toolNames, session, profileDeniedTools = [], hasAttachments, logger } = input;
+  const { toolNames, session, profileDeniedTools = [], hasAttachments, scopeDeniedTools = [], logger } = input;
 
-  const sessionDenied = new Set(session.disabledTools ?? []);
+  const sessionDenied = new Set([...(session.disabledTools ?? []), ...scopeDeniedTools]);
   const profileDenied = new Set(profileDeniedTools);
   const result = [...toolNames];
 

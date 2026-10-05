@@ -346,6 +346,24 @@ export interface IAgentExecution {
    * which is the per-execution user-approval denial list.
    */
   profileDeniedTools?: string[];
+  /**
+   * The toolbelt names the first invocation resolved (profile + payload, ambient Smart Tools
+   * included, denials already subtracted). Continuations replay this instead of recomputing,
+   * because the start payload that carried the ambient picks is gone after a Lambda handoff.
+   * Absent on legacy rows, which keep the recompute.
+   */
+  resolvedEnabledTools?: string[];
+  /**
+   * Tools the caller's credentials may not be offered on this run (an API key without the
+   * datalake scopes - see `dataLakeToolsDeniedFor`). Set once at creation and re-read on every
+   * invocation, since the tool list is rebuilt per Lambda.
+   */
+  scopeDeniedTools?: string[];
+  /**
+   * The `b4m_live_` key that started the run, when one did. Server-derived (`req.apiKeyInfo`);
+   * forwarded to ToolContext.apiKeyId so a tool-driven lake write is audited under the key.
+   */
+  apiKeyId?: string;
   /** IDs of mementos injected into the first-iteration prompt. Written once at iteration 0;
    * read by persistRunAsQuest so all terminal paths (continuation, gate-stop, abort) get the badge. */
   usedMementoIds?: string[];
@@ -731,6 +749,9 @@ const AgentExecutionSchema = new mongoose.Schema(
     // `default: undefined` so an absent field stays absent (a bare [String] would
     // materialize [] on every doc, indistinguishable from "profile denies nothing").
     profileDeniedTools: { type: [String], default: undefined },
+    resolvedEnabledTools: { type: [String], default: undefined },
+    scopeDeniedTools: { type: [String], default: undefined },
+    apiKeyId: { type: String },
     usedMementoIds: [{ type: String }],
     // Memory gates resolved once at execution start and persisted so read/write/
     // stop-at-gate all agree even if the underlying flags flip mid-run. Typed
@@ -1440,6 +1461,12 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    *  (see IAgentExecution.profileDeniedTools). */
   async persistProfileDeniedTools(id: string, profileDeniedTools: string[]): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { profileDeniedTools } });
+  }
+
+  /** Written once on the first invocation; continuations re-read it
+   *  (see IAgentExecution.resolvedEnabledTools). */
+  async persistResolvedEnabledTools(id: string, resolvedEnabledTools: string[]): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { resolvedEnabledTools } });
   }
 
   async persistMementoIds(id: string, mementoIds: string[]): Promise<void> {
