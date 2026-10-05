@@ -40,6 +40,10 @@ type DimensionBounds = { min: number; max: number; step?: number };
  * and sending it on would turn a wrong-size image into a failed generation. Both dimensions have
  * to fit, since using one and defaulting the other would distort the aspect ratio.
  *
+ * An explicit pair outside the bounds is scaled as a unit until it fits (2048x1024 becomes
+ * 1440x720), so the caller's aspect ratio survives; each axis is clamped only when no uniform
+ * scale can fit both, i.e. the ratio itself is wider than the bounds allow.
+ *
  * With a `step`, each resolved dimension is rounded to the nearest multiple of it. That covers
  * presets such as 1280x720 that sit off BFL's 32px grid, and explicit values from API callers.
  * Bounds that are themselves multiples of `step` keep an in-range value in range.
@@ -53,9 +57,26 @@ export function resolveImageDimensions(
     preset && (!bounds || [preset.width, preset.height].every(v => v >= bounds.min && v <= bounds.max))
       ? preset
       : undefined;
-  const snap = (value?: number) =>
-    value === undefined || !bounds?.step
-      ? value
-      : Math.min(bounds.max, Math.max(bounds.min, Math.round(value / bounds.step) * bounds.step));
-  return { width: snap(width ?? usablePreset?.width), height: snap(height ?? usablePreset?.height) };
+  const resolvedWidth = width ?? usablePreset?.width;
+  const resolvedHeight = height ?? usablePreset?.height;
+  if (!bounds) return { width: resolvedWidth, height: resolvedHeight };
+
+  const scale = fitScale(resolvedWidth, resolvedHeight, bounds);
+  const fit = (value?: number) => {
+    if (value === undefined) return value;
+    const scaled = value * scale;
+    const snapped = bounds.step ? Math.round(scaled / bounds.step) * bounds.step : Math.round(scaled);
+    return Math.min(bounds.max, Math.max(bounds.min, snapped));
+  };
+  return { width: fit(resolvedWidth), height: fit(resolvedHeight) };
+}
+
+/** The uniform factor that brings a width/height pair inside `bounds`; 1 when it already fits. */
+function fitScale(width: number | undefined, height: number | undefined, bounds: DimensionBounds): number {
+  if (width === undefined || height === undefined) return 1;
+  const longer = Math.max(width, height);
+  const shorter = Math.min(width, height);
+  if (longer > bounds.max) return bounds.max / longer;
+  if (shorter < bounds.min) return bounds.min / shorter;
+  return 1;
 }

@@ -27,9 +27,31 @@ describe('parseImageSize', () => {
 });
 
 describe('resolveImageDimensions', () => {
-  it('clamps explicit dimensions into bounds after snapping', () => {
+  it('clamps a lone explicit dimension into bounds after snapping', () => {
     expect(resolveImageDimensions({ width: 10 }, BFL_DIMENSION_BOUNDS).width).toBe(256);
     expect(resolveImageDimensions({ width: 1460 }, BFL_DIMENSION_BOUNDS).width).toBe(1440);
+  });
+
+  it('scales an out-of-range explicit pair as a unit so its aspect ratio survives', () => {
+    expect(resolveImageDimensions({ width: 2048, height: 1024 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 1440,
+      height: 736,
+    });
+    expect(resolveImageDimensions({ width: 1024, height: 2048 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 736,
+      height: 1440,
+    });
+    expect(resolveImageDimensions({ width: 128, height: 192 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 256,
+      height: 384,
+    });
+  });
+
+  it('clamps each axis only when the ratio is wider than the bounds allow', () => {
+    expect(resolveImageDimensions({ width: 4000, height: 400 }, BFL_DIMENSION_BOUNDS)).toEqual({
+      width: 1440,
+      height: 256,
+    });
   });
 
   it('prefers explicit dimensions over the preset', () => {

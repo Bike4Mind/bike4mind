@@ -15,6 +15,7 @@ import {
   isGPTImage2Model,
   isGPTImageModel,
   isGeminiImageModel,
+  isKontextModel,
   rejectsTransparentBackground,
   requiresImageInput,
   supportsImageEdit,
@@ -30,7 +31,8 @@ import {
  * - `dimensions`: discrete `width`/`height` within the bounds. Each is rounded to the nearest
  *   multiple of `step` before it is sent (resolveImageDimensions), presets included.
  * - `aspectRatio`: an `aspect_ratio` string such as `16:9`; the provider picks the pixels.
- * - `inputImage`: sized by the input image, so no `size` is taken.
+ * - `inputImage`: sized by the input image, so no `size` is taken. `aspectRatio` says whether an
+ *   `aspect_ratio` string is honoured as an override (Kontext forwards it; Fill does not).
  * - `fixed`: the provider takes no size at all.
  */
 export type ImageSizing =
@@ -53,7 +55,7 @@ export type ImageSizing =
       step: number;
     }
   | { kind: 'aspectRatio' }
-  | { kind: 'inputImage' }
+  | { kind: 'inputImage'; aspectRatio: boolean }
   | { kind: 'fixed' };
 
 export type ImageModelCapabilities = {
@@ -99,7 +101,8 @@ function resolveSizing(model: ImageModels): ImageSizing {
       step: stepSize,
     };
   }
-  if (requiresImageInput(model)) return { kind: 'inputImage' };
+  // Must stay in sync with the Kontext transform branch in ImageGeneration, which forwards aspect_ratio.
+  if (requiresImageInput(model)) return { kind: 'inputImage', aspectRatio: isKontextModel(model) };
   if (isBflUltraImageModel(model) || isGeminiImageModel(model)) return { kind: 'aspectRatio' };
   return { kind: 'fixed' };
 }

@@ -6,7 +6,7 @@ import { BFL_DIMENSION_BOUNDS, resolveImageDimensions } from './imageSize';
 import { isSupportedImageSize } from './imageSizes';
 import { MAX_REFERENCE_IMAGES } from './modelHelpers';
 
-// A Record, so a new ImageModels member fails typecheck until its sizing is decided here.
+// The it.each below fails for a new ImageModels member until its sizing is decided here.
 const EXPECTED_SIZING: Record<ImageModels, ImageSizing['kind']> = {
   [ImageModels.GPT_IMAGE_1]: 'presets',
   [ImageModels.GPT_IMAGE_1_5]: 'presets',
@@ -85,6 +85,17 @@ describe('getImageModelCapabilities', () => {
         expect(height % sizing.step).toBe(0);
       }
     });
+
+    it('advertises the BFL bounds resolveImageDimensions enforces', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_PRO_1_1).sizing).toMatchObject({
+        kind: 'dimensions',
+        minWidth: BFL_DIMENSION_BOUNDS.min,
+        maxWidth: BFL_DIMENSION_BOUNDS.max,
+        minHeight: BFL_DIMENSION_BOUNDS.min,
+        maxHeight: BFL_DIMENSION_BOUNDS.max,
+        step: BFL_DIMENSION_BOUNDS.step,
+      });
+    });
   });
 
   describe('gpt-image-2.5 vs gpt-image-2', () => {
@@ -131,6 +142,21 @@ describe('getImageModelCapabilities', () => {
       expect(getImageModelCapabilities(ImageModels.FLUX_KONTEXT_PRO).supports.requiresInputImage).toBe(true);
     });
 
+    it('advertises the aspect_ratio override Kontext forwards and Fill does not', () => {
+      expect(getImageModelCapabilities(ImageModels.FLUX_KONTEXT_PRO).sizing).toEqual({
+        kind: 'inputImage',
+        aspectRatio: true,
+      });
+      expect(getImageModelCapabilities(ImageModels.FLUX_KONTEXT_MAX).sizing).toEqual({
+        kind: 'inputImage',
+        aspectRatio: true,
+      });
+      expect(getImageModelCapabilities(ImageModels.FLUX_PRO_FILL).sizing).toEqual({
+        kind: 'inputImage',
+        aspectRatio: false,
+      });
+    });
+
     it('Gemini edits but takes no seed', () => {
       const { supports } = getImageModelCapabilities(ImageModels.GEMINI_3_PRO_IMAGE);
       expect(supports.edit).toBe(true);
@@ -141,6 +167,10 @@ describe('getImageModelCapabilities', () => {
       expect(getImageModelCapabilities(ImageModels.FLUX_KONTEXT_PRO).supports.maxImages).toBe(1);
       expect(getImageModelCapabilities(ImageModels.FLUX_PRO_FILL).supports.maxImages).toBe(1);
       expect(getImageModelCapabilities(ImageModels.GROK_IMAGINE_IMAGE_QUALITY).supports.maxImages).toBe(10);
+      expect(getImageModelCapabilities(ImageModels.GPT_IMAGE_2).supports.maxImages).toBe(MAX_IMAGES_PER_REQUEST);
+      expect(getImageModelCapabilities(ImageModels.GPT_IMAGE_2_5_FLARE).supports.maxImages).toBe(
+        MAX_IMAGES_PER_REQUEST
+      );
     });
 
     it('Grok takes none of the optional params', () => {

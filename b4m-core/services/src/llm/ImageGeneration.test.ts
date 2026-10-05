@@ -28,11 +28,16 @@ vi.mock('../apiKeyService', async importOriginal => {
 
 const mockGeminiEdit = vi.fn();
 const mockGeminiGenerate = vi.fn();
+const mockKontextTransform = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    aiImageService: vi.fn(() => ({ edit: mockGeminiEdit, generate: mockGeminiGenerate })),
+    aiImageService: vi.fn(() => ({
+      edit: mockGeminiEdit,
+      generate: mockGeminiGenerate,
+      transform: mockKontextTransform,
+    })),
     getSettingsMap: vi.fn().mockResolvedValue({}),
     getSettingsValue: vi.fn(actual.getSettingsValue),
     ClientMessageSender: vi.fn().mockImplementation(function () {
@@ -734,6 +739,7 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
 });
 
 describe('ImageGenerationService.process (usage event on a charged generation)', () => {
+  const PNG_DATA_URL = 'data:image/png;base64,AAAA';
   const geminiModelInfo = {
     id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
     type: 'image',
@@ -745,11 +751,23 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
     pricing: { 1: { input: 0, output: 0 } },
   } as unknown as ModelInfo;
 
-  const runCharged = async (record?: ReturnType<typeof vi.fn>) => {
+  const runCharged = async (
+    record?: ReturnType<typeof vi.fn>,
+    {
+      model = ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      n,
+      recentMessages = [],
+    }: { model?: ImageModels; n?: number; recentMessages?: unknown[] } = {}
+  ) => {
     const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
     const service = new ImageGenerationService({
       db: {
-        quests: { findById: vi.fn(async () => quest), update: vi.fn(), updateMany: vi.fn() },
+        quests: {
+          findById: vi.fn(async () => quest),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+          getMostRecentChatHistory: vi.fn(async () => recentMessages),
+        },
         users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
         organizations: { findById: vi.fn(async () => null) },
         fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
@@ -758,7 +776,10 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       },
       logEvent: vi.fn().mockResolvedValue(undefined),
       abilityGetter: vi.fn().mockReturnValue({}),
-      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') } as any,
+      storage: {
+        upload: vi.fn().mockResolvedValue('generated/output.png'),
+        getSignedUrl: vi.fn().mockResolvedValue(PNG_DATA_URL),
+      } as any,
       fabFileStorage: {} as any,
       wsHttpsUrl: 'https://ws.example.com',
     } as any);
@@ -770,7 +791,8 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
         questId: 'quest1',
         userId: 'user1',
         prompt: 'a red bicycle',
-        model: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+        model,
+        ...(n === undefined ? {} : { n }),
       } as any,
       logger: silentLogger,
     });
@@ -812,6 +834,23 @@ describe('ImageGenerationService.process (usage event on a charged generation)',
       expect.objectContaining({ requestId: 'quest1', feature: 'image_generation', creditsCharged: 40 })
     );
     expect(landed).toBe(true);
+  });
+
+  it('records the billed image count as units when Kontext is asked for several', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([{ ...geminiModelInfo, id: ImageModels.FLUX_KONTEXT_PRO }]);
+    mockKontextTransform.mockReset();
+    mockKontextTransform.mockResolvedValue(PNG_DATA_URL);
+    const record = vi.fn(async () => undefined);
+
+    await runCharged(record, {
+      model: ImageModels.FLUX_KONTEXT_PRO,
+      n: 3,
+      recentMessages: [{ id: 'm1', type: 'message', timestamp: new Date(0), images: ['generated/prior.png'] }],
+    });
+
+    expect(mockKontextTransform).toHaveBeenCalledTimes(1);
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: ImageModels.FLUX_KONTEXT_PRO, units: 1 }));
   });
 
   it('still completes the generation when the usage-event write fails', async () => {
