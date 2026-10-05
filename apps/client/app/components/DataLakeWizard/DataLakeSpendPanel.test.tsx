@@ -69,6 +69,14 @@ describe('DataLakeSpendPanel', () => {
     expect(screen.getByTestId('datalake-spend-empty')).toHaveTextContent(/since this feature shipped/i);
   });
 
+  it('does not claim "no spend recorded" for a lake with research spend but no embeddings or ledger rows', () => {
+    renderPanel({ summary: baseSummary({ embeddingSpendMicroUsd: 0, researchLifetimeUsd: 3 }) });
+    expect(screen.getByTestId('datalake-spend-lifetime')).toHaveTextContent('$3.00');
+    const empty = screen.getByTestId('datalake-spend-empty');
+    expect(empty).toHaveTextContent(/since this feature shipped/i);
+    expect(empty).not.toHaveTextContent(/no spend recorded yet/i);
+  });
+
   it('renders breakdown tables once ledger rows exist', () => {
     renderPanel({
       summary: baseSummary({
@@ -181,8 +189,7 @@ describe('DataLakeSpendPanel', () => {
       }),
     });
     const progress = screen.getByTestId('datalake-spend-lake-progress');
-    expect(progress).toHaveTextContent('80%');
-    expect(progress).toHaveTextContent('$80.00');
+    expect(progress).toHaveTextContent('Per-lake ingestion budget: $80.00 of $100.00 (80%)');
     expect(progress).not.toHaveTextContent('120%');
   });
 

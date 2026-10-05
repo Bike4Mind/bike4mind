@@ -100,11 +100,13 @@ export function DataLakeSpendPanel({
       ? (ingestionLifetimeUsd / lakeBudgetUsd) * 100
       : null;
 
-  // A lake with no ledger rows yet is either brand-new (lifetime meter also 0) or predates this
-  // feature's ship date (lifetime meter nonzero) - the two need distinct copy.
+  // A lake with no ledger rows yet is either brand-new (no lifetime spend of either kind) or predates
+  // this feature's ship date (lifetime spend nonzero) - the two need distinct copy. Research counts
+  // toward lifetime spend so the empty state never contradicts the Lifetime chip.
   const hasNoLedgerRows = summary.ledger.totals.requests === 0;
-  const isBrandNew = hasNoLedgerRows && (summary.embeddingSpendMicroUsd ?? 0) === 0;
-  const predatesLedger = hasNoLedgerRows && (summary.embeddingSpendMicroUsd ?? 0) > 0;
+  const hasLifetimeSpend = (summary.embeddingSpendMicroUsd ?? 0) > 0 || researchLifetimeUsd > 0;
+  const isBrandNew = hasNoLedgerRows && !hasLifetimeSpend;
+  const predatesLedger = hasNoLedgerRows && hasLifetimeSpend;
 
   return (
     <Stack gap={2} data-testid="datalake-spend-panel">
@@ -167,7 +169,7 @@ export function DataLakeSpendPanel({
             </Box>
           ) : (
             <Typography level="body-sm" data-testid="datalake-spend-lake-uncapped">
-              Per-lake budget: uncapped
+              Per-lake ingestion budget: uncapped
             </Typography>
           )}
           {researchLifetimeUsd > 0 && (
