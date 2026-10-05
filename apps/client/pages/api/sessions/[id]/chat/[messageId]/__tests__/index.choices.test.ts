@@ -1,6 +1,7 @@
 /**
- * The PUT allow-list admits the reply-choice pick, and only the pick: a caller must not be able to
- * rewrite the stored options, or re-pick once the conversation has followed a choice.
+ * The PUT allow-list. It admits the reply-choice pick, and only the pick: a caller must not be able
+ * to rewrite the stored options, or re-pick once the conversation has followed a choice. It admits
+ * the pin flag as a boolean only.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
@@ -122,5 +123,42 @@ describe('PUT /api/sessions/[id]/chat/[messageId] - reply choice pick', () => {
     await handler(req, res);
 
     expect(mockQuestUpdate).toHaveBeenCalledWith('sess-1', { id: 'quest-1' });
+  });
+});
+
+describe('PUT /api/sessions/[id]/chat/[messageId] - pin', () => {
+  const quest = (pinned?: boolean) => ({ id: 'quest-1', sessionId: 'sess-1', reply: 'hi', pinned });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSessionFindById.mockResolvedValue({ id: 'sess-1', userId: 'jwt-user', users: [] });
+    mockQuestFindBySessionIdAndId.mockResolvedValue(quest(false));
+    mockQuestUpdate.mockImplementation(async (_sessionId: string, update: object) => ({ ...quest(), ...update }));
+  });
+
+  it.each([true, false])('persists pinned=%j', async pinned => {
+    mockQuestFindBySessionIdAndId.mockResolvedValue(quest(!pinned));
+    const { req, res } = fire({ method: 'PUT', body: { pinned } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockQuestUpdate).toHaveBeenCalledWith('sess-1', { id: 'quest-1', pinned });
+    expect(res._getJSONData().data.pinned).toBe(pinned);
+  });
+
+  it.each(['true', 1, null, {}])('ignores a non-boolean pinned %j', async pinned => {
+    const { req, res } = fire({ method: 'PUT', body: { pinned } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockQuestUpdate).toHaveBeenCalledWith('sess-1', { id: 'quest-1' });
+  });
+
+  it('writes the pin alongside a reply edit in the same request', async () => {
+    const { req, res } = fire({ method: 'PUT', body: { pinned: true, reply: 'edited' } });
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockQuestUpdate).toHaveBeenCalledWith('sess-1', { id: 'quest-1', reply: 'edited', pinned: true });
   });
 });
