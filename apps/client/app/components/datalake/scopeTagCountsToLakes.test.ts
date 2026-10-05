@@ -27,14 +27,19 @@ describe('scopeTagCountsToLakes', () => {
     ]);
   });
 
-  it('carries the distinct per-path file count through scoping', () => {
+  it('keeps the lake-root row and its distinct count, but drops the rows above it', () => {
     const withDistinct: TagCount[] = [
-      { tag: 'legal', count: 0, fileCount: 4 },
-      { tag: 'legal:contracts', count: 3, fileCount: 3 },
+      { tag: 'acme', count: 0, fileCount: 7 },
+      { tag: 'acme:legal', count: 0, fileCount: 4 },
+      { tag: 'acme:legal:contracts', count: 3, fileCount: 3 },
+      { tag: 'acme:legal:nda', count: 2, fileCount: 2 },
+      { tag: 'acme:hr', count: 0, fileCount: 3 },
     ];
 
-    expect(scopeTagCountsToLakes(withDistinct, [{ fileTagPrefix: 'legal:' }])).toEqual([
-      { tag: 'legal:contracts', count: 3, fileCount: 3 },
+    expect(scopeTagCountsToLakes(withDistinct, [{ fileTagPrefix: 'acme:legal:' }])).toEqual([
+      { tag: 'acme:legal', count: 0, fileCount: 4 },
+      { tag: 'acme:legal:contracts', count: 3, fileCount: 3 },
+      { tag: 'acme:legal:nda', count: 2, fileCount: 2 },
     ]);
   });
 

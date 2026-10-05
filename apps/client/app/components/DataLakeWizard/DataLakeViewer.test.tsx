@@ -89,6 +89,29 @@ describe('DataLakeViewer pipeline notice', () => {
   });
 });
 
+describe('DataLakeViewer tree counts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('counts a branch over multi-tagged files once per file', () => {
+    const leaves = ['sales:legal:a', 'sales:legal:b', 'sales:legal:c', 'sales:legal:d'];
+    const files = ['f1', 'f2', 'f3'].map(id =>
+      fabFile({ id, fileName: `${id}.md`, tags: leaves.map(name => ({ name })) } as Partial<IFabFileDocument>)
+    );
+    useDataLakeFiles.mockReturnValue({ data: { data: files }, isLoading: false, isError: false });
+
+    render(
+      <TestWrapper>
+        <DataLakeViewer dataLakeId="lk1" dataLakeName="Sales" tagPrefix="sales:" />
+      </TestWrapper>
+    );
+
+    // Summing the four leaves read 12.
+    expect(screen.getByTestId('datalake-node-sales')).toHaveTextContent(/^Sales3$/);
+  });
+});
+
 describe('DataLakeViewer file content', () => {
   beforeEach(() => {
     vi.clearAllMocks();

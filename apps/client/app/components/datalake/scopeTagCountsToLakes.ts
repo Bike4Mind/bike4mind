@@ -29,7 +29,15 @@ export function scopeTagCountsToLakes(tagCounts: TagCount[], lakes: TagScopeLake
   // A tag matching two selected lakes must still appear ONCE: filter the counts by "any selected
   // prefix" rather than concatenating a per-lake pass, which would duplicate the branch in the
   // tree and double its count.
-  return tagCounts.filter(tc => lakes.some(lake => tc.tag.startsWith(lake.fileTagPrefix)));
+  // Also keep the lake-root row (the prefix minus its colon): its distinct fileCount covers exactly
+  // the lake's tagged files, where buildTagTree's fallback would sum the children. Rows above it
+  // mix in other lakes, so they still drop out and sum their (now distinct) children.
+  const roots = new Set(
+    lakes
+      .map(lake => (typeof lake.fileTagPrefix === 'string' ? lake.fileTagPrefix.replace(/:+$/, '') : ''))
+      .filter(Boolean)
+  );
+  return tagCounts.filter(tc => roots.has(tc.tag) || lakes.some(lake => tc.tag.startsWith(lake.fileTagPrefix)));
 }
 
 /**
