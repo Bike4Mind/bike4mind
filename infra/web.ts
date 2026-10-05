@@ -95,6 +95,8 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueue,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueue,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -146,6 +148,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'agent-continuation': agentContinuationQueueDLQ.url,
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
     'bob-run': bobRunQueueDLQ.url,
+    'libreoncology-audio-render': libreoncologyAudioRenderQueueDLQ.url,
     'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
@@ -207,6 +210,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     agentContinuationQueue: agentContinuationQueue.url,
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
     bobRunQueue: bobRunQueue.url,
+    libreoncologyAudioRenderQueue: libreoncologyAudioRenderQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,

@@ -31,6 +31,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'agent-continuation': 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueueDLQ',
   'optihashi-run-completion': 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueueDLQ',
   'bob-run': 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueueDLQ',
+  'libreoncology-audio-render': 'https://sqs.us-east-2.amazonaws.com/123456789/libreoncologyAudioRenderQueueDLQ',
   'data-lake-cleanup': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueueDLQ',
   'data-lake-research': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueueDLQ',
   'data-lake-taxonomy': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueueDLQ',
@@ -72,6 +73,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   agentContinuationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueue',
   optihashiRunCompletionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueue',
   bobRunQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueue',
+  libreoncologyAudioRenderQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/libreoncologyAudioRenderQueue',
   dataLakeCleanupQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueue',
   dataLakeResearchQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeResearchQueue',
   dataLakeTaxonomyQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeTaxonomyQueue',
@@ -95,9 +97,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 38 DLQ entries', () => {
+    it('returns all 39 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(38);
+      expect(registry).toHaveLength(39);
     });
 
     it('each entry has required fields', () => {
