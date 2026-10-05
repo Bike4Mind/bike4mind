@@ -108,6 +108,19 @@ describe('PostEditDiagnostics', () => {
     expect(report).not.toContain('stale error');
   });
 
+  it('drops an already-completed result when the file is re-edited before it is reported', async () => {
+    const { check, calls } = createControlledChecker();
+    const diagnostics = new PostEditDiagnostics({ workspaceRoot: ROOT, check });
+    diagnostics.beginTurn();
+
+    diagnostics.enqueue(fileA);
+    calls[0].resolve([typeError(fileA, 'stale error')]);
+    await flush();
+    diagnostics.enqueue(fileA);
+
+    expect(await diagnostics.drain(5)).toBeNull();
+  });
+
   it('ignores edits outside a turn and drops results from a previous turn', async () => {
     const { check, calls } = createControlledChecker();
     const diagnostics = new PostEditDiagnostics({ workspaceRoot: ROOT, check });

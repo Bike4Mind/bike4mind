@@ -25,9 +25,10 @@ type PostEditDiagnosticsOptions = {
  * agent loop via AgentRunOptions.drainFeedback. Edits never wait on a check.
  *
  * Queue semantics are re-edit-wins: a file edited again before its check runs
- * is checked once in its final state, and a file edited again while a check
- * is in flight has that (stale) result discarded in favor of the queued
- * re-check. Each completed result is reported at most once.
+ * is checked once in its final state, and a file edited again after a check
+ * started (in flight or already completed but not yet reported) has that stale
+ * result discarded in favor of the queued re-check. Each completed result is
+ * reported at most once.
  *
  * Only collects between beginTurn() and endTurn(); a no-op otherwise, which is
  * how the per-turn config gate in turnController switches it off.
@@ -59,7 +60,9 @@ export class PostEditDiagnostics {
 
   enqueue(filePath: string): void {
     if (!this.active) return;
-    this.pending.add(path.resolve(this.workspaceRoot, filePath));
+    const resolved = path.resolve(this.workspaceRoot, filePath);
+    this.results.delete(resolved);
+    this.pending.add(resolved);
     this.worker ??= this.processQueue();
   }
 

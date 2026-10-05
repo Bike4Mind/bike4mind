@@ -24,6 +24,8 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const TYPESCRIPT_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
 const ESLINT_EXTENSIONS = new Set([...TYPESCRIPT_EXTENSIONS, '.js', '.jsx', '.mjs', '.cjs']);
 const ESLINT_ERROR_SEVERITY = 2;
+const TSC_ENTRY = path.join('node_modules', 'typescript', 'bin', 'tsc');
+const ESLINT_ENTRY = path.join('node_modules', 'eslint', 'bin', 'eslint.js');
 // `--pretty false` line shape: `src/a.ts(12,5): error TS2322: Type 'string' is not ...`
 const TSC_ERROR_LINE = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/;
 
@@ -60,6 +62,14 @@ function runProcess(file: string, args: string[], cwd: string): Promise<ProcessO
       }
     );
   });
+}
+
+/**
+ * Runs a package's JS entry under the current Node. `node_modules/.bin/*` are sh
+ * shims (`.cmd` on Windows) that `execFile` cannot launch without a shell.
+ */
+function runNodeScript(script: string, args: string[], cwd: string): Promise<ProcessOutcome> {
+  return runProcess(process.execPath, [script, ...args], cwd);
 }
 
 /** Nearest `relativePath` at or above `startDir`, or null. */
@@ -149,12 +159,12 @@ export const checkTypeScript: DiagnosticsChecker = async filePaths => {
   const diagnostics: Diagnostic[] = [];
   for (const tsconfigPath of projects.keys()) {
     const projectDir = path.dirname(tsconfigPath);
-    const tsc = findUp(projectDir, path.join('node_modules', '.bin', 'tsc'));
+    const tsc = findUp(projectDir, TSC_ENTRY);
     if (!tsc) {
       logger.debug(`[diagnostics] no local tsc found for ${tsconfigPath}; skipping type check`);
       continue;
     }
-    const outcome = await runProcess(tsc, ['--noEmit', '--pretty', 'false', '-p', tsconfigPath], projectDir);
+    const outcome = await runNodeScript(tsc, ['--noEmit', '--pretty', 'false', '-p', tsconfigPath], projectDir);
     if (outcome.kind === 'failed') {
       logger.debug(`[diagnostics] tsc skipped for ${tsconfigPath}: ${outcome.reason}`);
       continue;
@@ -166,14 +176,14 @@ export const checkTypeScript: DiagnosticsChecker = async filePaths => {
 
 /** Lints changed files with the eslint installed nearest to each file, run from that package root. */
 export const checkEslint: DiagnosticsChecker = async filePaths => {
-  const eslintBin = path.join('node_modules', '.bin', 'eslint');
   const groups = groupBy(filePaths.filter(hasExtension(ESLINT_EXTENSIONS)), filePath =>
-    findUp(path.dirname(filePath), eslintBin)
+    findUp(path.dirname(filePath), ESLINT_ENTRY)
   );
   const diagnostics: Diagnostic[] = [];
   for (const [eslint, files] of groups) {
-    const packageRoot = path.resolve(path.dirname(eslint), '..', '..');
-    const outcome = await runProcess(eslint, ['--format', 'json', ...files], packageRoot);
+    // <root>/node_modules/eslint/bin/eslint.js
+    const packageRoot = path.resolve(path.dirname(eslint), '..', '..', '..');
+    const outcome = await runNodeScript(eslint, ['--format', 'json', ...files], packageRoot);
     if (outcome.kind === 'failed') {
       logger.debug(`[diagnostics] eslint skipped under ${packageRoot}: ${outcome.reason}`);
       continue;
