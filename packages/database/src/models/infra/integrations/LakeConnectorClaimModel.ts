@@ -114,10 +114,17 @@ export const lakeConnectorClaimRepository = new LakeConnectorClaimRepository(Lak
 
 /**
  * For a connector repository's release(), after its row is gone. Swallowed on failure: a claim left
- * behind is stale (its connection no longer exists), and the next connect takes it over.
+ * behind is stale (its connection no longer exists), and the next connect takes it over. The warning
+ * is what tells a grace-window 409 naming a vanished connector apart from a real conflict.
  */
 export async function releaseLakeClaimBestEffort(connectionId: string): Promise<void> {
-  await lakeConnectorClaimRepository.releaseByConnectionId(connectionId).catch(() => false);
+  await lakeConnectorClaimRepository.releaseByConnectionId(connectionId).catch((err: unknown) => {
+    console.warn(
+      `releaseLakeClaimBestEffort: failed to release lake claim for connection ${connectionId}; ` +
+        'the stale claim may refuse other connector kinds until its grace window passes',
+      err
+    );
+  });
 }
 
 export default LakeConnectorClaim;

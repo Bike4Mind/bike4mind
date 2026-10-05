@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer } from '../../../__test__/createMongoServer';
-import { LakeConnectorClaim, lakeConnectorClaimRepository } from './LakeConnectorClaimModel';
+import {
+  LakeConnectorClaim,
+  lakeConnectorClaimRepository,
+  releaseLakeClaimBestEffort,
+} from './LakeConnectorClaimModel';
 import { OrgGitHubLakeConnection, orgGitHubLakeConnectionRepository } from './OrgGitHubLakeConnectionModel';
 import { OrgGoogleDriveConnection, orgGoogleDriveConnectionRepository } from './OrgGoogleDriveConnectionModel';
 
@@ -161,5 +165,33 @@ describe('connector release() drops the matching claim', () => {
 
     expect(await orgGoogleDriveConnectionRepository.release(conn.id, owner)).toBe(true);
     expect(await LakeConnectorClaim.countDocuments({ lakeId })).toBe(0);
+  });
+});
+
+describe('releaseLakeClaimBestEffort', () => {
+  it('swallows a failed release but logs the connectionId', async () => {
+    const connectionId = oid();
+    const failure = new Error('mongo unavailable');
+    const releaseSpy = vi.spyOn(lakeConnectorClaimRepository, 'releaseByConnectionId').mockRejectedValueOnce(failure);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await expect(releaseLakeClaimBestEffort(connectionId)).resolves.toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain(connectionId);
+      expect(warnSpy.mock.calls[0][1]).toBe(failure);
+    } finally {
+      releaseSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('stays silent when the release succeeds', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await releaseLakeClaimBestEffort(oid());
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
