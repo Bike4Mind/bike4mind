@@ -191,7 +191,7 @@ async function main() {
 
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
-  registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
+  await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

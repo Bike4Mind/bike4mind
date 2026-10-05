@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, expect, it, describe, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { S3Client, CreateBucketCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { randomUUID } from 'node:crypto';
+import { CreateBucketCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import {
   SQSClient,
   SendMessageCommand,
   GetQueueAttributesCommand,
+  CreateQueueCommand,
+  DeleteQueueCommand,
   ReceiveMessageCommand,
   ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
@@ -47,7 +50,7 @@ vi.mock('sst', () => ({
 // eslint-disable-next-line no-restricted-imports
 import curate from '@pages/api/notebooks/curate';
 import * as storage from '@server/utils/storage';
-import { S3Storage } from '@bike4mind/fab-pipeline';
+import { S3Storage, createS3Client } from '@bike4mind/fab-pipeline';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
@@ -57,7 +60,7 @@ const enabled = process.env.NOTEBOOK_LIVE_PROOF === 'true';
 describe.skipIf(!enabled)('notebook live broker and object storage proof', () => {
   let mongo: Awaited<ReturnType<typeof createMongoReplSet>>;
   const sqs = new SQSClient({ region: 'us-east-2' });
-  const s3 = new S3Client({ region: 'us-east-2', endpoint: process.env.AWS_ENDPOINT_URL_S3, forcePathStyle: true });
+  const s3 = createS3Client({ region: 'us-east-2', endpoint: process.env.AWS_ENDPOINT_URL_S3, forcePathStyle: true });
   const eventUrl = process.env.SELF_HOST_EVENT_QUEUE!;
   const jobUrl = process.env.NOTEBOOK_QUEUE_URL!;
   beforeAll(async () => {
@@ -75,7 +78,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
     await mongoose.disconnect();
     await mongo?.stop();
   });
-  function worker() {
+  async function worker() {
     const instance = new SelfHostWorker(logger);
     instance.registerQueueHandler(
       'events',
@@ -86,7 +89,8 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
       },
       { batchSize: 1 }
     );
-    registerNotebookCurationQueue(instance, jobUrl, logger);
+    process.env.NOTEBOOK_CURATION_QUEUE_DLQ = jobUrl + 'DLQ';
+    await registerNotebookCurationQueue(instance, jobUrl, logger);
     // Drive exactly one real receive/dispatch/delete iteration without leaving background long polls.
     const control = instance as unknown as {
       queues: unknown[];
@@ -142,7 +146,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
     expect(statusCode).toBe(202);
     const jobId = (response as { data: { curationJobs: { curationJobId: string }[] } }).data.curationJobs[0]
       .curationJobId;
-    const first = worker();
+    const first = await worker();
     await first.events();
     // Fail only the post-commit completion notification, not progress callbacks.
     notify.mockImplementation(async (_user, _endpoint, message) => {
@@ -162,7 +166,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
         MessageBody: JSON.stringify({ sessionId, userId, curationJobId: jobId }),
       })
     );
-    const restarted = worker();
+    const restarted = await worker();
     await restarted.jobs();
     expect(await FabFile.countDocuments({ userId })).toBe(1);
     expect(await CreditTransaction.countDocuments({ ownerId: userId })).toBe(1);
@@ -189,7 +193,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
       })
     );
     process.env.NOTEBOOK_QUEUE_URL = `${jobUrl}-missing`;
-    const runner = worker();
+    const runner = await worker();
     let attempted = 0;
     const dlqUrl = eventUrl.replace('notebookEvents', 'notebookEventsDLQ');
     let retained: import('@aws-sdk/client-sqs').Message | undefined;
@@ -264,7 +268,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
     });
     const detail = { userId, sessionId, curationJobId: 'storage-recovery' };
     const sent = await sqs.send(new SendMessageCommand({ QueueUrl: jobUrl, MessageBody: JSON.stringify(detail) }));
-    const runner = worker();
+    const runner = await worker();
     const dlqUrl = jobUrl + 'DLQ';
     let retained: import('@aws-sdk/client-sqs').Message | undefined;
     const brokenStorage = vi
@@ -307,5 +311,17 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
     const file = await FabFile.findById(receipt!.result!.curatedFileId).lean();
     const stored = await s3.send(new GetObjectCommand({ Bucket: 'notebook-proof', Key: file!.filePath! }));
     expect(await stored.Body!.transformToString()).toContain('Storage is available again.');
+  });
+  it('refuses to register against a broker with missing redrive', async () => {
+    const isolated = await sqs.send(new CreateQueueCommand({ QueueName: `notebook-no-redrive-${randomUUID()}` }));
+    expect(isolated.QueueUrl).toBeTruthy();
+    const instance = new SelfHostWorker(logger);
+    try {
+      await expect(registerNotebookCurationQueue(instance, isolated.QueueUrl, logger)).rejects.toThrow('redrive');
+      expect((instance as unknown as { queues: unknown[] }).queues).toHaveLength(0);
+    } finally {
+      await sqs.send(new DeleteQueueCommand({ QueueUrl: isolated.QueueUrl }));
+    }
+    await expect(worker()).resolves.toBeDefined();
   });
 });

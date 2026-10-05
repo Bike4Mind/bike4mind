@@ -72,3 +72,17 @@ describe('curation retry after credit write failure', () => {
     expect(adapters.userRepository.incrementCredits).toHaveBeenCalledOnce();
   });
 });
+
+it('reports a retryable storage failure without persisting or billing', async () => {
+  const adapters = buildDefaultAdapters();
+  adapters.fileStorageService.upload.mockRejectedValueOnce(new Error('storage unavailable'));
+  const service = new NotebookCurationService(adapters as unknown as NotebookCurationAdapters);
+  expect(await service.curateNotebook('s1', 'u1', options)).toMatchObject({
+    success: false,
+    error: 'Failed to store curated file',
+    retryable: true,
+  });
+  expect(adapters.fabFileRepository.create).not.toHaveBeenCalled();
+  expect(adapters.userRepository.incrementCredits).not.toHaveBeenCalled();
+  expect(adapters.sessionRepository.update).not.toHaveBeenCalled();
+});

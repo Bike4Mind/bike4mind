@@ -614,9 +614,7 @@ export class NotebookCurationService {
       // Preserve a BadRequestError's identity (and its specific reason) so the caller can
       // tell an admission gate refusal apart from a genuinely unknown storage failure.
       if (error instanceof BadRequestError) throw error;
-      throw new Error(
-        `Failed to create curated notebook file: ${error instanceof Error ? error.message : 'Unknown error'}`
-      );
+      throw new NotebookCurationError('Failed to store curated file', 'STORAGE_FAILED');
     }
   }
 

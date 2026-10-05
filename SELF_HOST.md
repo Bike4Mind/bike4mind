@@ -1124,6 +1124,8 @@ VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/
 
 The worker routes notebook start events to the notebook queue and consumes one curation job at a time. The default transcript export uses the existing curation service without a model. Executive summaries still require a configured operations model; transcript verification does not establish summary-provider availability.
 
+Notebook worker startup requires `NOTEBOOK_CURATION_QUEUE_DLQ` and verifies that the source queue redrives after three deliveries to that configured queue's actual ARN. Missing, malformed or mismatched redrive prevents startup. If a later delivery exceeds three attempts, it is retained without running curation again; repair broker redrive and replay the unchanged job body. The worker never substitutes local deletion for dead-letter retention.
+
 Curation uses a cooperative ten-minute budget and renews the fifteen-minute message visibility while the handler is active. The budget prevents starting subsequent persistence stages after expiry; it does not cancel an in-flight database, model or storage request. Run a single worker. Shutdown retains the existing bounded drain period, not an unlimited completion guarantee.
 
 Prepared object keys include the job identity and the digest of the actual artifact bytes. A Mongo transaction commits the file row, session cache/link, credit deduction and completion receipt together. Duplicate deliveries within the receipt retention window reuse the committed result without another debit. Completion-notification failure does not reverse the persisted result. The existing completion-receipt retention is fourteen days; this does not promise indefinite deduplication.
