@@ -3,7 +3,7 @@ import type { AgentExecutionStatus, IQuestGraphDocument, IQuestNodeDocument } fr
 import { BadRequestError, InternalServerError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
-import { dataLakeToolsDeniedFor, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
+import { apiKeyExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import {
   dispatchAgentExecution,
@@ -66,7 +66,6 @@ export async function runQuestNode(args: {
   apiKeyInfo?: ApiKeyCredential;
 }): Promise<RunQuestNodeResult> {
   const { node, graph, userId, model, logger, apiKeyInfo } = args;
-  const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
 
   if (!graph.sessionId) {
     // AgentExecution.sessionId is required, and the session is what gives the
@@ -149,8 +148,7 @@ export async function runQuestNode(args: {
       connectionId: HEADLESS_CONNECTION_ID,
       approvedTools: [],
       deniedTools: [],
-      ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
-      ...(apiKeyInfo?.keyId ? { apiKeyId: apiKeyInfo.keyId } : {}),
+      ...apiKeyExecutionFields(apiKeyInfo),
       iterationBilling: [],
       totalCreditsUsed: 0,
       lambdaInvocationCount: 1,

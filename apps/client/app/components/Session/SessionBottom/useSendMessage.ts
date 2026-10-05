@@ -30,7 +30,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
-import { pickerAttachedAgents, resolveDispatchAgent } from './resolveDispatchAgent';
+import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
@@ -981,11 +981,10 @@ export function useSendMessage({
         // optimistic bubble instead of waiting for the persisted Quest on reload.
         createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
 
-        // Iteration cap comes from the agent doc; left unset when agentless so
-        // the executor fills it from admin defaults.
-        const thoroughness = dispatchAgent?.defaultThoroughness ?? 'medium';
-        const maxIters = dispatchAgent?.maxIterations?.[thoroughness];
-        // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
+        // Iteration cap comes from the agent doc; unset when agentless or the agent has no
+        // default thoroughness, so the executor fills it from admin defaults.
+        const maxIters = resolveDispatchMaxIterations(dispatchAgent);
+        // A briefcase `toolsOverride` wins the whitelist so an agent can't
         // drop the tools the prompt needs (see `resolveDispatchTools`). An agentless send
         // ships the user's Smart Tools marked ambient; the server unions them onto the
         // profile it resolves rather than replacing it.

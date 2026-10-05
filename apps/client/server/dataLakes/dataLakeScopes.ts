@@ -85,6 +85,18 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
   return holdsDataLakeReadScope(req) ? [...DATA_LAKE_WRITE_TOOL_NAMES] : [...DATA_LAKE_TOOL_NAMES];
 }
 
+/** The persisted run fields derived from the authenticating key; each is omitted when empty. */
+export function apiKeyExecutionFields(apiKeyInfo?: ApiKeyCredential): {
+  scopeDeniedTools?: string[];
+  apiKeyId?: string;
+} {
+  const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
+  return {
+    ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
+    ...(apiKeyInfo?.keyId ? { apiKeyId: apiKeyInfo.keyId } : {}),
+  };
+}
+
 export function assertDataLakeWriteScope(req: ScopedRequest): void {
   assertApiKeyScope(
     req,

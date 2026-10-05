@@ -15,6 +15,11 @@ export function resolveDispatchAgent(
   return orchestrationAgent ?? mentionedAgent ?? attachedAgents[0] ?? null;
 }
 
+/** Iteration cap for the dispatched agent; undefined when it sets no default thoroughness so the server's admin default applies. */
+export function resolveDispatchMaxIterations(agent: IAgent | null): number | undefined {
+  return agent?.defaultThoroughness ? agent.maxIterations?.[agent.defaultThoroughness] : undefined;
+}
+
 /** The agents the composer's Agents badge shows: the session's once it exists, else the workbench's. */
 export function pickerAttachedAgents(
   currentSessionId: string | null | undefined,

@@ -71,6 +71,12 @@ describe('agentExecutor toolDeps wiring', () => {
     );
   });
 
+  it('gates the profile tool resolution on whether the connection has an approver', () => {
+    expect(source).toMatch(
+      /resolveInvocationEnabledTools\(\{[^}]*hasApprover: hasApprover\(execution\.connectionId\),/
+    );
+  });
+
   it('subtracts the persisted scope denials in the final tool policy pass', () => {
     expect(source).toMatch(/applySessionToolPolicy\(\{[^}]*scopeDeniedTools: execution\.scopeDeniedTools,/);
   });

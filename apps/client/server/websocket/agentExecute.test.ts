@@ -648,6 +648,26 @@ describe('start command credential threading', () => {
     expect(input.apiKeyInfo).toBeUndefined();
   });
 
+  it('never takes a key credential from the message body', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const event = startEvent('jwt');
+    event.body = JSON.stringify({
+      ...JSON.parse(event.body),
+      apiKeyId: 'spoofed',
+      scopeDeniedTools: [],
+      apiKeyInfo: { keyId: 'spoofed', scopes: Object.values(ApiKeyScope) },
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(event, {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBeUndefined();
+    expect(input).not.toHaveProperty('apiKeyId');
+    expect(input).not.toHaveProperty('scopeDeniedTools');
+  });
+
   it('passes no key credential for a session JWT', async () => {
     vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
     vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);

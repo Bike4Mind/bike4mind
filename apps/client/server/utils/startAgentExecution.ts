@@ -23,7 +23,7 @@ import {
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { dataLakeToolsDeniedFor, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
+import { apiKeyExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -148,7 +148,6 @@ export async function startAgentExecution(
   logger: Logger
 ): Promise<StartAgentExecutionResult> {
   const { userId } = input;
-  const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo: input.apiKeyInfo });
 
   // Validate session ownership before creating anything.
   const session = await sessionRepository.findById(input.sessionId);
@@ -295,8 +294,7 @@ export async function startAgentExecution(
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
     deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
-    ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
-    ...(input.apiKeyInfo?.keyId ? { apiKeyId: input.apiKeyInfo.keyId } : {}),
+    ...apiKeyExecutionFields(input.apiKeyInfo),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,

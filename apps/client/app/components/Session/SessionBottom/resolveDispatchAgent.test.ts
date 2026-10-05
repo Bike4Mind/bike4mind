@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import type { IAgent } from '@bike4mind/common';
-import { pickerAttachedAgents, resolveDispatchAgent } from './resolveDispatchAgent';
+import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 
 const agent = (id: string, extra: Partial<IAgent> = {}) => ({ id, name: id, ...extra }) as IAgent;
 
@@ -74,5 +74,21 @@ describe('pickerAttachedAgents', () => {
 
   it('uses the workbench agents before a session exists', () => {
     expect(pickerAttachedAgents(null, sessionAgents, workBenchAgents)).toBe(workBenchAgents);
+  });
+});
+
+describe('resolveDispatchMaxIterations', () => {
+  const caps = { quick: 3, medium: 7, very_thorough: 20 } as unknown as IAgent['maxIterations'];
+
+  it('sends the cap for the agent default thoroughness', () => {
+    expect(resolveDispatchMaxIterations(agent('a', { defaultThoroughness: 'quick', maxIterations: caps }))).toBe(3);
+  });
+
+  it('sends nothing for an agent with no default thoroughness, even with caps set', () => {
+    expect(resolveDispatchMaxIterations(agent('a', { maxIterations: caps }))).toBeUndefined();
+  });
+
+  it('sends nothing when agentless', () => {
+    expect(resolveDispatchMaxIterations(null)).toBeUndefined();
   });
 });

@@ -92,7 +92,12 @@ describe('POST /api/quest-nodes/{id}/run credential forwarding', () => {
   });
 
   it('ignores an apiKeyId or scopeDeniedTools sent in the body', async () => {
-    const { req, res } = run({ model: 'm', apiKeyId: 'spoofed', scopeDeniedTools: [] });
+    const { req, res } = run({
+      model: 'm',
+      apiKeyId: 'spoofed',
+      scopeDeniedTools: [],
+      apiKeyInfo: { keyId: 'spoofed', scopes: Object.values(ApiKeyScope) },
+    });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (handler as any)(req, res);

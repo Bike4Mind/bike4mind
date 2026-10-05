@@ -197,7 +197,12 @@ describe('POST /api/v1/agent-executions', () => {
   // forward the credential, and only from the request's apiKeyInfo.
   it('forwards the authenticating key as apiKeyInfo, never an id from the body', async () => {
     const keyInfo = { keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT] };
-    const keyed = post({ session_id: 's1', message: 'go', apiKeyId: 'spoofed' });
+    const keyed = post({
+      session_id: 's1',
+      message: 'go',
+      apiKeyId: 'spoofed',
+      apiKeyInfo: { keyId: 'spoofed', scopes: Object.values(ApiKeyScope) },
+    });
     Object.assign(keyed.req, { apiKeyInfo: keyInfo });
     const session = post({ session_id: 's1', message: 'go' });
 
