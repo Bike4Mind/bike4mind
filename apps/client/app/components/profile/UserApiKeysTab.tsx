@@ -711,7 +711,7 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
   ${origin}/api/ai/llm`,
     },
     javascript: {
-      listSessions: `const response = await fetch('/api/sessions', {
+      listSessions: `const response = await fetch('${origin}/api/sessions', {
   method: 'GET',
   headers: {
     Authorization: 'Bearer ${sampleApiKey}',
@@ -719,7 +719,7 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
   }
 });
 const sessions = await response.json();`,
-      createSession: `const response = await fetch('/api/v1/sessions', {
+      createSession: `const response = await fetch('${origin}/api/v1/sessions', {
   method: 'POST',
   headers: {
     Authorization: 'Bearer ${sampleApiKey}',
@@ -730,7 +730,7 @@ const sessions = await response.json();`,
   })
 });
 const newSession = await response.json();`,
-      aiChatSimple: `const response = await fetch('/api/chat', {
+      aiChatSimple: `const response = await fetch('${origin}/api/chat', {
   method: 'POST',
   headers: {
     Authorization: 'Bearer ${sampleApiKey}',
@@ -744,7 +744,7 @@ const newSession = await response.json();`,
   })
 });
 const result = await response.json();`,
-      aiChatSync: `const response = await fetch('/api/chat', {
+      aiChatSync: `const response = await fetch('${origin}/api/chat', {
   method: 'POST',
   headers: {
     Authorization: 'Bearer ${sampleApiKey}',
@@ -757,14 +757,14 @@ const result = await response.json();`,
   })
 });
 const result = await response.json();`,
-      questStatus: `const response = await fetch('/api/v1/quests/quest_123', {
+      questStatus: `const response = await fetch('${origin}/api/v1/quests/quest_123', {
   method: 'GET',
   headers: {
     Authorization: 'Bearer ${sampleApiKey}'
   }
 });
 const quest = await response.json();`,
-      aiChat: `const response = await fetch('/api/ai/llm', {
+      aiChat: `const response = await fetch('${origin}/api/ai/llm', {
   method: 'POST',
   headers: {
     Authorization: 'Bearer ${sampleApiKey}',
