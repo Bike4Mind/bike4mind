@@ -131,7 +131,7 @@ services:
         { [ -n "$$PUBLISHED_ARTIFACTS_BUCKET" ] && { mc ilm rule ls "local/$$PUBLISHED_ARTIFACTS_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 --prefix "drafts/" "local/$$PUBLISHED_ARTIFACTS_BUCKET"; }; };
         { [ -n "$$HISTORY_IMPORT_BUCKET" ] && { mc ilm rule ls "local/$$HISTORY_IMPORT_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 "local/$$HISTORY_IMPORT_BUCKET"; }; };
         { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 1 --prefix "exports/" "local/$$FAB_FILE_BUCKET"; }; };
-        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "tts-offload/" || mc ilm rule add --expire-days 1 --prefix "tts-offload/" "local/$$FAB_FILE_BUCKET"; }; }; true
+        { [ -n "$$FAB_FILE_BUCKET" ] && { mc ilm rule ls "local/$$FAB_FILE_BUCKET" 2>/dev/null | grep -q "generated-audio-offload/" || mc ilm rule add --expire-days 1 --prefix "generated-audio-offload/" "local/$$FAB_FILE_BUCKET"; }; }; true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
   # format there matches the *_QUEUE URLs in .env.selfhost.example.

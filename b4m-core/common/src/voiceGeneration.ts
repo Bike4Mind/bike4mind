@@ -3,6 +3,11 @@ import type { ApiErrorCode } from './apiErrorCodes';
 // The specific file, not the `./schemas` barrel - the barrel drags in an unbuilt
 // dist in the CI openapi job (same note as tts.contract.ts).
 import { ApiErrorSchema } from './schemas/chat';
+import {
+  extendGeneratedAudioResponseSchema,
+  generatedAudioRequestFields,
+  generatedAudioTooLargeSchema,
+} from './generatedAudio';
 
 // Providers supported by the unified TTS API. Mirrors supportedImageGenerationVendor.
 export const supportedVoiceGenerationVendor = z.enum(['openai', 'elevenlabs']);
@@ -40,12 +45,6 @@ export const VOICE_VENDOR_SUPPORTED_FORMATS: Record<VoiceGenerationVendor, Voice
   elevenlabs: ['mp3', 'pcm', 'opus'],
 };
 
-// How the endpoint should return the audio. 'binary' streams raw bytes with an
-// audio/* Content-Type; 'base64' returns JSON { audio, format, contentType }.
-export const voiceResponseEncodingSchema = z.enum(['binary', 'base64']);
-
-export type VoiceResponseEncoding = z.infer<typeof voiceResponseEncodingSchema>;
-
 // Per-provider max input length (characters). OpenAI hard-caps at 4096;
 // ElevenLabs accepts more (model-dependent, up to 10k on multilingual v2). Each
 // vendor service enforces its own limit so no provider is needlessly throttled
@@ -77,7 +76,6 @@ export const ttsRequestSchema = z.object({
   model: z.string().optional(),
   voice: z.string().optional(),
   format: voiceOutputFormatSchema.optional(),
-  encoding: voiceResponseEncodingSchema.optional(),
   // ElevenLabs voice_settings; ignored by providers that don't use them.
   stability: z.number().min(0).max(1).optional(),
   similarityBoost: z.number().min(0).max(1).optional(),
@@ -86,78 +84,23 @@ export const ttsRequestSchema = z.object({
   // that mispronounces short, isolated tokens (a bare "2", acronyms, names).
   // Best-effort: ignored by providers/models that don't support it.
   languageCode: ttsLanguageCodeSchema.optional(),
-  // When true, the result is a throwaway audition (e.g. the Settings voice
-  // preview) and is never saved to the File Browser, regardless of the user's
-  // saveGeneratedAudio preference.
-  preview: z.boolean().optional(),
+  ...generatedAudioRequestFields,
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;
 
 /**
- * Why a browsable copy of generated audio was not kept. Saving is best-effort and
- * never fatal (the caller was already billed for the bytes it is being handed), so
- * this is reported alongside a successful response rather than as an error.
- *
- * Must stay in sync with `PersistGeneratedAudioResult` in
- * apps/client/server/utils/persistGeneratedAudio.ts, which derives its `reason`
- * from this schema.
+ * JSON body of `POST /api/ai/tts` for `encoding: 'base64'`: the shared generated-audio
+ * body plus the TTS fields. `provider`/`fallbackFrom` appear only when the requested
+ * provider was unavailable and another one stood in.
  */
-export const audioSaveSkippedReasonSchema = z.enum(['storage_limit', 'file_too_large', 'error']);
-
-export type AudioSaveSkippedReason = z.infer<typeof audioSaveSkippedReasonSchema>;
-
-/**
- * Fields shared by both `delivery` variants of the `encoding: 'base64'` body.
- *
- * The save + provider fields are all optional because the handler spreads them in
- * only when they apply: the save fields are absent when no copy was attempted
- * (`preview: true`, or the saveGeneratedAudio preference is off), and
- * `provider`/`fallbackFrom` appear only when the requested provider was
- * unavailable and another one stood in.
- */
-const ttsBase64ResponseMetadataSchema = z.object({
+export const ttsBase64ResponseSchema = extendGeneratedAudioResponseSchema({
   format: voiceOutputFormatSchema,
-  contentType: z.string(),
-  saved: z.boolean().optional(),
-  fabFileId: z.string().optional(),
-  fileUrl: z.string().optional(),
-  saveSkippedReason: audioSaveSkippedReasonSchema.optional(),
   /** The provider that actually produced the audio, present only on a fallback. */
   provider: supportedVoiceGenerationVendor.optional(),
   /** The originally requested provider that could not serve the request. */
   fallbackFrom: supportedVoiceGenerationVendor.optional(),
 });
-
-/**
- * The audio fits under the serverless response ceiling and rides in the body.
- * `delivery` is optional only so a client still parses a server that predates
- * the `url` variant; the handler always sends it.
- */
-export const ttsInlineAudioResponseSchema = ttsBase64ResponseMetadataSchema.extend({
-  delivery: z.literal('inline').optional(),
-  /** Base64-encoded audio payload. */
-  audio: z.string(),
-});
-
-/**
- * The audio exceeds the serverless response ceiling (ttsResponseLimit.ts), so it
- * was offloaded to storage and `url` is a time-limited signed GET for it.
- */
-export const ttsUrlAudioResponseSchema = ttsBase64ResponseMetadataSchema.extend({
-  delivery: z.literal('url'),
-  url: z.string(),
-  /** Size of the audio behind `url`, in bytes. */
-  bytes: z.number().int().nonnegative(),
-});
-
-/**
- * JSON body of `POST /api/ai/tts` when the caller asks for `encoding: 'base64'`:
- * inline audio, or a `url` when it is too large to inline. The default `binary`
- * encoding returns raw audio bytes instead (or a 303 to the same `url`) and has
- * no JSON shape.
- */
-export const ttsBase64ResponseSchema = z.union([ttsUrlAudioResponseSchema, ttsInlineAudioResponseSchema]);
 
 export type TtsBase64Response = z.infer<typeof ttsBase64ResponseSchema>;
 
@@ -209,23 +152,19 @@ export const ttsErrorResponseSchema = ApiErrorSchema.extend({
 });
 
 /**
- * 413 body: the audio was generated and billed but exceeds the serverless
- * response-size cap, and offloading it to storage failed too. Oversized audio is
- * normally served by URL instead (`ttsUrlAudioResponseSchema` / the 303), and a
- * saved copy's `fileUrl` is that URL, so this handler no longer sends the
- * `saved`/`fabFileId`/`fileUrl` fields; they stay so a client still parses a
- * server that predates the offload.
+ * TTS 413 body: `generatedAudioTooLargeSchema` plus the provider. The handler never
+ * sends the `saved`/`fabFileId`/`fileUrl` fields (a saved copy's `fileUrl` is now
+ * served as the oversized-audio URL); they stay so a client still parses a server
+ * that predates the offload.
  *
  * Not derived from `ApiErrorSchema`: every 413 on this route is written, never
- * thrown, so errorHandler never serves one and `name` is genuinely absent rather than
- * optional - a stronger claim than `ttsErrorResponseSchema` can make for its own
- * statuses, see the note there. The offload-failure branch is the only writer (a
- * provider 413 is folded onto a 422 by documentedStatusForUpstream4xx). An
- * oversized *request* body is another 413 that never reaches this schema at all -
- * Next's own body parser answers it in plain text before the router runs.
+ * thrown, so `name` is genuinely absent rather than optional - a stronger claim than
+ * `ttsErrorResponseSchema` can make for its own statuses, see the note there (a
+ * provider 413 is folded onto a 422 by documentedStatusForUpstream4xx). An oversized
+ * *request* body is another 413 that never reaches this schema at all - Next's own
+ * body parser answers it in plain text before the router runs.
  */
-export const ttsResponseTooLargeSchema = z.object({
-  error: z.string(),
+export const ttsResponseTooLargeSchema = generatedAudioTooLargeSchema.extend({
   provider: supportedVoiceGenerationVendor,
   saved: z.literal(true).optional(),
   fabFileId: z.string().optional(),
