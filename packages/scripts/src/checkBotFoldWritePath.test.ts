@@ -1151,7 +1151,7 @@ const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
 /**
  * The `Edit()` fences that sit OUTSIDE the mode ternary, so they hold in review mode too.
  *
- * All three are absolute, because a bare write-tool grant reaches anywhere on the filesystem
+ * All of them are absolute, because a bare write-tool grant reaches anywhere on the filesystem
  * and not only the working directory. `runner.temp` holds the runner's own
  * `_runner_file_commands` files, i.e. command execution in every later step. `_actions` holds
  * the unpacked JavaScript of every `uses:` step - including the one that runs after the agent
@@ -1159,13 +1159,14 @@ const MULTI_WORD_EXPANSION = 'probe --settings ./probe-settings.json';
  * both are the PROGRAM of a step rather than an input to one. `.bun` is the same kind: the
  * action's own trailing `Post buffered inline comments` step resolves `bun` by bare name off
  * a `$HOME` PATH entry, so the exec-bit argument the workflow makes for `git`/`gh`/`python3`/
- * `jq` does not reach it. The `_actions` pair is written as a literal because no expression
+ * `jq` does not reach it. The dot-path pair covers every other `$HOME` startup file the
+ * same way. The `_actions` pair is written as a literal because no expression
  * yields that path, which makes it a premise about the hosted image.
  *
  * Note what asserting it here does and does not buy, because the two are easy to conflate.
  * It forces an edit to the FENCE to be deliberate. It does not bind the runner: `runs-on`
  * reads `vars.RUNNER_LABEL`, a repo variable settable in the web UI with no commit and no
- * diff, and a self-hosted runner with a different work root or home makes the three absolute
+ * diff, and a self-hosted runner with a different work root or home makes the absolute
  * specs match nothing with nothing here going red. `RUNS_ON` below pins the DEFAULT so that half of the
  * move is a reviewable edit; the variable override is outside what this repo can pin, and a
  * self-hosted move needs its own fence entries.
@@ -1221,9 +1222,13 @@ const ALWAYS_ON_EDIT_FENCES = [
   'Edit(//home/runner/work/_*/**)',
   'Edit(//home/runner/runners/**)',
   'Edit(//home/runner/.bun/**)',
+  // Every $HOME dotfile and dot-directory: startup files for post-agent programs this file
+  // cannot give an `env:`, such as checkout's post step and the action's own trailing steps.
+  'Edit(//home/runner/.*)',
+  'Edit(//home/runner/.*/**)',
 ];
 
-/** The runner the three `/home/runner/...` fences above are a premise about. */
+/** The runner the `/home/runner/...` fences above are a premise about. */
 const RUNS_ON = "runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}";
 
 /**
@@ -1823,8 +1828,6 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
       // it is also what keeps `pull_request` safe to check out and run an agent over.
       'github.event.pull_request.head.repo.full_name == github.repository',
       'github.event.pull_request.draft == false',
-      "github.event.pull_request.base.ref != 'prod'",
-      "github.event.pull_request.head.ref != 'prod'",
       "!startsWith(github.event.pull_request.head.ref, 'changeset-release/')",
       "(github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')",
     ]);
@@ -1833,7 +1836,7 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
     // a bound that is a property of which keys are present cannot be stated by pinning the ones
     // someone already thought of. `defaults: { run: { shell: ... } }` at column 0 changes the
     // program every `run:` body below is executed BY, and a job-level `container:` moves every
-    // step into an image the three absolute `/home/runner/...` write fences are not a premise
+    // step into an image the absolute `/home/runner/...` write fences are not a premise
     // about - each reaching past every other assertion in this file without disturbing one.
     //
     // Read through the SHARED mapping reader, not a bare-token `matchAll`. `/^ {4}
@@ -1997,7 +2000,7 @@ describe('bot-fold write path', { timeout: 180_000 }, () => {
         ...ALWAYS_ON_EDIT_FENCES,
       ].sort()
     );
-    // Three of the four fences above are absolute literals for the hosted layout, so they are
+    // All but one of the fences above are absolute literals for the hosted layout, so they are
     // only as good as the runner staying that image. Pinned next to them so the two have to
     // move together: swapping the default label without revisiting the fences turns this red.
     expect(src).toContain(RUNS_ON);

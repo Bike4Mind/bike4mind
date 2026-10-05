@@ -34,6 +34,7 @@ export const READER_LAKE_FIELDS = [
   'isPublic',
   'auditQueryTextEnabled',
   'lakeMemoryEnabled',
+  'injectPromptForReaders',
   'status',
   'origin',
   'fileCount',
@@ -63,6 +64,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   description: 'reader',
   // Steers every answer drawn from the lake, editable only by its editors.
   systemPrompt: 'withheld',
+  // The prompt TEXT stays withheld, but a reader whose scoped turns it steers should be able to see
+  // that it does - the transparency half of the reader opt-in (see IDataLake.injectPromptForReaders).
+  injectPromptForReaders: 'reader',
   // Editor-only, like systemPrompt: a reader gets its EFFECT (the prompt activates on a session
   // created for the lake, resolved server-side) but never reads the binding itself.
   preferredSystemPromptId: 'withheld',
@@ -108,6 +112,7 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   filesDeletedAt: 'withheld',
   // Same rationale, archive axis.
   filesArchivedAt: 'withheld',
+  purgeClaimId: 'withheld',
   // Lake-memory producer bookkeeping (#1440): internal lease + continuation cursor. Of no use to a
   // reader, and the lease timestamp would leak when/whether extraction is running. NOTE: the
   // lake-memory `state` on the health payload deliberately reverses the spirit of this withholding -

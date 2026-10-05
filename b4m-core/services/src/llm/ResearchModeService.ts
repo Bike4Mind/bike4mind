@@ -28,7 +28,8 @@ export class ResearchModeService {
     researchMode: z.infer<typeof ResearchModeParamsSchema>,
     messages: any[],
     baseOptions: ICompletionOptions,
-    onStream: (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: any) => Promise<void>
+    onStream: (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: any) => Promise<void>,
+    abortSignal?: AbortSignal
   ): Promise<ResearchModeResult[]> {
     if (!researchMode?.enabled || !researchMode.configurations?.length) {
       throw new Error('Research Mode is not properly configured');
@@ -40,7 +41,9 @@ export class ResearchModeService {
     const enabledConfigs = researchMode.configurations.filter(config => config.enabled);
 
     // Process all enabled configurations in parallel
-    const promises = enabledConfigs.map(config => this.processConfiguration(config, messages, baseOptions, onStream));
+    const promises = enabledConfigs.map(config =>
+      this.processConfiguration(config, messages, baseOptions, onStream, abortSignal)
+    );
 
     const results = await Promise.allSettled(promises);
 
@@ -63,8 +66,14 @@ export class ResearchModeService {
     config: any,
     messages: any[],
     baseOptions: ICompletionOptions,
-    onStream: (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: any) => Promise<void>
+    onStream: (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: any) => Promise<void>,
+    abortSignal?: AbortSignal
   ): Promise<ResearchModeResult> {
+    // A Stop that landed before this configuration started must not reach the provider at all.
+    if (abortSignal?.aborted) {
+      return { configurationId: config.id, success: false, error: 'Cancelled' };
+    }
+
     try {
       this.logger.info(`🔬 [Research Mode] Processing configuration: ${config.label || config.model} (${config.id})`);
 
@@ -85,7 +94,8 @@ export class ResearchModeService {
         throw new Error(`Failed to get LLM instance for model ${config.model}`);
       }
 
-      // Prepare options with configuration-specific parameters
+      // Prepare options with configuration-specific parameters. Only set abortSignal when the
+      // caller supplied one, so the uncancelled path sends exactly the options it did before.
       const options: ICompletionOptions = {
         ...baseOptions,
         temperature: config.parameters?.temperature ?? baseOptions.temperature,
@@ -93,6 +103,7 @@ export class ResearchModeService {
         topP: config.parameters?.topP ?? baseOptions.topP,
         presencePenalty: config.parameters?.presencePenalty ?? baseOptions.presencePenalty,
         frequencyPenalty: config.parameters?.frequencyPenalty ?? baseOptions.frequencyPenalty,
+        ...(abortSignal ? { abortSignal } : {}),
       };
 
       let finalResponse = '';
@@ -100,32 +111,53 @@ export class ResearchModeService {
 
       // Create a timeout promise (120 seconds timeout)
       const TIMEOUT_MS = 120000;
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Timeout after ${TIMEOUT_MS / 1000} seconds`)), TIMEOUT_MS);
+        timeoutHandle = setTimeout(() => reject(new Error(`Timeout after ${TIMEOUT_MS / 1000} seconds`)), TIMEOUT_MS);
       });
 
-      // Race between the LLM completion and timeout
-      await Promise.race([
-        llm.complete(
-          config.model,
-          messages,
-          options,
-          async (streamedTexts: (string | null | undefined)[], info?: any) => {
-            // Forward streaming data with configuration ID
-            await onStream(config.id, streamedTexts, info);
+      // Reject promptly on abort too, so a Stop unblocks this configuration even if the
+      // adapter ignores the signal. The race subscribes to this promise, so a rejection
+      // after the race has already settled is handled and does not surface as unhandled.
+      let onAbort: (() => void) | undefined;
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (!abortSignal) return;
+        onAbort = () => reject(new Error('Cancelled'));
+        if (abortSignal.aborted) {
+          onAbort();
+          return;
+        }
+        abortSignal.addEventListener('abort', onAbort, { once: true });
+      });
 
-            // Accumulate response
-            if (streamedTexts.some(text => text != null)) {
-              finalResponse += streamedTexts.filter(text => text != null).join('');
-            }
+      try {
+        // Race between the LLM completion, the timeout, and cancellation
+        await Promise.race([
+          llm.complete(
+            config.model,
+            messages,
+            options,
+            async (streamedTexts: (string | null | undefined)[], info?: any) => {
+              // Forward streaming data with configuration ID
+              await onStream(config.id, streamedTexts, info);
 
-            if (info) {
-              completionInfo = info;
+              // Accumulate response
+              if (streamedTexts.some(text => text != null)) {
+                finalResponse += streamedTexts.filter(text => text != null).join('');
+              }
+
+              if (info) {
+                completionInfo = info;
+              }
             }
-          }
-        ),
-        timeoutPromise,
-      ]);
+          ),
+          timeoutPromise,
+          abortPromise,
+        ]);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (abortSignal && onAbort) abortSignal.removeEventListener('abort', onAbort);
+      }
 
       this.logger.info(`🔬 [Research Mode] Configuration ${config.id} completed successfully`);
 

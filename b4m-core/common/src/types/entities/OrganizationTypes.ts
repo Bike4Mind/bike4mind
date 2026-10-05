@@ -45,7 +45,6 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
   stripeCustomerId?: string | null;
 
   storageLimit?: number /** Storage limit in MBs */;
-  currentStorageSize?: number /** Current storage size in Bytes */;
 
   /**
    * Organization-wide system prompt that applies to all conversations for team members.
@@ -185,13 +184,6 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
   findByIdAndUserId(id: string, userId: string): Promise<IOrganizationDocument | null>;
 
   /**
-   * Increment the current storage size of an organization
-   * @param organizationId - The ID of the organization
-   * @param count - The amount to increment by (can be negative for decrements)
-   */
-  incrementCurrentStorage(organizationId: string, count: number): Promise<void>;
-
-  /**
    * Seed a zero-usage `userDetails` row for a member if absent (idempotent). Must be called wherever
    * membership is granted so `userDetails[]` stays in sync with `users[]`: `updateUserDetails` uses a
    * positional update that cannot create the row it positions on, so a member with no row tracks no
@@ -201,6 +193,9 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * @param member - The member identity to seed (id + email/name for the row's display fields)
    */
   ensureUserDetails(organizationId: string, member: { id: string; email: string; name: string }): Promise<void>;
+
+  /** Remove a member from users/userDetails/adminUserIds and vacate managerId if theirs (one targeted, idempotent update). */
+  removeMember(organizationId: string, userId: string): Promise<void>;
 
   /**
    * Update a user's usage details within an organization.

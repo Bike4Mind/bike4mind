@@ -10,6 +10,8 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { IQuestCallback } from '../../schemas/generationCallback';
+import type { SuggestedChoices } from '../../utils/replyChoices';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -209,6 +211,12 @@ export interface IChatHistoryItem {
   errorCode?: QuestErrorCode;
 
   /**
+   * Completion callback armed by an API caller's `callbackUrl` (generation jobs only). Never
+   * part of any client or poll payload: it names the caller's endpoint and signing key.
+   */
+  callback?: IQuestCallback;
+
+  /**
    * The ID of the QuestMaster plan that was created from this chat history item
    */
   questMasterPlanId?: string;
@@ -394,6 +402,13 @@ export interface IChatHistoryItem {
   }>;
 
   /**
+   * Next-step options parsed from the reply's trailing choices block (see utils/replyChoices).
+   * Rendered with navigationIntents as one numbered button row; the block itself is stripped
+   * from the stored reply text.
+   */
+  suggestedChoices?: SuggestedChoices;
+
+  /**
    * Attachment list for interactive download buttons (Slack and web UI)
    * Stores attachment metadata from MCP list tools (jira_list_attachments, confluence_list_attachments)
    * for generating interactive download buttons
@@ -562,6 +577,29 @@ export interface IConversationContext {
 
 ////////
 
+/** Where a session was created. Absent on sessions that predate the field; render those as 'web'. */
+export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'agent'] as const;
+export type SessionOriginChannel = (typeof SESSION_ORIGIN_CHANNELS)[number];
+
+export interface ISessionOrigin {
+  channel: SessionOriginChannel;
+  /**
+   * The API key that created the session, set only for channel 'api'. Never serialized to a
+   * client (see redactSessionForClient), so a viewer the session is shared with cannot see it.
+   */
+  apiKeyId?: string;
+}
+
+/** List filters on top of the existing search/surface/pagination params (see searchOwnSessions). */
+export interface SessionListFilters {
+  /** Only sessions from this channel. 'web' also matches sessions with no recorded origin. */
+  origin?: SessionOriginChannel;
+  /** Exclude sessions from this channel. Excluding 'web' also excludes sessions with no origin. */
+  excludeOrigin?: SessionOriginChannel;
+  /** true: only sessions with generated images; false: only sessions without. */
+  hasImages?: boolean;
+}
+
 export interface ISession {
   id: string;
   name: string;
@@ -647,7 +685,7 @@ export interface ISession {
   lakeScopeExplicit?: boolean;
   /**
    * Lake ids a manager was admitted to for THIS session even though they are not a member of the
-   * lake (manage-but-not-member admission) - set ONLY by pages/api/sessions/create.ts, AFTER its
+   * lake (manage-but-not-member admission) - set ONLY by pages/api/v1/sessions/index.ts, AFTER its
    * own canManageLake check, as a write separate from session creation. Never part of
    * createSession's input type (fork/clone/snip cannot copy it - a type error, not a runtime
    * check) and never part of SessionUpdateRequestSchema (no session can grant itself this after
@@ -744,6 +782,13 @@ export interface ISession {
   curatedAt?: Date; // When the notebook was last curated
   curationContentHash?: string; // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
   messageCount?: number; // Lazy-loaded count of messages in this session - calculated on first read
+  /** Set once at creation (see ISessionOrigin); the schema marks it immutable. */
+  origin?: ISessionOrigin;
+  /**
+   * Running total of images generated into this session's quests. Monotonic: deleting a quest
+   * does not decrement it, so treat it as "has ever held generated images", not a live tally.
+   */
+  imageCount?: number;
   slackMetadata?: {
     channelId: string;
     threadTs?: string; // Optional - undefined for non-threaded DMs
@@ -805,7 +850,7 @@ function tagRetryCutoff(now: number): Date {
  *
  * MUST agree with `tagAttemptDueFilter` below. The gate decides what is dispatched and the filter
  * decides what the credit pre-flight prices; the two disagreeing is exactly the defect
- * `apps/client/server/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
+ * `apps/workers/src/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
  * forms live here rather than one beside each caller.
  */
 export function isTagAttemptDue(session: Pick<ISession, 'tagLastAttemptAt'>, now: number = Date.now()): boolean {
@@ -908,6 +953,12 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   findAllWithKnowledgeId: (knowledgeId: string) => Promise<ISessionDocument[]>;
 
   /**
+   * Atomically remove the given file ids from every session's `knowledgeIds` (a `$pull`, so
+   * concurrent callers cannot overwrite each other's removals). Resolves to the sessions modified.
+   */
+  pullKnowledgeIds: (fabFileIds: string[]) => Promise<number>;
+
+  /**
    * Search for sessions by user ID
    *
    * @param search - The search query
@@ -918,8 +969,13 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   searchByUserId: (
     search: string | undefined,
     userId: string,
-    options: SearchOptions<ISessionDocument>
+    options: SearchOptions<ISessionDocument>,
+    surface?: string,
+    filters?: SessionListFilters
   ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
+  incrementImageCount: (sessionId: string, count: number) => Promise<void>;
 
   /**
    * Find the most recently updated session by user ID

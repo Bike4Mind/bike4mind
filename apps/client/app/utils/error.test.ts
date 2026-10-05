@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { AxiosError, AxiosHeaders } from 'axios';
-import { getInsufficientCreditsMessage } from './error';
+import { getInsufficientCreditsMessage, getServerErrorField } from './error';
 
 /** An axios rejection shaped like one from the shared error envelope (errorHandler.ts). */
 const apiError = (status: number, data: unknown): AxiosError => {
@@ -47,5 +47,19 @@ describe('getInsufficientCreditsMessage', () => {
       'Out.'
     );
     expect(getInsufficientCreditsMessage(apiError(422, { errorCode: 'insufficient_credits' }))).toBeUndefined();
+  });
+});
+
+describe('getServerErrorField', () => {
+  it('returns undefined for a non-axios error', () => {
+    expect(getServerErrorField(new Error('x'))).toBeUndefined();
+  });
+
+  it('returns undefined when the error field is not a string', () => {
+    expect(getServerErrorField({ isAxiosError: true, response: { data: { error: { code: 1 } } } })).toBeUndefined();
+  });
+
+  it('returns the server error string', () => {
+    expect(getServerErrorField({ isAxiosError: true, response: { data: { error: 'boom' } } })).toBe('boom');
   });
 });

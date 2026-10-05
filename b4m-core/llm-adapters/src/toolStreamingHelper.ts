@@ -1,13 +1,30 @@
-import { filterToolArtifactMarkup, stripDeliveredArtifactBlocks, type StreamChannel } from '@bike4mind/common';
-import type { CompletionInfo } from './backend';
+import {
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+  filterToolArtifactMarkup,
+  hasDeliverablePinnedArtifact,
+  stripDeliveredArtifactBlocks,
+  stripToolArtifactMarkup,
+  type StreamChannel,
+} from '@bike4mind/common';
+import type { CompletionInfo, ICompletionOptionTools } from './backend';
+
+/** The `artifactType` the named tool declared at registration, for the helpers below. */
+export function declaredArtifactType(
+  tools: ICompletionOptionTools[] | undefined,
+  toolName: string
+): string | undefined {
+  return tools?.find(t => t.toolSchema.name === toolName)?.artifactType;
+}
 
 /**
  * Helper function to handle tool result streaming for artifact-generating tools
  * This ensures tools like recharts that generate artifacts are streamed immediately
  * rather than waiting for recursive completion calls.
  *
- * Only the emitters in TOOL_ARTIFACT_EMITTERS stream, and only their pinned artifact type:
- * streamed text is parsed into reply artifacts, so any other tool's markup would render.
+ * Only the emitters in TOOL_ARTIFACT_EMITTERS (or a tool that declared `artifactType`, see
+ * declaredArtifactType) stream, and only their pinned artifact type: streamed text is parsed
+ * into reply artifacts, so any other tool's markup would render.
  *
  * What does stream is still a raw tool artifact rather than reply prose, so `streamCallback`
  * receives the channel tag and a public surface drops the text on that tag alone.
@@ -15,13 +32,33 @@ import type { CompletionInfo } from './backend';
 export async function handleToolResultStreaming(
   toolName: string,
   toolResult: unknown,
-  streamCallback: (results: string[], info: { channel: StreamChannel }) => Promise<void>
+  streamCallback: (results: string[], info: { channel: StreamChannel }) => Promise<void>,
+  artifactType?: string
 ): Promise<void> {
-  const filtered = filterToolArtifactMarkup(toolName, String(toolResult));
+  const filtered = filterToolArtifactMarkup(toolName, String(toolResult), artifactType);
 
   if (filtered !== null) {
     await streamCallback([filtered], { channel: 'tool-artifact' });
   }
+}
+
+/**
+ * Strips artifact markup from a tool result before it re-enters history, so the model cannot echo
+ * it into a second card. Live-emitting backends pass `delivered` = whether their tool-artifact
+ * emit fired. The `hasDeliverablePinnedArtifact` fallback is for the OpenAI Responses path, whose
+ * artifact reaches the client through sharedToolBuilder extraction instead.
+ *
+ * The delivered/removed choice is made once per result and stamped on every block it contains.
+ * That holds because each emitter emits one pinned block; a result mixing a foreign-type block
+ * with a pinned one would label both DELIVERED.
+ */
+export function stripUnstreamedToolResult(toolName: string, result: string, delivered?: boolean): string {
+  return stripToolArtifactMarkup(
+    result,
+    (delivered ?? hasDeliverablePinnedArtifact(toolName, result))
+      ? ARTIFACT_DELIVERED_PLACEHOLDER
+      : ARTIFACT_REMOVED_PLACEHOLDER
+  );
 }
 
 // The four backends' own completion-callback types differ only in whether `info` is required
@@ -55,9 +92,11 @@ export interface RecursiveArtifactGuard<Cb extends LooseCompletionCallback> {
    * identifier matches an already-delivered artifact removed) to the real callback. Always
    * emits exactly once, even when the buffered text ends up empty, so the terminal
    * token/usage/stopReason metadata that call carries (read by credit/billing attribution) is
-   * never silently dropped. A second call is a no-op - `flush` never clears `buffer`, so without
-   * this guard a re-flush would resend the entire buffered reply text AND the terminal `meta` a
-   * second time (duplicate text on the client, double-counted usage), not merely a stale total. */
+   * never silently dropped. A second call, concurrent or later, returns the first call's promise
+   * (settling with that single cb() call, never retrying it) - `flush` never clears `buffer`, so
+   * without this guard a re-flush would resend the entire buffered reply text AND the terminal
+   * `meta` a second time (duplicate text on the client, double-counted usage), not merely a stale
+   * total. */
   flush: () => Promise<void>;
 }
 
@@ -104,12 +143,23 @@ export function createRecursiveArtifactGuard<Cb extends LooseCompletionCallback>
   const markDelivered = (markup: string) => {
     deliveredMarkup += markup;
   };
-  let flushed = false;
-  const flush = async () => {
-    if (flushed) return;
-    flushed = true;
+  // Memoized so a concurrent caller awaits the in-flight cb() instead of resolving early. The slot
+  // is claimed before cb() runs, so a flush() re-entered synchronously from inside cb() cannot
+  // start a second cb() call.
+  // Not `flushPromise ??= (async () => ...)()`: an async IIFE runs synchronously up to its first
+  // await, so cb() would run before the slot is assigned.
+  let flushPromise: Promise<void> | null = null;
+  const flush = () => {
+    if (flushPromise) return flushPromise;
     const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
-    await cb(cleaned ? [cleaned] : [], meta);
+    let resolve!: () => void;
+    let reject!: (reason: unknown) => void;
+    flushPromise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    (async () => cb(cleaned ? [cleaned] : [], meta))().then(() => resolve(), reject);
+    return flushPromise;
   };
   return { callback, emitArtifact, markDelivered, flush };
 }

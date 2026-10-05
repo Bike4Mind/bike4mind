@@ -16,7 +16,7 @@ interface SendEmailVerificationAdapters {
   db: {
     users: {
       findById: (id: string) => Promise<IUserDocument | null>;
-      update: (user: IUserDocument) => Promise<unknown>;
+      update: (user: Partial<IUserDocument>) => Promise<unknown>;
     };
   };
   mailer: {
@@ -48,7 +48,13 @@ export const sendEmailVerification = async (
   // Reset used flag when generating new token
   user.emailVerificationUsed = null;
 
-  await db.users.update(user);
+  await db.users.update({
+    id: user.id,
+    emailVerificationToken: user.emailVerificationToken,
+    emailVerificationSentAt: user.emailVerificationSentAt,
+    emailVerificationExpires: user.emailVerificationExpires,
+    emailVerificationUsed: user.emailVerificationUsed,
+  });
 
   await mailer.sendEmailVerificationEmail(user, token);
 };

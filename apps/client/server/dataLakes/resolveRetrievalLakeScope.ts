@@ -9,7 +9,9 @@
  *
  * Browse stays the wider of the two - see the difference list in ./index.ts (admin reach;
  * draft lakes). Retrieval is a subset in every case, never the reverse. Do not paper those
- * over here. An owner's own gated lake is no longer among them: the core resolver restores it, and
+ * over here. The one caller that legitimately needs browse's draft reach asks for it explicitly
+ * (`includeDraftLakes` on the request-free resolver below), because it is an ATTACHMENT door and
+ * not a retrieval one. An owner's own gated lake is no longer among them: the core resolver restores it, and
  * so is a lake held by an owner/curator grant - the grant arm below is what keeps browse and
  * retrieval agreeing on a transferred lake.
  */
@@ -112,7 +114,18 @@ export function withStaticRegistryBypass(
  * the widening here still buys the thing that matters - it is not in the scope every chat turn
  * resolves for every caller.
  */
-export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Promise<RetrievalLakeScope> {
+export async function resolveRetrievalLakeScope(
+  req: RetrievalScopeRequest,
+  opts: {
+    /**
+     * Forwarded to resolveRetrievalLakeScopeForUser; default `true`. Pass `false` when the result
+     * must match what chat itself can reach, which never includes the privileged registry widening.
+     * The list-label route (resolveLakeListRetrievalScope) does, so an admin's registry lake is not
+     * labelled searchable when chat would not search it.
+     */
+    staticRegistryBypass?: boolean;
+  } = {}
+): Promise<RetrievalLakeScope> {
   const user = req.user!;
   // Thin memoizing wrapper over the request-free resolver below - the two MUST NOT drift, which is
   // why this holds no resolution logic of its own. All it adds is per-request memoization:
@@ -120,6 +133,7 @@ export async function resolveRetrievalLakeScope(req: RetrievalScopeRequest): Pro
   // every consumer, rather than once per call.
   return resolveRetrievalLakeScopeForUser(user, {
     logger: req.logger,
+    staticRegistryBypass: opts.staticRegistryBypass,
     entitlementKeys: await getRequestEntitlements(req),
     // The resolver derives membership itself from user.id; serve that lookup from the request memo
     // so one request resolves membership once across toAccessContext and this scope. Any other id
@@ -164,13 +178,23 @@ export async function resolveRetrievalLakeScopeForUser(
     /**
      * Default `true` - today's behaviour for every existing caller, none of which passes this
      * flag. Pass `false` to opt a caller OUT of the privileged static-registry widening below.
-     * The attachment door does this: that widening escalates registry reach from passages
+     * Two callers do. The list-label route (resolveLakeListRetrievalScope, via the request wrapper
+     * above) labels what chat searches, and chat never gets this widening. The attachment door
+     * (agentExecutor.attachmentLakeAccess) does too: that widening escalates registry reach from passages
      * (semantic-search) to whole inlined documents, and the chat attachment door structurally
      * cannot follow it (`b4m-core/services` cannot import `@server/*`), so inheriting it here
      * would ship the two attachment doors disagreeing for exactly the caller class most likely
      * to notice.
      */
     staticRegistryBypass?: boolean;
+    /**
+     * Default `false`. Pass `true` to resolve the ATTACHMENT scope instead of the retrieval one:
+     * draft lakes join active ones, matching the browse door that admitted the file to the
+     * workbench. Only `createAttachmentLakeAccess` passes it - the derivation call sites
+     * below (sessionCrud, the voice and quest-plan routes) are retrieval and must not, or an
+     * unpublished lake would become ground truth for a question the user never pointed at it.
+     */
+    includeDraftLakes?: boolean;
   } = {}
 ): Promise<RetrievalLakeScope> {
   // Resolved for every caller, including admins. The static-registry bypass below covers only STATIC
@@ -181,29 +205,32 @@ export async function resolveRetrievalLakeScopeForUser(
   // Projected field-for-field to what ToolContext hands the same function in the chat tool, so
   // "same lake set" is a property of the call, not a coincidence. Membership is resolved INSIDE the
   // shared resolver from user.id, not from user.organizationId (the selected-org display pointer).
-  const scope = await dataLakeService.getDynamicDataLakeAccess({
-    db: {
-      dataLakes: dataLakeRepository,
-      organizations: {
-        findMembershipOrgIds: opts.findMembershipOrgIds ?? (uid => organizationRepository.findMembershipOrgIds(uid)),
+  const scope = await dataLakeService.getDynamicDataLakeAccess(
+    {
+      db: {
+        dataLakes: dataLakeRepository,
+        organizations: {
+          findMembershipOrgIds: opts.findMembershipOrgIds ?? (uid => organizationRepository.findMembershipOrgIds(uid)),
+        },
+        // The grant rung, on the same terms browse resolves it. Both are wired here for the same
+        // reason the chat/tool contexts carry them: an unthreaded site is not a type error, it just
+        // silently drops a grant-reached lake out of retrieval.
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
+        adminSettings: adminSettingsRepository,
       },
-      // The grant rung, on the same terms browse resolves it. Both are wired here for the same
-      // reason the chat/tool contexts carry them: an unthreaded site is not a type error, it just
-      // silently drops a grant-reached lake out of retrieval.
-      dataLakeAccessGrants: dataLakeAccessGrantRepository,
-      adminSettings: adminSettingsRepository,
+      user: { id: user.id, tags: user.tags ?? [] },
+      entitlementKeys,
+      // The subscription/registry arm propagates a failure instead of degrading to `[]`, so this path
+      // has no short key list to vouch for there. NOT true of the partner arm: partnerRules' rule load
+      // fails closed to an empty map, so a rules-DB outage silently drops partner-granted keys and
+      // this `true` overstates them. Deriving it needs that arm to surface its own degradation first.
+      // A future swallow-and-degrade here must set this from the value it degrades on, not leave the
+      // `true` standing.
+      entitlementKeysResolved: true,
+      logger: opts.logger,
     },
-    user: { id: user.id, tags: user.tags ?? [] },
-    entitlementKeys,
-    // The subscription/registry arm propagates a failure instead of degrading to `[]`, so this path
-    // has no short key list to vouch for there. NOT true of the partner arm: partnerRules' rule load
-    // fails closed to an empty map, so a rules-DB outage silently drops partner-granted keys and
-    // this `true` overstates them. Deriving it needs that arm to surface its own degradation first.
-    // A future swallow-and-degrade here must set this from the value it degrades on, not leave the
-    // `true` standing.
-    entitlementKeysResolved: true,
-    logger: opts.logger,
-  });
+    { includeDraftLakes: opts.includeDraftLakes }
+  );
 
   const isPrivileged = !!user.isAdmin || hasDeveloperUserTag(user.tags);
   return isPrivileged && (opts.staticRegistryBypass ?? true) ? withStaticRegistryBypass(scope) : scope;

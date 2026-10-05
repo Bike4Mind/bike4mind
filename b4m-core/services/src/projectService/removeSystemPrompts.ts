@@ -47,7 +47,7 @@ export const removeSystemPrompts = async (
   project.systemPrompts = project.systemPrompts.filter(prompt => !removeSet.has(prompt.fileId));
   project.updatedAt = new Date();
 
-  await db.projects.update(project);
+  await db.projects.update({ id: project.id, systemPrompts: project.systemPrompts, updatedAt: project.updatedAt });
 
   return project;
 };

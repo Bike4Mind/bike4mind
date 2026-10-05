@@ -122,6 +122,38 @@ describe('bedrock normalization', () => {
     expect(record.patch).not.toHaveProperty('autoDisabled');
   });
 
+  describe('clearing an earlier disable', () => {
+    const confirmed: BedrockAvailability = {
+      authorizationStatus: 'AUTHORIZED',
+      entitlementAvailability: 'AVAILABLE',
+      regionAvailability: 'AVAILABLE',
+    };
+    const normalize = (inferenceTypesSupported: string[], entitlement?: BedrockAvailability) =>
+      normalizeBedrockModels({
+        summaries: [{ ...summaries[0], inferenceTypesSupported }],
+        availability: entitlement ? new Map([[String(summaries[0].modelId), entitlement]]) : undefined,
+      })[0].patch;
+
+    it('says false once it is listed on demand and every availability clause says yes', () => {
+      expect(normalize(['ON_DEMAND', 'INFERENCE_PROFILE'], confirmed)).toMatchObject({ autoDisabled: false });
+      expect(normalize(['ON_DEMAND'], confirmed)).not.toHaveProperty('autoDisabledReason');
+    });
+
+    it('says nothing without an availability answer', () => {
+      expect(normalize(['ON_DEMAND'])).not.toHaveProperty('autoDisabled');
+    });
+
+    it('says nothing when an availability clause is missing rather than positive', () => {
+      expect(normalize(['ON_DEMAND'], { ...confirmed, regionAvailability: undefined })).not.toHaveProperty(
+        'autoDisabled'
+      );
+    });
+
+    it('says nothing when the listing did not say how the model can be invoked', () => {
+      expect(normalize([], confirmed)).not.toHaveProperty('autoDisabled');
+    });
+  });
+
   it('skips malformed entries and drops an unparseable lifecycle date', () => {
     const records = normalizeBedrockModels({ summaries: malformed.modelSummaries as BedrockFoundationModelSummary[] });
     expect(records.map(record => record.modelId)).toEqual([
@@ -170,11 +202,47 @@ describe('bedrock source fetch', () => {
       new Set(['anthropic.claude-opus-4-5-20251101-v1:0', 'anthropic.claude-3-haiku-20240307-v1:0']);
 
     await createBedrockSource({ client, activeModelIds }).fetch(makeContext());
-    expect(asked.sort()).toEqual([
-      'amazon.nova-canvas-v1:0',
-      'amazon.titan-embed-text-v2:0',
-      'meta.llama4-scout-17b-instruct-v1:0',
-    ]);
+    // The profile-only llama id is not asked either: its listing already disables it.
+    expect(asked.sort()).toEqual(['amazon.nova-canvas-v1:0', 'amazon.titan-embed-text-v2:0']);
+  });
+
+  it('skips the availability call for a model the listing shows as not on demand', async () => {
+    const asked: string[] = [];
+    const client = fakeClient({
+      getFoundationModelAvailability: async (modelId: string) => {
+        asked.push(modelId);
+        return availability.get(modelId) ?? null;
+      },
+    });
+
+    const result = await createBedrockSource({ client }).fetch(makeContext());
+
+    expect(asked).not.toContain('anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(asked).not.toContain('meta.llama4-scout-17b-instruct-v1:0');
+    if (result.ok) {
+      const opus = result.records.find(record => record.modelId === 'anthropic.claude-opus-4-5-20251101-v1:0');
+      expect(opus?.patch).toMatchObject({ autoDisabled: true, autoDisabledReason: /inference profile/ });
+    }
+  });
+
+  it('asks again the run a disabled model is first listed on demand, so the disable can lift', async () => {
+    const opus = 'anthropic.claude-opus-4-5-20251101-v1:0';
+    const asked: string[] = [];
+    const client = fakeClient({
+      listFoundationModels: async () =>
+        summaries.map(summary =>
+          summary.modelId === opus ? { ...summary, inferenceTypesSupported: ['ON_DEMAND'] } : summary
+        ),
+      getFoundationModelAvailability: async (modelId: string) => {
+        asked.push(modelId);
+        return availability.get(modelId) ?? null;
+      },
+    });
+
+    const result = await createBedrockSource({ client }).fetch(makeContext());
+
+    expect(asked).toContain(opus);
+    if (result.ok) expect(result.records.find(record => record.modelId === opus)?.patch.autoDisabled).toBe(false);
   });
 
   it('bounds concurrency so 300 models do not become 300 simultaneous calls', async () => {

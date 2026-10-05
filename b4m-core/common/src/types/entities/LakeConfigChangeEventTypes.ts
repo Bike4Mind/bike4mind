@@ -153,6 +153,20 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    * here, not even a triggering user kept alongside the forced rung.
    */
   'complete-research-run',
+  /**
+   * The lake was created. Its `changes` are the initial configuration, recorded as unset -> value,
+   * so the history starts where the lake did rather than at its first edit.
+   */
+  'create',
+  /**
+   * An upload batch settled (see `uploadBatchChange`). One row per BATCH, never per file: per-file
+   * moves live in LakeMembershipChangeEvent, whose volume this history is not built to carry.
+   * Recorded from the guarded batch finalize, the cancel route and the stuck-batch reconciler, at
+   * most once per batch (`claimUploadHistory`), attributed to the batch's uploader. Not recorded:
+   * a batch the client marks `failed` (nothing landed) and batches cancelled by a lake archive or
+   * delete cascade (the archive/delete row covers those).
+   */
+  'upload-files',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 
@@ -172,6 +186,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   slug: 'audited',
   description: 'audited',
   systemPrompt: 'audited',
+  injectPromptForReaders: 'audited',
   preferredSystemPromptId: 'audited',
   groundingMode: 'audited',
   requiredPassageTokenTarget: 'audited',
@@ -202,6 +217,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   lastInconsistencyScanAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
+  purgeClaimId: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
   lakeMemoryCursor: 'excluded',
   // The purge itself is audited as its own event (LAKE_MEMORY_PURGED); a config row for the fence
@@ -283,6 +299,24 @@ export const LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG = 'researchConfig';
  */
 export const LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN = 'researchRun';
 
+/**
+ * A DERIVED field for a finished upload batch, which lives in `DataLakeBatch`. Its value carries the
+ * batch's file counts (see `uploadBatchChange`).
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_UPLOAD = 'upload';
+
+/**
+ * The derived fields that record an EVENT rather than a setting's move: their `before` is always
+ * unset and the whole content is the `after` value. A consumer renders the value alone; a
+ * "not set -> ..." framing would describe a prior state that never existed.
+ */
+export const LAKE_CONFIG_EVENT_VALUE_FIELDS: readonly LakeConfigChangeField[] = [
+  LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN,
+  LAKE_CONFIG_DERIVED_FIELD_UPLOAD,
+];
+
 export const LAKE_CONFIG_CHANGE_FIELDS: readonly LakeConfigChangeField[] = [
   ...LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER,
@@ -290,6 +324,7 @@ export const LAKE_CONFIG_CHANGE_FIELDS: readonly LakeConfigChangeField[] = [
   LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW,
   LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG,
   LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN,
+  LAKE_CONFIG_DERIVED_FIELD_UPLOAD,
 ];
 export type LakeConfigChangeField =
   | LakeConfigDocumentField
@@ -297,7 +332,8 @@ export type LakeConfigChangeField =
   | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT
   | typeof LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW
   | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG
-  | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN;
+  | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN
+  | typeof LAKE_CONFIG_DERIVED_FIELD_UPLOAD;
 
 /**
  * Compile-time pin: every field `UpdateDataLakeRequestInput` can write MUST be audited. Without it

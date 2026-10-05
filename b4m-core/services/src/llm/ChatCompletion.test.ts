@@ -3,6 +3,7 @@ import {
   ChatCompletionProcess,
   addPairedTool,
   resolveEnabledTools,
+  resolveDeniedTools,
   shouldDeferCorpusToRetrieval,
   attachmentHasIndexedContent,
   computeSettlementDelta,
@@ -30,6 +31,7 @@ import {
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
+import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import type { FabFileNotice } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -40,11 +42,14 @@ import {
 } from '@bike4mind/llm-adapters';
 import {
   ChatModels,
+  DATA_LAKE_TOOL_NAMES,
+  DATA_LAKE_WRITE_TOOL_NAMES,
   ImageModels,
   ModelBackend,
   usdToCredits as realUsdToCredits,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  REPLY_CHOICES_GUIDANCE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -171,6 +176,7 @@ const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 const mockedProcessFabFilesServer = vi.mocked(processFabFilesServer);
 const mockedFetchAndConvertFabFiles = vi.mocked(fetchAndConvertFabFiles);
+const mockedGetEffectiveLLMApiKeys = vi.mocked(getEffectiveLLMApiKeys);
 
 const mockDb = {};
 const mockStorage = {};
@@ -249,7 +255,12 @@ describe('ChatCompletionProcess', () => {
         update: vi.fn(),
         attachAgent: vi.fn().mockResolvedValue(mockSession),
       },
-      organizations: { findById: vi.fn(), update: vi.fn(), findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      organizations: {
+        findById: vi.fn(),
+        update: vi.fn(),
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
       quests: {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
@@ -597,6 +608,75 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect((service as any).turnPreauthorizedLakeIds).toBeUndefined();
+    });
+  });
+
+  // vetReaderConsentDatalakeTags' contract (same owner gate as vetPreauthorizedLakeIds above),
+  // pinned at BOTH doors it feeds - reverting either call site to raw `session.retrievalTags`
+  // must fail a test, not just the isolated helper unit test.
+  describe('reader-consent vetting at both injection doors', () => {
+    it('forced-retrieval door: forwards retrievalTags only when the acting user owns the session', async () => {
+      mockSession.userId = 'user1';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toEqual(['datalake:x']);
+    });
+
+    it('forced-retrieval door: withholds retrievalTags when the acting user is not the session owner', async () => {
+      mockSession.userId = 'someone-else';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBeUndefined();
+    });
+
+    it('tool door: forwards sessionReaderConsentDatalakeTags only when the acting user owns the session', async () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      let capturedDeps: any;
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (
+        this: any,
+        args: any
+      ) {
+        capturedDeps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+
+      mockSession.userId = 'user1';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(capturedDeps.sessionReaderConsentDatalakeTags).toEqual(['datalake:x']);
+      buildMcpToolsSpy.mockRestore();
+    });
+
+    it('tool door: withholds sessionReaderConsentDatalakeTags when the acting user is not the session owner', async () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      let capturedDeps: any;
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (
+        this: any,
+        args: any
+      ) {
+        capturedDeps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+
+      mockSession.userId = 'someone-else';
+      mockSession.retrievalTags = ['datalake:x'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(capturedDeps.sessionReaderConsentDatalakeTags).toBeUndefined();
+      buildMcpToolsSpy.mockRestore();
     });
   });
 
@@ -1111,6 +1191,29 @@ describe('ChatCompletionProcess', () => {
       const count = await (service as any).countLakeReachableAttachments(['f1']);
       expect(count).toBe(1);
     });
+
+    it('asks through the RETRIEVAL scope, never the draft-inclusive attachment one', async () => {
+      // Switching to the attachment memo would count a draft-lake attachment as lake content and
+      // flip personalCorpusOnly, even though retrieval cannot reach that lake.
+      (service as any).accessibleDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [{ ...LAKE, source: 'dynamic' as const, membership: MEMBERSHIP }],
+      };
+      (service as any).attachmentDataLakeAccessMemo = {
+        dataLakeTags: [LAKE.datalakeTag, 'datalake:draft'],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+      };
+      const search = vi.fn().mockResolvedValue({ data: [], hasMore: false, total: 0 });
+      (service as any).db = { fabfiles: { search } };
+
+      await (service as any).countLakeReachableAttachments(['f1']);
+
+      expect(search.mock.calls[0][5].dataLakeTags).toEqual([LAKE.datalakeTag]);
+    });
   });
 
   describe('attachmentLakeAccess (#1576 attachment door lake-membership arm)', () => {
@@ -1139,7 +1242,9 @@ describe('ChatCompletionProcess', () => {
     };
 
     it('derives lakeMemberships via lakeMembershipsFrom (owned only) and forwards tags/prefixes verbatim', async () => {
-      (service as any).accessibleDataLakeAccessMemo = {
+      // Seeds the ATTACHMENT memo, not the retrieval one: the two are separate resolutions -
+      // the attachment scope admits draft lakes, as browse does.
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme', 'datalake:reg'],
         dataLakeTagPrefixes: ['reg:'],
         lakes: [OWNED_LAKE, REGISTRY_LAKE],
@@ -1204,8 +1309,142 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // The attachment door re-authorizes a file the user NAMED and that browse
+    // (`GET /api/files/byIds`) already admitted to the workbench, so it must track browse's
+    // draft+active status set. Retrieval must not follow it there - an unpublished lake is not
+    // ground truth for a question the user never pointed at. These three pin both halves.
+    it('resolves the attachment scope with draft lakes included', async () => {
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).attachmentDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).attachmentLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).toMatchObject({ includeDraftLakes: true });
+    });
+
+    it('leaves the RETRIEVAL resolution active-only', async () => {
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).getAccessibleDataLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+    });
+
+    it('keeps the two on separate memos, so neither can serve the other its status set', async () => {
+      // A single shared memo would make the answer depend on which door ran first in the turn.
+      const findActiveByUserTagsAndEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).attachmentDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: { findActiveByUserTagsAndEntitlements, countGateExcludedLakes: vi.fn().mockResolvedValue(0) },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      await (service as any).getAccessibleDataLakeAccess();
+      await (service as any).attachmentLakeAccess();
+      // Second call of each is served from its own memo - one query per scope, not per caller.
+      await (service as any).getAccessibleDataLakeAccess();
+      await (service as any).attachmentLakeAccess();
+
+      expect(findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(2);
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[0][4]).not.toHaveProperty('includeDraftLakes', true);
+      expect(findActiveByUserTagsAndEntitlements.mock.calls[1][4]).toMatchObject({ includeDraftLakes: true });
+    });
+
+    describe('getToolReadableAttachedFiles (the knowledge-tool offer gate)', () => {
+      const DRAFT_LAKE = {
+        ...OWNED_LAKE,
+        id: 'lake-draft',
+        datalakeTag: 'datalake:draft',
+        fileTagPrefix: 'draft:',
+        membership: { ...OWNED_LAKE.membership, datalakeTag: 'datalake:draft', fileTagPrefix: 'draft:' },
+      };
+      const ACTIVE_FILE = { id: 'f-active', vectorized: true } as any;
+      const DRAFT_FILE = { id: 'f-draft', vectorized: true } as any;
+
+      beforeEach(() => {
+        (service as any).accessibleDataLakeAccessMemo = {
+          dataLakeTags: [OWNED_LAKE.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [OWNED_LAKE],
+        };
+        (service as any).getScopeFilter = vi.fn().mockReturnValue({ userId: 'u1' });
+      });
+
+      it('returns the attached files as-is, with no second read, when both scopes reach the same lakes', async () => {
+        (service as any).attachmentDataLakeAccessMemo = (service as any).accessibleDataLakeAccessMemo;
+        const getAccessibleFiles = vi.fn();
+        (service as any).db = { fabfiles: { getAccessibleFiles } };
+
+        const files = await (service as any).getToolReadableAttachedFiles([ACTIVE_FILE]);
+
+        expect(files).toEqual([ACTIVE_FILE]);
+        expect(getAccessibleFiles).not.toHaveBeenCalled();
+      });
+
+      it('re-reads through the RETRIEVAL scope when a draft lake is in reach, dropping the draft-only file', async () => {
+        // The tools search active-only, so offering them for a draft-lake-only file could only
+        // return an empty reply for content that is already inlined.
+        (service as any).attachmentDataLakeAccessMemo = {
+          dataLakeTags: [OWNED_LAKE.datalakeTag, DRAFT_LAKE.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [OWNED_LAKE, DRAFT_LAKE],
+        };
+        const getAccessibleFiles = vi.fn().mockResolvedValue([ACTIVE_FILE]);
+        (service as any).db = { fabfiles: { getAccessibleFiles } };
+
+        const files = await (service as any).getToolReadableAttachedFiles([ACTIVE_FILE, DRAFT_FILE]);
+
+        expect(files).toEqual([ACTIVE_FILE]);
+        expect(getAccessibleFiles).toHaveBeenCalledWith(
+          ['f-active', 'f-draft'],
+          { userId: 'u1' },
+          {
+            lakeMemberships: [OWNED_LAKE.membership],
+            dataLakeTags: [OWNED_LAKE.datalakeTag],
+            dataLakeTagPrefixes: [],
+          }
+        );
+      });
+
+      it('fails open (null) when the re-read throws, matching the gate it feeds', async () => {
+        (service as any).attachmentDataLakeAccessMemo = {
+          dataLakeTags: [OWNED_LAKE.datalakeTag, DRAFT_LAKE.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: [OWNED_LAKE, DRAFT_LAKE],
+        };
+        (service as any).db = { fabfiles: { getAccessibleFiles: vi.fn().mockRejectedValue(new Error('db down')) } };
+        (service as any).logger = { warn: vi.fn() };
+
+        await expect((service as any).getToolReadableAttachedFiles([DRAFT_FILE])).resolves.toBeNull();
+        expect((service as any).logger.warn).toHaveBeenCalled();
+      });
+
+      it('passes a null (skipped or failed) attached-file lookup straight through', async () => {
+        await expect((service as any).getToolReadableAttachedFiles(null)).resolves.toBeNull();
+      });
+    });
+
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
-      (service as any).accessibleDataLakeAccessMemo = {
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
         dataLakeTagPrefixes: [],
         lakes: [OWNED_LAKE],
@@ -1313,6 +1552,95 @@ describe('ChatCompletionProcess', () => {
       expect(statuses.length).toBeGreaterThan(0);
       expect(statuses.at(-1)).toBe('stopped');
       expect(mockQuest.status).toBe('stopped');
+    });
+
+    describe('Research Mode cancellation', () => {
+      const RESEARCH_MODEL = 'gpt-4-research';
+
+      function availableModels() {
+        const base = {
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        };
+        return [base, { ...base, id: RESEARCH_MODEL, name: 'Research' }].map(m => ({
+          id: m.id ?? ChatModels.GPT4,
+          ...m,
+        }));
+      }
+
+      function researchBody() {
+        return {
+          ...startQuestParams,
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          researchMode: {
+            enabled: true,
+            configurations: [{ id: 'cfg-1', enabled: true, model: RESEARCH_MODEL, parameters: {} }],
+          },
+        };
+      }
+
+      it('aborts the configuration and ends the quest stopped when the watcher sees a Stop', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial ']);
+          // A user Stop persists 'stopped'; the (hoisted) watcher sees it and aborts.
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal?.aborted) return resolve();
+            opts.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+            setTimeout(resolve, 3000);
+          });
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels() as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        expect(complete).toHaveBeenCalled();
+        expect(complete.mock.calls[0][2].abortSignal).toBeInstanceOf(AbortSignal);
+        expect(complete.mock.calls[0][2].abortSignal.aborted).toBe(true);
+
+        const statuses = mockDb.quests.update.mock.calls.map(([arg]: [{ status?: string } | undefined]) => arg?.status);
+        expect(statuses.at(-1)).toBe('stopped');
+        expect(mockQuest.status).toBe('stopped');
+      });
+
+      it('ends an uncancelled Research Mode turn as done and threads the signal', async () => {
+        const complete = vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
+          await cb(['Answer ']);
+          await cb(['complete']);
+        });
+        mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn().mockResolvedValue([]) } as any);
+        mockedGetAvailableModels.mockResolvedValue(availableModels() as any);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        await service.process({ body: researchBody() as any, logger: mockLogger });
+
+        expect(complete.mock.calls[0][2].abortSignal.aborted).toBe(false);
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.researchModeResults).toEqual([
+          { configurationId: 'cfg-1', success: true, response: 'Answer complete', completionInfo: undefined },
+        ]);
+      });
     });
 
     describe('incomplete answer notice', () => {
@@ -1914,6 +2242,268 @@ describe('ChatCompletionProcess', () => {
           delete (service as any).user.blogIntegration;
           mockSession.disabledTools = undefined;
         }
+      });
+
+      describe('data-lake intent gate and the request deniedTools', () => {
+        const offeredNames = () =>
+          (vi.mocked(mockedGetLlmByModel.mock.results[0].value.complete).mock.calls[0][2].tools ?? []).map(
+            (t: { toolSchema: { name: string } }) => t.toolSchema.name
+          );
+        const lakeBody = (extra: Record<string, unknown> = {}) => ({
+          ...startQuestParams,
+          message: 'save this summary to my data lake',
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+          ...extra,
+        });
+
+        beforeEach(() => {
+          (service.db.adminSettings as Record<string, unknown>).getSettingsValue = vi.fn().mockResolvedValue(true);
+        });
+        afterEach(() => {
+          delete (service.db.adminSettings as Record<string, unknown>).getSettingsValue;
+        });
+
+        it('offers the data-lake trio on save-to-lake intent', async () => {
+          mockTextModel();
+          await service.process({ body: lakeBody(), logger: mockLogger });
+          expect(offeredNames()).toEqual(
+            expect.arrayContaining(['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'])
+          );
+        });
+
+        // Load-bearing: the intent gate pushes these AFTER resolveEnabledTools, so only the final
+        // denylist pass on the built list can strip them - this is the API-key scope case.
+        it('strips gate-added tools named in the request deniedTools, keeping the rest', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['create_data_lake', 'save_content_to_data_lake'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          expect(names).not.toContain('create_data_lake');
+          expect(names).not.toContain('save_content_to_data_lake');
+        });
+
+        it('strips a caller-named tool in the request deniedTools too', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({
+              message: 'hello',
+              tools: ['save_content_to_data_lake'],
+              deniedTools: ['save_content_to_data_lake', 'create_data_lake'],
+            }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('save_content_to_data_lake');
+          expect(names).not.toContain('create_data_lake');
+        });
+
+        // The gate-added trio is a UNIT for the Smart Tools toggle - denying only the read tool
+        // must not also drop the write tools it is paired with.
+        it('strips only the request-denied read tool, keeping the write tools', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ deniedTools: ['list_my_data_lakes'] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).not.toContain('list_my_data_lakes');
+          expect(names).toContain('create_data_lake');
+          expect(names).toContain('save_content_to_data_lake');
+        });
+
+        // The route half of this chain: dataLakeToolsDeniedFor (apps/client dataLakeScopes.ts) returns
+        // DATA_LAKE_TOOL_NAMES for a datalake:read-less key and DATA_LAKE_WRITE_TOOL_NAMES for a
+        // datalake:read key, and /api/chat + /api/ai/llm pass it through as body.deniedTools
+        // (dataLakeScopes.test.ts, chat.integration.test.ts, llm.integration.test.ts).
+        it('withholds list_my_data_lakes on list intent for a datalake:read-less key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          for (const toolName of DATA_LAKE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        it('still offers list_my_data_lakes on list intent to a datalake:read key', async () => {
+          mockTextModel();
+          await service.process({
+            body: lakeBody({ message: 'list my lakes', deniedTools: [...DATA_LAKE_WRITE_TOOL_NAMES] }),
+            logger: mockLogger,
+          });
+          const names = offeredNames();
+          expect(names).toContain('list_my_data_lakes');
+          for (const toolName of DATA_LAKE_WRITE_TOOL_NAMES) expect(names).not.toContain(toolName);
+        });
+
+        // The local-model (Ollama) trim (ChatCompletionProcess.ts's `modelInfo.backend ===
+        // ModelBackend.Ollama` block, ~line 3073) strips every AUTO_ADDED_TOOL_NAMES entry the user
+        // didn't select. The data-lake trio is in that list, so it must survive the trim when the
+        // caller explicitly selected save_content_to_data_lake - resolveEnabledTools' companion
+        // pairing (list_my_data_lakes, create_data_lake) counts as "selected" too - while an
+        // unrelated auto-added tool (blog_draft) the user never asked for still gets dropped, even
+        // though its own intent is in the message.
+        describe('local-model (Ollama) auto-added-tool trim', () => {
+          const mockOllamaModel = () => {
+            mockTextModel();
+            mockedGetAvailableModels.mockResolvedValue([
+              {
+                id: ChatModels.GPT4,
+                type: 'text',
+                name: 'Local Model',
+                backend: ModelBackend.Ollama,
+                max_tokens: 100,
+                contextWindow: 1000,
+                can_stream: false,
+                pricing: {},
+                supportsImageVariation: false,
+              },
+            ]);
+          };
+
+          // Blog intent in the message (to prove blog_draft would otherwise be offered) plus an
+          // explicit save-to-lake tool selection (to prove its companions survive the trim).
+          const trimBody = () =>
+            lakeBody({
+              message: 'Turn this conversation into a blog post',
+              tools: ['save_content_to_data_lake'],
+            });
+
+          // Control: same body, non-Ollama backend. Both the data-lake trio and the unrelated
+          // blog_draft are offered - proves the trim (not the gate or the selection) is what removes
+          // blog_draft on the Ollama path below.
+          it('offers the data-lake trio and the unrelated blog_draft on a non-Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockTextModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining([
+                  'save_content_to_data_lake',
+                  'list_my_data_lakes',
+                  'create_data_lake',
+                  'blog_draft',
+                ])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('keeps the selected save tool and its list/create companions on an Ollama model', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              const names = offeredNames();
+              expect(names).toEqual(
+                expect.arrayContaining(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake'])
+              );
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+
+          it('drops the unrelated blog_draft on an Ollama model despite its intent in the message', async () => {
+            (service as any).user.isAdmin = true;
+            try {
+              mockOllamaModel();
+              await service.process({ body: trimBody(), logger: mockLogger });
+              expect(offeredNames()).not.toContain('blog_draft');
+            } finally {
+              delete (service as any).user.isAdmin;
+            }
+          });
+        });
+      });
+
+      // Reviewer finding: both resolveCorpusInlinePlan's `knowledgeSearchDisabled` input (site
+      // around ChatCompletionProcess.ts:2826) and the invisible-failure warning's
+      // `knowledgeToolWithheldByConfig` gate (site around :3221) must read the RESOLVED request
+      // `deniedTools` union (resolveDeniedTools(session.disabledTools, parsedBody.deniedTools)),
+      // not session.disabledTools alone. A caller can deny search_knowledge_base only at the
+      // REQUEST level (e.g. an API-key scope - see dataLakeScopes.ts), and no existing test sent
+      // that tool through the request deniedTools field, so either site quietly reverting to
+      // session.disabledTools stayed green.
+      describe('corpus inline-defer plan and the withheld-tool warning read the resolved deniedTools', () => {
+        beforeEach(() => {
+          mockedGetSettingsValue.mockImplementation(((key: string) => {
+            if (key === 'CorpusRetrievalMinInlineTokensPerDoc') return 500;
+            if (key === 'defaultEmbeddingModel') return 'text-embedding-3-small';
+            return undefined;
+          }) as typeof getSettingsValue);
+        });
+        afterEach(() => {
+          mockedGetSettingsValue.mockReset();
+        });
+
+        it('inlines a retrievable lake corpus when only the request deniedTools names the tool', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = Array.from({ length: 40 }, (_, i) => `k${i}`);
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          (service as any).getScopeFilter = vi.fn().mockReturnValue({});
+          const files = mockSession.knowledgeIds.map((id: string) => ({
+            id,
+            tags: [{ name: 'datalake:corpus' }],
+            chunkCount: 2,
+            vectorizedChunkCount: 2,
+            embeddingModel: 'text-embedding-3-small',
+            fileName: `${id}.md`,
+            vectorized: true,
+          }));
+          mockDb.fabfiles = { getAccessibleFiles: vi.fn().mockResolvedValue(files) };
+          mockedGetEffectiveLLMApiKeys.mockResolvedValueOnce({ openai: 'sk-test-key-1234567890' });
+
+          const body = { ...wireMinimalTurn(), deniedTools: ['search_knowledge_base'] };
+          const resolveCorpusInlinePlanSpy = vi.spyOn(service as any, 'resolveCorpusInlinePlan');
+
+          await service.process({ body, logger: mockLogger });
+
+          const args = resolveCorpusInlinePlanSpy.mock.calls[0][0] as { knowledgeSearchDisabled: boolean };
+          expect(args.knowledgeSearchDisabled).toBe(true);
+          const plan = await resolveCorpusInlinePlanSpy.mock.results[0].value;
+          expect(plan.deferredToRetrieval).toBe(false);
+        });
+
+        it('suppresses the invisible-failure warning for a lake-only caller whose deniedTools is request-only', async () => {
+          mockSession.disabledTools = undefined; // session denylist does NOT deny the tool
+          mockSession.knowledgeIds = []; // lake-only: no attached knowledge, so hasAttachedKnowledge stays false
+          (service as any).accessibleDataLakeAccessMemo = {
+            dataLakeTags: ['datalake:corpus'],
+            dataLakeTagPrefixes: [],
+            scopedTagPrefixes: [],
+            lakes: [],
+          };
+          // This warning is logged through `this.logger`, set once at construction from
+          // baseOptions - not through the per-call `logger` argument service.process() takes.
+          // Point it at this test's mock so the assertion below is not vacuously true.
+          (service as any).logger = mockLogger;
+
+          const body = {
+            ...wireMinimalTurn(),
+            // Keeps offeredToolNames non-empty so the OTHER knowledgeToolWithheldByConfig disjunct
+            // (offeredToolNames.length === 0) cannot mask a broken deniedTools check.
+            tools: ['current_datetime'],
+            deniedTools: ['search_knowledge_base'],
+          };
+
+          await service.process({ body, logger: mockLogger });
+
+          expect(mockLogger.warn).not.toHaveBeenCalledWith(
+            expect.stringMatching(/has an accessible data lake but search_knowledge_base is not offered/)
+          );
+        });
       });
 
       it('suppresses auto-added tools under a mode even with blog intent in the message', async () => {
@@ -3082,9 +3672,114 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
       expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.settledBasis).toBe('local');
+      // GPT-4 is uncalibrated: the output count is the raw tokenizer count.
+      expect(tokenUsage.outputTokens).toBe(40);
       // The local basis never bills cache creation, so recording a count here would
       // imply a charge that was not made.
       expect(tokenUsage.cacheCreationInputTokens).toBeUndefined();
+    });
+
+    const claudeSonnet5 = {
+      id: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      type: 'text' as const,
+      name: 'Claude Sonnet 5',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+    const gpt4 = {
+      id: ChatModels.GPT4,
+      type: 'text' as const,
+      name: 'GPT-4',
+      backend: ModelBackend.OpenAI,
+      max_tokens: 100,
+      contextWindow: 200_000,
+      pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+      supportsImageVariation: false,
+    };
+    const claudeBody = {
+      ...startQuestParams,
+      params: { ...startQuestParams.params, model: ChatModels.CLAUDE_5_SONNET_BEDROCK },
+      tools: [],
+      projectId: undefined,
+      organizationId: undefined,
+    };
+    const findSettledTokenUsage = () =>
+      mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      )?.[0]?.promptMeta.tokenUsage;
+
+    it("settles a Claude model's local output count in its own tokenizer's units", async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      mockedGetAvailableModels.mockResolvedValue([claudeSonnet5]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({ body: claudeBody, logger: mockLogger });
+
+      const tokenUsage = findSettledTokenUsage();
+      // Raw 40 output scaled by Claude 5's 1.5. Local basis: 80 * $10/1M + 60 * $30/1M = $0.0026 -> 5.2,
+      // ceil'd by the pinned draw to 6 credits.
+      expect(tokenUsage.outputTokens).toBe(60);
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.0026, 6);
+      expect(tokenUsage.creditsUsed).toBe(6);
+      expect(tokenUsage.settledBasis).toBe('local');
+    });
+
+    it('restates the local input in the fallback model units when a fallback answers', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: Bedrock is unable to process')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.CLAUDE_5_SONNET_BEDROCK,
+      });
+      const fallbackBackend = {
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hello from fallback'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: gpt4, backend: fallbackBackend, attempt: 1 } as any);
+      mockedGetAvailableModels.mockResolvedValue([claudeSonnet5, gpt4]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({ body: claudeBody, logger: mockLogger });
+
+      expect(fallbackBackend.complete).toHaveBeenCalledTimes(1);
+      const tokenUsage = findSettledTokenUsage();
+      // 80 Claude-5 units restated for GPT-4: ceil(80 / 1.5) = 54. Output is GPT-4's raw 40.
+      // 54 * $10/1M + 40 * $30/1M = $0.00174; pricing the unconverted 80 would give $0.002.
+      expect(tokenUsage.outputTokens).toBe(40);
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.00174, 6);
+      expect(tokenUsage.settledBasis).toBe('local');
     });
 
     // Partial provider usage (cache read reported without input/output counts) also
@@ -3382,7 +4077,7 @@ describe('ChatCompletionProcess', () => {
         entitlementKeys: string[],
         organizationIds: string[] | undefined,
         userId: string | undefined,
-        opts?: { restrictToTags?: string[] }
+        opts?: { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
       ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
@@ -3393,6 +4088,14 @@ describe('ChatCompletionProcess', () => {
       // widening), so a test can pin that the targeted exclusion measurement excludes exactly
       // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
       admittedPreauthorizedTags?: string[];
+      // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
+      userIsAdmin?: boolean;
+      // Wires mockDb.dataLakes.findByDatalakeTags, which the seed's not-serving (draft) count reads
+      // for the session-named lakes that did not make lakeScope.
+      lakesByTag?: Array<{ datalakeTag: string; status: string; createdByUserId: string }>;
+      // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
+      // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
+      attachmentLakes?: unknown[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
       mockSession.retrievalTags = opts.retrievalTags ?? [];
@@ -3400,8 +4103,20 @@ describe('ChatCompletionProcess', () => {
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
-      if (opts.countGateExcludedLakesImpl) {
-        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      (service as any).user.isAdmin = opts.userIsAdmin;
+      if (opts.countGateExcludedLakesImpl || opts.lakesByTag) {
+        mockDb.dataLakes = {
+          ...(opts.countGateExcludedLakesImpl
+            ? { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) }
+            : {}),
+          ...(opts.lakesByTag
+            ? {
+                findByDatalakeTags: vi.fn(async (tags: string[]) =>
+                  opts.lakesByTag!.filter(lake => tags.includes(lake.datalakeTag))
+                ),
+              }
+            : {}),
+        };
       }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
@@ -3413,6 +4128,15 @@ describe('ChatCompletionProcess', () => {
         admittedPreauthorizedTags: new Set(opts.admittedPreauthorizedTags ?? []),
         ...(opts.excludedByAccessCount !== undefined ? { excludedByAccessCount: opts.excludedByAccessCount } : {}),
       };
+      if (opts.attachmentLakes) {
+        (service as any).attachmentDataLakeAccessMemo = {
+          dataLakeTags: [],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [],
+          lakes: opts.attachmentLakes,
+          admittedPreauthorizedTags: new Set(),
+        };
+      }
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
       if (opts.fabPromptMessages || opts.fabFileNotices) {
@@ -3583,6 +4307,23 @@ describe('ChatCompletionProcess', () => {
       expect(enabledToolsArg).toContain('search_knowledge_base');
       expect(enabledToolsArg).toContain('retrieve_knowledge_content');
       expect(getAccessibleFiles).toHaveBeenCalledTimes(1);
+    });
+
+    // The attachment scope admits a DRAFT lake's file, but the tools search active-only, so they
+    // could only reply empty for it. The file is still inlined; only the tool offer is withheld.
+    it('withholds both knowledge tools for an indexed attachment reachable only through a draft lake', async () => {
+      let reads = 0;
+      const { enabledToolsArg, getAccessibleFiles } = await runKnowledgeGatingCase({
+        knowledgeIds: ['f-draft'],
+        attachmentLakes: [{ id: 'lake-draft', datalakeTag: 'datalake:draft', source: 'dynamic' }],
+        // First read is the attachment scope (the file resolves); second is the retrieval-scoped
+        // re-read for the offer gate (it does not).
+        getAccessibleFilesImpl: async () =>
+          reads++ === 0 ? [{ id: 'f-draft', fileName: 'draft.pdf', vectorized: true, chunkCount: 2 }] : [],
+      });
+      expect(getAccessibleFiles).toHaveBeenCalledTimes(2);
+      expect(enabledToolsArg).not.toContain('search_knowledge_base');
+      expect(enabledToolsArg).not.toContain('retrieve_knowledge_content');
     });
 
     it('offers both knowledge tools from an accessible lake with no attachment, and never reads files', async () => {
@@ -3864,6 +4605,30 @@ describe('ChatCompletionProcess', () => {
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
 
+        it.each([
+          [true, true],
+          [false, false],
+          [undefined, false],
+        ])(
+          'forwards the turn user admin flag (%s) to the identity count as callerMaySeeAllLakes=%s',
+          async (userIsAdmin, expected) => {
+            const countGateExcludedLakesImpl = vi.fn().mockReturnValue(0);
+            await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              retrievalTags: ['datalake:a'],
+              countGateExcludedLakesImpl,
+              userIsAdmin,
+            });
+            expect(countGateExcludedLakesImpl).toHaveBeenCalledWith(
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.objectContaining({ restrictToTags: ['datalake:a'], callerMaySeeAllLakes: expected })
+            );
+          }
+        );
+
         // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
         // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and
         // ask the underlying gate query about a lake it has no notion was admitted. Both cases
@@ -3901,6 +4666,50 @@ describe('ChatCompletionProcess', () => {
             countGateExcludedLakesImpl: countExcludingEverythingNamed,
           });
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+
+        // A draft lake is not in any retrieval arm (active-only), so a session naming one narrows to
+        // an empty scope. notServingLakes is what lets the answer diagnosis say why.
+        describe('notServingLakes', () => {
+          const draftWorld = [
+            { datalakeTag: 'datalake:my-draft', status: 'draft', createdByUserId: 'user1' },
+            { datalakeTag: 'datalake:their-draft', status: 'draft', createdByUserId: 'someone-else' },
+          ];
+
+          it("records the caller's own draft that the session named", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:my-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 1, reason: 'draft' } });
+          });
+
+          it("does not count another user's draft", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:their-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('does not count an active lake that is missing for another reason (that is excludedLakes)', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:gated'],
+              lakesByTag: [{ datalakeTag: 'datalake:gated', status: 'active', createdByUserId: 'user1' }],
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('stays absent when the session names no lake', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval && 'notServingLakes' in retrieval).toBe(false);
+          });
         });
       });
 
@@ -3986,7 +4795,8 @@ describe('ChatCompletionProcess', () => {
      * `getAttachedKnowledgeFiles` (getAccessibleFiles) and `fabFilesToMessages`
      * (fetchAndConvertFabFiles) must resolve `attachmentLakeAccess()` off the SAME
      * memoized per-turn access, or an id reachable through one door could silently
-     * disagree with the other.
+     * disagree with the other. That memo is the ATTACHMENT one, which is what this
+     * seeds.
      */
     it('forwards the same attachmentLakeAccess to fetchAndConvertFabFiles as getAttachedKnowledgeFiles gets from getAccessibleFiles', async () => {
       const membership = {
@@ -3995,7 +4805,7 @@ describe('ChatCompletionProcess', () => {
         fileTagPrefix: 'acme:',
         creatorUserId: 'creator-1',
       };
-      (service as any).accessibleDataLakeAccessMemo = {
+      (service as any).attachmentDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
         dataLakeTagPrefixes: [],
         lakes: [
@@ -4141,14 +4951,19 @@ describe('ChatCompletionProcess', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
     const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
 
-    const runWithTools = async (tools: any[], disabledTools?: string[]) => {
+    const runWithTools = async (
+      tools: any[],
+      disabledTools?: string[],
+      extraBody: Record<string, unknown> = {},
+      reply = 'Hi!'
+    ) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
-          await cb(['Hi!']);
+          await cb([reply]);
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
@@ -4167,14 +4982,22 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      // Echoes the admitted system/context stack (argument 2) back into the returned messages, so
+      // systemPromptDetails' delivered-by-reference check (toPromptDetails in systemPromptSources.ts)
+      // reports every admitted source as delivered - matching production when nothing is evicted.
+      // The reply-choices eviction test below overrides this per-call via mockImplementationOnce.
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [...(contextAndSystemMessages ?? []), { role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined, ...extraBody };
       await service.process({ body, logger: mockLogger });
 
       buildToolsSpy.mockRestore();
@@ -4215,6 +5038,85 @@ describe('ChatCompletionProcess', () => {
     // requested list still names it. Gating on the requested list described a tool the model lacked.
     it('omits the view registry when navigate_view never reached the built tool list', async () => {
       expect(await hasViewRegistry([])).toBe(false);
+    });
+
+    const hasReplyChoices = async (extraBody: Record<string, unknown>) =>
+      ((await runWithTools([], undefined, extraBody))?.[1] ?? ([] as any[])).some(
+        (m: any) => typeof m?.content === 'string' && m.content === REPLY_CHOICES_GUIDANCE
+      );
+
+    it('includes the reply-choices guidance on an in-app turn', async () => {
+      expect(await hasReplyChoices({})).toBe(true);
+    });
+
+    // Voice sets this: it speaks the raw reply stream and has no buttons to render.
+    it('omits the reply-choices guidance under skipReplyChoices', async () => {
+      expect(await hasReplyChoices({ skipReplyChoices: true })).toBe(false);
+    });
+
+    // History re-attaches stored choices only when the guidance ships, so it never demonstrates a
+    // format the model was not told about.
+    const historyIncludesReplyChoices = async (extraBody: Record<string, unknown>) => {
+      mockedFetchAndProcessPreviousMessages.mockClear();
+      await runWithTools([], undefined, extraBody);
+      return mockedFetchAndProcessPreviousMessages.mock.calls.map(call => call[2]?.includeReplyChoices);
+    };
+
+    it('asks history for stored choices when the guidance is offered', async () => {
+      expect(await historyIncludesReplyChoices({})).toEqual([true]);
+    });
+
+    it.each([{ skipReplyChoices: true }, { skipAutoOffers: true }, { promptMode: 'raw' }])(
+      'does not ask history for stored choices under %j',
+      async extraBody => {
+        expect(await historyIncludesReplyChoices(extraBody)).toEqual([false]);
+      }
+    );
+
+    it('records on promptMeta that choices were offered but absent', async () => {
+      await runWithTools([], undefined, {});
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'absent' });
+    });
+
+    it('records parsed choices on promptMeta', async () => {
+      const options = [
+        { label: 'One', description: 'Do the first thing.' },
+        { label: 'Two', description: 'Do the second thing.' },
+      ];
+      await runWithTools([], undefined, {}, 'Pick one.\n\n```choices\n' + JSON.stringify({ options }) + '\n```');
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'parsed' });
+      expect(mockQuest.suggestedChoices).toEqual({ options });
+    });
+
+    it('records and logs an invalid block with its reason', async () => {
+      const reply = 'Pick one.\n\n```choices\n{"options":[{"label":"Only","description":"One option."}]}\n```';
+      await runWithTools([], undefined, { skipReplyChoices: true }, reply);
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'invalid', reason: 'too_few' });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[ReplyChoices]'),
+        expect.objectContaining({ reason: 'too_few', offered: false })
+      );
+    });
+
+    // The system-prompt budget can evict REPLY_CHOICES_GUIDANCE (lowest priority - see
+    // SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) even though it was requested,
+    // so `offered` must reflect delivery, not just the request-time decision.
+    it('records offered: false when the guidance was requested but evicted by the system-prompt budget', async () => {
+      mockedBuildAndSortMessages.mockImplementationOnce(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [
+              ...(contextAndSystemMessages ?? []).filter((m: any) => m.content !== REPLY_CHOICES_GUIDANCE),
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
+
+      await runWithTools([], undefined, {});
+
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'absent' });
     });
   });
 
@@ -5115,7 +6017,9 @@ describe('ChatCompletionProcess', () => {
       // countTokens serves BOTH the tool-schema count (string arg) and the output count (array
       // arg); the impl differentiates so a test can target one without disturbing the other.
       toolCountImpl: (text: any) => number;
+      model?: { id: ChatModels; backend: ModelBackend };
     }): Promise<any> => {
+      const model = opts.model ?? { id: ChatModels.GPT4, backend: ModelBackend.OpenAI };
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(opts.tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
@@ -5136,14 +6040,14 @@ describe('ChatCompletionProcess', () => {
           await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
+        currentModel: model.id,
       } as any);
       mockedGetAvailableModels.mockResolvedValue([
         {
-          id: ChatModels.GPT4,
+          id: model.id,
           type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
+          name: 'Model under test',
+          backend: model.backend,
           max_tokens: 100,
           contextWindow: 200_000,
           can_stream: false,
@@ -5158,7 +6062,13 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = {
+        ...startQuestParams,
+        params: { ...startQuestParams.params, model: model.id },
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
       await service.process({ body, logger: mockLogger });
 
       // Second lookup for the runs where the breakdown itself fails: there is no tokensBySource to
@@ -5171,6 +6081,33 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
       return call?.[0]?.promptMeta;
     };
+
+    // calculateTotalTokenLength is mocked, so these route its count through the tokenizer the process
+    // hands it: that is the only way to see whether the turn counts in the model's own units.
+    const countThroughTokenizer = async (_messages: any, options: any) => options.tokenizer.countTokens('x');
+
+    it("scales every input count to a Claude model's tokenizer", async () => {
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        tokenLengthImpl: countThroughTokenizer,
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 100 : 7),
+        model: { id: ChatModels.CLAUDE_5_SONNET_BEDROCK, backend: ModelBackend.Bedrock },
+      });
+      // messages 150 + tool schemas 150, each a raw 100 scaled by Claude 5's 1.5.
+      expect(promptMeta.context.tokensBySource.toolSchemas).toBe(150);
+      expect(promptMeta.tokenUsage.inputTokens).toBe(300);
+      const builderTokenizer = mockedBuildAndSortMessages.mock.calls[0][7];
+      await expect(builderTokenizer.countTokens('x')).resolves.toBe(150);
+    });
+
+    it('leaves an OpenAI model on the raw count', async () => {
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        tokenLengthImpl: countThroughTokenizer,
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 100 : 7),
+      });
+      expect(promptMeta.tokenUsage.inputTokens).toBe(200);
+    });
 
     it('folds tool-schema tokens into inputTokens without inflating the systemPrompts remainder', async () => {
       // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5; tools -> 30.
@@ -6011,6 +6948,25 @@ describe('resolveEnabledTools', () => {
     const twice = resolveEnabledTools({ requestTools: once, hasAttachedKnowledge: true });
     expect(twice).toEqual(once);
   });
+
+  it('pairs the save-to-data-lake toggle with its list and create companions', () => {
+    const result = resolveEnabledTools({ requestTools: ['save_content_to_data_lake'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes', 'create_data_lake']);
+  });
+
+  it('does not drag the data-lake companions in without the save tool', () => {
+    const result = resolveEnabledTools({ requestTools: ['list_my_data_lakes'], hasAttachedKnowledge: false });
+    expect(result).toEqual(['list_my_data_lakes']);
+  });
+
+  it('lets the session denylist strip a data-lake companion the save tool would pair in', () => {
+    const result = resolveEnabledTools({
+      requestTools: ['save_content_to_data_lake'],
+      hasAttachedKnowledge: false,
+      sessionDisabledTools: ['create_data_lake'],
+    });
+    expect(result).toEqual(['save_content_to_data_lake', 'list_my_data_lakes']);
+  });
 });
 
 describe('shouldDeferCorpusToRetrieval (per-doc even-split depth floor)', () => {
@@ -6262,5 +7218,23 @@ describe('dropOldestHistoryTurn (overflow-recovery shed)', () => {
     history = dropOldestHistoryTurn(history!);
     expect(history).toEqual([user('q3'), assistant('a3')]);
     expect(dropOldestHistoryTurn(history!)).toBeNull();
+  });
+});
+
+describe('resolveDeniedTools', () => {
+  it('unions the session denylist with the request deniedTools', () => {
+    expect(resolveDeniedTools(['web_search'], ['create_data_lake', 'web_search'])?.sort()).toEqual([
+      'create_data_lake',
+      'web_search',
+    ]);
+  });
+
+  it('ignores a non-array session value', () => {
+    expect(resolveDeniedTools(undefined, ['create_data_lake'])).toEqual(['create_data_lake']);
+    expect(resolveDeniedTools('web_search', undefined)).toBeUndefined();
+  });
+
+  it('is undefined when neither source denies anything', () => {
+    expect(resolveDeniedTools([], [])).toBeUndefined();
   });
 });

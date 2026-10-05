@@ -68,6 +68,7 @@ afterEach(async () => {
 
 const OWNER = '5f9d88b8c1d2a30017a1c333';
 const ORG = '5f9d88b8c1d2a30017a1b111';
+const ORG_OWNER = { kind: 'organization', organizationId: ORG } as const;
 
 const seedLake = async () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -125,14 +126,22 @@ describe('disableDriveConnectionForLake / enableDriveConnectionForLake (real rep
     await seedConnection(lake.id, { enabled: false });
     // Sanity: the enabled-only finder genuinely cannot see this row - proves enable must go
     // through findByDataLakeIdAny, not findByDataLakeId.
-    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId(lake.id, ORG)).toBeFalsy();
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId(lake.id, ORG_OWNER)).toBeFalsy();
 
     const result = await enableDriveConnectionForLake(lake.id);
 
     expect(result).toBe(true);
-    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId(lake.id, ORG)).toMatchObject({
+    expect(await orgGoogleDriveConnectionRepository.findByDataLakeId(lake.id, ORG_OWNER)).toMatchObject({
       enabled: true,
     });
+  });
+
+  it('does not re-enable a connection whose disconnect purge is still queued', async () => {
+    const lake = await seedLake();
+    const conn = await seedConnection(lake.id, { enabled: false, disconnectRequestedAt: new Date() });
+
+    await expect(enableDriveConnectionForLake(lake.id)).resolves.toBe(false);
+    expect((await OrgGoogleDriveConnection.findById(conn.id))?.enabled).toBe(false);
   });
 
   it('is a no-op returning false when the lake has no Drive connection', async () => {

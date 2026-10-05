@@ -150,11 +150,6 @@ export async function verifyFederatedIdToken(
       "Federated client must present a B4M-issued ID token (subjectSource='sub'); the self-asserted identities path is no longer accepted"
     );
   }
-  console.warn(
-    `[OAUTH_AI_TOKEN] would-reject: federated client (issuer ${idp.issuer}) uses the self-asserted ` +
-      "'identities' subject source; set OAUTH_AI_TOKEN_REQUIRE_SUB=true to enforce subjectSource='sub'"
-  );
-
   if (claims.token_use !== 'id') {
     throw new FederatedIdTokenError(
       `Expected an ID token (token_use='id'), got token_use='${String(claims.token_use)}'`

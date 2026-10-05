@@ -75,14 +75,14 @@ describe('createResource — self-host Resource shim', () => {
   });
 
   test('SCREAMING_SNAKE secret names with digits map to the identical env var', () => {
-    // Regression: `B4M_PROD_API_KEY` / `E2E_CLEANUP_SECRET` must NOT become
-    // `B4_M_PROD_API_KEY` / `E2_E_CLEANUP_SECRET` - the real secret keeps its name.
+    // Regression: `B4M_ANALYTICS_ENABLED` / `E2E_CLEANUP_SECRET` must NOT become
+    // `B4_M_ANALYTICS_ENABLED` / `E2_E_CLEANUP_SECRET` - the real secret keeps its name.
     const manifest: Manifest = {
-      B4M_PROD_API_KEY: { kind: 'secret' },
+      B4M_ANALYTICS_ENABLED: { kind: 'secret' },
       E2E_CLEANUP_SECRET: { kind: 'secret' },
     };
-    const Resource = createResource({ B4M_PROD_API_KEY: 'prod-key', E2E_CLEANUP_SECRET: 'e2e-key' }, manifest);
-    expect(Resource.B4M_PROD_API_KEY.value).toBe('prod-key');
+    const Resource = createResource({ B4M_ANALYTICS_ENABLED: 'true', E2E_CLEANUP_SECRET: 'e2e-key' }, manifest);
+    expect(Resource.B4M_ANALYTICS_ENABLED.value).toBe('true');
     expect(Resource.E2E_CLEANUP_SECRET.value).toBe('e2e-key');
   });
 

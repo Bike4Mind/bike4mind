@@ -197,7 +197,7 @@ The reply fields (`response`/`responses` synchronously, `reply`/`replies` when p
 }
 ```
 
-- Present on both read paths: the `wait: true` response above, and `GET /api/quests/{id}` when polling (which is also how you read an agent run's structured output).
+- Present on both read paths: the `wait: true` response above, and `GET /api/v1/quests/{id}` when polling (which is also how you read an agent run's structured output).
 - Always an array, `[]` when the turn fired no such tool. No opt-in flag.
 - `type` tells you how to read `payload`; treat an unfamiliar `type` as "newer server than my client" and skip that entry.
 - Entries are in emission order, which matters for a multi-step turn.
@@ -454,7 +454,7 @@ The `web_search` tool (and `deep_research`) can run against a self-hosted [SearX
    docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
    ```
 
-Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
+Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` leads with SerpAPI when a key is set (`SerperKey` in Admin > API Keys) and otherwise uses SearXNG, so a SearXNG-only install needs no extra setting; with both configured, the other provider is the backup. Set it to `serpapi` or `searxng` to lead with that provider (an unconfigured choice disables search rather than switching providers). The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
 
 ### Reading pages: web_fetch and Firecrawl
 
@@ -756,7 +756,7 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio a
 
 Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
 
-The FabFile safety-net filter in `apps/client/server/worker/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
+The FabFile safety-net filter in `apps/client/server/s3/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
 ## Security notes
 
@@ -765,6 +765,8 @@ The stack is configured for **local, single-host use**: the backing services (Mo
 When you put the app behind a reverse proxy, forward the original `Host` header and set `X-Forwarded-Proto` (e.g. `https` once TLS is terminated at the proxy). The published-artifact viewer derives each page's Content-Security-Policy origin and scheme from those headers, so getting them right is what lets published artifact bundles load their assets over your real origin.
 
 Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
+
+Notebook exports are written under `exports/` in the FabFile bucket and downloaded via a short-lived signed URL; `createbuckets` sets a MinIO lifecycle rule that expires them after 1 day. On a different S3 backend, add an equivalent 1-day rule on the `exports/` prefix of that bucket.
 
 ## Share your instance with friends (secure internet exposure)
 
@@ -982,3 +984,40 @@ HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the
 An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
 
 Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
+
+### Daily lake health trends
+
+The worker records health snapshots for active data lakes at 06:00 UTC, using the same bounded sweep as hosted deployments and without CloudWatch metrics. It does not run this sweep at startup. Starting after the daily boundary waits until the next day; a delayed timer runs only the latest due slot, with at most one scheduled attempt per UTC day. An overlapping run consumes the slot without starting another sweep. Shutdown waits up to the worker's existing 20-second grace period; a sweep still running then is abandoned. Completed lakes keep their snapshots, while unvisited lakes retain their older check timestamps and sort first at the next 06:00 UTC run. A restart after today's boundary does not retry that day's missed snapshots.
+
+Snapshots upsert by lake and UTC day. Failed lakes are isolated and their attempted-check timestamp advances so they cannot starve other lakes. The existing 2,000-lake cap and five concurrent computations remain; these are count bounds, not cancellation of a hung database request. This job reports health only. It neither repairs content nor runs inconsistency detection: absent or stale stored inconsistency results remain absent or stale. Other hosted maintenance jobs are not enabled by this registration.
+
+### Daily telemetry retention
+
+The single worker removes `promptMeta.contextTelemetry` from eligible Quest records older than 90 days at 03:00 UTC. The existing hosted cleanup and local worker share the same 5,000-record batches and database writes. The cutoff is fixed once per run using UTC calendar days; the exact cutoff remains excluded. Conversation content and other prompt metadata remain intact.
+
+There is no bootstrap run. Starting after 03:00 waits for the next day; starting exactly at 03:00 runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown waits within the worker's existing grace period. This remains a single-worker schedule, without a distributed lock or a promise to finish after shutdown grace expires.
+
+Database failures reject the run. Successful earlier batches remain cleaned; the next scheduled run retries the remaining eligible rows. Repeating a completed cleanup makes no further changes. This does not delete Quests, remove every type of telemetry, or change the model's existing record-selection policy.
+
+Focused tests use disposable Mongo, exact retention boundaries and an injected later-batch write failure. CI also runs the retention tests with `TZ=America/New_York` set before Node starts, covering a daylight-saving transition. They establish persisted application effects, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/telemetryCleanup.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/telemetryCleanup.test.ts
+TZ=America/New_York VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
+```
+
+## Daily API-key usage baselines
+
+The single local worker calculates usage baselines at 02:00 UTC using the existing calculator and Mongo repositories. It processes keys whose stored status is active, using their own user's usage logs from the inclusive trailing 30-day window. It preserves the existing averages, common IPs/endpoints and UTC peak-hour calculation. Keys without usage are skipped; existing baselines on skipped or inactive keys remain unchanged. This does not change key authorization, expiry enforcement or rate limits.
+
+There is no bootstrap run. A start after 02:00 waits until the next day; an exact 02:00 start runs that slot. Delayed ticks coalesce missed days, active runs do not overlap, and shutdown uses the existing bounded worker grace period. There is no distributed scheduling lock or completion guarantee beyond that grace period.
+
+A failed key does not prevent processing the others. The local task rejects after any per-key errors so the worker records a failed run, then retries on the next daily slot. Global query failures also reject. Successfully persisted baselines remain intact; failed writes leave their prior baseline for retry. The hosted adapter keeps its existing success/error responses and per-key counts.
+
+Verification exercises the actual calculator and disposable Mongo, including user/key isolation, time boundaries, repeat results and write-failure recovery. This is application-level proof, not a Kubernetes deployment drill.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/apiKeyBaselineCalculation.test.ts src/selfhost/apiKeyBaselineCalculation.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/apiKeyBaselineCalculation.e2e.test.ts
+```

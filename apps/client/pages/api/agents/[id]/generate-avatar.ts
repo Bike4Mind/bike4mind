@@ -464,7 +464,13 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
       generationPrompt: cleanPrompt.substring(0, 100) + '...',
     });
 
-    const updateResult = await agentRepository.update(updatedAgent);
+    // Leaf paths: `agent` was read before a generation that takes many seconds, and a concurrent edit
+    // to the rest of `visual` (e.g. its style) must survive this write.
+    const updateResult = await agentRepository.update({
+      id: agent.id,
+      'visual.portraitUrl': updatedAgent.visual.portraitUrl,
+      'visual.generationPrompt': updatedAgent.visual.generationPrompt,
+    });
 
     if (updateResult) {
       imageLogger.info(`Agent update result:`, {

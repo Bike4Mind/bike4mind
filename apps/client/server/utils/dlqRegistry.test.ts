@@ -6,6 +6,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'fab-file-chunk': 'https://sqs.us-east-2.amazonaws.com/123456789/fabFileChunkQueueDLQ',
   'image-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/imageGenerationDLQ',
   'image-edit': 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditDLQ',
+  'generation-callback': 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueueDLQ',
   'video-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
   'whats-new-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
@@ -36,6 +37,9 @@ const mockDlqUrls = vi.hoisted(() => ({
   'lake-memory': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueueDLQ',
   'lake-inconsistency-model': 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueueDLQ',
   'drive-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueueDLQ',
+  'drive-disconnect-purge': 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueueDLQ',
+  'github-lake-ingest': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueueDLQ',
+  'github-lake-revoke': 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -43,6 +47,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   fabFileChunkQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/fabFileChunkQueue',
   imageGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageGenerationQueue',
   imageEditQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/imageEditQueue',
+  generationCallbackQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueue',
   videoGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationQueue',
   researchEngineQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueue',
   whatsNewGenerationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueue',
@@ -73,6 +78,9 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   lakeMemoryQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeMemoryQueue',
   lakeInconsistencyModelQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/lakeInconsistencyModelQueue',
   driveLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveLakeIngestQueue',
+  driveDisconnectPurgeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/driveDisconnectPurgeQueue',
+  githubLakeIngestQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeIngestQueue',
+  githubLakeRevokeQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/githubLakeRevokeQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -87,9 +95,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 34 DLQ entries', () => {
+    it('returns all 38 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(34);
+      expect(registry).toHaveLength(38);
     });
 
     it('each entry has required fields', () => {

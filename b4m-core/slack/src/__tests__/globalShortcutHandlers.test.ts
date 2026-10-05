@@ -289,9 +289,14 @@ describe('GlobalShortcutHandlers', () => {
       const result = await handleCreateNotebookSubmission(basePayload, 'xoxb-token');
 
       expect(result).toEqual({});
-      expect(mockCreateSession).toHaveBeenCalledWith('user123', { name: 'My Test Notebook' }, expect.anything(), {
-        setLastNotebook: true,
-      });
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        'user123',
+        { name: 'My Test Notebook', origin: { channel: 'slack' } },
+        expect.anything(),
+        {
+          setLastNotebook: true,
+        }
+      );
     });
 
     it('should generate default name when notebook name is empty', async () => {
@@ -313,7 +318,7 @@ describe('GlobalShortcutHandlers', () => {
 
       expect(mockCreateSession).toHaveBeenCalledWith(
         'user123',
-        { name: expect.stringContaining('Slack Chat') },
+        { name: expect.stringContaining('Slack Chat'), origin: { channel: 'slack' } },
         expect.anything(),
         { setLastNotebook: true }
       );

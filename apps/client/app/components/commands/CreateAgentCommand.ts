@@ -51,8 +51,8 @@ export const handleCreateAgentCommand = async (args: CreateAgentCommandArgs): Pr
 
         // Invalidate agent queries to refresh the list
         queryClient.invalidateQueries({ queryKey: ['agents'] });
-        // A first agent unlocks the 'agents' gear - refresh the earned-nav
-        // state (see routes/agents/new.tsx for the same first-create pattern).
+        // A first agent unlocks the 'agents' gear - refresh the Gears status so its
+        // reward shows (see routes/agents/new.tsx for the same first-create pattern).
         const gearsStatus = queryClient.getQueryData<GearsStatusResponse>(['gears', 'status']);
         const agentsGear = gearsStatus?.gears.find(g => g.key === 'agents');
         if (!agentsGear || !agentsGear.unlocked) {

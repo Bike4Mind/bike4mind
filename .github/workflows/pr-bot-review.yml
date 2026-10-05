@@ -26,9 +26,6 @@ name: pr-bot-review
 # a comment is posted instead asking for human review. On `gh pr view` API
 # failure, the size guard treats the PR as oversize and skips the review
 # (fail-closed by design - cost control over transient API resilience).
-# PRs where either side is the `prod` branch are skipped (deployment kickoffs
-# from `main`, hotfixes into `prod`, and `prod -> main` back-merges - all are
-# deployment plumbing rather than code review candidates).
 # After a label-triggered run, the label is auto-removed so the next "add"
 # cleanly triggers another review.
 #
@@ -94,8 +91,6 @@ jobs:
     if: |
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.base.ref != 'prod' &&
-      github.event.pull_request.head.ref != 'prod' &&
       !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
       (github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -502,10 +497,16 @@ jobs:
             # permission rule is consulted. What covers that case is the job's fork gate:
             # `head.repo.full_name == github.repository` means the branch is in this repo, so
             # anyone who could ship such a file could edit this workflow directly.
-            # NOT fenced, and stated rather than left to be discovered: `$HOME`, and the
-            # process CWD, which on a hosted runner is the checkout. A blanket deny is
-            # not available for either - the checkout itself lives under `$HOME`
-            # (`/home/runner/work/...`), so denying `$HOME` would deny the fold. The
+            # `$HOME`'s dotfiles and dot-directories ARE fenced, on both arms: they are
+            # where startup files live, and some post-agent programs are not ours to bound
+            # per-step - checkout's post step runs `git submodule foreach` over a copy of
+            # `~/.gitconfig`, and claude-code-action's own post-agent steps run programs
+            # with no `env:` this file controls. The checkout under `work/` is not a
+            # dotfile, so the fold is unaffected.
+            # NOT fenced, and stated rather than left to be discovered: the rest of
+            # `$HOME`, and the process CWD, which on a hosted runner is the checkout. A
+            # blanket deny is not available for either - the checkout itself lives under
+            # `$HOME` (`/home/runner/work/...`), so denying `$HOME` would deny the fold. The
             # bound is therefore per-step, and the invariant a new step has to satisfy,
             # stated as the class rather than as the two instances that have bitten so
             # far: EVERY PROGRAM A POST-AGENT STEP RUNS MUST HAVE ALL OF ITS IMPLICIT,
@@ -532,11 +533,11 @@ jobs:
             #             no execute bit for either. Both closed by `-I` on the
             #             invocation, with PYTHONNOUSERSITE as the belt; note `-E` alone
             #             covers neither.
-            #   jq      - startup file, ACCEPTED residual rather than closed. jq
-            #             auto-loads `~/.jq`, which can redefine a builtin used by the
+            #   jq      - startup file, closed by the `$HOME` dot-path fence rather than by a
+            #             flag. jq auto-loads `~/.jq`, which can redefine a builtin used by the
             #             ScheduleWakeup detection query in the transcript step, and
-            #             there is no suppression flag or variable for it. The bound is
-            #             jq's own: no shell escape, and that query's only effect is
+            #             there is no suppression flag or variable for it. Off the hosted
+            #             image the fence matches nothing, and the bound is jq's own: no shell escape, and that query's only effect is
             #             which sentence `Report incomplete review` prints. Any new jq
             #             whose output decides something must supply its own program
             #             with `-n`/`--args` fixtures instead.
@@ -564,8 +565,8 @@ jobs:
             # named `git`, `gh`, `python3` or `jq` sits on a `$HOME` PATH entry. That last
             # is a premise about the IMAGE, not something this file can pin: `runs-on` reads
             # a repo variable, and on a self-hosted runner $HOME persists between jobs.
-            # On the hosted image all four resolve under `/usr/bin`. Stated rather than assumed,
-            # because the day a fold gains a tool that can chmod, this becomes live.
+            # On the hosted image all four resolve under `/usr/bin`, and every `$HOME` PATH entry
+            # is a dot-path, so the `$HOME` dot-path fence keeps the write tools off it too.
             #
             # That enumeration covers the programs THIS file's `run:` steps name, and the
             # action's own steps are outside it: `claude-code-action`'s trailing
@@ -583,7 +584,7 @@ jobs:
             # ScheduleWakeup makes sense only in an interactive session; this
             # process is single-shot, so hard-block the tool call itself
             # rather than relying on the prompt bullet above alone.
-            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),Edit(//home/runner/.bun/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
+            --disallowedTools "Edit(/${{ runner.temp }}/**),Edit(//home/runner/work/_*/**),Edit(//home/runner/runners/**),Edit(//home/runner/.bun/**),Edit(//home/runner/.*),Edit(//home/runner/.*/**),${{ env.FOLD_MODE == 'true' && 'Bash,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**),Edit(.github/**),Edit(.git/**),Edit(.claude/**),Edit(.mcp.json),Edit(.gitattributes),Edit(**/.gitattributes),Edit(.gitignore),Edit(**/.gitignore)' || 'Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,ScheduleWakeup,Read(.git/**),Read(//proc/**),Read(//sys/**)' }}"
             # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
             # spawns ~8 parallel review agents, and the orchestration overhead
             # (read skill, fetch PR/diff/linked issues, fan-out, classify, post)
@@ -705,8 +706,8 @@ jobs:
           SERVER_URL: ${{ github.server_url }}
           RUN_ID: ${{ github.run_id }}
           # Load-bearing, not hygiene. Every `git` below reads config, and on a fold
-          # run `$HOME` is agent-writable: it is neither the checkout nor $RUNNER_TEMP,
-          # so no write fence covers it. A global `filter.<x>.clean` plus a working-tree
+          # run the `$HOME` dot-path fence keeps the agent off `~/.gitconfig` only on the
+          # hosted image, because it names that image's path. A global `filter.<x>.clean` plus a working-tree
           # `.gitattributes` (which need not be tracked, and so never reaches the path
           # guard) runs an arbitrary command during `git add -u` below - i.e. inside the
           # step holding PUSH_TOKEN, and UPSTREAM of the path guard, the size bound and
@@ -1078,8 +1079,8 @@ jobs:
           SKILL_SHA: ${{ steps.skill_fetch.outputs.skill_sha }}
           DEST: ${{ runner.temp }}/review-transcript-redacted.json
           # `git show` below must not read an agent-written global config: this step
-          # runs after the agent, and $HOME is neither the checkout nor $RUNNER_TEMP,
-          # so it is outside every write fence. Same three vars as `Push fold commit`.
+          # runs after the agent, and the `$HOME` dot-path fence holds only on the hosted
+          # image, because it names that image's path. Same three vars as `Push fold commit`.
           GIT_CONFIG_GLOBAL: /dev/null
           GIT_CONFIG_SYSTEM: /dev/null
           GIT_CONFIG_NOSYSTEM: '1'

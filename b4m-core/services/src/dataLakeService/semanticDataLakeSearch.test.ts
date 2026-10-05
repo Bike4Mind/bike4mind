@@ -241,6 +241,20 @@ describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
     expect(search.mock.calls[0][5]).not.toHaveProperty('scopedTagPrefixes');
   });
 
+  it('restrictToDataLake reaches the search options only when the caller opts in', async () => {
+    const defaultSearch = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP] }, {
+      db: { fabfiles: { search: defaultSearch }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(defaultSearch.mock.calls[0][5]).not.toHaveProperty('restrictToDataLake');
+
+    const restrictedSearch = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), lakeMemberships: [MEMBERSHIP], restrictToDataLake: true }, {
+      db: { fabfiles: { search: restrictedSearch }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(restrictedSearch.mock.calls[0][5]).toMatchObject({ restrictToDataLake: true });
+  });
+
   it('ownFilesOnly with no lake tags still sends lakeMemberships: [] + includeShared: true', async () => {
     const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
     await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], ownFilesOnly: true }, {
@@ -436,6 +450,19 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
 
     expect(result.results).not.toHaveLength(0);
     expect(result.results[0].documentDate).toEqual(documentDate);
+  });
+
+  it("carries the file's owner through the lake-scoped scan as fileUserId", async () => {
+    const owned = [{ id: 'f1', fileName: 'Owned.pdf', tags: [], userId: 'owner-9' }];
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: owned, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 1)) },
+      },
+    } as never);
+
+    expect(result.results).not.toHaveLength(0);
+    expect(result.results[0].fileUserId).toBe('owner-9');
   });
 
   it('leaves the vintage null on the lake-scoped path for a file that has none', async () => {

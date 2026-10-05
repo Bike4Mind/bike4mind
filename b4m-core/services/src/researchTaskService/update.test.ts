@@ -101,8 +101,11 @@ describe('researchTaskService - update', () => {
     });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
     expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
-      ...existingTask,
-      ...updateParams,
+      id: taskId,
+      title: 'Updated Title',
+      description: 'Updated Description',
+      urls: ['https://updated.com'],
+      canDiscoverLinks: true,
     });
   });
 

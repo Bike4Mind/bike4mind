@@ -13,11 +13,14 @@ import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { getFilesStorage } from '@server/utils/storage';
+import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import qs from 'qs';
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
   // GET /api/files
   .get(async (req, res) => {
+    assertFilesReadScope(req);
     const userId = req.user.id;
 
     // No server scope argument, so the default view lists only files this user owns. The query
@@ -51,6 +54,7 @@ const handler = baseApi()
   })
   // DELETE /api/files
   .delete(async (req, res) => {
+    assertFilesWriteScope(req);
     try {
       if (!req.ability) {
         return res.status(403).json({ error: 'Unauthorized' });
@@ -87,7 +91,11 @@ const handler = baseApi()
           await Promise.all([
             user.save({ session }),
             FabFile.deleteMany(ownedFilter, { session }),
-            FabFile.updateMany(sharedInFilter, { $pull: { users: { userId } } }, { session }),
+            // includeDeleted: the grant must also leave soft-deleted shares, or restoring one
+            // (e.g. a data-lake undelete) would hand the caller's access back.
+            FabFile.updateMany(sharedInFilter, { $pull: { users: { userId } } }, { session }).setOptions({
+              includeDeleted: true,
+            }),
           ]);
 
           await Promise.all(

@@ -123,7 +123,12 @@ export const create = async (
       researchTask.status = ResearchTaskStatus.FAILED;
       researchTask.statusFailedMessage = `Failed to process research task: ${e instanceof Error ? e.message : 'Unknown error'}`;
       researchTask.statusFailedAt = new Date();
-      await db.researchTasks.update(researchTask);
+      await db.researchTasks.update({
+        id: researchTask.id,
+        status: researchTask.status,
+        statusFailedMessage: researchTask.statusFailedMessage,
+        statusFailedAt: researchTask.statusFailedAt,
+      });
 
       logger?.error(`Failed to process research task ${researchTask.id}: ${e}`);
     }

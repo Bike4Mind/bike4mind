@@ -97,7 +97,7 @@ export async function addMember(user: IUserDocument, parameters: AddMemberParame
   // theirs, and they change it through the switcher.
   if (!userToAdd.organizationId) {
     userToAdd.organizationId = organizationId;
-    await db.users.update(userToAdd);
+    await db.users.update({ id: userToAdd.id, organizationId });
   }
 
   return { organization, user: userToAdd };

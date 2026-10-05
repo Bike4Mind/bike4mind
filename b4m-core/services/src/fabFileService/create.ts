@@ -26,6 +26,11 @@ import { v4 as uuidv4 } from 'uuid';
 import { assertCanWriteDataLakeTags, assertCanWriteStaticRegistryTags } from '../dataLakeService/authorizeLakeWrite';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 
+// The fab-file bucket reaps everything under this prefix after 1 day (infra/buckets.ts,
+// expire-notebook-exports), so no durable FabFile may be stored there. Pinned to the rule by
+// infra/__tests__/fabFileBucketLifecycle.test.ts.
+export const RESERVED_FAB_FILE_KEY_PREFIX = 'exports/';
+
 export const createFabFileSchema = z.object({
   fileName: z.string(),
   mimeType: z.string(),
@@ -41,7 +46,13 @@ export const createFabFileSchema = z.object({
    */
   contentType: z.string().optional(),
   public: z.boolean().optional(),
-  prefix: z.string().optional(),
+  prefix: z
+    .string()
+    // Mirrors the key built below (`${prefix}/<uuid>.<ext>`).
+    .refine(prefix => !`${prefix}/`.startsWith(RESERVED_FAB_FILE_KEY_PREFIX), {
+      message: `prefix must not start with the reserved "${RESERVED_FAB_FILE_KEY_PREFIX}" namespace`,
+    })
+    .optional(),
   system: z.boolean().optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   systemPriority: z.number().optional(),

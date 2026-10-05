@@ -381,6 +381,38 @@ describe('ToolsSection unavailable-tool display', () => {
   });
 });
 
+// The Save to Data Lake row is behind the EnableDataLakes admin flag, same pattern as
+// the Knowledge Base row above: hidden entirely (not just dimmed) until the flag is on.
+describe('ToolsSection save-to-data-lake flag gating', () => {
+  it('renders the row when EnableDataLakes is on', () => {
+    mocks.adminFeatureFlags.value = { EnableDataLakes: true };
+    const { getByTestId } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(getByTestId('tool-toggle-save-to-data-lake')).toBeTruthy();
+  });
+
+  it('does not render the row when EnableDataLakes is off', () => {
+    mocks.adminFeatureFlags.value = {};
+    const { queryByTestId } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(queryByTestId('tool-toggle-save-to-data-lake')).toBeNull();
+  });
+
+  it('toggles save_content_to_data_lake on from an empty tool set', () => {
+    mocks.adminFeatureFlags.value = { EnableDataLakes: true };
+    mocks.state.tools = [];
+    const { getByTestId } = render(<ToolsSection />, { wrapper: Wrapper });
+    fireEvent.click(getByTestId('tool-toggle-save-to-data-lake'));
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ tools: ['save_content_to_data_lake'] });
+  });
+
+  it('toggles save_content_to_data_lake off when already enabled', () => {
+    mocks.adminFeatureFlags.value = { EnableDataLakes: true };
+    mocks.state.tools = ['save_content_to_data_lake'];
+    const { getByTestId } = render(<ToolsSection />, { wrapper: Wrapper });
+    fireEvent.click(getByTestId('tool-toggle-save-to-data-lake'));
+    expect(mocks.useLLM.setState).toHaveBeenCalledWith({ tools: [] });
+  });
+});
+
 // LOCK-STEP with computeToolAvailability in pages/api/settings/serverConfig.ts: web_search and
 // deep_research now resolve through the SearXNG/Firecrawl providers, so their disabled-tooltips must
 // name those alternatives (not just Serper/Firecrawl keys).

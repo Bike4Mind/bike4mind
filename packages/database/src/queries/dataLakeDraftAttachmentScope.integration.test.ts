@@ -6,21 +6,19 @@ import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { DataLakeModel, dataLakeRepository } from '../models/ai/DataLakeModel';
 
 /**
- * Pins the DRAFT-lake gap between the two doors that authorize a lake file, against the real
- * lake and fabFile repositories.
+ * Pins the DRAFT-lake split between the two scopes that resolve a lake file's arms, against the
+ * real lake and fabFile repositories.
  *
  * Browse (`listDataLakes`, behind `GET /api/files/byIds`) selects `status: { $in: ['draft',
- * 'active'] }`. Retrieval (`findActiveByUserTagsAndEntitlements`, which every attachment door
- * resolves its lake arms through) selects `status: 'active'` alone, and a new lake defaults to
- * `draft`. So a file in an unpublished lake is attachable in the UI and readable through byIds,
- * while `findAccessibleInIds` - the predicate the image edit/generation paths scope on - returns
- * nothing for it.
+ * 'active'] }`, and a new lake defaults to `draft`. Retrieval selects `status: 'active'` alone -
+ * deliberately, per `resolveRetrievalLakeScope`: an unpublished lake must not become ground truth
+ * for a question the user never pointed at it.
  *
- * That asymmetry is deliberate on the retrieval side (`resolveRetrievalLakeScope`: "Browse stays
- * the wider of the two ... draft lakes. Do not paper those over here") but it means the edit path
- * silently drops a file the workbench admitted. This test exists so the gap is a recorded,
- * asserted behaviour rather than a surprise the next reader has to rediscover from a QA report;
- * whichever door is eventually moved, one of these assertions must be updated deliberately.
+ * The ATTACHMENT doors pass `includeDraftLakes` and track browse instead: were they to inherit
+ * retrieval's narrowing, a file the workbench admitted and the user explicitly attached would be
+ * silently dropped by `findAccessibleInIds` - the image edit mask, the reference anchors, the
+ * generation input. This file asserts BOTH halves, because the contract is the split, not the
+ * widening: move either door and one of these assertions must change deliberately.
  *
  * Against a real server rather than asserted structurally: the whole claim is about what Mongo
  * returns for a status filter combined with the tag/prefix arms, which a shape assertion cannot show.
@@ -38,18 +36,23 @@ let lakeId: string;
 let lakeFileId: string;
 
 /**
- * The arms an attachment door would hand `findAccessibleInIds`, derived the way production derives
- * them: ask the lake repository what this caller reaches, then project the reachable lakes into
- * tag/prefix buckets. A lake the repository withholds contributes no arm - which is the mechanism
- * under test, so it must not be short-circuited by hardcoding the tag.
+ * The arms a door would hand `findAccessibleInIds`, derived the way production derives them: ask
+ * the lake repository what this caller reaches, then project the reachable lakes into tag/prefix
+ * buckets. A lake the repository withholds contributes no arm - which is the mechanism under test,
+ * so it must not be short-circuited by hardcoding the tag.
+ *
+ * `includeDraftLakes` is the ONLY difference between the two doors, so both call this.
  */
-const attachmentArmsFor = async (userTags: string[]) => {
-  const lakes = await dataLakeRepository.findActiveByUserTagsAndEntitlements(userTags, undefined, []);
+const armsFor = async (userTags: string[], opts?: { includeDraftLakes?: boolean }) => {
+  const lakes = await dataLakeRepository.findActiveByUserTagsAndEntitlements(userTags, undefined, [], undefined, opts);
   return {
     dataLakeTags: lakes.map(lake => lake.datalakeTag),
     dataLakeTagPrefixes: lakes.map(lake => lake.fileTagPrefix),
   };
 };
+
+const attachmentArmsFor = (userTags: string[]) => armsFor(userTags, { includeDraftLakes: true });
+const retrievalArmsFor = (userTags: string[]) => armsFor(userTags);
 
 beforeAll(async () => {
   server = await createMongoServer();
@@ -95,34 +98,40 @@ describe('draft lake, attachment scope', () => {
     expect(lake?.status).toBe('draft');
   });
 
-  it('withholds a draft lake from the retrieval resolver even for a tag-holding reader', async () => {
+  it('still withholds a draft lake from the RETRIEVAL resolver, for a tag-holding reader', async () => {
+    // The half that must NOT move: semantic search and chat retrieval stay active-only.
     const lakes = await dataLakeRepository.findActiveByUserTagsAndEntitlements([READER_TAG], undefined, []);
 
     expect(lakes.map(l => l.slug)).not.toContain(SLUG);
   });
 
-  it('drops the draft lake file from findAccessibleInIds, though the workbench admitted it', async () => {
-    // The gap in one assertion: no arms, so the image edit/generation lookup returns nothing for a
-    // file the caller can attach and read through byIds.
-    const arms = await attachmentArmsFor([READER_TAG]);
-    expect(arms.dataLakeTags).toEqual([]);
+  it('resolves the draft lake for the ATTACHMENT scope, which tracks the door that admitted the file', async () => {
+    const lakes = await dataLakeRepository.findActiveByUserTagsAndEntitlements([READER_TAG], undefined, [], undefined, {
+      includeDraftLakes: true,
+    });
 
-    const found = await fabFileRepository.findAccessibleInIds([lakeFileId], { userId: READER }, arms);
-
-    expect(found).toEqual([]);
+    expect(lakes.map(l => l.slug)).toContain(SLUG);
   });
 
-  it('resolves the same file once the lake is published', async () => {
-    // The control: nothing about the file or the caller changes, only the lake's status - which
-    // localises the drop above to the status filter and not to the tag arms or the file's shape.
-    await DataLakeModel.findByIdAndUpdate(lakeId, { status: 'active' });
-
+  it('finds the draft-lake file through findAccessibleInIds on the attachment arms', async () => {
+    // The fix in one assertion: the image edit/generation lookup now returns the file the caller
+    // attached and can read through byIds.
     const arms = await attachmentArmsFor([READER_TAG]);
     expect(arms.dataLakeTags).toContain(DATALAKE_TAG);
 
     const found = await fabFileRepository.findAccessibleInIds([lakeFileId], { userId: READER }, arms);
 
     expect(found.map(f => f.id)).toEqual([lakeFileId]);
+  });
+
+  it('does NOT find it on the retrieval arms, which carry no arm for an unpublished lake', async () => {
+    // The control, and the reason the two scopes are separate rather than one widened scope.
+    const arms = await retrievalArmsFor([READER_TAG]);
+    expect(arms.dataLakeTags).toEqual([]);
+
+    const found = await fabFileRepository.findAccessibleInIds([lakeFileId], { userId: READER }, arms);
+
+    expect(found).toEqual([]);
   });
 
   it('returns a populated `id` on every hit', async () => {
@@ -138,6 +147,31 @@ describe('draft lake, attachment scope', () => {
     expect(found).toHaveLength(1);
     expect(typeof found[0].id).toBe('string');
     expect(found[0].id).toBe(lakeFileId);
+  });
+
+  it('withholds the draft lake from a reader without its required tag, on the attachment scope too', async () => {
+    // Guards the widening from proving too much: `includeDraftLakes` opens the STATUS gate and
+    // nothing else, so a tag-less caller must still get nothing.
+    const arms = await attachmentArmsFor([]);
+    expect(arms.dataLakeTags).toEqual([]);
+
+    const found = await fabFileRepository.findAccessibleInIds([lakeFileId], { userId: READER }, arms);
+
+    expect(found).toEqual([]);
+  });
+
+  it('resolves the same file on BOTH scopes once the lake is published', async () => {
+    // Publishing is what closes the split: the attachment widening is a superset of retrieval, so
+    // an active lake must never be the thing that separates them.
+    await DataLakeModel.findByIdAndUpdate(lakeId, { status: 'active' });
+
+    for (const arms of [await retrievalArmsFor([READER_TAG]), await attachmentArmsFor([READER_TAG])]) {
+      expect(arms.dataLakeTags).toContain(DATALAKE_TAG);
+
+      const found = await fabFileRepository.findAccessibleInIds([lakeFileId], { userId: READER }, arms);
+
+      expect(found.map(f => f.id)).toEqual([lakeFileId]);
+    }
   });
 
   it('still withholds the published lake from a reader without its required tag', async () => {

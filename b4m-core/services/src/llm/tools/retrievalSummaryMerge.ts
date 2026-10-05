@@ -110,14 +110,15 @@ function mergeInjected(
  *   to a specific lake, #3055 review) - never both, and never combined, so which one ran is not
  *   this merge's concern. Not summed: whichever ran is this turn's one measurement, so a second
  *   write would double-count the identical exclusion rather than report a new one.
+ * - notServingLakes: first-writer-wins pass-through, same seed and same reasoning as excludedLakes.
  * - answerability: existing-wins pass-through, and it is here to PRESERVE rather than to combine.
  *   Nothing in a turn writes it - the offline replay backfills it straight to Mongo - so a
  *   two-sided merge is not reachable. What IS reachable is a later runtime write on a quest that
  *   was already backfilled (a regenerate, an edit), and since this function returns an explicit
  *   object literal, a field with no case here is DROPPED rather than carried. That silent erase is
  *   the failure this rule exists to prevent.
- * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed / grantedLakeIdsUsed:
- *   union, deduped.
+ * - surfaces / dataLakeTags / injectedLakePromptIds / preauthorizedLakeIdsUsed / grantedLakeIdsUsed /
+ *   readerOptInLakeIdsUsed: union, deduped.
  *   injectedLakePromptCount is derived from the merged injectedLakePromptIds, not merged
  *   independently, so a two-sided merge can never leave the two disagreeing.
  * - injected: chunks and chars SUM, topScore is the max, and the pre/post relative-floor and
@@ -141,6 +142,10 @@ function mergeInjected(
  * nothing seeded `retrieval` first, which every caller of both doors already does. Readers should
  * still derive the count from the ids rather than assume it is present.
  */
+/** Deduped union of two optional id lists; absent only when BOTH sides are, so "unknown" never reads as "none". */
+const unionIds = (existing: string[] | undefined, incoming: string[] | undefined): string[] | undefined =>
+  existing || incoming ? [...new Set([...(existing ?? []), ...(incoming ?? [])])] : undefined;
+
 export function mergeRetrievalSummary(
   existing: RetrievalSummary | undefined,
   incoming: RetrievalSummary | undefined
@@ -157,19 +162,12 @@ export function mergeRetrievalSummary(
   const answerability = existing.answerability ?? incoming.answerability;
   const lakeScope = existing.lakeScope ?? incoming.lakeScope;
   const excludedLakes = existing.excludedLakes ?? incoming.excludedLakes;
-  const injectedLakePromptIds =
-    existing.injectedLakePromptIds || incoming.injectedLakePromptIds
-      ? [...new Set([...(existing.injectedLakePromptIds ?? []), ...(incoming.injectedLakePromptIds ?? [])])]
-      : undefined;
+  const notServingLakes = existing.notServingLakes ?? incoming.notServingLakes;
+  const injectedLakePromptIds = unionIds(existing.injectedLakePromptIds, incoming.injectedLakePromptIds);
   const injected = mergeInjected(existing.injected, incoming.injected);
-  const preauthorizedLakeIdsUsed =
-    existing.preauthorizedLakeIdsUsed || incoming.preauthorizedLakeIdsUsed
-      ? [...new Set([...(existing.preauthorizedLakeIdsUsed ?? []), ...(incoming.preauthorizedLakeIdsUsed ?? [])])]
-      : undefined;
-  const grantedLakeIdsUsed =
-    existing.grantedLakeIdsUsed || incoming.grantedLakeIdsUsed
-      ? [...new Set([...(existing.grantedLakeIdsUsed ?? []), ...(incoming.grantedLakeIdsUsed ?? [])])]
-      : undefined;
+  const preauthorizedLakeIdsUsed = unionIds(existing.preauthorizedLakeIdsUsed, incoming.preauthorizedLakeIdsUsed);
+  const grantedLakeIdsUsed = unionIds(existing.grantedLakeIdsUsed, incoming.grantedLakeIdsUsed);
+  const readerOptInLakeIdsUsed = unionIds(existing.readerOptInLakeIdsUsed, incoming.readerOptInLakeIdsUsed);
 
   // Keys are spread in only when defined: the shape is absent-or-fully-present on the Mongoose
   // side, and an explicit `undefined` would persist as a set-but-empty path.
@@ -182,6 +180,7 @@ export function mergeRetrievalSummary(
     ...(answerability !== undefined ? { answerability } : {}),
     ...(lakeScope !== undefined ? { lakeScope } : {}),
     ...(excludedLakes !== undefined ? { excludedLakes } : {}),
+    ...(notServingLakes !== undefined ? { notServingLakes } : {}),
     surfaces: [...new Set([...existing.surfaces, ...incoming.surfaces])],
     dataLakeTags: [...new Set([...existing.dataLakeTags, ...incoming.dataLakeTags])],
     // Union of the two ARMS' contributing lakes, and absent only when neither arm could attribute
@@ -200,5 +199,6 @@ export function mergeRetrievalSummary(
     ...(injected ? { injected } : {}),
     ...(preauthorizedLakeIdsUsed ? { preauthorizedLakeIdsUsed } : {}),
     ...(grantedLakeIdsUsed ? { grantedLakeIdsUsed } : {}),
+    ...(readerOptInLakeIdsUsed ? { readerOptInLakeIdsUsed } : {}),
   };
 }

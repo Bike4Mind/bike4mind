@@ -3,6 +3,7 @@ import {
   fabFileBucket,
   generatedImagesBucket,
   publishedArtifactsBucket,
+  qaArtifactsBucket,
   historyImportBucket,
   whatsNewDistributionBucket,
   uploadCompleteFunction,
@@ -27,6 +28,7 @@ import { mcpHandler } from './mcp';
 import {
   fabFileChunkQueue,
   fabFileVectorizeQueue,
+  generationCallbackQueue,
   imageEditQueue,
   imageGenerationQueue,
   videoGenerationQueue,
@@ -47,6 +49,12 @@ import {
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueue,
+  driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueue,
+  githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueue,
+  githubLakeRevokeQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -55,6 +63,7 @@ import {
   // DLQ exports used by the dlqUrls Linkable (not directly linked to avoid IAM bloat).
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
+  generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
@@ -89,7 +98,14 @@ import {
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
-import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv } from './router';
+import {
+  router,
+  routerDistributionId,
+  whatsNewDistributionId,
+  cdnUrlForLambdaEnv,
+  appUrlForLambdaEnv,
+  originVerifySecret,
+} from './router';
 import { secrets } from './secrets';
 import { migratorInvocation } from './database';
 import { websocketApi } from './websocket';
@@ -103,6 +119,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
   properties: {
     'fab-file-vectorize': fabFileVectorizeQueueDLQ.url,
     'fab-file-chunk': fabFileChunkQueueDLQ.url,
+    'generation-callback': generationCallbackQueueDLQ.url,
     'image-generation': imageGenerationDLQ.url,
     'image-edit': imageEditDLQ.url,
     'video-generation': videoGenerationDLQ.url,
@@ -135,6 +152,9 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'lake-memory': lakeMemoryQueueDLQ.url,
     'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
+    'drive-disconnect-purge': driveDisconnectPurgeQueueDLQ.url,
+    'github-lake-ingest': githubLakeIngestQueueDLQ.url,
+    'github-lake-revoke': githubLakeRevokeQueueDLQ.url,
   },
 });
 
@@ -161,6 +181,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     emailJobQueue: emailJobQueue.url,
     fabFileChunkQueue: fabFileChunkQueue.url,
     fabFileVectorizeQueue: fabFileVectorizeQueue.url,
+    generationCallbackQueue: generationCallbackQueue.url,
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
     videoGenerationQueue: videoGenerationQueue.url,
@@ -192,6 +213,9 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     lakeMemoryQueue: lakeMemoryQueue.url,
     lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
+    driveDisconnectPurgeQueue: driveDisconnectPurgeQueue.url,
+    githubLakeIngestQueue: githubLakeIngestQueue.url,
+    githubLakeRevokeQueue: githubLakeRevokeQueue.url,
   },
 });
 
@@ -225,6 +249,7 @@ export const web = new sst.aws.Nextjs(
       generatedImagesBucket,
       appFilesBucket,
       publishedArtifactsBucket,
+      qaArtifactsBucket,
       eventBus,
       slackEventBus,
       uploadCompleteFunction,
@@ -245,12 +270,22 @@ export const web = new sst.aws.Nextjs(
       // exports). Resource.dataLakeTaxonomyQueue.url resolves in both Lambdas this way.
       dataLakeTaxonomyQueue,
       driveLakeIngestQueue,
+      githubLakeIngestQueue,
+      // The App's webhook (pages/api/webhooks/github/lake.ts) reads Resource.githubLakeRevokeQueue.url directly
+      // to enqueue one purge message per affected connection, and the GitHub DELETE route queues its
+      // disconnect purge on it (githubLakeConnection.ts) - the same reason
+      // githubLakeIngestQueue above is linked directly rather than only through sourceQueueUrls.
+      githubLakeRevokeQueue,
       // Directly linked for the plainer reason: `POST /api/data-lakes/:id/research/runs` reads
       // Resource.dataLakeResearchQueue.url to enqueue the run. Via sourceQueueUrls alone the key is
       // only reachable as Resource.sourceQueueUrls.dataLakeResearchQueue, and sst's Resource proxy
       // THROWS on an unlinked key rather than returning undefined - so the route's optional-chained
       // guard would never run and every start would 500.
       dataLakeResearchQueue,
+      // Directly linked like dataLakeTaxonomyQueue: dispatchQuestCallback reads
+      // Resource.generationCallbackQueue.url, which also has to resolve in the generation queue
+      // Lambdas and the timeout sweep, where only direct links exist.
+      generationCallbackQueue,
       ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
       ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
     ],
@@ -386,6 +421,14 @@ export const web = new sst.aws.Nextjs(
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
+      // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the
+      // matching header). Not under `sst dev`: Next runs locally there and nothing comes via CloudFront.
+      // DISABLE_ORIGIN_VERIFY='true' ships the router stamp without the gate: use it on a stage's first
+      // deploy (the Lambda env can update before the CloudFront Function reaches the edges, 403ing
+      // everything meanwhile), then redeploy without it. Also the kill switch if the gate misfires.
+      ...(!$dev && process.env.DISABLE_ORIGIN_VERIFY !== 'true'
+        ? { ORIGIN_VERIFY_SECRET: originVerifySecret.result }
+        : {}),
       // Kill-switch for in-handler response gzip (apps/client/server/utils/sendMaybeGzip.ts).
       // Declared here so the lever is greppable from infra and survives a redeploy; set to
       // 'true' to fall back to plain res.json on every route using the helper.
@@ -398,10 +441,12 @@ export const web = new sst.aws.Nextjs(
       // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
       API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
       // Grant-enforcement lever for the federated AI-token exchange (apps/client/pages/api/oauth/
-      // ai-token.ts). Empty (default) leaves the exchange in grace mode (logs a would-reject when a
-      // (user,client) grant is missing); 'true' enforces (403s it). Declared here so the lever is
-      // greppable from infra and can be flipped per stage, mirroring API_KEY_SCOPE_STAGING.
-      OAUTH_AI_TOKEN_ENFORCE_GRANT: process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || '',
+      // ai-token.ts). Defaults to 'true' on production and dev stages; empty (grace mode) elsewhere.
+      // The env var is checked first so an explicit value (e.g. 'false') acts as a kill switch even
+      // on production -- the handler enforces only on the exact string 'true'. Mirroring
+      // API_KEY_SCOPE_STAGING: greppable from infra and flippable per stage without a code change.
+      OAUTH_AI_TOKEN_ENFORCE_GRANT:
+        process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || (PRODUCTION_STAGES.includes($app.stage) ? 'true' : ''),
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the
@@ -482,12 +527,14 @@ export const web = new sst.aws.Nextjs(
       // Reserved concurrency on `dev` only. Reserved is also a hard ceiling; prod peaks ~319
       // concurrent with 0 throttles today, so capping at 150 would throttle into 429s. A sized
       // prod reservation needs an account-limit increase — deferred to a follow-up. (#9148)
-      // `concurrency` is not exposed on the Nextjs `server` prop (a narrow FunctionArgs subset),
-      // so it must be applied via `transform.server`, which takes full FunctionArgs.
+      // `concurrency`/`logging` are not exposed on the Nextjs `server` prop (a narrow FunctionArgs subset),
+      // so they must be applied via `transform.server`, which takes full FunctionArgs.
       server: args => {
         if ($app.stage === 'dev') {
           args.concurrency = { reserved: 150 };
         }
+        // SST defaults the server log group to 1 month; bound it explicitly to limit retained request logs.
+        args.logging = { retention: '1 week' };
       },
     },
     // Order the frontend deploy strictly AFTER the database migration Invocation (CI only). The

@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -52,7 +53,7 @@ export interface ImportModalsResponse {
  *   modalKeys: ["production/2025-12-29.json", "production/2025-12-28.json"]
  * }
  */
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: 10,

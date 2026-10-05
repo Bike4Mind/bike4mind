@@ -69,10 +69,10 @@ export interface PendingMessageFile {
  * cited text rather than the top of the document (#3038).
  *
  * `passage` is the text as SERVED - trimmed, clipped, defanged - not the stored chunk, so the
- * reader is shown exactly what grounded the claim. It rides the store rather than the URL because
- * a passage does not belong in a query string and there is no endpoint that resolves `chunkId`
- * back to its text; a shared or reloaded link therefore lands on the whole document, as it does
- * today. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
+ * reader is shown exactly what grounded the claim. Chip clicks set it in the store, since there is
+ * no endpoint that resolves `chunkId` back to its text. Finding deep links
+ * (`/data-lakes?article=&passage=`) carry the excerpt in the URL instead, so a reload of one of
+ * those re-highlights. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
  *
  * The shape itself is declared on the React-free primitive (components/Knowledge/citedPassage) and
  * re-exported here for the existing importers: the store depends on the primitive, not the reverse.
@@ -268,13 +268,32 @@ export const setSessionLayout = (
     useSessionLayout.setState({
       ...newState,
       artifactData: currentState.artifactData,
-      selectedArtifactId: currentState.selectedArtifactId,
+      // A caller that names its own selection wins: falling back unconditionally would leave the
+      // viewer on the old artifact's tab while a newly set previewFile sits unselected.
+      selectedArtifactId: newState.selectedArtifactId ?? currentState.selectedArtifactId,
     });
   } else {
     // If artifactData is provided or we're hiding the panel, update normally
     useSessionLayout.setState(newState);
   }
 };
+
+/**
+ * Opens a file in the chat's own KnowledgeViewer, beside the conversation, through the transient
+ * `previewFile` slot - viewing never attaches the file to the notebook. For hosts whose chat embeds
+ * the viewer (SessionContainer renders it once the layout is `vertical`); docked-chat hosts render
+ * no viewer and must not use this.
+ *
+ * `citedPassage` is written only when passed, `null` included: a citation chip passes its anchor
+ * (or `null` to clear a stale one), while a plain View leaves the slot alone.
+ */
+export const openFileInChatViewer = (file: IFabFileDocument, citedPassage?: CitedPassage | null) =>
+  setSessionLayout({
+    layout: 'vertical',
+    previewFile: file,
+    selectedArtifactId: file.id,
+    ...(citedPassage !== undefined && { citedPassage }),
+  });
 
 /**
  * Returns the version selected for a specific artifact, or undefined if none was chosen

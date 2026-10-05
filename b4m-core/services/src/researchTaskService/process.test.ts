@@ -7,6 +7,7 @@ import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 import * as fabFilesService from '../fabFileService';
 import { mockResearchTask } from '../__tests__/utils/testUtils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
+import { getLinksFromHtml } from '../lib/cheerio';
 
 vi.mock('../lib/turndown', () => ({
   htmlToMarkdown: vi.fn().mockImplementation(html => html),
@@ -207,6 +208,10 @@ describe('researchTaskService - process', () => {
     await process(mockUser, { id: taskId }, adapters);
 
     // Assert
+    expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
+      id: taskId,
+      status: ResearchTaskStatus.PROCESSING,
+    });
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
     // Check that scraper.fetch was called with the first URL from the urls array
     expect(adapters.scraper.fetch).toHaveBeenCalledWith('https://example.com');
@@ -238,12 +243,70 @@ describe('researchTaskService - process', () => {
     });
 
     // Check that discoveredLinks is set when canDiscoverLinks is true
-    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockTask,
-        discoveredLinks: [], // Empty array since our mock returns no links
-      })
+    expect(mockTask).toHaveProperty('discoveredLinks', []);
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: mockTask.id,
+      status: ResearchTaskStatus.COMPLETED,
+      statusCompletedAt: expect.any(Date),
+    });
+  });
+
+  it('persists discovered links before process() re-reads the task', async () => {
+    const taskId = 'test-task-id';
+    const mockTask: IResearchTask = mockResearchTask({
+      id: taskId,
+      canDiscoverLinks: true,
+      urls: ['https://example.com'],
+    });
+
+    (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+    (mockResearchTaskRepo.findById as Mock).mockResolvedValue({ ...mockTask, discoveredLinks: [] });
+    (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '<html></html>', metadata: {} });
+    (getLinksFromHtml as Mock).mockReturnValueOnce(['https://example.com/a', 'https://example.com/b']);
+
+    await process(mockUser, { id: taskId }, adapters);
+
+    const expectedLinks = [
+      { url: 'https://example.com/a', status: 'pending', sourceUrl: 'https://example.com' },
+      { url: 'https://example.com/b', status: 'pending', sourceUrl: 'https://example.com' },
+    ];
+    const updateMock = mockResearchTaskRepo.update as Mock;
+    const linksWriteIndex = updateMock.mock.calls.findIndex(
+      ([arg]) => Object.keys(arg).sort().join() === 'discoveredLinks,id'
     );
+    expect(linksWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(updateMock.mock.calls[linksWriteIndex][0]).toEqual({ id: taskId, discoveredLinks: expectedLinks });
+    expect(updateMock.mock.invocationCallOrder[linksWriteIndex]).toBeLessThan(
+      (mockResearchTaskRepo.findById as Mock).mock.invocationCallOrder[0]
+    );
+  });
+
+  it('does not re-queue previously discovered links that are no longer on the page', async () => {
+    const taskId = 'test-task-id';
+    const mockTask: IResearchTask = mockResearchTask({
+      id: taskId,
+      canDiscoverLinks: true,
+      urls: ['https://example.com'],
+      discoveredLinks: [
+        { url: 'https://example.com/old', status: 'completed', sourceUrl: 'https://example.com' },
+        { url: 'https://example.com/a', status: 'completed', sourceUrl: 'https://example.com' },
+      ],
+    });
+
+    (mockResearchTaskRepo.findByIdAndUserId as Mock).mockResolvedValue(mockTask);
+    (mockResearchTaskRepo.findById as Mock).mockResolvedValue({ ...mockTask });
+    (adapters.scraper.fetch as Mock).mockResolvedValue({ rawHtml: '<html></html>', metadata: {} });
+    (getLinksFromHtml as Mock).mockReturnValueOnce(['https://example.com/a']);
+
+    await process(mockUser, { id: taskId }, adapters);
+
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: taskId,
+      discoveredLinks: [
+        { url: 'https://example.com/old', status: 'completed', sourceUrl: 'https://example.com' },
+        { url: 'https://example.com/a', status: 'pending', sourceUrl: 'https://example.com' },
+      ],
+    });
   });
 
   it('should throw NotFoundError when task is not found', async () => {
@@ -283,14 +346,12 @@ describe('researchTaskService - process', () => {
     await expect(process(mockUser, { id: taskId }, adapters)).rejects.toThrow('Failed to fetch');
 
     // Verify task was marked as FAILED before throwing
-    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockTask,
-        status: ResearchTaskStatus.FAILED,
-        statusFailedMessage: 'Failed to fetch',
-        statusFailedAt: expect.any(Date),
-      })
-    );
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: mockTask.id,
+      status: ResearchTaskStatus.FAILED,
+      statusFailedMessage: 'Failed to fetch',
+      statusFailedAt: expect.any(Date),
+    });
 
     // Verify client was notified of failure
     expect(adapters.jobs.researchTasks.sendToClient).toHaveBeenCalledWith(
@@ -333,12 +394,12 @@ describe('researchTaskService - process', () => {
 
     // Assert
     // Check that discoveredLinks is an empty array when canDiscoverLinks is false
-    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockTask,
-        discoveredLinks: [],
-      })
-    );
+    expect(mockTask).toHaveProperty('discoveredLinks', []);
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: mockTask.id,
+      status: ResearchTaskStatus.COMPLETED,
+      statusCompletedAt: expect.any(Date),
+    });
     expect(mockLLM.complete).not.toHaveBeenCalled();
     expect(fabFilesService.createFabFile).toHaveBeenCalledWith(
       mockTask.userId,
@@ -385,7 +446,7 @@ describe('researchTaskService - process', () => {
 
     // Verify task was marked as FAILED before throwing
     const failedTask = {
-      ...mockTask,
+      id: mockTask.id,
       status: ResearchTaskStatus.FAILED,
       statusFailedMessage: 'Unsupported research task type: salesforce',
       statusFailedAt: expect.any(Date),
@@ -438,12 +499,12 @@ describe('researchTaskService - process', () => {
     await process(mockUser, { id: taskId }, adapters);
 
     // Assert - Verify task was processed successfully
-    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockTask,
-        discoveredLinks: [],
-      })
-    );
+    expect(mockTask).toHaveProperty('discoveredLinks', []);
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: mockTask.id,
+      status: ResearchTaskStatus.COMPLETED,
+      statusCompletedAt: expect.any(Date),
+    });
   });
 
   // Link filtering and downloading test removed - file downloading is no longer handled in this function
@@ -546,12 +607,12 @@ describe('researchTaskService - process', () => {
     expect(mockResearchDataRepo.create).toHaveBeenCalledTimes(3);
 
     // Verify final status (completion is no longer handled in this function)
-    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockTask,
-        discoveredLinks: [],
-      })
-    );
+    expect(mockTask).toHaveProperty('discoveredLinks', []);
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({
+      id: mockTask.id,
+      status: ResearchTaskStatus.COMPLETED,
+      statusCompletedAt: expect.any(Date),
+    });
   });
 
   it('should set organizationId on created fab files when research task has organizationId', async () => {

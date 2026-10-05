@@ -3791,3 +3791,193 @@ describe('search_knowledge_base flags passages that contradict each other', () =
     expect(conflict).toBeLessThan(out.indexOf(RETRIEVED_CONTENT_BEGIN));
   });
 });
+
+describe('search_knowledge_base chip source origin', () => {
+  const lakeA = { id: 'lake-a', name: 'Lake A', datalakeTag: 'datalake:a' };
+  const lakeB = { id: 'lake-b', name: 'Lake B', datalakeTag: 'datalake:b' };
+  const hit = (fileId: string, fileTags: string[], fileUserId: string, score: number) => ({
+    chunkId: `c-${fileId}`,
+    fileId,
+    fileName: `${fileId}.md`,
+    fileTags,
+    fileUserId,
+    chunkText: `body of ${fileId}`,
+    score,
+  });
+
+  function semanticCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+    return makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: [], total: 0 }), getAccessibleFiles: vi.fn() },
+        fabfilechunks: { findVectorsByFabFileIds: vi.fn() },
+        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(ADA) },
+        apiKeys: {},
+        usageEvents: { record: vi.fn() },
+      } as never,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:a', 'datalake:b'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [lakeA, lakeB],
+    });
+  });
+
+  it('semantic arm: labels each chip with its own lake, and an untagged owned file as library', async () => {
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [
+        hit('fa', ['datalake:a'], 'someone-else', 0.9),
+        hit('fb', ['datalake:b'], 'someone-else', 0.85),
+        hit('fmine', [], 'u1', 0.8),
+      ],
+    });
+
+    const ctx = semanticCtx();
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fa: { kind: 'lake', lakes: [{ id: 'lake-a', name: 'Lake A' }] },
+      fb: { kind: 'lake', lakes: [{ id: 'lake-b', name: 'Lake B' }] },
+      fmine: { kind: 'library', owned: true },
+    });
+  });
+
+  it('semantic arm: a dynamic lake prefix attributes only the creator-owned file', async () => {
+    const dynamicLake = {
+      id: 'lake-dyn',
+      name: 'Dynamic Lake',
+      datalakeTag: 'datalake:dyn',
+      membership: {
+        kind: 'owned' as const,
+        datalakeTag: 'datalake:dyn',
+        creatorUserId: 'creator',
+        fileTagPrefix: 'acme:',
+      },
+    };
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:dyn'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [dynamicLake],
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fcreator', ['acme:x'], 'creator', 0.9), hit('fother', ['acme:x'], 'someone-else', 0.85)],
+    });
+
+    const ctx = semanticCtx();
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fcreator: { kind: 'lake', lakes: [{ id: 'lake-dyn', name: 'Dynamic Lake' }] },
+      fother: { kind: 'library', owned: false },
+    });
+  });
+
+  it('semantic agent-scoped (kbScope) arm: chips carry no sourceOrigin key at all', async () => {
+    fileScopedSemanticSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fa', ['datalake:a'], 'someone-else', 0.9)],
+    });
+    const ctx = semanticCtx({ kbScope: { fileIds: ['fa'] } as never });
+
+    await run(ctx);
+
+    expect(fileScopedSemanticSearchMock).toHaveBeenCalled();
+    const citables = emittedCitables(ctx);
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
+  });
+
+  it('keyword arm (unscoped): chips carry an origin, attributed per file', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [
+              { id: 'fa', fileName: 'A.pdf', tags: [{ name: 'datalake:a' }], userId: 'someone-else' },
+              { id: 'fother', fileName: 'Shared.pdf', tags: [], userId: 'someone-else' },
+              { id: 'fmine', fileName: 'Mine.pdf', tags: [], userId: 'u1' },
+            ],
+            total: 3,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const originById = Object.fromEntries(emittedCitables(ctx).map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fa: { kind: 'lake', lakes: [{ id: 'lake-a', name: 'Lake A' }] },
+      fother: { kind: 'library', owned: false },
+      fmine: { kind: 'library', owned: true },
+    });
+  });
+
+  // A degraded lake read returns a short lake list without throwing, so a lake file would otherwise
+  // read as library; leaving the origin off keeps the chip's "Data Lake" fallback instead.
+  it('semantic and keyword arms: leave the origin off when the lake view is incomplete', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: ['datalake:a'],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [lakeA],
+      lakeViewComplete: false,
+    });
+    semanticDataLakeSearchMock.mockResolvedValue({
+      ...emptySemanticResult(),
+      results: [hit('fb', ['datalake:b'], 'someone-else', 0.9)],
+    });
+    const semantic = semanticCtx();
+    await run(semantic);
+    expect(emittedCitables(semantic)).toHaveLength(1);
+    expect(emittedCitables(semantic)[0].metadata).not.toHaveProperty('sourceOrigin');
+
+    const keyword = makeContext({
+      retrievalFilter: undefined,
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'fb', fileName: 'B.pdf', tags: [{ name: 'datalake:b' }], userId: 'someone-else' }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+    await run(keyword);
+    expect(emittedCitables(keyword)).toHaveLength(1);
+    expect(emittedCitables(keyword)[0].metadata).not.toHaveProperty('sourceOrigin');
+  });
+
+  it('keyword arm (agent-scoped): chips carry no sourceOrigin key at all', async () => {
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      kbScope: { fileIds: ['fa'] },
+      db: {
+        fabfiles: {
+          search: vi.fn().mockResolvedValue({
+            data: [{ id: 'fa', fileName: 'A.pdf', tags: [{ name: 'datalake:a' }], userId: 'u1' }],
+            total: 1,
+          }),
+        },
+      } as never,
+    });
+
+    await run(ctx);
+
+    const citables = emittedCitables(ctx);
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
+    expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
+  });
+});

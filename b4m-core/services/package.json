@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "14.0.0",
+  "version": "14.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -28,6 +28,16 @@
       "require": {
         "types": "./dist/imageCost/index.d.cts",
         "default": "./dist/imageCost/index.cjs"
+      }
+    },
+    "./lakeGateWideningRule": {
+      "import": {
+        "types": "./dist/dataLakeService/lakeGateWideningRule.d.mts",
+        "default": "./dist/dataLakeService/lakeGateWideningRule.mjs"
+      },
+      "require": {
+        "types": "./dist/dataLakeService/lakeGateWideningRule.d.cts",
+        "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
       }
     },
     "./apiKeyService": {
@@ -269,7 +279,7 @@
     "@mendable/firecrawl-js": "^1.29.3",
     "@opensearch-project/opensearch": "2.11.0",
     "async-mutex": "^0.5.0",
-    "axios": "1.18.0",
+    "axios": "1.20.0",
     "bcryptjs": "^3.0.3",
     "cheerio": "1.2.0",
     "chess.js": "^1.4.0",
@@ -301,13 +311,13 @@
     "@types/mime-types": "^3.0.1",
     "@types/turndown": "^5.0.6",
     "@types/yauzl": "^3.4.0",
-    "@vitest/coverage-v8": "^4.1.10",
-    "@vitest/ui": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/ui": "^4.1.11",
     "mailparser": "^3.9.26",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

@@ -8,7 +8,14 @@ vi.mock('../../../../apiKeyService', () => ({
 }));
 
 import { getSerperKey, getSearxngUrl, getWebSearchProviderSetting } from '../../../../apiKeyService';
-import { createSearxngProvider, createSerpApiProvider, resolveWebSearchProvider, serpApiSearch } from './providers';
+import {
+  WEB_SEARCH_WORST_CASE_MS,
+  createSearxngProvider,
+  createSerpApiProvider,
+  resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  serpApiSearch,
+} from './providers';
 
 const mockGetSerperKey = vi.mocked(getSerperKey);
 const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
@@ -303,6 +310,52 @@ describe('createSerpApiProvider', () => {
   });
 });
 
+describe('SerpAPI geo-targeting', () => {
+  const requestUrl = (call = 0) => new URL(String(fetchMock.mock.calls[call][0]));
+
+  beforeEach(() => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+  });
+
+  it('targets the US on an ordinary organic and image search', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [], images_results: [] }));
+    const provider = createSerpApiProvider(adapters);
+
+    await provider.search('q', 3);
+    await provider.searchImages!('q');
+
+    for (const call of [0, 1]) {
+      expect(requestUrl(call).searchParams.get('location')).toBe('United States');
+      expect(requestUrl(call).searchParams.get('gl')).toBe('us');
+    }
+  });
+
+  it('sends a query that names its own place unchanged and untargeted', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [], images_results: [] }));
+    const provider = createSerpApiProvider(adapters);
+    const query = 'best coffee shops near Shibuya Crossing Tokyo';
+
+    await provider.search(query, 3, { locationInQuery: true });
+    await provider.searchImages!(query, undefined, { locationInQuery: true });
+
+    for (const call of [0, 1]) {
+      const params = requestUrl(call).searchParams;
+      expect(params.get('q')).toBe(query);
+      expect(params.has('location')).toBe(false);
+      expect(params.has('gl')).toBe(false);
+    }
+  });
+
+  it('keeps a recency filter alongside an untargeted place query', async () => {
+    fetchMock.mockResolvedValue(jsonRes({ organic_results: [] }));
+
+    await serpApiSearch(adapters, 'q', 3, { locationInQuery: true, recencyDays: 7 });
+
+    expect(requestUrl().searchParams.get('tbs')).toBe('qdr:w');
+    expect(requestUrl().searchParams.has('gl')).toBe(false);
+  });
+});
+
 describe('resolveWebSearchProvider precedence', () => {
   it('forces SearXNG when the admin choice is searxng and a URL is set', async () => {
     mockGetProvider.mockResolvedValue('searxng');
@@ -332,14 +385,21 @@ describe('resolveWebSearchProvider precedence', () => {
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
 
-  it('auto: prefers SearXNG when a URL is configured', async () => {
+  it('auto: keeps SerpAPI as the lead when a SearXNG URL is configured too', async () => {
     mockGetProvider.mockResolvedValue(null); // unset -> auto
     mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
     mockGetSerperKey.mockResolvedValue('serp-key');
+    expect((await resolveWebSearchProvider(adapters))?.name).toBe('serpapi');
+  });
+
+  it('auto: falls back to SearXNG when only a URL is configured', async () => {
+    mockGetProvider.mockResolvedValue('auto');
+    mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue(null);
     expect((await resolveWebSearchProvider(adapters))?.name).toBe('searxng');
   });
 
-  it('auto: falls back to SerpAPI when only a Serper key is set', async () => {
+  it('auto: uses SerpAPI when only a Serper key is set', async () => {
     mockGetProvider.mockResolvedValue('auto');
     mockGetSearxngUrl.mockResolvedValue(null);
     mockGetSerperKey.mockResolvedValue('serp-key');
@@ -496,12 +556,12 @@ describe('serpApiSearch retry behavior', () => {
     fetchMock.mockImplementation(neverSettlingFetch());
 
     const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow(
-      'Web search timed out: SerpAPI did not respond within 20s (tried 2 times)'
+      'Web search timed out: SerpAPI did not respond within 10s (tried 2 times)'
     );
 
-    await vi.advanceTimersByTimeAsync(20_000); // first attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // first attempt aborts
     await vi.advanceTimersByTimeAsync(500); // fixed retry delay
-    await vi.advanceTimersByTimeAsync(20_000); // second attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // second attempt aborts
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -520,7 +580,7 @@ describe('serpApiSearch retry behavior', () => {
       organic_results: [{ title: 'T', link: 'https://x.com', snippet: 's' }],
     });
 
-    await vi.advanceTimersByTimeAsync(20_000); // first attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // first attempt aborts
     await vi.advanceTimersByTimeAsync(500); // fixed retry delay, then second attempt resolves
 
     await pending;
@@ -570,7 +630,7 @@ describe('serpApiSearch retry behavior', () => {
 
   // Regression: the final error used to read ONLY the last attempt's outcome, so a first
   // attempt that got a concrete HTTP 503 followed by a second attempt that timed out produced
-  // "SerpAPI did not respond within 20s" - false, since the first attempt proves SerpAPI DID
+  // "SerpAPI did not respond within 10s" - false, since the first attempt proves SerpAPI DID
   // respond. The message now distinguishes "the last attempt timed out" from "nothing ever
   // responded" and names the earlier attempt's actual failure.
   it('reports the earlier response, not a blanket "did not respond", when only the last attempt times out', async () => {
@@ -583,11 +643,11 @@ describe('serpApiSearch retry behavior', () => {
     });
 
     const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow(
-      "Web search timed out: SerpAPI's last attempt did not respond within 20s (earlier attempt: HTTP 503)"
+      "Web search timed out: SerpAPI's last attempt did not respond within 10s (earlier attempt: HTTP 503)"
     );
 
     await vi.advanceTimersByTimeAsync(500); // fixed retry delay before the second attempt
-    await vi.advanceTimersByTimeAsync(20_000); // second attempt aborts
+    await vi.advanceTimersByTimeAsync(10_000); // second attempt aborts
 
     await pending;
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -599,5 +659,139 @@ describe('serpApiSearch retry behavior', () => {
 
     await expect(serpApiSearch(adapters, 'q')).rejects.toThrow('SERP API error');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// An inline chat turn runs in the 60s server Lambda and has already spent time on retrieval and
+// the first model call before the tool starts. A search that can only fail near 60s is killed with
+// the Lambda instead of erroring back to the model (#3356).
+describe('web_search time budget', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('leaves at least half the server Lambda budget for the rest of the turn', () => {
+    expect(WEB_SEARCH_WORST_CASE_MS).toBeLessThanOrEqual(30_500);
+  });
+
+  it('aborts a hung image search at 10s and resolves to no images', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSerpApiProvider(adapters).searchImages!('q');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it('aborts a hung place search at 10s and resolves to no places', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSerpApiProvider(adapters).searchPlaces!('q');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it('aborts a hung SearXNG search at 10s and resolves to no results', async () => {
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = createSearxngProvider('http://searxng:8080').search('q', 3);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual([]);
+  });
+
+  it('throws an explicit timeout from a hung SearXNG search when asked to, so failover can fire', async () => {
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(
+      createSearxngProvider('http://searxng:8080').search('q', 3, { throwOnError: true })
+    ).rejects.toThrow('Web search timed out: SearXNG did not respond within 10s');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await pending;
+  });
+
+  it('throws on a SearXNG HTTP error only when asked to', async () => {
+    fetchMock.mockResolvedValue(jsonRes({}, false, 502));
+    const provider = createSearxngProvider('http://searxng:8080');
+
+    await expect(provider.search('q', 3)).resolves.toEqual([]);
+    await expect(provider.search('q', 3, { throwOnError: true })).rejects.toThrow('SearXNG error: HTTP 502');
+  });
+
+  // The failover path (SearXNG timeout, then SerpAPI) must fit the same budget as SerpAPI alone.
+  it('bounds the SerpAPI fallback to a single attempt with no retry delay', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(serpApiSearch(adapters, 'q', 3, { maxAttempts: 1 })).rejects.toThrow('tried 1 times');
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await pending;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails a hung organic SerpAPI search by 20.5s, still inside the Lambda', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockImplementation(neverSettlingFetch());
+
+    const pending = expect(serpApiSearch(adapters, 'q')).rejects.toThrow('Web search timed out');
+    await vi.advanceTimersByTimeAsync(20_500);
+
+    await pending;
+  });
+});
+
+describe('resolveWebSearchProviders lead and backup', () => {
+  it.each([
+    ['auto' as const, ['serpapi', 'searxng']],
+    ['serpapi' as const, ['serpapi', 'searxng']],
+    ['searxng' as const, ['searxng', 'serpapi']],
+  ])('under %s with both configured, leads with the choice and backs it up with the other', async (choice, order) => {
+    mockGetProvider.mockResolvedValue(choice);
+    mockGetSearxngUrl.mockResolvedValue('http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup?.name]).toEqual(order);
+  });
+
+  it.each([
+    ['auto: SearXNG only', null, ['searxng', null]],
+    ['auto: Serper key only', 'serp-key', ['serpapi', null]],
+  ])('%s leads with the configured provider and has no backup', async (_label, serperKey, order) => {
+    mockGetProvider.mockResolvedValue('auto');
+    mockGetSearxngUrl.mockResolvedValue(serperKey ? null : 'http://searxng:8080');
+    mockGetSerperKey.mockResolvedValue(serperKey);
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup?.name ?? null]).toEqual(order);
+  });
+
+  it('has no backup when only the lead is configured', async () => {
+    mockGetProvider.mockResolvedValue('serpapi');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    const [lead, backup] = await resolveWebSearchProviders(adapters);
+
+    expect([lead?.name, backup]).toEqual(['serpapi', null]);
+  });
+
+  it('does not substitute the other provider when the explicit choice is unconfigured', async () => {
+    mockGetProvider.mockResolvedValue('searxng');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetSerperKey.mockResolvedValue('serp-key');
+
+    await expect(resolveWebSearchProviders(adapters)).resolves.toEqual([null, null]);
   });
 });

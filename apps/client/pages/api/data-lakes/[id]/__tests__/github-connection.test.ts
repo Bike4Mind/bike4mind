@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { InternalServerError } from '@server/utils/errors';
+import { ConflictError, InternalServerError } from '@server/utils/errors';
 
 // Unit test of the per-lake GitHub connection status/install/disconnect route. Repo + auth gate +
 // the githubLakeConnection lib (which has its own dedicated unit tests) are mocked.
@@ -7,9 +7,10 @@ const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
+  countByGitHubConnectionIdInDataLake: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
-  buildGitHubLakeConnectUrls: vi.fn(),
-  releaseGitHubLakeConnection: vi.fn(),
+  buildGitHubLakeAuthorizeUrl: vi.fn(),
+  requestGitHubLakeDisconnect: vi.fn(),
   requireGitHubLakeAppConfig: vi.fn(),
   resolveConnectableLake: vi.fn(),
   toGitHubLakeConnectionResponse: vi.fn(),
@@ -36,8 +37,8 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
 vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
-  buildGitHubLakeConnectUrls: h.buildGitHubLakeConnectUrls,
-  releaseGitHubLakeConnection: h.releaseGitHubLakeConnection,
+  buildGitHubLakeAuthorizeUrl: h.buildGitHubLakeAuthorizeUrl,
+  requestGitHubLakeDisconnect: h.requestGitHubLakeDisconnect,
   requireGitHubLakeAppConfig: h.requireGitHubLakeAppConfig,
   resolveConnectableLake: h.resolveConnectableLake,
   toGitHubLakeConnectionResponse: h.toGitHubLakeConnectionResponse,
@@ -47,6 +48,10 @@ vi.mock('@bike4mind/database', async importOriginal => {
   return {
     ...actual,
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
+    fabFileRepository: {
+      ...actual.fabFileRepository,
+      countByGitHubConnectionIdInDataLake: h.countByGitHubConnectionIdInDataLake,
+    },
     orgGitHubLakeConnectionRepository: {
       ...actual.orgGitHubLakeConnectionRepository,
       findByDataLakeIdAny: h.connFindByDataLakeIdAny,
@@ -62,8 +67,9 @@ const flagGateCallsAtLoad = h.requireFeatureEnabled.mock.calls.map(call => call[
 
 const makeRes = () => {
   const json = vi.fn();
-  const status = vi.fn(() => ({ json }));
-  return { res: { json, status } as never, json, status };
+  const send = vi.fn();
+  const status = vi.fn(() => ({ json, send }));
+  return { res: { json, status } as never, json, send, status };
 };
 const makeReq = (method: string, extra: Record<string, unknown> = {}) =>
   ({ method, query: { id: 'lake1' }, user: { id: 'u1', isAdmin: false }, ...extra }) as never;
@@ -99,22 +105,24 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       await expect(run(makeReq('GET'), res)).rejects.toThrow(/not found/i);
     });
 
-    it('returns a response with exactly the documented connection fields', async () => {
+    it("counts the connection's files under the lake's tag and hands the count to the response", async () => {
+      h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA', datalakeTag: 'datalake:one' });
       h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
-      h.toGitHubLakeConnectionResponse.mockReturnValue({
-        id: 'conn1',
-        accountLogin: 'acme',
-        repositoryId: 100,
-        repositoryFullName: 'acme/one',
-        connectedBy: 'u1',
-        connectedAt: new Date('2024-01-01'),
-      });
+      h.countByGitHubConnectionIdInDataLake.mockResolvedValue(7);
+      h.toGitHubLakeConnectionResponse.mockReturnValue({ id: 'conn1', fileCount: 7 });
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      const { connection } = json.mock.calls[0][0];
-      expect(Object.keys(connection).sort()).toEqual(
-        ['accountLogin', 'connectedAt', 'connectedBy', 'id', 'repositoryFullName', 'repositoryId'].sort()
-      );
+      expect(h.countByGitHubConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:one');
+      expect(h.toGitHubLakeConnectionResponse).toHaveBeenCalledWith({ id: 'conn1', organizationId: 'orgA' }, 7);
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 7 } });
+    });
+
+    it('resolves null without counting when the org lake has no connection', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue(null);
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(h.countByGitHubConnectionIdInDataLake).not.toHaveBeenCalled();
     });
 
     it('404s a connection whose org does not match the lake (global finder, org-scoped defence)', async () => {
@@ -128,10 +136,9 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     beforeEach(() => {
       h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app', clientId: 'client-1' });
       h.resolveConnectableLake.mockResolvedValue({ lakeId: 'lake1', organizationId: 'orgA' });
-      h.buildGitHubLakeConnectUrls.mockReturnValue({
-        installUrl: 'https://github.com/apps/test-app/installations/new?state=abc',
-        authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=client-1&state=abc',
-      });
+      h.buildGitHubLakeAuthorizeUrl.mockReturnValue(
+        'https://github.com/login/oauth/authorize?client_id=client-1&state=abc'
+      );
     });
 
     it('asserts the write scope before doing anything else', async () => {
@@ -139,7 +146,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       const req = makeReq('POST', { apiKeyInfo: { scopes: [] } });
       await expect(run(req, res)).rejects.toThrow(/read-only for data lakes/i);
       expect(h.resolveConnectableLake).not.toHaveBeenCalled();
-      expect(h.buildGitHubLakeConnectUrls).not.toHaveBeenCalled();
+      expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
 
     it('500s when the GitHub App is not configured on this deployment', async () => {
@@ -149,13 +156,20 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       expect(h.resolveConnectableLake).not.toHaveBeenCalled();
     });
 
-    it('returns both installUrl and authorizeUrl', async () => {
+    it('returns the authorizeUrl', async () => {
       const { res, json } = makeRes();
       await run(makeReq('POST'), res);
       expect(json).toHaveBeenCalledWith({
-        installUrl: 'https://github.com/apps/test-app/installations/new?state=abc',
         authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=client-1&state=abc',
       });
+      expect(h.buildGitHubLakeAuthorizeUrl).toHaveBeenCalledWith(
+        expect.anything(),
+        { slug: 'test-app', clientId: 'client-1' },
+        {
+          userId: 'u1',
+          dataLakeId: 'lake1',
+        }
+      );
     });
 
     it('propagates a resolveConnectableLake error (e.g. a conflicting existing connection)', async () => {
@@ -164,28 +178,49 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       );
       const { res } = makeRes();
       await expect(run(makeReq('POST'), res)).rejects.toThrow(/already connected/i);
-      expect(h.buildGitHubLakeConnectUrls).not.toHaveBeenCalled();
+      expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
     });
   });
 
   describe('DELETE', () => {
-    it('returns installationRetained: false when there is nothing to release', async () => {
+    it('204s with nothing sent when there is no connection', async () => {
       h.connFindByDataLakeIdAny.mockResolvedValue(null);
-      const { res, json } = makeRes();
+      const { res, status, send, json } = makeRes();
       await run(makeReq('DELETE'), res);
-      expect(json).toHaveBeenCalledWith({ installationRetained: false });
-      expect(h.releaseGitHubLakeConnection).not.toHaveBeenCalled();
+      expect(status).toHaveBeenCalledWith(204);
+      expect(send).toHaveBeenCalled();
+      expect(json).not.toHaveBeenCalled();
+      expect(h.requestGitHubLakeDisconnect).not.toHaveBeenCalled();
     });
 
-    it('delegates to releaseGitHubLakeConnection and returns its result', async () => {
+    it('delegates to requestGitHubLakeDisconnect and answers 202 with its queued result', async () => {
       const conn = { id: 'conn1', organizationId: 'orgA' };
       h.connFindByDataLakeIdAny.mockResolvedValue(conn);
-      h.getGitHubLakeAppConfig.mockReturnValue({ slug: 'test-app' });
-      h.releaseGitHubLakeConnection.mockResolvedValue({ installationRetained: true });
-      const { res, json } = makeRes();
+      h.requestGitHubLakeDisconnect.mockResolvedValue({ queued: true });
+      const { res, status, json } = makeRes();
+      const req = makeReq('DELETE', { logger: 'req-logger' });
+      await run(req, res);
+      expect(h.requestGitHubLakeDisconnect).toHaveBeenCalledWith(conn, 'req-logger');
+      expect(status).toHaveBeenCalledWith(202);
+      expect(json).toHaveBeenCalledWith({ success: true, queued: true });
+    });
+
+    it('reports queued: false when a purge is already progressing', async () => {
+      const conn = { id: 'conn1', organizationId: 'orgA' };
+      h.connFindByDataLakeIdAny.mockResolvedValue(conn);
+      h.requestGitHubLakeDisconnect.mockResolvedValue({ queued: false });
+      const { res, status, json } = makeRes();
       await run(makeReq('DELETE'), res);
-      expect(h.releaseGitHubLakeConnection).toHaveBeenCalledWith(conn, { slug: 'test-app' });
-      expect(json).toHaveBeenCalledWith({ installationRetained: true });
+      expect(status).toHaveBeenCalledWith(202);
+      expect(json).toHaveBeenCalledWith({ success: true, queued: false });
+    });
+
+    it('propagates the 409 a live sync raises', async () => {
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
+      h.requestGitHubLakeDisconnect.mockRejectedValue(new ConflictError('A sync is in progress'));
+      const { res, json } = makeRes();
+      await expect(run(makeReq('DELETE'), res)).rejects.toMatchObject({ statusCode: 409 });
+      expect(json).not.toHaveBeenCalled();
     });
 
     it('404s a personal (org-less) lake', async () => {

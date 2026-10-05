@@ -14,6 +14,7 @@ import type {
 import {
   DATA_LAKES,
   DATA_LAKE_TRANSITIONAL_STATUSES,
+  LAKE_ATTACHABLE_STATUSES,
   DEFAULT_DATA_LAKE_ORIGIN,
   strandedCutoffMsFor,
   resolveRetryAction,
@@ -46,7 +47,7 @@ type OrgAdminLookup = Pick<IOrganizationRepository, 'findIdsWithAdminRights'>;
  * `toAccessContext` ZEROES `administeredOrgIds` for an admin caller (org resolution is pure
  * overhead for the ordinary read gates, which grant an admin outright), so reading it off `ctx`
  * would report `canPreauthorize: false` for a platform admin whose real rung on the lake is
- * org-admin - the same trap `pages/api/sessions/create.ts` documents and avoids by re-resolving.
+ * org-admin - the same trap `pages/api/v1/sessions/index.ts` documents and avoids by re-resolving.
  * Re-resolve here too, and ONLY for an admin: a non-admin's `ctx` value is already correct.
  *
  * Degrades to `[]` when no org repo is wired, which under-reports that one rung rather than
@@ -295,6 +296,7 @@ const toManageableConfig = (
   manageable: boolean,
   canManageMemory: boolean,
   isOwn: boolean,
+  isCreator: boolean,
   canPreauthorize: boolean,
   ownerDisplayName?: string,
   pendingProposalCount?: number
@@ -316,6 +318,7 @@ const toManageableConfig = (
   // the one manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
   canManageMemory,
   isOwn,
+  isCreator,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
   ...(!isOwn && ownerDisplayName ? { ownerDisplayName } : {}),
@@ -392,6 +395,7 @@ const toFallbackConfig = (
   canManageMemory: false,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
+  isCreator: false,
   // A registry lake has no document, and session-create resolves every pre-authorized id through
   // findById - so naming one could only ever 404. Never offer the affordance.
   canPreauthorize: false,
@@ -459,7 +463,7 @@ export const listDataLakes = async (
     // failed narrowing costs the caller their dynamic lakes rather than handing them back unnarrowed.
     const supersededOwnLakeIds = await supersededOwnLakeIdsFor(ctx, db.dataLakes, db.dataLakeAccessGrants);
     dynamicLakes = await db.dataLakes.findAccessible(ctx, {
-      statuses: ['draft', 'active'],
+      statuses: [...LAKE_ATTACHABLE_STATUSES],
       grantedLakeIds,
       orgGrantedLakes,
       supersededOwnLakeIds,
@@ -497,6 +501,7 @@ export const listDataLakes = async (
       manageableById.get(dl.id) ?? false,
       canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      String(dl.createdByUserId) === String(ctx.userId),
       canPreauthorizeById.get(dl.id) ?? false,
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]
@@ -533,7 +538,7 @@ export const listAllDataLakes = async (
 ): Promise<ManageableDataLakeConfig[]> => {
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
-    dynamicLakes = await db.dataLakes.find({ status: { $in: ['draft', 'active'] } });
+    dynamicLakes = await db.dataLakes.find({ status: { $in: [...LAKE_ATTACHABLE_STATUSES] } });
   } catch {
     // Fall through to hardcoded
   }
@@ -562,6 +567,7 @@ export const listAllDataLakes = async (
       // predicate rather than hardcoded, so a change to the rule reaches this surface too.
       canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      String(dl.createdByUserId) === String(ctx.userId),
       canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]

@@ -13,8 +13,8 @@
  * reason it DECLINED to summarize, so it describes no run and belongs to a decision, not a
  * document. It is typed by SummarizationDecision there, not by the session field.
  *
- * 'manual' means someone asked for one notebook's summary. The admin sweep (apps/client
- * server/events/spider.ts) summarizes every un-summarized notebook of the admin who ran it in one
+ * 'manual' means someone asked for one notebook's summary. The admin sweep
+ * (apps/workers/src/events/spider.ts) summarizes every un-summarized notebook of the admin who ran it in one
  * billed pass, so it stamps 'spider' instead: without that, one deliberate click and a whole sweep
  * are indistinguishable when someone investigates unexpected summarization spend.
  */

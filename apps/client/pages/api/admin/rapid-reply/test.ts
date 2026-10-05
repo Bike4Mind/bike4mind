@@ -8,7 +8,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
 import { sessionRepository } from '@bike4mind/database';
-import { ttfvtState } from '@bike4mind/common';
+import { ApiKeyScope, ttfvtState } from '@bike4mind/common';
 import { Types } from 'mongoose';
 import { SQSService } from '@bike4mind/utils';
 
@@ -19,7 +19,7 @@ interface TestConfiguration {
   simulateLatency?: number;
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(
     rateLimit({
       limit: 5,

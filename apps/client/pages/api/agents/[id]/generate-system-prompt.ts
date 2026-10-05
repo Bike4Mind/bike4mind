@@ -208,13 +208,11 @@ Please create a detailed system prompt that captures this agent's personality, c
     const cleanSystemPrompt = generatedSystemPrompt.trim();
 
     // Update the agent with the new system prompt
-    const updateData = {
-      ...agent,
+    const updatedAgent = await agentRepository.update({
+      id: agent.id,
       systemPrompt: cleanSystemPrompt,
       lastSystemPromptGeneratedAt: new Date(),
-    };
-
-    const updatedAgent = await agentRepository.update(updateData);
+    });
 
     if (!updatedAgent) {
       throw new BadRequestError('Failed to save generated system prompt');

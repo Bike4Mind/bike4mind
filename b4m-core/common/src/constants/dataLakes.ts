@@ -390,6 +390,12 @@ export interface DataLakeConfig {
    */
   lakeMemoryEnabled?: boolean;
   /**
+   * Reader opt-in for the lake's system prompt (see IDataLake.injectPromptForReaders). Reader-visible
+   * like lakeMemoryEnabled: it answers "does this lake's prompt steer my scoped turns", never the
+   * prompt text itself.
+   */
+  injectPromptForReaders?: boolean;
+  /**
    * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
    * archive, remove files). Server-computed per request from the manage rule (admin or
    * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
@@ -412,6 +418,23 @@ export interface DataLakeConfig {
    */
   origin?: DataLakeOrigin;
 }
+
+/**
+ * Opt-in row label on GET /api/data-lakes (`?includeRetrievability=true`), never set by the list
+ * projections. The one authoritative statement of its contract:
+ * - `retrievable`: whether chat retrieval searches this lake for the CALLER (always the caller, even
+ *   when `?preauthorizableFor` relabels `canPreauthorize`). With `&sessionId=` naming one of the
+ *   caller's own sessions, it also counts that session's still-managed pre-authorizations, i.e.
+ *   whether chat searches the lake in that session once the session's scope includes it. Any other
+ *   session id is treated as no session. Drafts read `false`.
+ * - Absent means unknown (not requested, or the scope was unresolved or degraded) and must be
+ *   treated as searchable.
+ */
+export interface DataLakeRetrievabilityLabel {
+  retrievable?: boolean;
+}
+
+export type RetrievabilityLabeledDataLake = ManageableDataLakeConfig & DataLakeRetrievabilityLabel;
 
 /**
  * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
@@ -458,12 +481,18 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   isOwn: boolean;
   /**
+   * Whether the caller is the lake's `createdByUserId` - the identity lake membership (and so the
+   * file count and reachability) is anchored to; see services/src/dataLakeService/lakeMembershipScope.ts.
+   * Differs from `isOwn` after an ownership transfer. Built-in fallback lakes have no creator: `false`.
+   */
+  isCreator: boolean;
+  /**
    * Whether the caller may name this lake in `preauthorizedLakeIds` at session create - i.e. the
    * manage-but-not-member admission that lets a maintainer ground a scoped session on a lake the
    * ordinary tag/entitlement gate would not give them.
    *
    * NOT the same predicate as `canManage`, and the difference is the point: this one is resolved
-   * with `isAdmin: false`, exactly as `pages/api/sessions/create.ts` and `filterStillManagedLakes`
+   * with `isAdmin: false`, exactly as `pages/api/v1/sessions/index.ts` and `filterStillManagedLakes`
    * both resolve it. Platform-admin is deliberately not an admission rung there (the admission
    * widens FILE retrieval, not just prompt injection - see unionPreauthorizedLakeAccess), so a
    * platform admin who holds no other rung on the lake gets `canManage: true` and
@@ -756,6 +785,7 @@ export function toDataLakeConfig(dl: {
   description?: string;
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
+  injectPromptForReaders?: boolean;
   status?: DataLakeStatus;
   origin?: DataLakeOrigin;
 }): DataLakeConfig {
@@ -771,6 +801,7 @@ export function toDataLakeConfig(dl: {
     description: dl.description,
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
+    injectPromptForReaders: dl.injectPromptForReaders,
     status: dl.status,
     origin: dl.origin,
   };

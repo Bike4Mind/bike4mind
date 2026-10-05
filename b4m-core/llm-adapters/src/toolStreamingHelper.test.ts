@@ -1,14 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
-import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
+import { ARTIFACT_DELIVERED_PLACEHOLDER, ARTIFACT_REMOVED_PLACEHOLDER } from '@bike4mind/common';
+import {
+  handleToolResultStreaming,
+  createRecursiveArtifactGuard,
+  declaredArtifactType,
+  stripUnstreamedToolResult,
+} from './toolStreamingHelper';
+import type { ICompletionOptionTools } from './backend';
 
 const CHESS_ARTIFACT =
   '<artifact identifier="game-1" type="application/vnd.ant.chess" title="Chess Game">{"fen":"8/8/8/8/8/8/8/8 w - - 0 1"}</artifact>';
 const MERMAID_ARTIFACT =
   '<artifact identifier="flow" type="application/vnd.ant.mermaid" title="Flow">graph TD; A-->B</artifact>';
 
-const streamed = async (toolName: string, result: unknown) => {
+const streamed = async (toolName: string, result: unknown, artifactType?: string) => {
   const callback = vi.fn(async (_results: string[]) => {});
-  await handleToolResultStreaming(toolName, result, callback);
+  await handleToolResultStreaming(toolName, result, callback, artifactType);
   return callback.mock.calls.map(([results]) => results);
 };
 
@@ -80,6 +87,41 @@ describe('handleToolResultStreaming: only emitting tools stream, and only their 
 
 // stripToolArtifactMarkup and stripDeliveredArtifactBlocks are tested with their own
 // module, co-located at @bike4mind/common's toolArtifactEmitters.test.ts.
+
+describe('stripUnstreamedToolResult: delivered vs removed must agree with what extraction actually delivers', () => {
+  it('reports DELIVERED for a result holding only its own pinned type', () => {
+    const result = stripUnstreamedToolResult('mermaid_chart', MERMAID_ARTIFACT);
+
+    expect(result).not.toContain('<artifact');
+    expect(result).toBe(ARTIFACT_DELIVERED_PLACEHOLDER);
+  });
+
+  it('reports REMOVED when extraction skips an upper-case opener', () => {
+    const upperCaseArtifact = MERMAID_ARTIFACT.replace('<artifact', '<ARTIFACT');
+    expect(stripUnstreamedToolResult('mermaid_chart', upperCaseArtifact)).toBe(ARTIFACT_REMOVED_PLACEHOLDER);
+  });
+
+  it('still reports DELIVERED when a valid pinned block is followed by a later malformed opener', () => {
+    // filterToolArtifactMarkup would bail to null on the trailing malformed opener and read this
+    // as REMOVED, even though sharedToolBuilder's scanArtifactTags already delivered the first block.
+    const result = `${MERMAID_ARTIFACT}\n<artifact identifier="x" type="text/html" title="Open"><p>x</p>`;
+    const stripped = stripUnstreamedToolResult('mermaid_chart', result);
+
+    expect(stripped).toBe(`${ARTIFACT_DELIVERED_PLACEHOLDER}\n${ARTIFACT_DELIVERED_PLACEHOLDER}`);
+    expect(stripped).not.toContain(ARTIFACT_REMOVED_PLACEHOLDER);
+  });
+
+  it('reports REMOVED for a result holding only a different type than the tool is pinned to', () => {
+    const result = stripUnstreamedToolResult('mermaid_chart', CHESS_ARTIFACT);
+
+    expect(result).not.toContain('<artifact');
+    expect(result).toBe(ARTIFACT_REMOVED_PLACEHOLDER);
+  });
+
+  it('leaves a result with no artifact markup unchanged', () => {
+    expect(stripUnstreamedToolResult('mermaid_chart', 'No diagram needed.')).toBe('No diagram needed.');
+  });
+});
 
 describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole recursive chain', () => {
   it('buffers text across multiple calls and strips an echo of an already-delivered artifact on flush', async () => {
@@ -199,6 +241,78 @@ describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole
     expect(received[0].text).toEqual(['Hello.']);
   });
 
+  it('a concurrent second flush() does not resolve until the single underlying cb() call finishes', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const cb = vi.fn(async () => {
+      await gate;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const settled = [false, false];
+    const first = guard.flush().then(() => {
+      settled[0] = true;
+    });
+    const second = guard.flush().then(() => {
+      settled[1] = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(settled).toEqual([false, false]);
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    release();
+    await Promise.all([first, second]);
+
+    expect(settled).toEqual([true, true]);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('concurrent flush() callers share the rejection of the single cb() call', async () => {
+    const error = new Error('delivery failed');
+    const cb = vi.fn(async () => {
+      throw error;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const results = await Promise.allSettled([guard.flush(), guard.flush()]);
+
+    expect(results).toEqual([
+      { status: 'rejected', reason: error },
+      { status: 'rejected', reason: error },
+    ]);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('a flush() after cb() has rejected re-throws the same error without retrying cb()', async () => {
+    const error = new Error('delivery failed');
+    const cb = vi.fn(async () => {
+      throw error;
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    await expect(guard.flush()).rejects.toBe(error);
+    await expect(guard.flush()).rejects.toBe(error);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('a flush() re-entered synchronously from inside cb() does not call cb() again', async () => {
+    let inner: Promise<void> | undefined;
+    const cb = vi.fn((): Promise<void> => {
+      inner = guard.flush();
+      return Promise.resolve();
+    });
+    const guard = createRecursiveArtifactGuard(cb);
+
+    const outer = guard.flush();
+    await outer;
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(inner).toBe(outer);
+  });
+
   it('a later echo of a chained artifact is also stripped on the final flush', async () => {
     const received: Array<{ text: (string | null | undefined)[]; info: unknown }> = [];
     const cb = async (text: (string | null | undefined)[], info: unknown) => {
@@ -217,5 +331,34 @@ describe('createRecursiveArtifactGuard: one shared buffer/flush pipe for a whole
 
     expect(received).toHaveLength(1);
     expect(received[0].text).toEqual(['Thanks for watching.']);
+  });
+});
+
+describe('a tool that declared artifactType at registration (externalTools)', () => {
+  const HTML_ARTIFACT = '<artifact identifier="panel" type="text/html" title="Panel"><p>rows</p></artifact>';
+  const tool = (name: string, artifactType?: string): ICompletionOptionTools => ({
+    toolFn: async () => '',
+    toolSchema: { name, description: 'stub', parameters: { type: 'object', properties: {} } },
+    ...(artifactType ? { artifactType } : {}),
+  });
+
+  it('looks the declared type up by tool name', () => {
+    const tools = [tool('plain'), tool('external_panel', 'text/html')];
+
+    expect(declaredArtifactType(tools, 'external_panel')).toBe('text/html');
+    expect(declaredArtifactType(tools, 'plain')).toBeUndefined();
+    expect(declaredArtifactType(tools, 'missing')).toBeUndefined();
+    expect(declaredArtifactType(undefined, 'external_panel')).toBeUndefined();
+  });
+
+  it('streams its declared type, and nothing without the declaration', async () => {
+    const result = `Here is the panel:\n${HTML_ARTIFACT}`;
+
+    expect(await streamed('external_panel', result, 'text/html')).toEqual([[result]]);
+    expect(await streamed('external_panel', result)).toEqual([]);
+  });
+
+  it('does not stream another type under its declaration', async () => {
+    expect(await streamed('external_panel', CHESS_ARTIFACT, 'text/html')).toEqual([]);
   });
 });

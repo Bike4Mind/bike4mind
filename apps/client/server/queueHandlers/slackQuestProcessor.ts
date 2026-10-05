@@ -37,7 +37,10 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
+  lakeMembershipRemovalRepository,
 } from '@bike4mind/database';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
@@ -58,7 +61,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission, stripSearchResultCardFences } from '@bike4mind/common';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
-import { withEventContext } from '@server/events/utils';
+import { withEventContext } from '@server/utils/eventContext';
 import {
   slackToolDefinitions,
   createPendingActionToolDefs,
@@ -82,7 +85,7 @@ type StaticChatCompletionOptions = Omit<ChatCompletionOptions, 'logger' | 'token
 let cachedStaticOptions: StaticChatCompletionOptions | null = null;
 let cachedDbConnection: typeof mongoose.connection | null = null;
 
-const getStaticOptions = () => {
+export const getStaticOptions = () => {
   if (cachedStaticOptions) {
     console.log('♻️ [PERFORMANCE] Reusing cached static ChatCompletion options');
     return cachedStaticOptions;
@@ -152,6 +155,11 @@ const getStaticOptions = () => {
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
+      // Read by save_content_to_data_lake (-> addFileToDataLake). Without them that tool answers
+      // "not available on this surface" rather than failing mid-write.
+      lakeMembershipRemovals: lakeMembershipRemovalRepository,
+      lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
+      lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

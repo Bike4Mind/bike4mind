@@ -57,6 +57,7 @@ import {
 } from '@bike4mind/common';
 import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
+import { gateWriteWidensReadership } from '@bike4mind/services/lakeGateWideningRule';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
 import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
@@ -106,6 +107,11 @@ export interface EditableLake {
    */
   systemPrompt: string;
   /**
+   * Whether the system prompt also steers tag/entitlement readers on sessions scoped to this lake
+   * (see IDataLake.injectPromptForReaders). Editor-only control, always a concrete boolean.
+   */
+  injectPromptForReaders: boolean;
+  /**
    * Preferred registry system prompt bound to this lake, by promptId ('' = none). Editor-only,
    * same as systemPrompt: the field renders off `canManage`, not off this value.
    */
@@ -144,6 +150,8 @@ export interface EditableLake {
    * Origin, Required passage size).
    */
   canManage: boolean;
+  /** Owner per isEffectiveOwner, server-computed (see ManageableDataLakeConfig.isOwn). Gates who may widen sharing. */
+  isOwn: boolean;
   /**
    * Lifetime embedding-spend meter, ALWAYS present (defaulted to 0) when canManage - its
    * presence, not its value, is the signal that gates the Spend tab (see
@@ -162,6 +170,7 @@ const formSeed = (lake: EditableLake) => ({
   // response missing this field would otherwise set state to undefined and crash the character-count
   // helper text below (`.trim()` on undefined).
   systemPrompt: lake.systemPrompt ?? '',
+  injectPromptForReaders: lake.injectPromptForReaders,
   preferredSystemPromptId: lake.preferredSystemPromptId ?? '',
   groundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
   origin: lake.origin ?? DEFAULT_DATA_LAKE_ORIGIN,
@@ -176,6 +185,9 @@ const formSeed = (lake: EditableLake) => ({
  * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
  * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
+
+const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
+
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
   const setVisibility = useSetLakeVisibility();
@@ -252,11 +264,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       ? 'settings'
       : tab;
   const showTabs = showSpendTab || showHistoryTab || showProposalsTab || showResearchTab;
-  // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
-  // them means a future narrow read-only tab silently gets a Save button it must not have.
-  // Every non-settings panel is tabular and needs the room; the settings form does not.
-  const isWideTab =
-    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
+  const dialogWidth = showTabs ? '44rem' : '28rem';
   // Research saves through its own per-configuration buttons, so the modal's Save must stay away
   // from it - it would submit the lake settings form the user is not looking at.
   const isReadOnlyTab =
@@ -281,6 +289,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [researchDirty, setResearchDirty] = useState(false);
+  const [proposalsDirty, setProposalsDirty] = useState(false);
   // Snapshotted with the form, not rebuilt from the live `lake`: a background refetch that brings in
   // someone else's rename would otherwise count as an edit here.
   const [seed, setSeed] = useState<ReturnType<typeof formSeed> | null>(null);
@@ -297,6 +306,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [injectPromptForReaders, setInjectPromptForReaders] = useState(false);
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
   const [origin, setOrigin] = useState<DataLakeOrigin>(DEFAULT_DATA_LAKE_ORIGIN);
@@ -335,6 +345,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setRequiredUserTag(initial.requiredUserTag);
       setRequiredEntitlement(initial.requiredEntitlement);
       setSystemPrompt(initial.systemPrompt);
+      setInjectPromptForReaders(initial.injectPromptForReaders);
       setPreferredSystemPromptId(initial.preferredSystemPromptId);
       setGroundingMode(initial.groundingMode);
       setOrigin(initial.origin);
@@ -363,6 +374,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       requiredUserTag !== seed.requiredUserTag ||
       requiredEntitlement !== seed.requiredEntitlement ||
       systemPrompt !== seed.systemPrompt ||
+      injectPromptForReaders !== seed.injectPromptForReaders ||
       preferredSystemPromptId !== seed.preferredSystemPromptId ||
       groundingMode !== seed.groundingMode ||
       origin !== seed.origin ||
@@ -371,7 +383,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // Escape, the backdrop and the close button all come through here; Cancel and a successful save
   // close directly, since both are the user deciding what happens to the edits.
   const requestClose = () => {
-    if (settingsDirty || researchDirty) setConfirmDiscardOpen(true);
+    if (settingsDirty || researchDirty || proposalsDirty) setConfirmDiscardOpen(true);
     else onClose();
   };
   const discardAndClose = () => {
@@ -396,8 +408,18 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       parsedTarget < MIN_PASSAGE_TOKEN_TARGET ||
       parsedTarget > OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
 
+  // Mirrors the server rule in updateDataLake: a non-owner may narrow a gate but not widen readership.
+  const widensAsNonOwner =
+    !!lake &&
+    !lake.isOwn &&
+    gateWriteWidensReadership(lake, {
+      requiredUserTag: requiredUserTag.trim(),
+      requiredEntitlement: requiredEntitlement.trim(),
+    });
+
   const handleSave = () => {
     if (!lake) return;
+    if (widensAsNonOwner) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
     if (targetInvalid) return;
@@ -415,6 +437,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
         // and '' is what unsets it.
         ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
+        // Editor-only, sent only when changed - same shape and reason as lakeMemoryEnabled below.
+        ...(lake.canManage && injectPromptForReaders !== lake.injectPromptForReaders ? { injectPromptForReaders } : {}),
         // Send only when the editor actually changed the binding. Omitting an unchanged value is
         // "leave as-is" server-side, which (a) never re-sends a now-delisted id that the write
         // boundary would 400 on - that would block saving name/description/gate too - and (b) still
@@ -502,11 +526,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session - not to users given read-only access by tag, entitlement, or a reader grant - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag or entitlement don't get them unless you turn on "Apply to readers". Users with only a reader grant never get them. Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
           </FormHelperText>
+        </FormControl>
+      )}
+      {lake?.canManage && (
+        <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <FormLabel>Apply to readers</FormLabel>
+            <FormHelperText data-testid="datalake-reader-prompt-toggle-help" sx={{ mt: 0 }}>
+              {requiredUserTag.trim() || requiredEntitlement.trim()
+                ? 'Also apply the system prompt for users who reach this lake by its access tag or entitlement, ' +
+                  "but only in chats they've scoped to this lake. They can't read the text."
+                : 'Has no effect until this lake has an access tag or required entitlement.'}
+            </FormHelperText>
+          </Box>
+          <Switch
+            checked={injectPromptForReaders}
+            onChange={e => setInjectPromptForReaders(e.target.checked)}
+            slotProps={{ input: { 'data-testid': 'datalake-reader-prompt-toggle' } }}
+          />
         </FormControl>
       )}
       {/* Per-lake config, editor-only (canManage). This section is the home for lake-scoped
@@ -657,17 +699,32 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           }}
           data-testid="datalake-settings-visibility"
         >
-          <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+          {/* Non-owner rules must stay in sync with setLakeVisibility's owner-only checks (b4m-core/services). */}
+          <Radio
+            value="private"
+            label="Private"
+            disabled={
+              setVisibility.isPending || (!lake?.isOwn && visibility !== 'private' && !!lake?.organizationId && hasGate)
+            }
+          />
           <Radio
             value="organization"
             label="Organization"
-            disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+            disabled={
+              setVisibility.isPending ||
+              (!canShareToOrg && visibility !== 'organization') ||
+              (!lake?.isOwn && visibility !== 'organization')
+            }
             data-testid="datalake-settings-visibility-org"
           />
           <Radio
             value="public"
             label="Public"
-            disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+            disabled={
+              setVisibility.isPending ||
+              (hasGate && visibility !== 'public') ||
+              (!lake?.isOwn && visibility !== 'public')
+            }
             data-testid="datalake-settings-visibility-public"
           />
         </RadioGroup>
@@ -684,13 +741,16 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
+        {lake && !lake.isOwn && (
+          <FormHelperText data-testid="datalake-settings-visibility-owner-only">{ownerOnlyMsg}</FormHelperText>
+        )}
       </FormControl>
       <FormControl>
         <FormLabel>Access tag</FormLabel>
         <Input
           value={requiredUserTag}
           onChange={e => setRequiredUserTag(e.target.value)}
-          placeholder="e.g. Opti"
+          placeholder="e.g. LegalTeam"
           data-testid="datalake-settings-usertag"
         />
         <FormHelperText data-testid="datalake-settings-usertag-help">
@@ -713,6 +773,11 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             : 'Namespaced key (e.g. \u201Cproduct:pro\u201D). Leave blank for no entitlement gate.'}
         </FormHelperText>
       </FormControl>
+      {widensAsNonOwner && (
+        <FormHelperText sx={{ color: 'danger.plainColor' }} data-testid="datalake-settings-gate-owner-only">
+          {ownerOnlyMsg}
+        </FormHelperText>
+      )}
     </Stack>
   );
 
@@ -728,8 +793,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         <ModalDialog
           data-testid="datalake-settings-modal"
           sx={{
-            width: { xs: '95%', sm: isWideTab ? '44rem' : '28rem' },
-            maxWidth: isWideTab ? '44rem' : '28rem',
+            width: { xs: '95%', sm: dialogWidth },
+            maxWidth: dialogWidth,
           }}
         >
           <ModalClose aria-label="Close data lake settings" data-testid="datalake-settings-close-btn" />
@@ -790,12 +855,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   />
                 </TabPanel>
                 {/* Kept mounted, guarded and keyed like the Research panel below, because a
-                    half-typed decline reason is this panel's own state too. It reports no dirty
-                    state, so an unmount here loses the text with nothing warning at all. */}
+                    half-typed decline reason is this panel's own state too. It reports that
+                    reason as dirty state, and an unmount here would lose the text. */}
                 {showProposalsTab && (
                   <TabPanel value="proposals" sx={{ p: 0 }} keepMounted>
                     <DataLakeProposalsPanel
                       key={lake?.id}
+                      onDirtyChange={setProposalsDirty}
                       view={proposalsView}
                       onViewChange={view => {
                         if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
@@ -866,7 +932,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 variant="solid"
                 color="primary"
                 loading={updateLake.isPending}
-                disabled={!name.trim() || targetInvalid}
+                disabled={!name.trim() || targetInvalid || widensAsNonOwner}
                 onClick={handleSave}
                 data-testid="datalake-settings-save-btn"
               >

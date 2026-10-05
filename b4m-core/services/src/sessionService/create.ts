@@ -10,6 +10,7 @@ import {
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
+  ISessionOrigin,
   ISessionRepository,
   IUserDocument,
 } from '@bike4mind/common';
@@ -72,7 +73,7 @@ const createSessionParametersSchema = z.object({
   // holds one loses the provenance instead of failing the copy.
   summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
-  // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
+  // spider gate at apps/workers/src/events/spider.ts pays to re-tag every copy; snip deliberately
   // does not. Declared here because secureParameters strips unknown keys; still not a client input,
   // since z.date() rejects the string a JSON body would carry.
   taggedAt: z.date().optional(),
@@ -120,6 +121,13 @@ export interface CreateSessionOptions {
    * access filter would drop the source's lake files. Export still re-checks access on the copy.
    */
   knowledgeIdsFromSourceSession?: boolean;
+  /**
+   * Where the session is being created, resolved by the route from how the request authenticated
+   * (see resolveSessionOrigin in apps/client). An option, not a parameter: the parameters are
+   * parsed from request bodies, and a client must not be able to label its own origin. Copy paths
+   * (clone/fork/snip) leave it unset, so a copy carries no origin.
+   */
+  origin?: ISessionOrigin;
 }
 
 export const createSession = async (
@@ -190,6 +198,7 @@ export const createSession = async (
     ...(forceKnowledgeRetrieval !== undefined ? { forceKnowledgeRetrieval } : {}),
     // A taggedAt with no tags would close the spider's gate on a notebook with nothing to show.
     taggedAt: rest.tags?.length ? rest.taggedAt : undefined,
+    ...(options.origin ? { origin: options.origin } : {}),
     userId: user.id,
     knowledgeIds,
     artifactIds,

@@ -788,6 +788,39 @@ jobs:
               ]
             }' > /tmp/slack-payload.json
 
+      # Shadow mode, best-effort: scripts/qa-report.mjs exits 0 on every failure. Not on a
+      # cancel or a preview skip, where it would store an empty run as an infra error.
+      - name: Checkout QA ingest script
+        if: ${{ !cancelled() && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
+        continue-on-error: true
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/qa-report.mjs
+          sparse-checkout-cone-mode: false
+          path: qa-src
+
+      - name: Setup Node.js for QA ingest
+        if: ${{ !cancelled() && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
+        continue-on-error: true
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      # One run per workflow, merged across matrix cells. No media: attachment
+      # paths in the downloaded pw-results belong to the cell runners.
+      - name: Ingest QA run (shadow)
+        if: ${{ !cancelled() && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          QA_INGEST_URL: ${{ vars.QA_INGEST_URL }}
+          QA_INGEST_KEY: ${{ secrets.QA_INGEST_KEY }}
+          QA_PRODUCT: ${{ vars.QA_PRODUCT }}
+          QA_SUITE: AI Latency
+          QA_ENV: ${{ steps.config.outputs.env_label }}
+          QA_TRIGGER: ${{ steps.trigger.outputs.label }}
+        run: node qa-src/scripts/qa-report.mjs --results-dir downloaded-results --latency-dir downloaded-results
+
       - name: Send Slack notification
         if: always()
         uses: slackapi/slack-github-action@v2.1.0

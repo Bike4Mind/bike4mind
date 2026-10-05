@@ -1,35 +1,13 @@
 import { Modal, ModalClose, ModalDialog } from '@mui/joy';
 import { FC } from 'react';
-import { create } from 'zustand';
 
 import FileBrowserContent from './Browser/Content';
 import DataLakeWizardModal from '../DataLakeWizard/DataLakeWizardModal';
 import DataLakeManagerPanel from '../DataLakeWizard/DataLakeManagerPanel';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { IFabFileDocument } from '@bike4mind/common';
+import { useFileBrowser } from './fileBrowserStore';
 
-export const useFileBrowser = create<{
-  open: boolean;
-  setOpen: (open: boolean) => void;
-  fileToShare: IFabFileDocument | null;
-  setFileToShare: (fileToShare: IFabFileDocument | null) => void;
-  selectedIds: Set<string>;
-  setSelectedIds: (selectedIds: Set<string>) => void;
-  /**
-   * Selected file for instructions
-   */
-  selectedFileInstructions: IFabFileDocument | null;
-  setSelectedFileInstructions: (selectedFileInstructions: IFabFileDocument | null) => void;
-}>()(set => ({
-  open: false,
-  setOpen: (open: boolean) => set({ open }),
-  fileToShare: null,
-  setFileToShare: (fileToShare: IFabFileDocument | null) => set({ fileToShare }),
-  selectedIds: new Set<string>(),
-  setSelectedIds: (selectedIds: Set<string>) => set({ selectedIds }),
-  selectedFileInstructions: null,
-  setSelectedFileInstructions: (selectedFileInstructions: IFabFileDocument | null) => set({ selectedFileInstructions }),
-}));
+export { useFileBrowser } from './fileBrowserStore';
 
 const FileBrowser: FC = () => {
   const { open, setOpen } = useFileBrowser();
@@ -77,7 +55,7 @@ const FileBrowser: FC = () => {
             borderRadius: { xs: 0, md: 'md' },
           }}
         >
-          <ModalClose data-testid="data-lake-manager-close-btn" />
+          <ModalClose aria-label="Close data lake manager" data-testid="data-lake-manager-close-btn" />
           {isManagerOpen ? <DataLakeManagerPanel /> : null}
         </ModalDialog>
       </Modal>

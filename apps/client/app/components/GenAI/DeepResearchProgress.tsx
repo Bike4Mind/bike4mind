@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Box, Card, Chip, LinearProgress, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import StyledTab from '@client/app/components/common/StyledTab';
-import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
+import { profileTabListSx } from '@client/app/components/common/profileTabListSx';
 import {
   Search as SearchIcon,
   FilterList as ExtractIcon,

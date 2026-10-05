@@ -70,6 +70,28 @@
     "@bike4mind/scripts#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"]
     },
+    // @bike4mind/workers compiles and tests apps/client/server code through its interim path
+    // alias (apps/workers/tsconfig.json), and some of that code imports the premium-generated
+    // stubs @bike4mind/client's codegen writes - same cross-package edge as @bike4mind/scripts.
+    // The extra inputs keep a client-only edit from replaying a cached workers result.
+    // packages/scripts/help is imported from source (cron/helpDatalakeIngest.ts) and has no build
+    // task, so ^build never hashes it - list it here for the same reason.
+    "@bike4mind/workers#typecheck": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+    },
+    "@bike4mind/workers#typecheck:native": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+    },
+    "@bike4mind/workers#typecheck:fast": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+    },
+    "@bike4mind/workers#test": {
+      "dependsOn": ["^build", "@bike4mind/client#codegen"],
+      "inputs": ["$TURBO_DEFAULT$", "../client/**/*.ts", "../client/tsconfig.json", "../../packages/scripts/help/**/*.ts"]
+    },
     "test": {
       "dependsOn": ["^build"]
     },

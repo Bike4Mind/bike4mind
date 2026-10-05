@@ -480,7 +480,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           // Deliberately written BEFORE the fail-open OpenSearch write it predicts: removing from
           // an index that holds nothing is a no-op, missing one orphans documents forever.
           if (indexesToOpenSearch) chunk.retrievalIndexModel = embeddingModel;
-          return fabFileChunkRepository.update(chunk);
+          return fabFileChunkRepository.update({
+            id: chunk.id,
+            vector: chunk.vector,
+            embeddingModel: chunk.embeddingModel,
+            ...(indexesToOpenSearch ? { retrievalIndexModel: chunk.retrievalIndexModel } : {}),
+          });
         })
       );
     });

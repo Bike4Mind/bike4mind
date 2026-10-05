@@ -1,8 +1,9 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
-import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '../../gears/status';
+import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '@server/services/gears/catalog';
 import { z } from 'zod';
 
 /**
@@ -32,7 +33,7 @@ const PutSchema = z.object({
     .optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) throw new ForbiddenError('Unauthorized. Admin access required.');
     const overrides = await gearOverrideRepository.byKey();

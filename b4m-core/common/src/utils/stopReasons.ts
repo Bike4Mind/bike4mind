@@ -28,6 +28,19 @@ export const TRUNCATED_FINISH_REASON = 'max_tokens';
 export const DEGENERATE_FINISH_REASON = 'degenerate_repetition';
 
 /**
+ * Stamped on `promptMeta.finishReason` when recovery settles a quest whose run died without
+ * finishing: the liveness timeout (the process was hard-killed, e.g. at the server Lambda's
+ * execution limit) or the abandoned-run sweep. No provider ever reports these; they exist so
+ * a caller polling the quest can tell a dead run's surviving partial text from a finished
+ * answer, which `status: 'done'` / `type: 'message'` alone cannot.
+ *
+ * Deliberately NOT in EARLY_STOP_FINISH_REASONS: recovery writes its own notice into the reply,
+ * so the client's early-stop banner would say it twice.
+ */
+export const RUN_TIMED_OUT_FINISH_REASON = 'timeout';
+export const RUN_ABANDONED_FINISH_REASON = 'abandoned';
+
+/**
  * Every reason meaning "this reply stopped early". Membership rather than equality with a
  * single literal, so a newly-added early-stop reason surfaces a notice automatically.
  */

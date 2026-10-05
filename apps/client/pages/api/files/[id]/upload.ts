@@ -6,6 +6,7 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { getFilesStorage } from '@server/utils/storage';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import type { Request, Response } from 'express';
 
 /**
@@ -18,7 +19,7 @@ import type { Request, Response } from 'express';
  * (the storage upload takes a Buffer) and marks the FabFile complete - the PUT completing proves
  * the object landed. The MinIO ObjectCreated webhook still fires to enqueue chunking; marking
  * complete here (not only in the webhook) is what lets the safety-net scan
- * (server/worker/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
+ * (server/s3/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
  * status:'complete' files.
  *
  * Auth is normal baseApi (the caller is the logged-in user / API key), so no capability token is
@@ -29,7 +30,7 @@ import type { Request, Response } from 'express';
 /** Coarse Content-Length pre-check ceiling; the exact MaxFileSize cap is enforced mid-stream. */
 const BODY_CEILING_BYTES = 512 * 1024 * 1024;
 
-const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
+const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES_WRITE_SCOPES }).put(
   asyncHandler(async (req: Request, res: Response) => {
     if (process.env.B4M_SELF_HOST !== 'true') {
       return res.status(404).json({ error: 'Not found' });

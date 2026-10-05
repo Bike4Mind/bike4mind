@@ -1,44 +1,65 @@
+import { availableParallelism } from 'node:os';
+
 /**
  * Shared vitest worker-pool budget, consumed by every package's vitest config.
  *
  * By default each package's vitest sizes its worker pool to the full host core
  * count. When an orchestrator (`pnpm -r`, `turbo`) runs several packages at
- * once, that means `concurrent_packages × cores` workers competing for `cores`
- * CPUs — an N× oversubscription that starves CPU-bound suites (notably the
+ * once, that means `concurrent_packages x cores` workers competing for `cores`
+ * CPUs, an N-fold oversubscription that starves CPU-bound suites (notably the
  * `@bike4mind/optihashi-engine` solver benchmarks) past their timeouts. Whether it bites
  * is otherwise down to scheduling luck.
  *
  * `VITEST_MAX_WORKERS` lets the orchestrator hand each package a bounded slice
- * of the machine so the totals stay deterministic — e.g. 4 concurrent packages
+ * of the machine so the totals stay deterministic - e.g. 4 concurrent packages
  * at `'25%'` each consume the whole box and no more. It accepts an absolute
- * worker count (`'2'`) or a percentage of cores (`'25%'`). Left unset — single
- * package runs and local full-box runs — it preserves vitest's default of using
+ * worker count (`'2'`) or a percentage of cores (`'25%'`). Left unset - single
+ * package runs and local full-box runs - it preserves vitest's default of using
  * all cores.
  *
  * Spread `sharedTest` into each package's `test` config so the knob applies
  * uniformly. `minWorkers: 1` guarantees at least one worker when a cap is set.
  */
-const raw = process.env.VITEST_MAX_WORKERS?.trim();
+const WORKER_BUDGET_ENV = 'VITEST_MAX_WORKERS';
 
-// vitest accepts `maxWorkers`/`minWorkers` as an absolute count or a "<n>%"
-// string; keep a valid percentage verbatim and coerce a positive bare number.
-function parseMaxWorkers(value: string | undefined): number | string | undefined {
-  if (!value) return undefined;
-  if (/^\d+%$/.test(value)) return value;
-  const count = Number(value);
-  return Number.isInteger(count) && count > 0 ? count : undefined;
+/**
+ * Resolves a `VITEST_MAX_WORKERS` value to an absolute worker count, or `undefined` when unset.
+ *
+ * The count must be absolute because vitest reads this SAME env var itself, after the config is
+ * loaded, with a bare `Number.parseInt` that overrides `test.maxWorkers` (vitest 4,
+ * `resolveConfig`). Handed `'25%'` it silently runs 25 workers per package, on any core count:
+ * that turned CI's 4-package x 25% buckets on a 4-vCPU runner into up to 100 forks, one mongod per
+ * real-Mongo file, and its "Hook timed out" flakes. Same formula vitest applies to a percentage
+ * it does parse (round, clamped to [1, cores]), so the result matches what the value means.
+ *
+ * A malformed value throws rather than warns: vitest would still `parseInt` it into something
+ * arbitrary ("25 %" -> 25, "-1" -> -1), so there is no safe fallback to degrade to.
+ * `vitestWorkerBudget.test.ts` in packages/scripts pins this.
+ */
+export function resolveMaxWorkers(value: string | undefined, cores: number): number | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+
+  const percentage = /^(\d+)%$/.exec(raw);
+  if (percentage) {
+    const share = Math.round((Number(percentage[1]) / 100) * cores);
+    return Math.max(1, Math.min(cores, share));
+  }
+
+  if (/^\d+$/.test(raw) && Number(raw) > 0) return Number(raw);
+
+  throw new Error(
+    `[vitest.shared] Malformed ${WORKER_BUDGET_ENV}="${raw}" - expected a positive integer ("2") or a percentage ("25%").`
+  );
 }
 
-const maxWorkers = parseMaxWorkers(raw);
+const maxWorkers = resolveMaxWorkers(process.env[WORKER_BUDGET_ENV], availableParallelism());
 
-// A set-but-malformed value (e.g. "25 %", "25.5%", "-1") would silently revert
-// to vitest's all-cores default — reintroducing the exact oversubscription this
-// budget exists to prevent. Surface it loudly so CI misconfiguration is caught
-// instead of quietly degrading.
-if (raw && maxWorkers === undefined) {
-  console.warn(
-    `[vitest.shared] Ignoring malformed VITEST_MAX_WORKERS="${raw}" — expected a positive integer ("2") or a percentage ("25%"). Falling back to all cores.`
-  );
+// Write the resolved count back so vitest's own env read (see resolveMaxWorkers) sees the same
+// integer this config asks for. Config files load before vitest resolves its config, so this lands
+// in time, and forks inherit the normalized value.
+if (maxWorkers !== undefined) {
+  process.env[WORKER_BUDGET_ENV] = String(maxWorkers);
 }
 
 // vitest's defaults (5s per test, 10s per hook) suit pure unit tests but are too tight for

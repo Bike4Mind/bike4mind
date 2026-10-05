@@ -7,3 +7,8 @@ export const subscriptionPlanSchema = z.object({
   // through Stripe's hosted checkout success/cancel pages.
   callbackUrl: z.string().url(),
 });
+
+export const subscriptionCheckoutSchema = subscriptionPlanSchema.extend({
+  // Older callers can still buy, but may not attach attribution without consent.
+  attributionConsent: z.boolean().optional(),
+});

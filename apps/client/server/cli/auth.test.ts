@@ -142,16 +142,38 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
 
     it('gives the desktop app the CLI cap even though its requests resolve to source: api', async () => {
       for (let i = 0; i < 1000; i++) {
-        await checkRateLimit(userId, 'api', 'b4m-desktop/0.1.0');
+        await checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' });
       }
-      await expect(checkRateLimit(userId, 'api', 'b4m-desktop/0.1.0')).rejects.toThrow(/Rate limit exceeded/);
+      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(
+        /Rate limit exceeded/
+      );
     });
 
     it('keeps the 100 cap for any other API client', async () => {
       for (let i = 0; i < 100; i++) {
-        await checkRateLimit(userId, 'api', 'my-script/1.0');
+        await checkRateLimit(userId, 'api', { client: 'my-script/1.0' });
       }
-      await expect(checkRateLimit(userId, 'api', 'my-script/1.0')).rejects.toThrow(/Rate limit exceeded/);
+      await expect(checkRateLimit(userId, 'api', { client: 'my-script/1.0' })).rejects.toThrow(/Rate limit exceeded/);
+    });
+  });
+
+  describe('buckets', () => {
+    it('keeps a bucketed counter apart from the shared one, in both directions', async () => {
+      // A CLI session at 1000 on the shared counter must not spend the tools budget.
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
+    });
+
+    it('applies the source cap to the bucketed counter', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, undefined, { bucket: 'tools' });
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).rejects.toThrow(/Rate limit exceeded/);
+      expect(cacheStore.has(key)).toBe(false);
     });
   });
 

@@ -7,10 +7,10 @@ export const checkStorageLimit = async (user: IUserDocument, fileSize: number) =
   if (fileSize + currentStorageSize > storageLimit) throw new BadRequestError('File size exceeds storage limit');
 };
 
+// Per-file ceiling only: organizations track no cumulative storage usage.
 export const checkOrganizationStorageLimit = async (organization: IOrganizationDocument, fileSize: number) => {
   const storageLimit = (organization.storageLimit ?? 1000) * 1000000; // Convert to Bytes
-  const currentStorageSize = organization.currentStorageSize ?? 0;
-  if (fileSize + currentStorageSize > storageLimit) throw new BadRequestError('Organization storage limit exceeded');
+  if (fileSize > storageLimit) throw new BadRequestError('Organization storage limit exceeded');
 };
 
 export const checkStorageLimitForFile = async (

@@ -50,10 +50,10 @@ export const RESEARCH_RUN_STATUSES = ['queued', 'running', 'completed', 'failed'
 export type ResearchRunStatus = (typeof RESEARCH_RUN_STATUSES)[number];
 
 /**
- * Why a run's loop ended. Every value other than `exhausted` names a LEVER that fired, which is
- * what makes this field worth storing: a run that proposed two things because its ceiling was
- * $0.05 and a run that proposed two things because the web held nothing else look identical
- * without it, and only one of them is fixed by turning a dial.
+ * Why a run's loop ended. Every value other than `exhausted` and `judge_unavailable` names a
+ * LEVER that fired, which is what makes this field worth storing: a run that proposed two things
+ * because its ceiling was $0.05 and a run that proposed two things because the web held nothing
+ * else look identical without it, and only one of them is fixed by turning a dial.
  */
 export const RESEARCH_RUN_STOP_REASONS = [
   /** The candidate list ran out - the run considered everything search returned. */
@@ -62,6 +62,11 @@ export const RESEARCH_RUN_STOP_REASONS = [
   'proposal_limit',
   /** The worker was running out of Lambda time and stopped rather than being killed mid-candidate. */
   'time_budget',
+  /**
+   * The judge failed several times in a row before scoring anything, so the run stopped instead of
+   * paying for a judgment on every remaining candidate. The rest are counted in `totals.notJudged`, or `totals.filteredBySource` if a source rule blocks them.
+   */
+  'judge_unavailable',
 ] as const;
 export type ResearchRunStopReason = (typeof RESEARCH_RUN_STOP_REASONS)[number];
 
@@ -297,6 +302,13 @@ export interface ResearchRunTotals {
   suppressedByTombstone: number;
   /** Nothing to key the source on (not an http(s) URL). */
   unusableSource: number;
+  /**
+   * Candidates never reached because the run stopped on `judge_unavailable`, which keeps that run's
+   * buckets summing to `searchHits`. Unreached candidates a source rule blocks are still counted in
+   * `filteredBySource`, since source rules are free and are checked for them. Only that stop fills it: `cost_ceiling`, `time_budget` and
+   * `proposal_limit` leave it 0, so their buckets can fall short. Older stored runs read it as 0.
+   */
+  notJudged: number;
 }
 
 export const emptyResearchRunTotals = (): ResearchRunTotals => ({
@@ -310,6 +322,7 @@ export const emptyResearchRunTotals = (): ResearchRunTotals => ({
   alreadyInLake: 0,
   suppressedByTombstone: 0,
   unusableSource: 0,
+  notJudged: 0,
 });
 
 export interface IDataLakeResearchRun {
@@ -453,8 +466,12 @@ export interface IDataLakeResearchRunRepository extends IBaseRepository<IDataLak
    * the row was not queued (the executor now owns it), true when it settled.
    */
   settleQueuedRun(id: string, input: SettleResearchRunInput): Promise<boolean>;
-  /** Live progress while the loop runs, so the panel is not blank for a minute. */
-  recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals): Promise<void>;
+  /**
+   * Live progress while the loop runs, so the panel is not blank for a minute. When given, also
+   * stamps the resolved judge model, so an in-flight run's card can name its judge before the run
+   * settles. Optional so existing callers keep compiling; an omitted model leaves the field as is.
+   */
+  recordProgress(id: string, spentMicroUsd: number, totals: ResearchRunTotals, judgeModel?: string): Promise<void>;
   /** How many runs a lake started since `since`. Backs the per-lake daily spend cap. */
   countStartedSince(dataLakeId: string, since: Date): Promise<number>;
   /**

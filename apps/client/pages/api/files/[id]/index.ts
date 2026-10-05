@@ -12,20 +12,17 @@ import {
   userRepository,
   withTransaction,
   User,
-  lakeAccessEventRepository,
 } from '@bike4mind/database';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
-import { NotFoundError } from '@bike4mind/utils';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
-import { grantingLakes, resolveAccessibleLakes } from '@server/dataLakes';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { getFilesStorage } from '@server/utils/storage';
-import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
+import { loadAccessibleFabFile } from '@server/files/loadAccessibleFabFile';
+import { assertFilesReadScope, assertFilesWriteScope, FILES_READ_OR_WRITE_SCOPES } from '@server/files/fileScopes';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -33,76 +30,18 @@ import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
-const handler = baseApi()
+// baseApi's scope gate is per route, so it admits either files scope and each method asserts its own.
+const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
   .get(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
+    assertFilesReadScope(req);
     req.logger.updateMetadata({ userId: req.user.id, fileId: req.query.id });
-
-    const adapter = {
-      db: {
-        fabFiles: fabFileRepository,
-        users: userRepository,
-        adminSettings: adminSettingsRepository,
-      },
-      storage: {
-        generateSignedUrl: async (path: string, expireInSeconds: number) => {
-          try {
-            return await getFilesStorage().getSignedUrl(path, 'get', { expiresIn: expireInSeconds });
-          } catch (error) {
-            req.logger.error('Error generating signed URL:', { error, path });
-            throw error;
-          }
-        },
-      },
-    };
-
-    try {
-      const fabFile = await fabFilesService.getFabFile(req.user.id, { id: req.query.id }, adapter);
-      return res.json(fabFile);
-    } catch (error) {
-      if (!(error instanceof NotFoundError)) throw error;
-      // Fallback: data-lake files are authorized by lake tag/prefix, NOT by per-file ACL.
-      // Curated/shared lake articles (e.g. OptiHashi's opti-knowledge) are owned by a curator,
-      // so getFabFile 404s for entitled non-owner users. Re-authorize via the SAME lake gate the
-      // browse endpoints use and, if granted, mint a fresh signed URL through the same path so
-      // the shared file viewer (KnowledgeModal) can render it. (#836)
-      const lakes = await resolveAccessibleLakes(req);
-      // Fetched directly and checked against the already-resolved `lakes` rather than a per-id
-      // helper that would re-run resolveAccessibleLakes's own DB read - the same one-resolve,
-      // reuse-everywhere shape as files/byIds.ts's lake fallback.
-      const candidate = lakes.length > 0 ? await fabFileRepository.findById(req.query.id) : null;
-      // The SAME computation grants access and names the grantor, so an open-prefix match (no
-      // tag to reverse) attributes to the specific lake whose prefix matched rather than falling
-      // back to every accessible lake - a false row in an immutable, 450-day-floor audit trail is
-      // worse than a missing one.
-      const grantors =
-        candidate && !candidate.deletedAt ? grantingLakes(lakes, candidate.tags?.map(t => t.name) ?? []) : [];
-      // No accessible lake serves this id either - never an audit-worthy read, so nothing is
-      // recorded; preserve the original 404 exactly as getFabFile raised it.
-      if (!candidate || grantors.length === 0) throw error;
-      const fabFile = await fabFilesService.generateSignedUrl(candidate, adapter);
-      // Best-effort audit write - this is the same single-file metadata + URL read as the
-      // articles `?id=` deep link, just reached through the direct-fetch fallback door instead.
-      // Awaited (never rethrows): a per-request serverless route must not race a post-response
-      // freeze of the execution environment.
-      await dataLakeService.recordLakeAccessEvent(
-        lakeAccessEventRepository,
-        {
-          ...resolveAuditPrincipal(req.user, req.apiKeyInfo),
-          organizationId: normalizeId(req.user.organizationId),
-          resolvedLakeIds: grantors.map(lake => lake.id),
-          fileIds: [candidate.id],
-          surface: 'data-lake-file-fallback',
-        },
-        req.logger,
-        adminSettingsRepository
-      );
-      return res.json(fabFile);
-    }
+    return res.json(await loadAccessibleFabFile(req, req.query.id));
   })
   /**
    * Update FabFile by ID
    */
   .put(async (req: Request<{}, {}, Partial<IFabFile> & { fileContent: string }, { id: string }>, res) => {
+    assertFilesWriteScope(req);
     const userId = req.user.id;
     const fabFileId = req.query.id;
 
@@ -218,6 +157,7 @@ const handler = baseApi()
    * Delete FabFile by ID
    */
   .delete(async (req: Request<{}, {}, {}, { id: string }>, res) => {
+    assertFilesWriteScope(req);
     const userId = req.user.id;
     const fabFileId = req.query.id;
 

@@ -142,12 +142,14 @@ re-deciding per endpoint:
 | Malformed JSON body | `400` | - |
 | Request body failed schema validation | `422` | - |
 | Missing or invalid credential | `401` | - |
-| Valid key, missing scope | `403` | - |
+| Valid key, missing scope | `403` | - (the body carries `required_scopes`, and `also_required_scopes` when set) |
+| Method the contract does not declare | `405` | - (`Allow` header; answered before auth, auto-documented on every operation) |
 | Provider rejected *our* credentials | `401` | `provider_rejected` |
 | Provider failed to generate (upstream error) | `502` | - |
 | No provider key configured for this deployment | `503` | `provider_not_configured` |
 | Insufficient credits | `422` | `insufficient_credits` |
 | Spend cap exceeded | `422` | `spend_cap_exceeded` |
+| Per-user active API key cap reached | `400` | `api_key_user_cap` |
 | Rate limit exceeded | `429` | - |
 | Response payload exceeds the platform ceiling | `413` | - (the body carries `fileUrl`) |
 | Referenced resource does not exist | `404` | - |
@@ -388,6 +390,36 @@ contract and no stated deprecation; they need one before they can go.
 
 ---
 
+## 8. Pagination
+
+A list endpoint is **cursor-paginated**, never offset-paginated: an offset re-counts a set that
+moved under it and skips or repeats rows, and a cursor does not.
+
+- **Request:** use `PaginationQuerySchema` (`schemas/pagination.ts`) as the contract's
+  `queryParams`, or `.extend()` it with filters: `limit` (1-100, default 25) and an optional
+  opaque `cursor`.
+- **Response:** build the `200` schema with `paginatedResponseSchema(itemSchema)`: the page under
+  `data` and `next_cursor`, which is **always present** and `null` on the last page. A caller
+  loops until it reads `null`; it never has to test for an absent key.
+- **Cursors are opaque.** A caller passes back exactly the `next_cursor` it was given. The server
+  helper (`apps/client/server/utils/cursorPagination.ts`) encodes a format version, the scope the
+  cursor was issued for and the last id served, and answers `422` for a cursor that is malformed or
+  was minted by a different endpoint. Order is by `id`, so a page boundary is stable while rows are
+  added or removed around it.
+- **Filters are not part of the cursor.** A caller that changes a filter starts again without one.
+
+**[gated]** A `GET` contract whose `200` body has an array `data` field must publish
+`next_cursor` as a present, nullable string and accept optional `limit` and `cursor` query params.
+A non-`GET` endpoint that happens to return `data` is not a list and is not gated.
+
+A `GET` that genuinely returns a `data` array but is not a list (nothing to page through) carries
+a `pagination` conventionExemption stating why, the same escape hatch `status-table` and
+`scope-required` use.
+
+This exemption is not live-caller debt, so the exemption policy at the top of this file does not govern it. It records that the list inference misfired on a GET whose `data` array has nothing to page through. Prefer renaming the field over exempting it.
+
+---
+
 ## What is not gated yet
 
 Honest list of the rules above that a reviewer still has to catch by hand, so nobody
@@ -395,6 +427,7 @@ mistakes "CI passed" for "conventions met":
 
 | Rule | Why it is not gated |
 |---|---|
+| Cursor pagination is enforced in the handler | The gate checks that `limit` is bounded 1-100 and `cursor` rejects an empty string. It cannot check that the handler pages with `paginateById` rather than slicing by hand, or that cursors stay opaque. That lives in handler control flow. |
 | A bespoke error schema is used only where no body is thrown | Whether a body is thrown or `res.status(...).json(...)`-ed lives in handler control flow, not the contract, exactly like the status-condition rule below. So nothing catches a bespoke schema on a status a throw can reach, which then omits whatever errorHandler adds to that body. |
 | A condition maps to the status this guide gives it | The gate checks only that a status is in the allowed *set*. Nothing checks that "no provider key configured" is the `503` the table says - and `/api/ai/tts` returns `401` for it today. Not structurally derivable: the condition lives in handler control flow, not the contract. |
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |

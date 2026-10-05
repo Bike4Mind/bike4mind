@@ -13,36 +13,159 @@ import remarkGfm from 'remark-gfm';
  */
 export const remarkGfmNoSingleTilde: [typeof remarkGfm, { singleTilde: false }] = [remarkGfm, { singleTilde: false }];
 
-// Matches a single-dollar span with no nested/adjacent `$` and no newline, requiring at least
-// one LaTeX control sequence (`\command`) inside - this is what distinguishes real inline math
-// ("$17 \times 24$") from ordinary currency prose ("$124 and $150"), which never contains a
-// backslash command.
-const SINGLE_DOLLAR_LATEX_SPAN = /(?<!\$)\$(?!\$)([^$\n]*\\[a-zA-Z][^$\n]*)(?<!\$)\$(?!\$)/g;
-// Splits on fenced code blocks and inline code spans so `$` inside code is never touched.
-const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|`[^`\n]*`)/g;
+// Matches a single-dollar span with no nested/adjacent `$` and no newline, using pandoc's
+// delimiter shape as the gate: opening `$` not followed by whitespace, closing `$` not preceded
+// by whitespace and not followed by a digit. That last check is what rejects currency runs like
+// "$5 to $10", "$124 and $150 per seat", and "~$15M ... ~$40M" - each has another amount right
+// after the "closing" dollar. We widen pandoc's digit rule to any word char or `{` so shell
+// variables ("$HOME=$PWD", "$PATH/$SUBDIR", "${A}${B}") are rejected the same way; the cost is
+// that "$n$th" stays literal. Content still has to pass `looksLikeMath` below to be promoted.
+const SINGLE_DOLLAR_SPAN = /(?<!\$)\$(?!\$)(?!\s)([^$\n]*[^$\n\s])(?<!\$)\$(?!\$)(?![\w{])/g;
+// Splits on ``` and ~~~ fenced code blocks and inline code spans so `$` and `\(`/`\[` inside them
+// are never touched. Indented code blocks are not detected. A fence segment carries no trailing
+// newline, so the text after it starts mid-line.
+const CODE_SPAN_SPLITTER = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g;
+
+// LaTeX's own delimiters. CommonMark reads `\(` and `\[` as backslash escapes, so without this the
+// parser drops the backslash and prints "( a^2 )". The lookbehind requires an even run of
+// backslashes before the delimiter: `\\[2pt]` is a LaTeX line break, not an opening bracket.
+export const UNESCAPED = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)`;
+const INLINE_PAREN_SPAN = new RegExp(String.raw`${UNESCAPED}\\\(([^\n]*?)${UNESCAPED}\\\)`, 'g');
+const INLINE_BRACKET_SPAN = new RegExp(String.raw`${UNESCAPED}\\\[([^\n]*?)${UNESCAPED}\\\]`, 'g');
+// `\[` opening its line (after indentation or blockquote markers) and `\]` closing a line. The body
+// may not cross a blank line, so an unclosed `\[` cannot swallow the paragraphs that follow, nor
+// hold another unescaped `\[`/`\]`, so `\[ a \] and \[ b \]` is left to the inline pass instead of
+// becoming one broken block. The body consumes backslashes in escape pairs, which keeps it aligned
+// so the next `\]` it reaches is unescaped without a per-character lookbehind (that was quadratic
+// on a long backslash run).
+const OWN_LINE_BRACKET_BLOCK = new RegExp(
+  String.raw`^([ \t]*(?:>[ \t]*)*)\\\[((?:\\[^[\]\n]|\\(?=\n)|[^\\\n]|\n(?![ \t>]*\n))*?)\\\][ \t]*$`,
+  'gm'
+);
+
+// A span's content counts as math if it has a LaTeX control sequence ("\times", "\frac", ...),
+// an unambiguous structural math character (^, _, *, parens, braces), or is a bare single-letter
+// variable ("$x$"). A lone amount like "$5$" or "$1,000.50$" matches none of these and is left as
+// text.
+//
+// "=", "/", "+", "<", ">" are ambiguous on their own - shell assignment ("$HOME=$PWD"), path
+// joins ("$PATH/$SUBDIR") and redirects use them too - so they only count as math evidence when
+// followed by another character within the span. Real math always has an operand on both sides
+// ("x = 9", "n > 0", "x/y"); the false positives this rejects all dangle the operator as the very
+// last character of the content, immediately against the closing "$" (e.g. "$DEBUG=$ true",
+// "$PATH/$ as the base"), which is the tell that the "closing" $ is actually the start of an
+// unrelated token rather than the end of a math span.
+function looksLikeMath(content: string): boolean {
+  return (
+    /\\[a-zA-Z]/.test(content) || /[_^*(){}]/.test(content) || /^[a-zA-Z]$/.test(content) || /[=/+<>]./.test(content)
+  );
+}
+
+// `\[x\]` is also how markdown escapes literal brackets, and turndown writes exactly that into
+// stored Knowledge files (`\[Smith (2020)\]`, `arr\[i\]`, `\[n = 30\]`). An escaped `_`, `[` or `]`
+// inside marks prose; a control sequence marks math. An unescaped `#` or `%` is a KaTeX error or a
+// comment that cuts the body short, so the span stays text; `&` and `__` do too unless a control
+// sequence is present (`aligned` needs `&`). Turndown adds no padding but keeps the source's, so
+// padding alone is no tell: a tight body needs a raw `_` (turndown escapes it) and no `:` or 3+ letter
+// word; a padded body needs `^`, `_` or `=` between operands, and `^`/`_` once it holds a word
+// (`\[ key = value \]` is prose). Parens keep `looksLikeMath`: turndown never escapes them.
+function looksLikeBracketMath(raw: string): boolean {
+  const content = raw.trim();
+  const odd = String.raw`(?:^|[^\\])(?:\\\\)*\\`;
+  const hasUnescaped = (chars: string) => new RegExp(String.raw`(?:^|[^\\])(?:\\\\)*[${chars}]`).test(content);
+  if (new RegExp(odd + String.raw`[_[\]]`).test(content) || hasUnescaped('#%')) return false;
+  if (new RegExp(odd + '[a-zA-Z]').test(content)) return true;
+  if (hasUnescaped('&') || content.includes('__')) return false;
+  const hasWord = /[a-zA-Z]{3}/.test(content);
+  const padded = /^\s/.test(raw) && /\s$/.test(raw);
+  if (!padded) return !hasWord && !content.includes(':') && /\S\s*_\s*\S/.test(content);
+  return (hasWord ? /\S\s*[_^]\s*\S/ : /\S\s*[_^=]\s*\S/).test(content);
+}
+
+// Models write `\*` so markdown will not italicise a product, but KaTeX has no `\*` command. Scans
+// escape pairs left to right so `\\*` (an escaped backslash, then `*`) is left alone.
+function unescapeStars(tex: string): string {
+  return tex.replace(/\\[\s\S]/g, pair => (pair === '\\*' ? '*' : pair));
+}
+
+// Inline `$$...$$` for a one-line span, or the original text when it is not math (`\(sic\)`, the
+// markdown-escaped citation `\[1\]`) or holds a `$` that would break the produced delimiters. A
+// span touching a `$` or another delimiter gets a space on that side, so `$x$\(y^2\)` does not
+// become an unparseable `$x$$$y^2$$`.
+function toInlineMath(isMath: (raw: string) => boolean) {
+  return (match: string, inner: string, offset: number, whole: string): string => {
+    const body = inner.trim();
+    if (!body || body.includes('$') || !isMath(inner)) return match;
+    const before = whole[offset - 1] === '$' ? ' ' : '';
+    const next = whole.slice(offset + match.length, offset + match.length + 2);
+    const after = next.startsWith('$') || next === '\\(' || next === '\\[' ? ' ' : '';
+    return `${before}$$${unescapeStars(body)}$$${after}`;
+  };
+}
+
+// remark-math renders `$$` as display math only as a fence: `$$` alone on a line, then content,
+// then `$$` alone on a line. A one-line `$$ x $$` renders inline even on its own line. Every fence
+// line takes the opening line's prefix so the block stays inside its list item or blockquote.
+function toDisplayMath(match: string, prefix: string, inner: string): string {
+  if (inner.includes('$') || !looksLikeBracketMath(inner)) return match;
+  const [firstLine = '', ...lines] = inner.split('\n');
+  // A lazy-continuation line (no `>`) would end the blockquote between the two fences.
+  if (prefix.includes('>') && lines.some(line => !/^[ \t]*>/.test(line))) return match;
+  const width = (ws: string) => [...ws].reduce((col, ch) => (ch === '\t' ? col + 4 - (col % 4) : col + 1), 0);
+  const indent = width(prefix.match(/^[ \t]*/)![0]);
+  // A body line indented less than the opener is a lazy continuation; a `$$` fence cannot hold it.
+  if (indent && lines.some(line => line.trim() && width(line.match(/^[ \t]*/)![0]) < indent)) return match;
+  const first = firstLine.trim();
+  const last = lines.pop();
+  const body = [...(first ? [prefix + first] : []), ...lines];
+  if (last !== undefined && last.replace(/[\s>]/g, '')) body.push(last.trimEnd());
+  return [`${prefix}$$`, ...body.map(unescapeStars), `${prefix}$$`].join('\n');
+}
+
+function normalizeLatexBrackets(segment: string, startsLine: boolean, endsLine: boolean): string {
+  return segment
+    .replace(OWN_LINE_BRACKET_BLOCK, (match: string, prefix: string, inner: string, offset: number) => {
+      // `^`/`$` also match at the segment's edges, which sit mid-line next to inline code.
+      const atEdge = (offset === 0 && !startsLine) || (offset + match.length === segment.length && !endsLine);
+      return atEdge ? match : toDisplayMath(match, prefix, inner);
+    })
+    .replace(INLINE_BRACKET_SPAN, toInlineMath(looksLikeBracketMath))
+    .replace(
+      INLINE_PAREN_SPAN,
+      toInlineMath(raw => looksLikeMath(raw.trim()))
+    );
+}
 
 /**
- * Promotes single-dollar LaTeX spans (`$17 \times 24$`) to double-dollar spans
- * (`$$17 \times 24$$`) before markdown is parsed, so `remark-math` renders them as inline math
- * even with `singleDollarTextMath: false` (see `remarkGfmNoSingleTilde` above for why that
- * option is off). remark-math treats `$$...$$` as inline vs. block based on position - a span
- * embedded mid-sentence stays inline - so this only changes how genuine LaTeX renders, not
- * layout.
+ * Normalizes LLM math into the `$$` forms `remark-math` renders, before markdown is parsed:
+ * - single-dollar spans (`$17 \times 24$`, `$x^2 = 9$`) become inline `$$...$$`, so they render
+ *   even with `singleDollarTextMath: false` (see `remarkGfmNoSingleTilde` above for why that is off);
+ * - LaTeX `\( ... \)` becomes inline `$$...$$`;
+ * - LaTeX `\[ ... \]` becomes a fenced, centred `$$` block when it opens and closes its own lines,
+ *   and inline `$$...$$` when it sits mid-sentence (splitting the sentence would be worse).
+ * remark-math treats a `$$...$$` span embedded mid-sentence as inline, so the inline rewrites
+ * change how genuine LaTeX renders, not layout.
  *
- * Only spans containing a `\command` are promoted, so plain currency text ("$124 and $150 per
- * seat") is left untouched. This is deliberately narrower than "any `$...$` pair": it won't
- * catch LaTeX with no backslash command (e.g. `$x^2$`), but that tradeoff is what keeps currency
- * prose safe. LLMs almost always reach for a backslash command (`\times`, `\frac`, `\sqrt`, a
- * greek letter, ...) in real math, so this covers the common case.
+ * A dollar span is promoted when it matches `SINGLE_DOLLAR_SPAN`'s currency-safe delimiter shape
+ * AND its content passes `looksLikeMath`. Together these catch math with no backslash command
+ * (`$x^2$`, `$n > 0$`, `$f(x)$`, `$a_1, a_2$`) while still leaving currency prose ("$124 and
+ * $150 per seat", "$5 to $10", "$20/month") as literal text. `\( \)` spans pass `looksLikeMath`
+ * too; `\[ \]` spans pass the stricter `looksLikeBracketMath`, so markdown-escaped brackets like
+ * `\[1\]` or `\[Smith (2020)\]` stay literal.
  *
  * Use this in every renderer that displays LLM / AI-generated markdown so the behavior stays
  * consistent and the fix does not drift across surfaces.
  */
 export function promoteInlineLatexDollars(markdown: string): string {
-  return markdown
-    .split(CODE_SPAN_SPLITTER)
+  const segments = markdown.split(CODE_SPAN_SPLITTER);
+  return segments
     .map((segment, i) =>
-      i % 2 === 1 ? segment : segment.replace(SINGLE_DOLLAR_LATEX_SPAN, (_match, inner: string) => `$$${inner}$$`)
+      i % 2 === 1
+        ? segment
+        : normalizeLatexBrackets(segment, i === 0, i === segments.length - 1).replace(
+            SINGLE_DOLLAR_SPAN,
+            (match, inner: string) => (looksLikeMath(inner) ? `$$${inner}$$` : match)
+          )
     )
     .join('');
 }

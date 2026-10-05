@@ -101,7 +101,7 @@ describe('questMasterPlanAccess', () => {
 
     describe('legacy backfill', () => {
       it('backfills userId from session ownership and grants access', async () => {
-        const plan = { userId: undefined, notebookId: validNotebookId, sharedWith: [] };
+        const plan = { id: validPlanId, userId: undefined, notebookId: validNotebookId, sharedWith: [] };
         const session = { userId: validUserId };
         mockFindById.mockResolvedValue(plan);
         mockSessionFindById.mockResolvedValue(session);
@@ -111,7 +111,7 @@ describe('questMasterPlanAccess', () => {
 
         expect(result).toBe(plan);
         expect(plan.userId).toBe(validUserId);
-        expect(mockUpdate).toHaveBeenCalledWith(plan);
+        expect(mockUpdate).toHaveBeenCalledWith({ id: validPlanId, userId: validUserId });
       });
 
       it('denies access when session owner does not match', async () => {
@@ -205,7 +205,7 @@ describe('questMasterPlanAccess', () => {
 
     describe('legacy backfill', () => {
       it('backfills userId from session ownership and grants access', async () => {
-        const plan = { userId: undefined, notebookId: validNotebookId, sharedWith: [] };
+        const plan = { id: validPlanId, userId: undefined, notebookId: validNotebookId, sharedWith: [] };
         const session = { userId: validUserId };
         mockFindById.mockResolvedValue(plan);
         mockSessionFindById.mockResolvedValue(session);
@@ -215,7 +215,7 @@ describe('questMasterPlanAccess', () => {
 
         expect(result).toBe(plan);
         expect(plan.userId).toBe(validUserId);
-        expect(mockUpdate).toHaveBeenCalledWith(plan);
+        expect(mockUpdate).toHaveBeenCalledWith({ id: validPlanId, userId: validUserId });
       });
 
       it('denies access when session owner does not match', async () => {

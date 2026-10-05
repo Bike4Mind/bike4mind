@@ -43,6 +43,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'imageEditQueue',
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+  },
+  {
     label: 'data-lake-research',
     displayName: 'Data Lake Research Run',
     application: 'DataLakeManagement',
@@ -221,6 +227,24 @@ const DLQ_REGISTRY = [
     displayName: 'Drive Lake Ingest',
     application: 'DataLakeManagement',
     sourceQueue: 'driveLakeIngestQueue',
+  },
+  {
+    label: 'drive-disconnect-purge',
+    displayName: 'Drive Disconnect Purge',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveDisconnectPurgeQueue',
+  },
+  {
+    label: 'github-lake-ingest',
+    displayName: 'GitHub Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeIngestQueue',
+  },
+  {
+    label: 'github-lake-revoke',
+    displayName: 'GitHub Lake Revoke',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeRevokeQueue',
   },
 ] as const satisfies readonly DlqDescriptor[];
 

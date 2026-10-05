@@ -20,6 +20,9 @@ import {
   getCurrentPathFromContext,
   getViewSummaryForLLM,
   isNavigableFeaturePath,
+  applyReplyChoices,
+  REPLY_CHOICES_GUIDANCE,
+  stripChoicesFromReplies,
   ReasoningEffort,
   ICacheStrategy,
   generateAnonymousSessionId,
@@ -39,6 +42,7 @@ import {
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
   visibleReplyText,
+  tokenEstimateMultiplier,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -74,6 +78,7 @@ import {
   DEFAULT_OUTPUT_MAX_TOKENS,
   effectiveContextWindow,
   safeInputWindow,
+  withTokenEstimateMultiplier,
 } from '@bike4mind/utils';
 import type { FabFileNotice, EmbeddingCredential } from '@bike4mind/utils';
 import { buildAttachmentNoticePrompt, toAttachmentNoticeStrings } from './attachmentNotices';
@@ -107,6 +112,7 @@ import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedRep
 import { buildSystemPromptSourceFiles } from './buildSystemPromptSourceFiles';
 import { resolveCorrectionContext } from './buildCorrectionContext';
 import { LATTICE_TOOL_NAMES } from './tools';
+import { createWebSearchBudget, MAX_WEB_SEARCHES_PER_TURN } from './tools/implementation/websearch';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
@@ -114,11 +120,13 @@ import {
   warnIfManyLakeMemberships,
   type MeasurableDataLakeAccessContext,
   type EntitlementResolution,
+  type GetDynamicDataLakeAccessOptions,
 } from '../dataLakeService/getDynamicDataLakeTags';
 // Re-exported so the resolver below and the type it returns stay reachable from one import, while
 // the declaration stays beside the context contract it has to satisfy.
 export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
+import { countNotServingNamedLakes } from '../dataLakeService/countNotServingNamedLakes';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -175,7 +183,8 @@ import {
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
-import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
+import { vetPreauthorizedLakeIds } from '../dataLakeService/vetPreauthorizedLakeIds';
+import { vetReaderConsentDatalakeTags } from './vetReaderConsentDatalakeTags';
 import {
   unionPreauthorizedLakeAccess,
   type ResolvedLakeAccessSetWithAdmissions,
@@ -214,7 +223,12 @@ import {
   sortDetailsByDeliveryOrder,
 } from './systemPromptFloorTelemetry';
 import { buildArtifactEmissionMessages, resolveArtifactsEnabled } from './artifactGating';
-import { shouldOfferBlogTools, shouldOfferDelegation, shouldOfferSkillTool } from './autoAddedToolGating';
+import {
+  shouldOfferBlogTools,
+  shouldOfferDataLakeTools,
+  shouldOfferDelegation,
+  shouldOfferSkillTool,
+} from './autoAddedToolGating';
 import { resolveMementoGates } from './mementoGating';
 import {
   ContextTelemetryAlertsSchema,
@@ -225,6 +239,7 @@ import {
   ABSTENTION_PROMPT,
   ELISION_WARNING,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  DATA_LAKE_TOOL_NAMES,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -681,7 +696,25 @@ export function resolveEnabledTools(input: ResolveEnabledToolsInput): string[] {
   paired = addPairedTool(paired, 'search_knowledge_base', 'count_knowledge_base');
   // Corpus shape rides along too (#1292): topics, folders and pipeline health, same reasoning.
   paired = addPairedTool(paired, 'search_knowledge_base', 'describe_knowledge_base');
+  // The Smart Tools toggle exposes only the save tool; it cannot name a target lake without the
+  // list, or make one without the create.
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'list_my_data_lakes');
+  paired = addPairedTool(paired, 'save_content_to_data_lake', 'create_data_lake');
   return paired.filter(tool => !denied.has(tool));
+}
+
+/**
+ * The turn's denylist: the session's curated `disabledTools` plus the request's server-set
+ * `deniedTools` (e.g. write tools an API key lacks the scope for - see dataLakeScopes.ts). A union,
+ * so neither source can re-enable what the other denies. Undefined when both are empty, matching
+ * how `sessionDisabledTools` was passed before.
+ */
+export function resolveDeniedTools(sessionDisabledTools: unknown, requestDeniedTools?: string[]): string[] | undefined {
+  const merged = new Set([
+    ...(Array.isArray(sessionDisabledTools) ? sessionDisabledTools : []),
+    ...(requestDeniedTools ?? []),
+  ]);
+  return merged.size > 0 ? [...merged] : undefined;
 }
 
 /**
@@ -751,9 +784,10 @@ export function attachmentHasIndexedContent(
 
 /**
  * Tools this process auto-adds server-side regardless of user selection. Three auto-add sites
- * feed this: the request-parse method (navigate_view), the conditional blog/skill gate in
- * `process()` (blog_publish/blog_edit/blog_draft, skill - each on its own intent/catalog signal,
- * see `shouldOfferBlogTools`/`shouldOfferSkillTool`), and `resolveEnabledTools` (the
+ * feed this: the request-parse method (navigate_view), the conditional blog/skill/data-lake gate in
+ * `process()` (blog_publish/blog_edit/blog_draft, skill, and the DATA_LAKE_TOOL_NAMES trio - each on
+ * its own intent/catalog signal, see `shouldOfferBlogTools`/`shouldOfferSkillTool`/
+ * `shouldOfferDataLakeTools`), and `resolveEnabledTools` (the
  * attached-knowledge offer). Small local (Ollama) models get confused by tools they didn't ask
  * for, so the names in this list are trimmed for that backend unless the user explicitly enabled
  * them. Keep this list in sync with those auto-add sites.
@@ -764,7 +798,14 @@ export function attachmentHasIndexedContent(
  * which is the whole point of the feature for local models. Listing them here would silently
  * defeat it.
  */
-export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
+export const AUTO_ADDED_TOOL_NAMES = [
+  'blog_draft',
+  'blog_publish',
+  'blog_edit',
+  'navigate_view',
+  'skill',
+  ...DATA_LAKE_TOOL_NAMES,
+];
 
 /**
  * Reconciliation delta with the zero-balance floor. Pre-reservation (the only
@@ -899,6 +940,16 @@ export class ChatCompletionProcess {
    * knowledge tool resolves with.
    */
   private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
+  /**
+   * Per-turn memo for the ATTACHMENT scope - the same resolution as
+   * `accessibleDataLakeAccessMemo` above but with DRAFT lakes included, as browse includes them.
+   * Kept separate rather than widening that one: it feeds the tool-offer gate, the inline-defer
+   * plan and the retrieval seed's `lakeScope`, and an unpublished lake must not become ground truth
+   * for a question the user never pointed at. Resolved lazily off the SAME `DataLakeAccessContext`
+   * object, so the second pass re-runs one lake query and re-uses that turn's
+   * membership/grant/supersession snapshot rather than taking a second, possibly divergent one.
+   */
+  private attachmentDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
   /**
    * The SAME `DataLakeAccessContext` object for the whole turn (#3055), so every call into
    * `getDynamicDataLakeTags.ts`'s per-turn memos (membershipOrgIdsForTurn, grantedLakeReachForTurn,
@@ -1092,34 +1143,47 @@ export class ChatCompletionProcess {
    * empty access (treated as "no lake"), never breaks the turn.
    */
   private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
-    if (this.accessibleDataLakeAccessMemo === undefined) {
-      try {
-        const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext());
-        // Same union the retrieval and tool doors run, so all three agree on what this session can
-        // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
-        // un-widened exactly as it would have before the admission.
-        this.accessibleDataLakeAccessMemo = await unionPreauthorizedLakeAccess(
-          resolved,
-          this.turnPreauthorizedLakeIds,
-          this.user.id,
-          this.db
-        );
-      } catch (err) {
-        this.logger.warn(
-          `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
-        );
-        this.accessibleDataLakeAccessMemo = {
-          dataLakeTags: [],
-          dataLakeTagPrefixes: [],
-          scopedTagPrefixes: [],
-          lakes: [],
-          // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
-          // shaped anything is unknown, not "nothing was excluded" (#3055).
-          admittedPreauthorizedTags: new Set(),
-        };
-      }
-    }
+    this.accessibleDataLakeAccessMemo ??= await this.resolveDataLakeAccess({});
     return this.accessibleDataLakeAccessMemo;
+  }
+
+  /**
+   * The same resolution with DRAFT lakes included - the ATTACHMENT scope. Separate memo,
+   * separate query, deliberately: see `attachmentDataLakeAccessMemo`. Lazy, so a turn with no
+   * attachments never pays for it.
+   */
+  private async getAttachmentDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
+    this.attachmentDataLakeAccessMemo ??= await this.resolveDataLakeAccess({ includeDraftLakes: true });
+    return this.attachmentDataLakeAccessMemo;
+  }
+
+  /**
+   * The body both memos above share, so retrieval and attachment can differ ONLY by the status set
+   * they admit - never by the union, the fail direction, or the context they resolve against.
+   */
+  private async resolveDataLakeAccess(
+    opts: GetDynamicDataLakeAccessOptions
+  ): Promise<ResolvedLakeAccessSetWithAdmissions> {
+    try {
+      const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext(), opts);
+      // Same union the retrieval and tool doors run, so all three agree on what this session can
+      // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
+      // un-widened exactly as it would have before the admission.
+      return await unionPreauthorizedLakeAccess(resolved, this.turnPreauthorizedLakeIds, this.user.id, this.db);
+    } catch (err) {
+      this.logger.warn(
+        `[dataLakes] accessible-lake resolution failed; treating as no lake: ${(err as Error)?.message}`
+      );
+      return {
+        dataLakeTags: [],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [],
+        lakes: [],
+        // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
+        // shaped anything is unknown, not "nothing was excluded" (#3055).
+        admittedPreauthorizedTags: new Set(),
+      };
+    }
   }
 
   /**
@@ -1137,6 +1201,10 @@ export class ChatCompletionProcess {
    * the question is "is this file lake content", not "can the caller read it by any route".
    * `restrictToFileIds` bounds it to the requested ids. Returns `null` when it cannot
    * tell, which callers must treat as "cannot judge".
+   *
+   * Deliberately RETRIEVAL-scoped (active lakes only), not the draft-inclusive
+   * `getAttachmentDataLakeAccess`: a draft-lake attachment is inlined, but retrieval cannot reach
+   * its lake, so it must not count as lake content here - that keeps the corpus personal.
    */
   private async countLakeReachableAttachments(ids: string[]): Promise<number | null> {
     if (ids.length === 0) return 0;
@@ -1199,19 +1267,63 @@ export class ChatCompletionProcess {
    * one `$or` is the cross-tenant promotion the SCOPED/OPEN split forbids. Registry lakes are
    * covered by `dataLakeTagPrefixes` instead. Never construct `lakeMemberships` any other way here.
    *
-   * Fail direction is inherited from `getAccessibleDataLakeAccess`, which catches its own failures
+   * Fail direction is inherited from `resolveDataLakeAccess`, which catches its own failures
    * and returns an empty access set - so a lake-resolution outage degrades to today's
    * ownership-only behaviour. Never widen on error.
+   *
+   * Resolved through `getAttachmentDataLakeAccess`, NOT the retrieval memo: browse admits a
+   * DRAFT lake's file to the workbench, so re-authorizing that same named file against an
+   * active-only lake set would be narrower than the door that admitted it. The retrieval memo stays
+   * active-only - the two are separate on purpose, and the three attachment doors
+   * (`resolveAttachmentLakeAccess`, `createAttachmentLakeAccess`, this one) must stay in step.
    */
   private async attachmentLakeAccess(): Promise<AttachmentLakeAccess> {
-    const access = await this.getAccessibleDataLakeAccess();
+    return this.toAttachmentLakeAccess(await this.getAttachmentDataLakeAccess(), 'attachment-resolution');
+  }
+
+  private toAttachmentLakeAccess(access: ResolvedLakeAccessSetWithAdmissions, site: string): AttachmentLakeAccess {
     const lakeMemberships = lakeMembershipsFrom(access.lakes);
-    warnIfManyLakeMemberships(lakeMemberships, this.logger, 'attachment-resolution');
+    warnIfManyLakeMemberships(lakeMemberships, this.logger, site);
     return {
       lakeMemberships,
       dataLakeTags: access.dataLakeTags,
       dataLakeTagPrefixes: access.dataLakeTagPrefixes,
     };
+  }
+
+  /**
+   * The subset of `attachedFiles` the knowledge tools can actually READ, for the tool-offer gate.
+   *
+   * `attachedFiles` came through the draft-inclusive attachment scope, but the tools search through
+   * the active-only retrieval scope, so a file reachable only through a DRAFT lake is inlined yet
+   * unreturnable by the tool. Counting it would offer a tool that can only reply empty - the
+   * "I cannot access this file" pattern `hasAttachedKnowledge` exists to prevent.
+   *
+   * Re-reads only when the attachment scope reaches a lake the retrieval scope does not; otherwise
+   * the two reads are identical and `attachedFiles` is returned as-is. `null` in or on a failed
+   * re-read means "cannot tell", which the gate treats as offer (fail open), as it already does.
+   */
+  private async getToolReadableAttachedFiles(
+    attachedFiles: IFabFileDocument[] | null
+  ): Promise<IFabFileDocument[] | null> {
+    if (attachedFiles === null || attachedFiles.length === 0) return attachedFiles;
+    const retrieval = await this.getAccessibleDataLakeAccess();
+    const attachment = await this.getAttachmentDataLakeAccess();
+    const retrievalLakeIds = new Set(retrieval.lakes.map(l => l.id));
+    if (attachment.lakes.every(l => retrievalLakeIds.has(l.id))) return attachedFiles;
+    try {
+      const scope = this.getScopeFilter(this.user, Permission.read, 'FabFile');
+      return await this.db.fabfiles.getAccessibleFiles(
+        attachedFiles.map(f => f.id),
+        scope,
+        this.toAttachmentLakeAccess(retrieval, 'attachment-offer-gate')
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[knowledge] tool-readable attachment check failed; treating attached knowledge as indexed (fail open): ${(err as Error)?.message}`
+      );
+      return null;
+    }
   }
 
   /**
@@ -1684,6 +1796,8 @@ export class ChatCompletionProcess {
             `💾 [saveQuest] Saving quest ${quest.id} with ${quest.researchModeResults.length} Research Mode results`
           );
         }
+        // Deliberate whole-doc write: this is the streaming owner of `quest`, mutated across the
+        // pipeline and by tools, so no fixed field list exists. Narrowing needs a snapshot-diff.
         const result = await this.db.quests.update(quest);
         return result;
       });
@@ -1886,6 +2000,15 @@ export class ChatCompletionProcess {
       // the rule; the one site that cannot is the navigate_view auto-add, which runs in
       // initializeProcessContext before this exists and so calls the same helper directly.
       const skipAutoOffers = resolveSkipAutoOffers(parsedBody);
+      const isResearchMode = !!researchMode?.enabled && researchMode.configurations?.length > 0;
+      // Whether REPLY_CHOICES_GUIDANCE ships this turn. Decided here, ahead of the history fetch,
+      // because history re-attaches stored choices only when the guidance is offered (see
+      // fetchAndProcessPreviousMessages `includeReplyChoices`); voice reads the raw stream aloud.
+      // Research Mode is excluded because its early return never reaches applyReplyChoices.
+      const replyChoicesOffered = !(skipAutoOffers || isResearchMode || parsedBody.skipReplyChoices);
+      // Read at every denylist site below instead of `session.disabledTools`: the final pass after
+      // buildTools is load-bearing, since intent gates add tools after resolveEnabledTools runs.
+      const deniedTools = resolveDeniedTools(session.disabledTools, parsedBody.deniedTools);
       // Kicked off here (not awaited yet) so its DB read overlaps with the models/admin-settings
       // fetch below instead of serializing in front of it - folded into that Promise.all.
       //
@@ -1965,9 +2088,14 @@ export class ChatCompletionProcess {
       // discarding the content already in front of it. `attachedKnowledgeFiles` is `null` both
       // when the lookup was skipped above and when it failed - fail toward offering rather than
       // stranding a genuinely indexed corpus with no retrieval path (see getAttachedKnowledgeFiles).
+      // Narrowed to what the tool can READ, which excludes a draft-lake-only attachment (see
+      // getToolReadableAttachedFiles).
+      const toolReadableAttachedFiles = hasAnyAttachment
+        ? await this.getToolReadableAttachedFiles(attachedKnowledgeFiles)
+        : attachedKnowledgeFiles;
       const hasAttachedKnowledge =
         hasAnyAttachment &&
-        (attachedKnowledgeFiles === null || attachedKnowledgeFiles.some(attachmentHasIndexedContent));
+        (toolReadableAttachedFiles === null || toolReadableAttachedFiles.some(attachmentHasIndexedContent));
       // Only pay the accessible-lake lookup when it could change the offer: not skipped
       // (prompt-mode), and attached knowledge hasn't already triggered the offer anyway.
       const hasAccessibleDataLake =
@@ -1975,7 +2103,7 @@ export class ChatCompletionProcess {
       const resolvedTools = resolveEnabledTools({
         requestTools: enabledTools,
         sessionEnabledTools: Array.isArray(session.enabledTools) ? session.enabledTools : undefined,
-        sessionDisabledTools: Array.isArray(session.disabledTools) ? session.disabledTools : undefined,
+        sessionDisabledTools: deniedTools,
         hasAttachedKnowledge,
         hasAccessibleDataLake,
         skipAutoOffers,
@@ -2100,7 +2228,8 @@ export class ChatCompletionProcess {
         session.citationStyle,
         toRetrievalFilter(session),
         session.lakeScopeExplicit,
-        vettedPreauthorizedLakeIds
+        vettedPreauthorizedLakeIds,
+        vetReaderConsentDatalakeTags(session, this.user.id)
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2532,6 +2661,7 @@ export class ChatCompletionProcess {
         // model here decides whether Priority 2 tool replay is safe for THIS backend (currently
         // excludes Gemini) - see fetchAndProcessPreviousMessages's own doc comment on the param.
         model: modelInfo.id,
+        includeReplyChoices: replyChoicesOffered,
       });
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
@@ -2581,6 +2711,18 @@ export class ChatCompletionProcess {
           })
         ) {
           enabledTools.push('skill');
+        }
+
+        if (
+          await shouldOfferDataLakeTools({
+            message,
+            priorToolNames,
+            dataLakesEnabled: async () => Boolean(await this.db.adminSettings.getSettingsValue('EnableDataLakes')),
+          })
+        ) {
+          for (const tool of DATA_LAKE_TOOL_NAMES) {
+            if (!enabledTools.includes(tool)) enabledTools.push(tool);
+          }
         }
       }
 
@@ -2697,8 +2839,7 @@ export class ChatCompletionProcess {
         sessionKnowledgeIds: session.knowledgeIds ?? [],
         attachedFileTokenBudget,
         skipAutoOffers,
-        knowledgeSearchDisabled:
-          Array.isArray(session.disabledTools) && session.disabledTools.includes(KNOWLEDGE_SEARCH_TOOL_NAME),
+        knowledgeSearchDisabled: deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) ?? false,
         defaultAdminSettings,
         // The same mapping the tool build uses below, so the session -> filter translation cannot
         // drift between them. Narrower than "the two agree": reachability also depends on the tool
@@ -2773,6 +2914,7 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        apiKeyId: parsedBody.apiKeyId,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
@@ -2781,6 +2923,9 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        // Owner-vetted separately from the (unvetted) scope above - a share or teammate reply must
+        // not inherit the owner's consent to the reader opt-in prompt-injection arm.
+        sessionReaderConsentDatalakeTags: vetReaderConsentDatalakeTags(session, this.user.id),
         sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
@@ -2897,7 +3042,7 @@ export class ChatCompletionProcess {
         // Also enforced over the returned list below; passed here as well because two things the
         // builder produces never appear in that list - MCP tools and the delegate tool's captured
         // parentTools.
-        sessionDisabledTools: session.disabledTools,
+        sessionDisabledTools: deniedTools,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -2933,9 +3078,16 @@ export class ChatCompletionProcess {
       // delegate_to_agent), so strip any session-forbidden tools here too - this
       // closes loopholes like a research subagent web-searching on a "curated
       // sources only" surface.
-      if (Array.isArray(session.disabledTools) && session.disabledTools.length > 0 && allTools) {
-        const denied = new Set(session.disabledTools);
+      if (deniedTools && allTools) {
+        const denied = new Set(deniedTools);
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
+      }
+
+      // Research Mode runs its configurations in parallel over one tool list, so a shared budget
+      // would let one configuration's searches cap another's.
+      const webSearchBudget = createWebSearchBudget(MAX_WEB_SEARCHES_PER_TURN);
+      if (allTools && !isResearchMode) {
+        allTools = webSearchBudget.apply(allTools);
       }
 
       // Local (Ollama) models are small and easily confused by tools they weren't
@@ -2943,7 +3095,15 @@ export class ChatCompletionProcess {
       // the user explicitly enabled, dropping the auto/admin-added extras
       // (blog_draft, skill, navigate_view, blog_publish/edit) unless selected.
       if (modelInfo.backend === ModelBackend.Ollama && allTools) {
-        const userSelected = new Set<string>(parsedBody.tools ?? []);
+        // Companions of a selected tool count as selected (resolveEnabledTools' pairing), so the
+        // Smart Tools save-to-data-lake toggle keeps its list/create partners on this backend too.
+        const userSelected = new Set<string>(
+          resolveEnabledTools({
+            requestTools: [...(parsedBody.tools ?? [])],
+            hasAttachedKnowledge: false,
+            skipAutoOffers: true,
+          })
+        );
         const before = allTools.length;
         allTools = allTools.filter(
           t => !AUTO_ADDED_TOOL_NAMES.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)
@@ -3041,10 +3201,26 @@ export class ChatCompletionProcess {
         const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
           tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
         );
-        const excludedByAccessCount =
-          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
-            : narrowedAccess?.excludedByAccessCount;
+        // Both ways a named lake drops out of scope, measured only where the session named one:
+        // gate-excluded (above), and draft - retrieval is active-only, so a draft narrows to
+        // nothing; counted over the identity-named tags that did not survive into lakeScope.
+        // Independent reads, so they run together.
+        const namesALake = accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags);
+        const [excludedByAccessCount, notServingCount] = namesALake
+          ? await Promise.all([
+              this.getDataLakeAccessContext().then(accessContext =>
+                measureIdentityNamedExclusion(accessContext, identityTagsToMeasure, {
+                  callerMaySeeAllLakes: this.user?.isAdmin === true,
+                })
+              ),
+              countNotServingNamedLakes(
+                this.db.dataLakes,
+                this.user.id,
+                datalakeTagsFrom(session.retrievalTags ?? []).filter(tag => !lakeScope.includes(tag)),
+                this.logger
+              ),
+            ])
+          : [narrowedAccess?.excludedByAccessCount, undefined];
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
         // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
@@ -3052,6 +3228,8 @@ export class ChatCompletionProcess {
         // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
           excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
+        const notServingLakes =
+          notServingCount !== undefined ? { count: notServingCount, reason: 'draft' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3059,6 +3237,7 @@ export class ChatCompletionProcess {
           dataLakeTags: [],
           lakeScope,
           ...(excludedLakes ? { excludedLakes } : {}),
+          ...(notServingLakes ? { notServingLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
@@ -3082,8 +3261,7 @@ export class ChatCompletionProcess {
       // denies it, or a model offered no tools at all. Without this, every turn of every
       // lake-holding caller on a non-tool model logs a warning and drowns the real case.
       const knowledgeToolWithheldByConfig =
-        (Array.isArray(session.disabledTools) && session.disabledTools.includes('search_knowledge_base')) ||
-        offeredToolNames.length === 0;
+        deniedTools?.includes(KNOWLEDGE_SEARCH_TOOL_NAME) || offeredToolNames.length === 0;
       if ((hasAttachedKnowledge || (hasAccessibleDataLake && !knowledgeToolWithheldByConfig)) && !skipAutoOffers) {
         const source = hasAttachedKnowledge
           ? `${session.knowledgeIds!.length} attached document(s)`
@@ -3279,6 +3457,9 @@ export class ChatCompletionProcess {
               },
             ]
           : [],
+        // Prompt-only, so unlike viewRegistry it needs no tool and runs on every in-app turn;
+        // withheld with the other auto-offers - see replyChoicesOffered.
+        replyChoices: replyChoicesOffered ? [{ role: 'system' as const, content: REPLY_CHOICES_GUIDANCE }] : [],
         toolPrompt: toolPromptMessage ? [toolPromptMessage] : [], // Tool prompt, blog draft, MCP guidance, conversation context, agent delegation
         agentDetection: featureContextMessages['agentDetection'], // Add agent system prompts
         questMaster: featureContextMessages['questMaster'],
@@ -3364,6 +3545,10 @@ export class ChatCompletionProcess {
         imageGenerationAvailable,
         systemMessagePriority: (message: IMessage) => systemPromptPriorities.get(message),
       };
+      // Every input count this turn (assembly budget, overflow guard, pre-reservation, [BILLING_DRIFT])
+      // goes through this one tokenizer, so they all agree on the model's units: cl100k_base scaled up to
+      // the model's own tokenizer (see tokenEstimateMultiplier).
+      const estimateTokenizer = withTokenEstimateMultiplier(this.tokenizer, tokenEstimateMultiplier(modelInfo.id));
       // messageTruncationInfo is captured ONLY from this first build - the overflow-recovery rebuild
       // further down does not refresh it, so downstream telemetry always reflects the first attempt.
       const firstBuild = await buildAndSortMessages(
@@ -3374,7 +3559,7 @@ export class ChatCompletionProcess {
         defaultAdminSettings,
         historyCount,
         logger,
-        this.tokenizer,
+        estimateTokenizer,
         buildOptions
       );
       let messages = firstBuild.messages;
@@ -3427,7 +3612,7 @@ export class ChatCompletionProcess {
 
       // Calculate input tokens and per-source breakdown in parallel
       const tokenCalculationStartTime = Date.now();
-      const tokenCalcOptions = { estimateOnly: false, tokenizer: this.tokenizer };
+      const tokenCalcOptions = { estimateOnly: false, tokenizer: estimateTokenizer };
       let tokensBySource:
         | {
             systemPrompts: number;
@@ -3485,7 +3670,7 @@ export class ChatCompletionProcess {
                 })
               )
               .join('');
-            toolSchemaTokens = await this.tokenizer.countTokens(serializedToolSchemas);
+            toolSchemaTokens = await estimateTokenizer.countTokens(serializedToolSchemas);
           } catch (toolTokenError) {
             logger.warn(
               '📊 Failed to count tool-schema tokens; leaving tools uncounted for this estimate',
@@ -3549,7 +3734,7 @@ export class ChatCompletionProcess {
               defaultAdminSettings,
               historyCount,
               logger,
-              this.tokenizer,
+              estimateTokenizer,
               buildOptions
             );
             if (!rebuilt || rebuilt.length === 0) break; // keep the last good build; guard below decides
@@ -4062,6 +4247,7 @@ export class ChatCompletionProcess {
         chunkCount = 0;
         quest.promptMeta!.performance!.firstChunkTime = undefined;
         quest.promptMeta!.performance!.firstTokenTime = undefined;
+        webSearchBudget.reset();
       };
 
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
@@ -4105,50 +4291,9 @@ export class ChatCompletionProcess {
         ...(promptMode === 'raw' ? { omitIdentityReminder: true } : {}),
       };
 
-      // Check if Research Mode is enabled and handle parallel processing
-      if (researchMode?.enabled && researchMode.configurations?.length > 0) {
-        logger.info(
-          `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
-        );
-
-        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
-
-        // Handle Research Mode parallel processing
-        const researchResults = await researchModeService.processResearchMode(
-          researchMode,
-          messages,
-          options as ICompletionOptions,
-          async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
-            // Handle streaming for each configuration
-            this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
-          }
-        );
-
-        // Update quest with Research Mode results
-        quest.researchModeResults = researchResults;
-        quest.status = 'done';
-
-        logger.info(`🔬 [Research Mode] Saving quest with results:`, {
-          questId: quest.id,
-          resultsCount: researchResults.length,
-          results: researchResults.map(r => ({
-            configId: r.configurationId,
-            success: r.success,
-            responseLength: r.response?.length || 0,
-          })),
-        });
-
-        await saveQuest(quest);
-
-        // Send final status update to complete the Research Mode processing
-        await this.sendStatusUpdate(quest, null, { immediate: true });
-
-        logger.info(`🔬 [Research Mode] Completed parallel processing`);
-
-        return;
-      }
-
-      // Create an AbortController to allow cancelling the request
+      // Create an AbortController to allow cancelling the request. Set up before the Research
+      // Mode branch below, which returns early: both paths share one controller and one watcher,
+      // and the holder assignment is what lets tools on the research path see the turn signal.
       const abortController = new AbortController();
       // Make the signal available to subagents via the closure captured by buildTools
       abortSignalHolder.signal = abortController.signal;
@@ -4212,6 +4357,60 @@ export class ChatCompletionProcess {
 
       // Start the cancellation watcher
       startCancellationWatcher();
+
+      // Check if Research Mode is enabled and handle parallel processing
+      if (isResearchMode) {
+        logger.info(
+          `🔬 [Research Mode] Starting parallel processing with ${researchMode.configurations.length} configurations`
+        );
+
+        const researchModeService = new ResearchModeService(apiKeyTable, models, logger, this.user.id);
+
+        // Handle Research Mode parallel processing
+        const researchResults = await researchModeService.processResearchMode(
+          researchMode,
+          messages,
+          options as ICompletionOptions,
+          async (configId: string, streamedTexts: (string | null | undefined)[], completionInfo?: unknown) => {
+            // Handle streaming for each configuration
+            this.sendResearchModeStreamUpdate(quest, configId, streamedTexts, completionInfo);
+          },
+          abortController.signal
+        );
+
+        // Update quest with Research Mode results. A Stop makes the cancellation watcher
+        // abort the controller, so the terminal status has to reflect that rather than
+        // unconditionally claiming the turn finished.
+        quest.researchModeResults = researchResults;
+        quest.status = successStatus();
+
+        // This early return skips the normal-path cleanup below, so drop the controller entry
+        // and the watcher here; the outer finally only clears the interval.
+        cleanupAbortController();
+        if (cancelWatcherInterval) {
+          clearInterval(cancelWatcherInterval);
+          cancelWatcherInterval = null;
+        }
+
+        logger.info(`🔬 [Research Mode] Saving quest with results:`, {
+          questId: quest.id,
+          resultsCount: researchResults.length,
+          results: researchResults.map(r => ({
+            configId: r.configurationId,
+            success: r.success,
+            responseLength: r.response?.length || 0,
+          })),
+        });
+
+        await saveQuest(quest);
+
+        // Send final status update to complete the Research Mode processing
+        await this.sendStatusUpdate(quest, null, { immediate: true });
+
+        logger.info(`🔬 [Research Mode] Completed parallel processing`);
+
+        return;
+      }
 
       // (P2b) Resolve the overlapped rapid reply lookup before streaming begins - by now it
       // has run concurrently with all of context assembly, so this await is effectively free.
@@ -4802,6 +5001,28 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
+        // Before the incomplete-answer notice below appends its own slot, so the block is still trailing.
+        const replyChoicesOutcome = applyReplyChoices(quest);
+        // The system-prompt budget can evict the guidance after it was requested (lowest priority in
+        // systemPromptSources.ts), so `offered` reads what was actually delivered.
+        const replyChoicesDelivered =
+          quest.promptMeta?.context?.systemPromptDetails?.some(
+            detail => detail.name === 'reply_choices' && detail.wasIncluded
+          ) ?? false;
+        if (quest.promptMeta) {
+          quest.promptMeta.replyChoices = {
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            ...replyChoicesOutcome,
+          };
+        }
+        if (replyChoicesOutcome.status === 'invalid') {
+          logger.warn('[ReplyChoices] Choices block failed validation; no buttons shown', {
+            questId,
+            model: currentModel.id,
+            offered: replyChoicesOffered && replyChoicesDelivered,
+            reason: replyChoicesOutcome.reason,
+          });
+        }
 
         const incompleteAnswerNotice = buildIncompleteAnswerNotice({
           stopped: quest.status === 'stopped',
@@ -5117,9 +5338,13 @@ export class ChatCompletionProcess {
       // Post-streaming processing: token counting, credits, performance metrics, features.
       // Wrapped in protective try/catch so failures here never overwrite quest.reply or leave quest stuck.
       try {
-        // Calculate output tokens
+        // Calculate output tokens, in the units of the model that actually answered
+        const answeringMultiplier = tokenEstimateMultiplier(currentModel.id);
         const outputTokenCalculationStartTime = Date.now();
-        const outputTokens = await this.tokenizer.countTokens(Object.values(replies), currentModel.id);
+        const outputTokens = await withTokenEstimateMultiplier(this.tokenizer, answeringMultiplier).countTokens(
+          Object.values(replies),
+          currentModel.id
+        );
         logger.info(
           `⏱️ [${Date.now() - processStartTime}ms] Output token calculation completed (${outputTokens} tokens) in ${
             Date.now() - outputTokenCalculationStartTime
@@ -5175,11 +5400,18 @@ export class ChatCompletionProcess {
           (actualTokenUsage?.cacheCreationInputTokens ?? 0);
         const hasProviderUsage = providerInputTokens > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
         const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
-        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : inputTokens;
+        // inputTokens was counted in the requested model's units (estimateTokenizer). When a fallback that
+        // tokenizes differently answered, restate it in that model's units before it prices or drift-checks.
+        const requestedMultiplier = tokenEstimateMultiplier(modelInfo.id);
+        const localInputTokens =
+          requestedMultiplier === answeringMultiplier
+            ? inputTokens
+            : Math.ceil((inputTokens * answeringMultiplier) / requestedMultiplier);
+        const settledInputTokens = hasProviderUsage ? (actualTokenUsage.inputTokens ?? 0) : localInputTokens;
         const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
-          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, localInputTokens);
         // Provider-basis only: the local fallback deliberately never bills cache creation,
         // so recording a value there would imply a charge that was not made.
         const cacheCreationInputTokens = hasProviderUsage ? (actualTokenUsage.cacheCreationInputTokens ?? 0) : 0;
@@ -5193,7 +5425,7 @@ export class ChatCompletionProcess {
             )
           : getTextModelCost(
               currentModel,
-              inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              localInputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
               outputTokens
             );
         // Single stochastic settlement draw, shared by the quest meta, the
@@ -5221,11 +5453,13 @@ export class ChatCompletionProcess {
         // guards billing; it monitors the quality of the local estimate that still
         // drives pre-reservation (and fallback settlement). Causes worth
         // investigating: a new content-block shape we don't measure, or a provider
-        // accounting change. Tool schemas ARE now counted (see the breakdown site),
-        // so the expected residual gap on tool-carrying turns is wire-shape
-        // approximation (our {name,description,input_schema} proxy vs each backend's
-        // exact formatTools) plus provider-side overhead the provider injects when
-        // tools are present (e.g. a tool-use preamble). Threshold is symmetric +/-30%.
+        // accounting change, or a Claude release whose tokenizer tokenEstimateMultiplier
+        // does not cover. For calibrated Claude models the estimate is a deliberate lower
+        // bound, so expect ratios a little under 1, and lower on code-heavy turns (Claude
+        // spends ~2x cl100k on code against a 1.5x factor). Tool-carrying turns add
+        // wire-shape approximation (our {name,description,input_schema} proxy vs each
+        // backend's formatTools) and any preamble the provider injects for tools.
+        // Threshold is symmetric +/-30%.
         // Compare against the provider's FULL input accounting, not just the uncached tail.
         // Provider `input_tokens` reports only the tokens NOT served from / written to cache;
         // on a prompt-cache hit or write the rest lands in cache_read/cache_creation. Summing
@@ -5239,7 +5473,7 @@ export class ChatCompletionProcess {
               (actualTokenUsage.cacheCreationInputTokens ?? 0)
             : undefined;
         if (apiInputForDrift != null && apiInputForDrift > 0) {
-          const ratio = inputTokens / apiInputForDrift;
+          const ratio = localInputTokens / apiInputForDrift;
           if (ratio < 0.7 || ratio > 1.3) {
             logger.warn('[BILLING_DRIFT] Local vs provider input-token count diverges', {
               questId: quest.id,
@@ -5247,7 +5481,7 @@ export class ChatCompletionProcess {
               sessionId: quest.sessionId,
               model: currentModel.id,
               backend: currentModel.backend,
-              localInputTokens: inputTokens,
+              localInputTokens,
               providerInputTokens: apiInputForDrift,
               ratio: Number(ratio.toFixed(2)),
               tokensBySource: quest.promptMeta?.context?.tokensBySource,
@@ -5985,9 +6219,12 @@ export class ChatCompletionProcess {
         return;
       }
       const setErrorReply = (message: string) => {
-        const visiblePartial = (streamedRepliesBeforeError ?? [])
-          .map(r => visibleReplyText(r))
-          .filter(text => text.length > 0);
+        // Strip a trailing choices block (closed or cut mid-stream) before the error joins the
+        // slot with no separator - otherwise an unterminated block swallows the appended error as
+        // "part of the block", and once the error is the last slot the client no longer reads the
+        // earlier slot's block at all, leaking the raw JSON.
+        const choicesStripped = stripChoicesFromReplies(streamedRepliesBeforeError ?? []).replies;
+        const visiblePartial = choicesStripped.map(r => visibleReplyText(r)).filter(text => text.length > 0);
         const combined = [...visiblePartial, message];
         quest.replies = combined;
         quest.reply = combined.join('');
@@ -6343,7 +6580,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     retrievalFilter?: RetrievalExclusionOptions,
     lakeScopeExplicit?: boolean,
     /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
-    preauthorizedLakeIds?: string[]
+    preauthorizedLakeIds?: string[],
+    /** Already vetted against the request's authenticated principal by the caller (vetReaderConsentDatalakeTags). */
+    readerConsentDatalakeTags?: string[]
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -6461,7 +6700,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
           citationStyle,
           retrievalFilter,
           preauthorizedLakeIds,
-          lakeScopeExplicit
+          lakeScopeExplicit,
+          readerConsentDatalakeTags
         )
       );
 

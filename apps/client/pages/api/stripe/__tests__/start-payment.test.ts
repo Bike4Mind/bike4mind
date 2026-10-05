@@ -117,6 +117,7 @@ describe('POST /api/stripe/start-payment (pay-as-you-go, no subscription require
 
     expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
     expect(mockUserUpdate).toHaveBeenCalledTimes(1);
+    expect(mockUserUpdate).toHaveBeenCalledWith({ id: 'user_1', stripeCustomerId: 'cus_new' });
     expect(res.statusCode).toBe(200);
   });
 

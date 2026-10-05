@@ -406,6 +406,18 @@ function getJwtRateLimit(source?: CompletionSource): number {
 }
 
 /**
+ * A counter kept apart from the shared per-user one. Callers without a bucket
+ * share a single counter across every surface, so a CLI/agent session running
+ * at its 1000 cap would exhaust a 100-cap endpoint on the same account. A public
+ * endpoint that documents its own budget needs its own bucket.
+ */
+export type JwtRateLimitBucket = 'tools';
+
+function jwtRateLimitKey(userId: string, bucket?: JwtRateLimitBucket): string {
+  return bucket ? `rate-limit:ws-auth:${bucket}:${userId}` : `rate-limit:ws-auth:${userId}`;
+}
+
+/**
  * Increment the per-user JWT request counter and throw if the per-hour cap
  * for the calling surface has been reached.
  *
@@ -417,10 +429,14 @@ function getJwtRateLimit(source?: CompletionSource): number {
  * hit the cap could never recover without going idle for a full hour from
  * their *most recent* request.
  */
-export async function checkRateLimit(userId: string, source?: CompletionSource, client?: string): Promise<void> {
-  const key = `rate-limit:ws-auth:${userId}`;
+export async function checkRateLimit(
+  userId: string,
+  source?: CompletionSource,
+  options: { bucket?: JwtRateLimitBucket; client?: string } = {}
+): Promise<void> {
+  const key = jwtRateLimitKey(userId, options.bucket);
   const adapters = { db: { caches: cacheRepository } };
-  const limit = getJwtRateLimit(client && CLI_TIER_CLIENT.test(client) ? 'cli' : source);
+  const limit = getJwtRateLimit(options.client && CLI_TIER_CLIENT.test(options.client) ? 'cli' : source);
 
   const current = await cacheService.get({ key }, { ...adapters, schema: z.coerce.number() });
   if (current === null) {

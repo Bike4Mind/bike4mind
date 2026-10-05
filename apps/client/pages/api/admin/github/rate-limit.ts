@@ -15,11 +15,11 @@ import { NotFoundError, ensureAdmin } from '@server/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { GitHubService } from '@server/services/githubService';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { isNearLimit } from '@bike4mind/common';
+import { ApiKeyScope, isNearLimit } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { component: 'admin-github-rate-limit' } });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   // Rate limit to prevent abuse (60/hour - makes real API calls)
   .use(
     rateLimit({

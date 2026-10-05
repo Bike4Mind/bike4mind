@@ -1,5 +1,6 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { getErrorMessage } from '@client/app/utils/error';
+import { resolveConsent } from '@client/app/utils/consentRegion';
 import { ISubscription, SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { subscriptionPlanSchema } from '@client/lib/userSubscriptions/schemas';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
@@ -11,7 +12,10 @@ import { z } from 'zod';
 export const useSubscribePlan = () => {
   return useMutation({
     mutationFn: async (data: z.infer<typeof subscriptionPlanSchema>) => {
-      const response = await api.post<{ sessionUrl: string }>(`/api/subscriptions/subscribe`, data);
+      const response = await api.post<{ sessionUrl: string }>(`/api/subscriptions/subscribe`, {
+        ...data,
+        attributionConsent: resolveConsent() === 'granted',
+      });
       return response.data;
     },
     onError: err => {

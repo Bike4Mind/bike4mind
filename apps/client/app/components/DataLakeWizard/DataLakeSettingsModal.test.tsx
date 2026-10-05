@@ -79,6 +79,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeProposals: (...args: unknown[]) => useDataLakeProposalsMock(...args),
   useReviewDataLakeProposal: () => ({ mutate: reviewProposalMutate, isPending: false, variables: undefined }),
   useGetDataLakes: (...args: unknown[]) => useGetDataLakesMock(...args),
+  useGetDataLakesWithRetrievability: (...args: unknown[]) => useGetDataLakesMock(...args),
   // The research tab (#1682). Mocked here rather than in its own file because the modal
   // value-imports every one of these at module load - a missing export throws before a single
   // assertion runs, whether or not the test touches that tab.
@@ -130,8 +131,11 @@ const TRIAGE_ROUTER: MockActivatable = {
 // which internally uses react-query - stub it so these clear-tag tests don't need a
 // QueryClientProvider. No org / no selection -> the Organization toggle is simply disabled,
 // which is irrelevant to the access-gate assertions below.
+const accountsState = vi.hoisted(() => ({
+  value: { accounts: [] as unknown[], selectedAccount: null as unknown },
+}));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
-  useAccounts: () => ({ accounts: [], selectedAccount: null }),
+  useAccounts: () => accountsState.value,
 }));
 
 vi.mock('sonner', () => ({
@@ -154,6 +158,7 @@ const Wrapper = ({ children }: { children: ReactNode }) => (
 // Steady state for the tests that don't care about the picker: allowlist loaded, router present.
 // The preferred-prompt suite below overrides these per test to exercise the load-timing edges.
 beforeEach(() => {
+  accountsState.value = { accounts: [], selectedAccount: null };
   activatablePrompts = [TRIAGE_ROUTER];
   activatableLoading = false;
   activatableError = false;
@@ -202,7 +207,9 @@ const gatedLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
+  isOwn: true,
 };
 
 const openLake = {
@@ -219,7 +226,9 @@ const openLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
+  isOwn: true,
 };
 
 const entitlementGatedLake = {
@@ -236,7 +245,9 @@ const entitlementGatedLake = {
   origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
+  injectPromptForReaders: false,
   canManage: true,
+  isOwn: true,
 };
 
 describe('DataLakeSettingsModal — clearing an access gate', () => {
@@ -254,7 +265,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
       </Wrapper>
     );
 
-    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     await user.click(screen.getByTestId('datalake-settings-save-btn'));
 
     // '' is what tells the backend to remove the gate - omitting the field would be
@@ -290,7 +301,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     );
 
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(/must hold this tag/i);
-    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     expect(screen.getByTestId('datalake-settings-usertag-help')).toHaveTextContent(
       /removes the \u201COpti\u201D gate/i
     );
@@ -305,7 +316,7 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
       </Wrapper>
     );
 
-    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.clear(screen.getByPlaceholderText('e.g. LegalTeam'));
     const nameInput = screen.getByTestId('datalake-settings-name').querySelector('input')!;
     await user.clear(nameInput);
     await user.type(nameInput, 'Renamed Lake');
@@ -461,7 +472,12 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
 
     const help = screen.getByTestId('datalake-systemprompt-help');
     expect(help).toHaveTextContent(/anyone holding an owner or curator grant on this lake/i);
-    expect(help).toHaveTextContent(/not to users given read-only access by tag, entitlement, or a reader grant/i);
+    // Since injectPromptForReaders (#reader opt-in): readers by tag/entitlement/reader-grant are
+    // named as NOT reached by default, but the copy now also points at the opt-in toggle rather
+    // than stating a flat exclusion.
+    expect(help).toHaveTextContent(
+      /users given read-only access by tag or entitlement don't get them unless you turn on "apply to readers"\. users with only a reader grant never get them/i
+    );
   });
 
   it('states the retrieval-scoped condition, so the copy cannot regress to always-on wording', () => {
@@ -474,12 +490,12 @@ describe('DataLakeSettingsModal — per-lake system prompt', () => {
     const help = screen.getByTestId('datalake-systemprompt-help');
     // The two halves of the real contract: fires on retrieval turns, never otherwise.
     expect(help).toHaveTextContent(/pull content from this lake/i);
-    expect(help).toHaveTextContent(/never fire on turns that don't use the lake/i);
-    // The pre-#1108 always-on wording must not come back.
+    expect(help).toHaveTextContent(/never on turns that don't use it/i);
+    // The old always-on wording must not come back.
     expect(help).not.toHaveTextContent(/not only when the lake is used/i);
   });
 
-  // The QA carry-forward from PR 1: a user who can only READ a shared/public lake must never
+  // A user who can only READ a shared/public lake must never
   // see the wording of its prompt, only its effect on answers.
   it('NEVER shows the prompt to a non-editor on a shared/public lake', () => {
     render(
@@ -885,6 +901,7 @@ describe('DataLakeSettingsModal - Spend tab visibility', () => {
           byFeature: [],
           totals: { requests: 3, cogsUsd: 5, creditsCharged: 0 },
         },
+        researchLifetimeUsd: 0,
       },
       isLoading: false,
       isFetching: false,
@@ -1259,7 +1276,7 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
   });
 
   // Same shape as the Research draft: the half-typed reason is this panel's own state, so an
-  // unmount loses it. Unlike Research it reports no dirty state, so nothing would warn either.
+  // unmount loses it.
   it('keeps a half-typed decline reason while the curator visits another tab', async () => {
     withQueue([queued()]);
     const user = userEvent.setup();
@@ -1277,6 +1294,42 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
 
     expect(screen.getByTestId('datalake-proposal-decline-reason')).toHaveValue('Paywalled');
+  });
+
+  it('asks before discarding an unsaved decline reason', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.type(screen.getByTestId('datalake-proposal-decline-reason'), 'Paywalled');
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+
+  it('closes without asking when a decline was opened but no reason typed', async () => {
+    withQueue([queued()]);
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-tab-proposals'));
+    await user.click(screen.getByTestId('datalake-proposal-decline-btn'));
+    await user.click(screen.getByTestId('datalake-settings-close-btn'));
+
+    expect(onClose).toHaveBeenCalled();
   });
 });
 
@@ -1612,6 +1665,78 @@ describe('DataLakeSettingsModal - lake memory toggle', () => {
   });
 });
 
+describe('DataLakeSettingsModal - reader-prompt toggle (injectPromptForReaders)', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('renders for a manager and does not render for a non-manager', () => {
+    const readerLake = { ...openLake, id: 'lake-reader-1', canManage: false };
+    const { rerender } = render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-2' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByTestId('datalake-reader-prompt-toggle')).toBeInTheDocument();
+
+    rerender(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.queryByTestId('datalake-reader-prompt-toggle')).not.toBeInTheDocument();
+  });
+
+  it('sends injectPromptForReaders: true only when the editor toggles it and saves', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-3' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-reader-prompt-toggle'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ injectPromptForReaders: true });
+  });
+
+  it('never sends injectPromptForReaders when the editor leaves it unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-4' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('injectPromptForReaders');
+  });
+
+  it('warns the toggle has no effect when the lake has no access tag or entitlement', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...openLake, id: 'lake-reader-5' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reader-prompt-toggle-help')).toHaveTextContent(/has no effect/i);
+  });
+
+  it('describes what the toggle does once the lake has an access tag', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={{ ...gatedLake, id: 'lake-reader-6' }} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-reader-prompt-toggle-help')).not.toHaveTextContent(/has no effect/i);
+  });
+});
+
 describe('DataLakeSettingsModal - closing with unsaved edits', () => {
   const manageableLake = { ...openLake, id: 'lake-close-1' };
 
@@ -1734,5 +1859,164 @@ describe('DataLakeSettingsModal - closing with unsaved edits', () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId('datalake-discard-confirm')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeSettingsModal - dialog width', () => {
+  const renderLake = (lake: typeof openLake) =>
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+  const maxWidthOf = () => window.getComputedStyle(screen.getByTestId('datalake-settings-modal')).maxWidth;
+
+  it('stays at 28rem when no tabs are shown', () => {
+    const lake = { ...openLake, id: 'lake-width-1', canManage: false, embeddingSpendMicroUsd: undefined };
+    renderLake(lake);
+    expect(screen.queryByTestId('datalake-settings-tab-settings')).not.toBeInTheDocument();
+    expect(maxWidthOf()).toBe('28rem');
+  });
+
+  it('is 44rem when tabs are shown, and stays 44rem on another tab', async () => {
+    const user = userEvent.setup();
+    const lake = { ...openLake, id: 'lake-width-2', embeddingSpendMicroUsd: 0 };
+    renderLake(lake);
+    expect(maxWidthOf()).toBe('44rem');
+    await user.click(screen.getByTestId('datalake-settings-tab-spend'));
+    expect(maxWidthOf()).toBe('44rem');
+  });
+});
+
+describe('DataLakeSettingsModal - owner-only sharing changes', () => {
+  const curator = { ...openLake, id: 'lake-own-1', isOwn: false };
+  const curatorTagged = { ...curator, requiredUserTag: 'Opti' };
+  const curatorOrg = { ...curatorTagged, organizationId: 'org-1' };
+  const msg = 'datalake-settings-gate-owner-only';
+  const renderLake = (lake: typeof curator) =>
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('lets an owner add a tag to a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake({ ...curator, isOwn: true });
+    await user.type(screen.getByTestId('datalake-settings-usertag'), 'Opti');
+    expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+  });
+
+  it('blocks a curator adding a tag to a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake(curator);
+    await user.type(screen.getByTestId('datalake-settings-usertag'), 'Opti');
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('allows a curator clearing a tag on a private org-less lake (narrowing)', async () => {
+    const user = userEvent.setup();
+    renderLake(curatorTagged);
+    await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
+    expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+  });
+
+  it('blocks a curator clearing a tag on an org lake (widening)', async () => {
+    const user = userEvent.setup();
+    renderLake(curatorOrg);
+    await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('disables the exposing radios for a curator and explains why', () => {
+    renderLake(curator);
+    expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Public' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+    expect(screen.getByTestId('datalake-settings-visibility-owner-only')).toBeInTheDocument();
+  });
+
+  it('keeps Private open on an ungated org lake but closes it on a gated one', () => {
+    const { unmount } = renderLake({ ...curator, organizationId: 'org-1' });
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+    unmount();
+    renderLake(curatorOrg);
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeDisabled();
+  });
+
+  it('keeps Private and Public enabled for a curator on a public lake', () => {
+    renderLake({ ...curator, isPublic: true });
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+    expect(screen.getByRole('radio', { name: 'Public' })).toBeEnabled();
+  });
+
+  it('keeps Organization enabled for a curator on an org lake', () => {
+    renderLake(curatorOrg);
+    expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeEnabled();
+  });
+
+  it('keeps Private enabled for an owner on a gated org lake', () => {
+    renderLake({ ...curatorOrg, isOwn: true });
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeEnabled();
+  });
+
+  describe('with a team account selected', () => {
+    beforeEach(() => {
+      const team = { id: 'org-1', name: 'Team', personal: false };
+      accountsState.value = { accounts: [team], selectedAccount: team };
+    });
+
+    it('disables Organization for a curator on a private ungated lake', () => {
+      renderLake(curator);
+      expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeDisabled();
+    });
+
+    it('enables Organization for an owner on a private ungated lake', () => {
+      renderLake({ ...curator, isOwn: true });
+      expect(within(screen.getByTestId('datalake-settings-visibility-org')).getByRole('radio')).toBeEnabled();
+    });
+  });
+
+  it('lets an owner clear a tag on a gated org lake', async () => {
+    const user = userEvent.setup();
+    renderLake({ ...curatorOrg, isOwn: true });
+    await user.clear(within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox'));
+    expect(screen.queryByTestId(msg)).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+  });
+
+  it('blocks a curator adding an entitlement to a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake(curator);
+    await user.type(within(screen.getByTestId('datalake-settings-entitlement')).getByRole('textbox'), 'product:pro');
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('blocks a curator changing a tag on a private org-less lake', async () => {
+    const user = userEvent.setup();
+    renderLake({ ...curator, requiredUserTag: 'a' });
+    const input = within(screen.getByTestId('datalake-settings-usertag')).getByRole('textbox');
+    await user.clear(input);
+    await user.type(input, 'b');
+    expect(screen.getByTestId(msg)).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeDisabled();
+  });
+
+  it('lets a curator save a description edit on a gated lake', async () => {
+    const user = userEvent.setup();
+    renderLake(curatorOrg);
+    await user.type(screen.getByLabelText('Description'), ' more');
+    expect(screen.getByTestId('datalake-settings-save-btn')).toBeEnabled();
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+    expect(updateMutate).toHaveBeenCalledTimes(1);
   });
 });

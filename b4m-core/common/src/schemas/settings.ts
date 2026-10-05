@@ -128,6 +128,8 @@ SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is perm
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
 
+PYTHON ARTIFACTS: application/vnd.ant.python runs in the browser on Pyodide (Python 3.11, WebAssembly) with no network - packages cannot be installed from PyPI. Available: the Python standard library plus the packages bundled with Pyodide, including numpy, pandas, matplotlib, scipy (including scipy.optimize.milp for mixed-integer linear programs, HiGHS-backed, and scipy.optimize.linprog), scikit-learn, statsmodels, sympy and networkx; they load automatically from the imports. NOT available: seaborn (plot with matplotlib), and native/compiled solver packages such as highspy, gurobipy, cplex, ortools and pulp - for LP/MILP use scipy.optimize.milp or linprog. Output is what the script prints plus any open matplotlib figures, which are captured automatically; there is no input(), file system persistence or GUI.
+
 COMPLETENESS (artifact bodies only - see SCOPE): Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>.
 
 NEVER ABBREVIATE THE BODY - THIS IS THE MOST DAMAGING FAILURE YOU CAN PRODUCE HERE: every function the artifact needs must be written out in full, every time, even when you already wrote it in an earlier turn. An artifact whose logic is replaced by a summary comment still parses and still renders a complete-looking UI whose controls silently do nothing - the user cannot see the difference, ships it, and only finds out when a teammate clicks a dead button. That is far worse than an obviously unfinished artifact. Specifically FORBIDDEN as artifact body content, in any comment form: "same as above", "same as before", "identical to previous", "from the previous version", "for brevity" and any padded variant of it ("for the sake of brevity", "in the interest of brevity"), "omitted", "unchanged", "rest of the ...", "<rest of the code>", "code goes here", "implementation here", "[...]", or any comment that stands in for code you wrote previously or intend the reader to copy from elsewhere. Equally forbidden inside the artifact: anything addressed to the reader rather than to the runtime - asking them to reply "CONTINUE", pointing at a "next response", or promising in the first person what you are about to write ("I will include the remaining 84 entries"). The artifact is a standalone document; it has no next turn. Re-emitting the same 300 lines verbatim is CORRECT and expected; referring to them is not.
@@ -509,6 +511,7 @@ export const SettingKeySchema = z.enum([
   'HardwareComputeMaxUsdPerRun',
   'HardwareComputeMaxConcurrentRunsPerUser',
   'HardwareComputeMaxUsdPerUserPerDay',
+  'SimulatorComputeCreditsPerRound',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -649,6 +652,9 @@ export const OrchestrationDefaultsSchema = z.object({
     'lattice_add_entity',
     'lattice_set_value',
     'lattice_create_rule',
+    // Data lake writes (create a lake, persist a file into one)
+    'create_data_lake',
+    'save_content_to_data_lake',
     // NOTE: image_generation / edit_image / excel_generation were intentionally
     // moved to `allowedTools` above (see note there) and are no longer denied.
   ]),
@@ -1813,6 +1819,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'HardwareComputeMaxUsdPerRun', order: 89 },
       { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
       { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
+      { key: 'SimulatorComputeCreditsPerRound', order: 91.5 },
       { key: 'EnableQuestMaster', order: 92 },
       { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'EnableHearth', order: 94 },
@@ -2164,7 +2171,7 @@ export const settingsMap = {
     name: 'Data Lakes: Use Atlas $vectorSearch',
     defaultValue: false,
     description:
-      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan.',
+      'Kill-switch for the Atlas $vectorSearch cutover on Data Lake semantic search. Off by default; even when on, only files whose chunks are fully re-indexed on an Atlas backend actually use it - everything else keeps using the brute-force scan. Also lets forced retrieval choose which files to score by relevance on a scope larger than its candidate cap, instead of alphabetically by file name.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
@@ -3223,7 +3230,7 @@ export const settingsMap = {
     name: 'Web Search Provider',
     defaultValue: 'auto',
     description:
-      'Which backend the web_search tool uses. "auto" prefers a configured local SearXNG instance, then falls back to the Serp Search API. "serpapi" or "searxng" force that provider.',
+      'Which backend leads the web_search tool. "auto" leads with the Serp Search API when a key is set, else a configured SearXNG instance; "serpapi" or "searxng" lead with that provider. When both are configured, the other one is started as a backup if the lead fails, comes back empty, or has not answered within a few seconds, and the first non-empty answer wins. To use one provider only, leave the other unconfigured.',
     options: ['auto', 'serpapi', 'searxng'],
     category: 'Tools',
     group: API_SERVICE_GROUPS.SEARCH.id,
@@ -4611,6 +4618,28 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  SimulatorComputeCreditsPerRound: makeNumberSetting({
+    key: 'SimulatorComputeCreditsPerRound',
+    name: 'Simulator Compute: Credits per round',
+    defaultValue: 50,
+    min: 0,
+    max: 10_000,
+    // Credits are whole numbers; reject a fractional price at the write boundary rather than
+    // leaving the reservation (price x round count) to be rounded by whichever reader bills it.
+    int: true,
+    description:
+      'Credits charged per round of a multi-round hybrid compute job on the simulator. Each round is a ' +
+      'separate container run: the whole run is reserved up front at this price times its round count, and ' +
+      'rounds that never run are refunded. The price is fixed per run when it is submitted, so a change here ' +
+      'only affects later submissions. Set to 0 to make simulator rounds free.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    // 89.5, not 90: the admin tab sorts by this field, and 90 ties EnableDataLakeSlackAdd and
+    // EnableQuestMaster, which would render this row after them instead of beside the Hardware
+    // Compute settings.
+    order: 89.5,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({

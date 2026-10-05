@@ -6,12 +6,14 @@ import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { UNCATEGORIZED_KEY } from './DataLakeTreeView';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
-import { scopeTagCountsToLakes, seedEmptyLakeTags, type TagScopeLake } from './scopeTagCountsToLakes';
+import { prefixSegments } from '@client/app/components/DataLakeWizard/manager/shared';
+import { scopeTagCountsToLakes, seedEmptyLakeTags } from './scopeTagCountsToLakes';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
 import { lakeIdsForTags, tagsForLakeIds } from './tagsForLakeIds';
 import DataLakeRailViewer from './DataLakeRailViewer';
 import { resolveManageableLake } from './resolveManageableLake';
+import { isDraftLake } from './lakeVisibility';
 import { DataLakeNavProvider } from './dataLakeNavContext';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -19,12 +21,12 @@ import { useSessions, useWorkBenchActions, useWorkBenchFiles } from '@client/app
 import useSetDataLakeMode from '@client/app/hooks/useSetDataLakeMode';
 import useSetLakeScope from '@client/app/hooks/useSetLakeScope';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, { openFileInChatViewer, setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
 import { useNotebookLayout } from '@client/app/components/layouts/Notebook';
 import {
   useGetDataLakeArticles,
-  useGetDataLakes,
+  useGetDataLakesWithRetrievability,
   useGetDataLakeTagCounts,
   useGetDataLakeUncategorizedFiles,
   useRemoveFileFromDataLake,
@@ -55,6 +57,8 @@ import type { IFabFileDocument, ManageableDataLakeConfig } from '@bike4mind/comm
 interface DataLakeExplorerProps {
   /** When set (from URL param), auto-select and display this article on mount. */
   articleId?: string | null;
+  /** Optional cited passage text to highlight when opening a deep-linked article. */
+  articlePassage?: string | null;
   /** Which browse backend to read. Only the react-query cache key differs; a branded
    *  surface passes its own value to keep its cache separate from the main app's. */
   source?: DataLakeBrowseSource;
@@ -102,12 +106,41 @@ interface DataLakeExplorerProps {
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
 
+type LakeLabel = { name: string; datalakeTag: string };
+type LakePrefixSource = LakeLabel & { fileTagPrefix: string };
+
+/** Normalized prefix path ('acme:legal') -> the in-scope lake that owns it. Ambiguity is judged
+ *  against EVERY accessible lake, so neither the name nor the member count is credited to the
+ *  wrong one: a prefix two lakes hold is omitted, and so is a (legacy) prefix that nests another
+ *  lake's, since that lake's files sit in its subtree too. */
+export function buildLakePrefixLookup(
+  lakes: readonly LakePrefixSource[],
+  inScope: readonly LakePrefixSource[] = lakes
+): Map<string, LakeLabel> {
+  const byPath = new Map<string, LakeLabel | null>();
+  for (const lake of lakes) {
+    const key = prefixSegments(lake.fileTagPrefix).join(':');
+    if (!key) continue;
+    byPath.set(key, byPath.has(key) ? null : { name: lake.name, datalakeTag: lake.datalakeTag });
+  }
+  const scopedTags = new Set(inScope.map(l => l.datalakeTag));
+  const keys = [...byPath.keys()];
+  const unique = new Map<string, LakeLabel>();
+  byPath.forEach((lake, key) => {
+    if (!lake || !scopedTags.has(lake.datalakeTag)) return;
+    if (keys.some(other => other.startsWith(`${key}:`))) return;
+    unique.set(key, lake);
+  });
+  return unique;
+}
+
 /** Stable empty fallback for seedEmptyLakeTags below, so an in-flight lake list never churns
  *  the memo it feeds (see lakesInScope). */
-const EMPTY_LAKES: TagScopeLake[] = [];
+const EMPTY_LAKES: ManageableDataLakeConfig[] = [];
 
 export default function DataLakeExplorer({
   articleId,
+  articlePassage,
   source = 'datalakes',
   rootLabel,
   onManage,
@@ -219,9 +252,10 @@ export default function DataLakeExplorer({
   // surface restores it. So we set the selected artifact WITHOUT touching `layout` and mount
   // the viewer in our own rail (with its layout-switching controls hidden, for the same reason).
   const handleViewFile = useCallback(
-    (file: IFabFileDocument) => {
+    (file: IFabFileDocument, citedPassage?: Parameters<typeof openFileInChatViewer>[1]) => {
+      // The passage is only forwarded on the embedded branch: the rail viewer has no cited-passage slot.
       if (chatEmbedded) {
-        setSessionLayout({ layout: 'vertical', previewFile: file, selectedArtifactId: file.id });
+        openFileInChatViewer(file, citedPassage);
       } else {
         hostLayoutRef.current = useSessionLayout.getState().layout;
         setSessionLayout({ previewFile: file, selectedArtifactId: file.id });
@@ -234,7 +268,12 @@ export default function DataLakeExplorer({
 
   // Drives the lake picker, gates row deletes, and answers "do I have any lakes?" - the question
   // the empty state used to answer from the file scope instead, and got wrong (#1645).
-  const { data: lakes, isLoading: lakesLoading, isError: lakesError, refetch: refetchLakes } = useGetDataLakes();
+  const {
+    data: lakes,
+    isLoading: lakesLoading,
+    isError: lakesError,
+    refetch: refetchLakes,
+  } = useGetDataLakesWithRetrievability(currentSessionId);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
   const currentUserId = useUser(s => s.currentUser?.id);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);
@@ -367,6 +406,23 @@ export default function DataLakeExplorer({
     [isScopeEmpty, scopedTagCounts, lakesInScope]
   );
   const tree = useMemo(() => buildTagTree(seededTagCounts), [seededTagCounts]);
+  // Same prefix guard and trailing-colon strip as seedEmptyLakeTags, so a lake's path matches its
+  // own root node.
+  const draftLakePaths = useMemo(
+    () =>
+      new Set(
+        lakesInScope
+          .filter(lake => isDraftLake(lake) && typeof lake.fileTagPrefix === 'string')
+          .map(lake => lake.fileTagPrefix.replace(/:+$/, ''))
+          .filter(Boolean)
+      ),
+    [lakesInScope]
+  );
+  const lakePrefixLookup = useMemo(
+    () => buildLakePrefixLookup(lakes ?? [], selectedLakes.length > 0 ? selectedLakes : (lakes ?? [])),
+    [lakes, selectedLakes]
+  );
+  const lakeForPath = useCallback((path: string[]) => lakePrefixLookup.get(path.join(':')), [lakePrefixLookup]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -484,9 +540,14 @@ export default function DataLakeExplorer({
   useEffect(() => {
     if (deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
       openedDeepLinkRef.current = deepLinkTarget.id;
-      handleViewFile(deepLinkTarget);
+      handleViewFile(
+        deepLinkTarget,
+        articlePassage && articlePassage.trim().length > 0
+          ? { fileId: deepLinkTarget.id, chunkId: 'unknown', passage: articlePassage }
+          : undefined
+      );
     }
-  }, [deepLinkTarget, handleViewFile]);
+  }, [deepLinkTarget, handleViewFile, articlePassage]);
 
   // Browsing deliberately leaves the open file alone: the tree and the viewer are separate panels,
   // so browsing categories - including back out of one - must not dismiss what you are reading. The
@@ -606,12 +667,15 @@ export default function DataLakeExplorer({
       >
         <DataLakeChatTree
           tree={tree}
+          lakeForPath={lakeForPath}
+          lakeFileCounts={tagCountsData?.lakeFileCounts}
           articles={leafArticles}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
           source={source}
           uncategorized={uncategorized}
           selectedFileIds={attachedFileIds}
+          draftLakePaths={draftLakePaths}
           onAttachFile={attachFileToChat}
           onViewFile={handleViewFile}
           canDeleteFile={canDeleteFile}
@@ -652,7 +716,12 @@ export default function DataLakeExplorer({
               {/* The no-lake scope shows the strip with nothing in it: that is the one state the
                   tree cannot report, since it stays browsable so the user can get back out. */}
               {(selectedLakes.length > 1 || isNoLakeScope) && (
-                <ActiveLakeScopeStrip lakes={selectedLakes} onClear={() => handleSelectLakes([])} />
+                <ActiveLakeScopeStrip
+                  lakes={selectedLakes}
+                  onClear={() => handleSelectLakes([])}
+                  // From the resolved lakes, not the raw ids, so a stale id is dropped on the way.
+                  onRemove={lakeId => handleSelectLakes(selectedLakes.filter(l => l.id !== lakeId).map(l => l.id))}
+                />
               )}
             </>
           }

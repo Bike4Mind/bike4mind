@@ -13,6 +13,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from './types.js';
+import { isDirectInvocation } from './isDirectInvocation.js';
 import { DOCS_ROOT, INCLUDED_CATEGORIES, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
 
 // ES module compatibility
@@ -243,7 +244,7 @@ export async function buildHelpIndex(opts: BuildIndexOptions = {}): Promise<void
 }
 
 // Only run when invoked directly (not when imported by tests)
-if (process.argv[1] && process.argv[1].endsWith('build-help-index.ts')) {
+if (isDirectInvocation(import.meta.url)) {
   buildHelpIndex().catch(error => {
     console.error('Failed to build help index:', error);
     process.exit(1);

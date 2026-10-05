@@ -13,6 +13,9 @@ import {
   ISessionRepository,
   IUserDocument,
   SearchOptions,
+  SESSION_ORIGIN_CHANNELS,
+  SessionListFilters,
+  SessionOriginChannel,
   tagAttemptDueFilter,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
@@ -38,6 +41,41 @@ const TagSchema = new Schema(
     versionKey: false,
   }
 );
+
+const SessionOriginSchema = new Schema(
+  {
+    channel: { type: String, enum: [...SESSION_ORIGIN_CHANNELS], required: true },
+    apiKeyId: { type: String, required: false },
+  },
+  {
+    _id: false,
+    id: false,
+    versionKey: false,
+  }
+);
+
+/**
+ * Mongo filter clauses for SessionListFilters; {} when none is set. Shared by the own-list
+ * (searchByUserId) and the shared-list query (apps/client getSharedSessionsByUser) so the two agree.
+ *
+ * A session with no recorded origin predates the field and renders as 'web', so it matches 'web'
+ * and is excluded with it. The origin arm is an `$in` over the remaining channels (not `$ne`/`$nin`)
+ * so the planner can use point bounds on the userId + origin.channel + lastUpdated index below and
+ * merge-sort them. The image arm uses `$not: { $gt: 0 }` so a row with no imageCount counts as none.
+ */
+export function sessionListFilterQuery(filters: SessionListFilters = {}): Record<string, unknown> {
+  const q: Record<string, unknown> = {};
+  if (filters.origin || filters.excludeOrigin) {
+    const channels: (SessionOriginChannel | null)[] = SESSION_ORIGIN_CHANNELS.filter(
+      channel => (!filters.origin || channel === filters.origin) && channel !== filters.excludeOrigin
+    );
+    if (channels.includes('web')) channels.push(null);
+    q['origin.channel'] = { $in: channels };
+  }
+  if (filters.hasImages === true) q.imageCount = { $gt: 0 };
+  if (filters.hasImages === false) q.imageCount = { $not: { $gt: 0 } };
+  return q;
+}
 
 export interface ISessionModel extends Model<ISessionDocument> {}
 
@@ -65,7 +103,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lakeScopeExplicit: { type: Boolean, required: false },
     // default: undefined (not []) - keeps "field present" a meaningful marker of manage-but-not-
     // member admission, distinct from an ordinary session that never went through it. Written ONLY
-    // by pages/api/sessions/create.ts, as a separate authorized write AFTER its own canManageLake
+    // by pages/api/v1/sessions/index.ts, as a separate authorized write AFTER its own canManageLake
     // check - never part of session creation's own input, so fork/clone/snip cannot copy it.
     preauthorizedLakeIds: { type: [String], default: undefined },
     // Resolved from the lake at create time (resolveLakeSessionDefaults). DELIBERATELY no default -
@@ -91,7 +129,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     tags: { type: [TagSchema], required: false },
     // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
-    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    // apps/workers/src/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
     // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
     // retry gate would read permanently unattempted. Records that a completion was spent and
@@ -105,6 +143,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     curatedAt: { type: Date, required: false }, // When the notebook was last curated
     curationContentHash: { type: String, required: false }, // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
     messageCount: { type: Number, required: false }, // Lazy-loaded count of messages - calculated on first read
+    // Stamped once at creation by the create paths (see ISessionOrigin); never rewritten.
+    origin: { type: SessionOriginSchema, required: false, immutable: true },
+    // Only ever moved by incrementImageCount's $inc; see ISession.imageCount.
+    imageCount: { type: Number, required: false, default: 0, min: 0 },
     slackMetadata: {
       type: {
         channelId: { type: String, required: true },
@@ -302,8 +344,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   /**
    * Partial update that matches only while `user` still holds update access and the session is not
    * soft-deleted, so a revocation or delete landing between the authorizing read and this write
-   * makes it a no-op (null) instead of a write. `deletedAt: null` is explicit because
-   * softDeletePlugin does not hook findOneAndUpdate.
+   * makes it a no-op (null) instead of a write. softDeletePlugin's update hook already adds
+   * `deletedAt: null`; the explicit filter is redundant but keeps the contract visible here.
    */
   async updateWithUpdateAccess(
     user: Pick<IUserDocument, 'id' | 'groups'>,
@@ -358,6 +400,10 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     }
     return query;
   }
+  async incrementImageCount(sessionId: string, count: number) {
+    if (count <= 0 || !mongoose.isObjectIdOrHexString(sessionId)) return;
+    await this.sessionModel.updateOne({ _id: sessionId }, { $inc: { imageCount: count } });
+  }
   async findByIdAndUserId(id: string, userId: string) {
     // A non-ObjectId id can never address a row - report no such row, not a CastError the
     // calling route cannot attribute. Same contract as `BaseRepository.findById`.
@@ -377,7 +423,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     search: string | undefined,
     userId: string,
     options: SearchOptions<ISessionDocument>,
-    surface?: string
+    surface?: string,
+    filters: SessionListFilters = {}
   ) {
     const q: Record<string, unknown> = {
       userId: userId,
@@ -387,6 +434,8 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     // otherwise the main list excludes product-surface sessions ({ surface: null }
     // matches docs where the field is null OR absent).
     q.surface = surface ? surface : null;
+
+    Object.assign(q, sessionListFilterQuery(filters));
 
     if (search) {
       // Search name, summary, and tags via $or for better discovery.
@@ -419,6 +468,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
   }
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
+  }
+  async pullKnowledgeIds(fabFileIds: string[]) {
+    if (fabFileIds.length === 0) return 0;
+    const result = await this.sessionModel.updateMany(
+      { knowledgeIds: { $in: fabFileIds } },
+      { $pull: { knowledgeIds: { $in: fabFileIds } } }
+    );
+    return result.modifiedCount;
   }
   /** Ids come from `project.sessionIds`, declared `[{ type: String }]` - see usableObjectIds. */
   async findAllByIds(ids: string[], options?: { includeDeleted?: boolean }) {
@@ -524,7 +581,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate (`determineSessionOperations` in
-   * apps/client/server/events/spider.ts): quest existence AND the retry backoff. Both halves of
+   * apps/client/server/utils/sessionOperations.ts): quest existence AND the retry backoff. Both halves of
    * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {
@@ -676,6 +733,9 @@ SessionSchema.plugin(softDeletePlugin);
 
 // Optimize session listing - used on homepage and many screens
 SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
+
+// Session list filtered by origin (sidebar "Only API" / "Hide API"); see sessionListFilterQuery.
+SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated: -1 });
 
 // Optimize permission and sharing queries
 SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 });

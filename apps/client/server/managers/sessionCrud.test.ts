@@ -205,6 +205,22 @@ describe('sessionCrud', () => {
       await Promise.all(result.asyncPromises);
     });
 
+    it('forwards the origin to createSession as an option, not a parameter', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger, origin: { channel: 'api', apiKeyId: 'key-1' } });
+
+      const [, params, , options] = createSessionService.mock.calls.at(-1)!;
+      expect(options).toEqual({ origin: { channel: 'api', apiKeyId: 'key-1' } });
+      expect(params).not.toHaveProperty('origin');
+    });
+
+    it('does not create (or stamp) when an existing session is resolved', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+      await getOrCreateSession({ sessionId: 'owned', user, logger, origin: { channel: 'api' } });
+      expect(createSessionService).not.toHaveBeenCalled();
+    });
+
     it("hands createSession the attachment-door lake resolver for the caller's supplied files", async () => {
       const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
       createAttachmentLakeAccessSpy.mockReturnValueOnce(async () => lakeAccess);

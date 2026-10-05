@@ -46,6 +46,10 @@ vi.mock('@googleapis/drive', () => ({
 }));
 
 import { releaseDriveConnection, releaseDriveConnectionForLake } from './common';
+import type { DriveConnectionOwner } from '@bike4mind/common';
+
+const orgA: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
+const orgB: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgB' };
 
 describe('releaseDriveConnection', () => {
   beforeEach(() => {
@@ -68,7 +72,7 @@ describe('releaseDriveConnection', () => {
   });
 
   it('revokes the decrypted org credential BEFORE deleting the row', async () => {
-    await expect(releaseDriveConnection('conn1', 'orgA')).resolves.toBe(true);
+    await expect(releaseDriveConnection('conn1', orgA)).resolves.toBe(true);
     expect(h.revokeToken).toHaveBeenCalledWith('org-refresh');
     // Delete-first would strand a live grant behind a row nothing can reach any more; revoke-first
     // keeps the credential available for a retry if the revoke is the step that fails.
@@ -76,15 +80,15 @@ describe('releaseDriveConnection', () => {
   });
 
   it('reads the credential with the org scope it was given', async () => {
-    await releaseDriveConnection('conn1', 'orgA');
-    expect(h.findByIdWithCredentials).toHaveBeenCalledWith('conn1', 'orgA');
-    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+    await releaseDriveConnection('conn1', orgA);
+    expect(h.findByIdWithCredentials).toHaveBeenCalledWith('conn1', orgA);
+    expect(h.release).toHaveBeenCalledWith('conn1', orgA);
   });
 
   it('still deletes the row when Google refuses the revoke', async () => {
     h.revokeToken.mockRejectedValue(Object.assign(new Error('boom'), { response: { status: 503 } }));
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(releaseDriveConnection('conn1', 'orgA')).resolves.toBe(true);
+    await expect(releaseDriveConnection('conn1', orgA)).resolves.toBe(true);
     expect(h.release).toHaveBeenCalled();
     // The only signal that the grant may still be live - a smoke test must be able to tell this
     // from "the revoke never ran".
@@ -97,7 +101,7 @@ describe('releaseDriveConnection', () => {
       Object.assign(new Error('bad token'), { response: { status: 400, data: { error: 'invalid_token' } } })
     );
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await expect(releaseDriveConnection('conn1', 'orgA')).resolves.toBe(true);
+    await expect(releaseDriveConnection('conn1', orgA)).resolves.toBe(true);
     expect(consoleError).not.toHaveBeenCalled();
     consoleError.mockRestore();
   });
@@ -109,7 +113,7 @@ describe('releaseDriveConnection', () => {
       Object.assign(new Error('bad request'), { response: { status: 400, data: { error: 'invalid_request' } } })
     );
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    await releaseDriveConnection('conn1', 'orgA');
+    await releaseDriveConnection('conn1', orgA);
     expect(consoleError).toHaveBeenCalledWith(expect.stringMatching(/revoke failed/), expect.anything());
     consoleError.mockRestore();
   });
@@ -120,29 +124,29 @@ describe('releaseDriveConnection', () => {
     // reading "connected" - well past the org resource being disconnected. Dropping the org copy is
     // the whole teardown here; the grant stays theirs to revoke from their own profile.
     h.userFindById.mockResolvedValue({ googleDrive: { refreshToken: 'enc(org-refresh)' } });
-    await expect(releaseDriveConnection('conn1', 'orgA')).resolves.toBe(true);
+    await expect(releaseDriveConnection('conn1', orgA)).resolves.toBe(true);
     expect(h.revokeToken).not.toHaveBeenCalled();
-    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.release).toHaveBeenCalledWith('conn1', orgA);
   });
 
   it('revokes when the user holds a DIFFERENT token than the connection', async () => {
     // A re-consent gave the user a new refresh token; the connection's older one is a separate grant
     // that only this row still points at, so releasing the row must take it down.
     h.userFindById.mockResolvedValue({ googleDrive: { refreshToken: 'enc(newer-refresh)' } });
-    await releaseDriveConnection('conn1', 'orgA');
+    await releaseDriveConnection('conn1', orgA);
     expect(h.revokeToken).toHaveBeenCalledWith('org-refresh');
   });
 
   it('deletes a credential-less connection without pretending to revoke', async () => {
     h.findByIdWithCredentials.mockResolvedValue({ id: 'conn1', connectedBy: 'user-1', oauthRefreshToken: undefined });
-    await expect(releaseDriveConnection('conn1', 'orgA')).resolves.toBe(true);
+    await expect(releaseDriveConnection('conn1', orgA)).resolves.toBe(true);
     expect(h.revokeToken).not.toHaveBeenCalled();
-    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.release).toHaveBeenCalledWith('conn1', orgA);
   });
 
   it('is a no-op for a connection that is not visible to the given org', async () => {
     h.findByIdWithCredentials.mockResolvedValue(null);
-    await expect(releaseDriveConnection('conn1', 'orgB')).resolves.toBe(false);
+    await expect(releaseDriveConnection('conn1', orgB)).resolves.toBe(false);
     expect(h.revokeToken).not.toHaveBeenCalled();
     expect(h.release).not.toHaveBeenCalled();
   });
@@ -167,7 +171,7 @@ describe('releaseDriveConnectionForLake', () => {
     h.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
     await expect(releaseDriveConnectionForLake('lake1')).resolves.toBe(true);
     expect(h.findByDataLakeIdAny).toHaveBeenCalledWith('lake1');
-    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.release).toHaveBeenCalledWith('conn1', orgA);
   });
 
   it('resolves the row regardless of enabled state, which a disabled row would otherwise strand', async () => {
@@ -175,7 +179,7 @@ describe('releaseDriveConnectionForLake', () => {
     // exactly the strand this path exists to prevent.
     h.findByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA', enabled: false });
     await expect(releaseDriveConnectionForLake('lake1')).resolves.toBe(true);
-    expect(h.release).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.release).toHaveBeenCalledWith('conn1', orgA);
   });
 
   it('is a no-op for a lake with no Drive connection', async () => {

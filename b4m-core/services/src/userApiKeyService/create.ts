@@ -1,4 +1,5 @@
 import {
+  API_KEY_USER_CAP_ERROR_CODE,
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyStatus,
@@ -11,17 +12,26 @@ import {
   isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
-import { secureParameters, BadRequestError } from '@bike4mind/utils';
+import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
+import { encryptAtRest } from '@bike4mind/utils/security';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
+import { assertNoScopeEscalation } from './assertNoScopeEscalation';
+import { generateCallbackSigningSecret } from './callbackSigningSecret';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
 // path (setEmbedKeySpendCap).
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
+
+export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
+
+export const MAX_ACTIVE_KEYS_PER_USER = 10;
+/** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
+export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -56,7 +66,7 @@ const createUserApiKeySchema = z.object({
   // by the route; the service only enforces the field-shape invariant below.
   billingOwnerType: z.enum(CreditHolderType).optional(),
   organizationId: z.string().optional(),
-  // Manage-but-not-member session admission (see pages/api/sessions/create.ts): the lakes this
+  // Manage-but-not-member session admission (see pages/api/v1/sessions/index.ts): the lakes this
   // key may bind a session to. No existence/manage check at THIS layer - session-create
   // independently re-verifies the ACTING user's live manage rights against the lake on every
   // request, so a stale or made-up id reaching the document is inert, never a privilege. That is
@@ -83,6 +93,14 @@ interface CreateUserApiKeyAdapters {
     agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
+  /**
+   * Scopes of the API key making the request, when the caller authenticated with one.
+   * Undefined for a browser/JWT caller. Same no-escalation contract as rotate
+   * (see rotate.ts): a key may only mint scopes it literally holds.
+   */
+  callerScopes?: ApiKeyScope[];
+  /** Expiry of the calling API key, when it has one. A key may not mint a child that outlives it. */
+  callerExpiresAt?: Date;
 }
 
 export interface CreateUserApiKeyResult {
@@ -90,6 +108,8 @@ export interface CreateUserApiKeyResult {
   name: string;
   keyPrefix: string;
   key: string; // Only returned once during creation
+  /** Signs this key's generation completion callbacks. Only returned once, like `key`. */
+  callbackSigningSecret: string;
   scopes: ApiKeyScope[];
   status: ApiKeyStatus;
   expiresAt?: Date;
@@ -136,6 +156,21 @@ export const createUserApiKey = async (
   const { db, systemUserId } = adapters;
   const params = secureParameters(parameters, createUserApiKeySchema);
 
+  // No escalation by minting: otherwise a leaked narrow key bootstraps a broad one for
+  // the same owner.
+  assertNoScopeEscalation(
+    adapters.callerScopes,
+    params.scopes,
+    'Cannot create a key with scopes the calling key does not have'
+  );
+
+  // Same containment rule, applied to time: a key may not mint a child that
+  // outlives it. A caller key with no expiry sets no bound (and a JWT caller,
+  // which has no callerExpiresAt at all, is unaffected).
+  if (adapters.callerExpiresAt && (!params.expiresAt || params.expiresAt > adapters.callerExpiresAt)) {
+    throw new ForbiddenError('Cannot create a key that outlives the calling key');
+  }
+
   // OVERWATCH_INGEST_WRITE requires a productId
   if (params.scopes.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && !params.productId) {
     throw new BadRequestError('productId is required for overwatch-ingest:write scope');
@@ -149,7 +184,7 @@ export const createUserApiKey = async (
   // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
   if (params.scopes.length > 1 && params.scopes.some(scope => CONFINED_API_KEY_SCOPES.includes(scope))) {
     throw new BadRequestError(
-      'A confined scope (embed:chat, overwatch-ingest:write, cc-bridge:connect) must be the only scope on a key'
+      `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key`
     );
   }
 
@@ -214,18 +249,37 @@ export const createUserApiKey = async (
     }
   }
 
-  // Per-user cap: max 10 active keys. Skip only for the shared system user -
-  // keyed on userId === systemUserId (NOT on scope) to prevent rogue-admin bypass.
-  const MAX_ACTIVE_KEYS_PER_USER = 10;
+  // Exchange keys sit outside the standard cap only because they are short-lived and
+  // tagged to one relying party (pages/api/oauth/ai-token.ts keeps one per (user, client)).
+  // Refuse one that is neither, so the separate pool can't mint an unbounded long-lived key.
+  const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
+  if (isExchangeKey && (!params.expiresAt || !params.metadata.oauthClientId)) {
+    throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
+  }
+
+  // Per-user caps, one per ApiKeyCapPool: 10 standard keys, and a separate ceiling on
+  // concurrently authorized federated apps so they never crowd out the user's own keys.
+  // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
+  // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
   if (!isSystemUser) {
-    const activeCount = await db.userApiKeys.countActiveByUserId(userId);
-    if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
-      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`);
+    const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
+    const activeCount = await db.userApiKeys.countActiveByUserId(userId, pool);
+    if (isExchangeKey && activeCount >= MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) {
+      throw new BadRequestError(
+        `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`,
+        { errorCode: API_KEY_USER_CAP_ERROR_CODE }
+      );
+    }
+    if (!isExchangeKey && activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
+      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
+        errorCode: API_KEY_USER_CAP_ERROR_CODE,
+      });
     }
   }
 
   const { key, keyPrefix, keyHash } = generateApiKey();
+  const callbackSigningSecret = generateCallbackSigningSecret();
 
   const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
 
@@ -234,6 +288,8 @@ export const createUserApiKey = async (
     name: params.name,
     keyHash,
     keyPrefix,
+    callbackSigningSecret: encryptAtRest(callbackSigningSecret),
+    callbackSigningSecretCreatedAt: new Date(),
     scopes: params.scopes,
     status: ApiKeyStatus.ACTIVE,
     expiresAt: params.expiresAt,
@@ -261,6 +317,7 @@ export const createUserApiKey = async (
     name: apiKeyDocument.name,
     keyPrefix: apiKeyDocument.keyPrefix,
     key, // This is the only time the raw key is returned
+    callbackSigningSecret,
     scopes: apiKeyDocument.scopes,
     status: apiKeyDocument.status,
     expiresAt: apiKeyDocument.expiresAt,

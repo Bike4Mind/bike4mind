@@ -252,7 +252,7 @@ describe('createSession knowledgeIds validation', () => {
 
   // Phase 3, regression case 4: preauthorizedLakeIds (manage-but-not-member admission) must never
   // enter createSession's own input - it is authorized and written as a SEPARATE call by the create
-  // route, strictly after createSession returns (see pages/api/sessions/create.ts). A caller that
+  // route, strictly after createSession returns (see pages/api/v1/sessions/index.ts). A caller that
   // tries to pass it here - fork/snip/clone included, though none of them do today; they build their
   // own db.sessions.create() literal and never call this function at all - must not be able to
   // smuggle it in via a future refactor that forwards a source session's fields wholesale.
@@ -417,5 +417,38 @@ describe('createSession summaryTrigger validation', () => {
     const { adapters, created } = makeAdapters();
     await createSession(user, { name: 'no-trigger', summary: 'the gist' }, adapters);
     expect(created[0].summaryTrigger).toBeUndefined();
+  });
+});
+
+describe('createSession origin', () => {
+  const user = { id: 'u1' } as IUserDocument;
+  const makeAdapters = () => {
+    const create = vi.fn().mockResolvedValue({ id: 'session-1' });
+    return {
+      create,
+      adapters: {
+        db: {
+          sessions: { create },
+          projects: {},
+          fabFiles: { findAccessibleInIds: allowAllFiles },
+          agents: { shareable: { findAllAccessibleByIds: vi.fn() } },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal adapter shape for this unit test
+        } as any,
+      },
+    };
+  };
+
+  it('stamps the origin passed as an option', async () => {
+    const { create, adapters } = makeAdapters();
+    await createSession(user, { name: 'S' }, adapters, { origin: { channel: 'api', apiKeyId: 'key-1' } });
+    expect(create.mock.calls[0][0].origin).toEqual({ channel: 'api', apiKeyId: 'key-1' });
+  });
+
+  it('ignores an origin smuggled in through the parameters', async () => {
+    const { create, adapters } = makeAdapters();
+    // A request body is parsed into these parameters, so it must not be able to set its own origin.
+    const params = { name: 'S', origin: { channel: 'web' } } as unknown as Parameters<typeof createSession>[1];
+    await createSession(user, params, adapters);
+    expect(create.mock.calls[0][0]).not.toHaveProperty('origin');
   });
 });

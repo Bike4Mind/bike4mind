@@ -58,9 +58,18 @@ export const notifyEventLogsToSlack = async ({
       let metadata: Record<string, string>;
 
       try {
-        const logEventData = JSON.parse(logEvent.message.split('\t')[3]);
-        message = logEventData.message;
-        severity = logEventData.severity;
+        // Lambda lines are `ts\treqId\tLEVEL\tjsonPayload`; take the payload field.
+        // Fargate lines (ChatCompletion) have no prefix at all - the message IS the
+        // logger's raw JSON - so fall back to parsing the whole message instead of
+        // dropping a real error into the `source: 'AWS'` bucket.
+        const tabSeparatedParts = logEvent.message.split('\t');
+        const payload = tabSeparatedParts.length > 1 ? tabSeparatedParts[3] : logEvent.message;
+        const logEventData = JSON.parse(payload);
+        // A structured line without a `message` field (e.g. a raw Fargate payload that is not a
+        // logger record) would leave this undefined and throw below on `.includes`, silently
+        // dropping the alert - fall back to the raw line instead.
+        message = logEventData.message ?? logEvent.message;
+        severity = logEventData.severity ?? 'error';
         metadata = logEventData;
       } catch (error) {
         message = logEvent.message;

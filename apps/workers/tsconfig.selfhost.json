@@ -1,0 +1,24 @@
+{
+  // Runtime-only: the self-host `worker` service passes this to tsx (compose.selfhost.yaml). tsx
+  // applies compilerOptions only to files its tsconfig includes, so without the ../client glob the
+  // bridged client files would transpile with no tsconfig (sloppy mode, not strict). Typecheck keeps
+  // using tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    // Matches apps/client's target so client code transpiles here as it does in the hosted bundle.
+    // SelfHostWorker and RateLimitedEventPublisher, the only classes in src, extend nothing and set
+    // every field before use, so the es2018 class-field semantics don't change them.
+    "target": "es2018"
+  },
+  "include": ["sst-env.d.ts", "../client/global.d.ts", "src/**/*.ts", "../client/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "../client/node_modules",
+    "**/*.test.ts",
+    "../client/**/*.test.ts",
+    "../client/e2e/**",
+    "../client/playwright.config.ts",
+    "../client/**/__tests__/**"
+  ]
+}

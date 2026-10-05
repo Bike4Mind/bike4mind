@@ -53,7 +53,9 @@ premium/libreoncology/src/components/marketing/HomePage\.tsx.*mailto
 # One canned placeholder id reused verbatim across the API contracts and the OpenAPI output
 # they generate. Its reuse across four files is what marks it as a doc example rather than a
 # real document id. Path-anchored, so the literal is not blanket-allowed tree-wide.
-(openapi\.json|(chat|tts)\.contract\.ts):[0-9]+:.*664f1c2b9a1e4d0012ab34cd
+(openapi\.json|(chat|tts|imageGeneration|imageEdit|videoGeneration)\.contract\.ts):[0-9]+:.*664f1c2b9a1e4d0012ab34cd
+# Sibling placeholders (session, mask fabFile) beside it in the image/video contracts' examples.
+(openapi\.json|(image(Generation|Edit)|videoGeneration)\.contract\.ts):[0-9]+:.*664f1c2b9a1e4d0012ab34(aa|bb)
 # Hand-incremented example id in a --help usage line; not a real session.
 packages/scripts/seedContextSummary\.ts.*66a1b2c3d4e5f6a7b8c9d0e1
 # Example id inside prose that teaches an LLM tool caller what an ObjectId looks like.

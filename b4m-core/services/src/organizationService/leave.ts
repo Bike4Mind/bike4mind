@@ -41,7 +41,7 @@ export const leave = async (
   organization.userDetails = organization.userDetails?.filter(u => u.id !== user.id) ?? [];
 
   // Strip this org's group ids from the departing user, end their data-lake access on this org's
-  // lakes, and drop them from adminUserIds and from the manager appointment (the org doc, persisted
+  // lakes, and drop them from adminUserIds and from the manager appointment (persisted by removeMember
   // just below). None of `user.groups[]`, the grant rows, `adminUserIds` or `managerId` carries an
   // org qualifier, so leaving must clear them or the user keeps group-shared data access, direct
   // lake access and org-admin authority. Idempotent, so safe under a withTransaction retry.
@@ -51,7 +51,7 @@ export const leave = async (
   organization.adminUserIds = purged.adminUserIds;
   organization.managerId = purged.managerId;
 
-  await adapters.db.organizations.update(organization);
+  await adapters.db.organizations.removeMember(organization.id, user.id);
 
   // If the org they just left was their currently-selected org, clear it. Otherwise org-scoped
   // access (data-lake AccessContext, team-wide prompts) would still be inferred from a stale

@@ -44,7 +44,6 @@ const mintParams = {
 describe('rotateUserApiKey — round-trip regression guard', () => {
   it('rotated key validates successfully and prefix length matches KEY_PREFIX_LENGTH', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -73,7 +72,6 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
   it('rotation preserves spendCap and accumulated spend (rotating the secret must not reset the meter)', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -106,7 +104,6 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
 
   it('original key is invalid after rotation', async () => {
     const { repo } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const adapters = {
       db: {
         userApiKeys: repo as any,
@@ -139,22 +136,36 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
         findByUserIdAndId: vi.fn().mockResolvedValue(null),
         findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
         update: vi.fn().mockResolvedValue(undefined),
+        setCallbackSigningSecret: vi.fn().mockResolvedValue(undefined),
       };
       const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
 
-      const { key, previousOwnerUserId } = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
+      const { key, previousOwnerUserId, callbackSigningSecret } = await rotateUserApiKey(
+        'admin-user',
+        { keyId: 'key-1' },
+        adapters
+      );
 
       expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
       expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
       expect(key).toMatch(/^b4m_live_/);
-      expect(repo.update).toHaveBeenCalled();
+      expect(repo.update).toHaveBeenCalledWith({
+        id: 'key-1',
+        keyHash: expect.any(String),
+        keyPrefix: expect.any(String),
+        userId: 'admin-user',
+      });
 
       // The rotated credential must authenticate as the admin who now holds it,
       // not as the teammate who minted it.
       expect(stored.userId).toBe('admin-user');
       expect(previousOwnerUserId).toBe('minter');
+
+      // The minter knew the old callback signing secret; a re-owned key must not keep it.
+      expect(callbackSigningSecret).toMatch(/^whsec_/);
+      expect(repo.setCallbackSigningSecret).toHaveBeenCalledWith('key-1', callbackSigningSecret, expect.any(Date));
     });
 
     it('leaves ownership alone when the minter rotates their own key', async () => {
@@ -168,15 +179,24 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
         findByUserIdAndId: vi.fn().mockResolvedValue(stored),
         findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockResolvedValue(undefined),
+        setCallbackSigningSecret: vi.fn().mockResolvedValue(undefined),
       };
       const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
 
-      const { previousOwnerUserId } = await rotateUserApiKey('minter', { keyId: 'key-1' }, adapters);
+      const result = await rotateUserApiKey('minter', { keyId: 'key-1' }, adapters);
 
       expect(stored.userId).toBe('minter');
-      expect(previousOwnerUserId).toBeUndefined();
+      expect(result.previousOwnerUserId).toBeUndefined();
+      expect(repo.update).toHaveBeenCalledWith({
+        id: 'key-1',
+        keyHash: expect.any(String),
+        keyPrefix: expect.any(String),
+      });
+      // The owner's receivers keep verifying: their own rotation leaves the signing secret alone.
+      expect(result.callbackSigningSecret).toBeUndefined();
+      expect(repo.setCallbackSigningSecret).not.toHaveBeenCalled();
     });
 
     it('throws NotFound when the caller neither minted nor administers the key', async () => {

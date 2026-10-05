@@ -100,7 +100,7 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     expect(resourceAccessLog).toContain('SECRET_ENCRYPTION_KEY');
   }, 20000);
 
-  it('memoizes the result — repeated calls return the same reference', async () => {
+  it('memoizes the result - repeated calls return the same reference', async () => {
     const mod = await import('./chatCompletionDefaults');
     const first = mod.getDefaultChatCompletionOptions();
     const second = mod.getDefaultChatCompletionOptions();
@@ -300,5 +300,23 @@ describe('isChatModelUsable', () => {
     getLlmByModelMock.mockReturnValue({ backend: 'anthropic' });
     const { isChatModelUsable } = await import('./chatCompletionDefaults');
     expect(isChatModelUsable({ anthropic: 'sk-ant' }, modelInfo, makeLogger())).toBe(true);
+  }, 20000);
+});
+
+describe('getDefaultChatCompletionOptions', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('wires the save_content_to_data_lake audit adapters', async () => {
+    const { getDefaultChatCompletionOptions } = await import('./chatCompletionDefaults');
+    const { db } = getDefaultChatCompletionOptions();
+
+    // Without any one of these, saveContentAdapters() in
+    // b4m-core/services/src/llm/tools/implementation/dataLakeContent/adapters.ts returns null and
+    // the tool answers NOT_AVAILABLE instead of saving.
+    expect(db.lakeMembershipRemovals).toBeDefined();
+    expect(db.lakeConfigChangeEvents).toBeDefined();
+    expect(db.lakeMembershipChangeEvents).toBeDefined();
   }, 20000);
 });

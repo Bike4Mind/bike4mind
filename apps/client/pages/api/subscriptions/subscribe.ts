@@ -1,6 +1,6 @@
 import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
-import { subscriptionPlanSchema } from '@client/lib/userSubscriptions/schemas';
+import { subscriptionCheckoutSchema } from '@client/lib/userSubscriptions/schemas';
 import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
@@ -8,16 +8,17 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
+import { acquisitionToStripeMetadata, readAcquisitionTouches } from '@server/analytics/acquisition';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
 
-type RequestBody = z.infer<typeof subscriptionPlanSchema>;
+type RequestBody = z.infer<typeof subscriptionCheckoutSchema>;
 
 const handler = baseApi()
   .use(requireStripeWebhook())
   .post<Request<unknown, RequestBody>>(async (req, res) => {
-    const { priceId, callbackUrl } = subscriptionPlanSchema.parse(req.body);
+    const { priceId, callbackUrl, attributionConsent } = subscriptionCheckoutSchema.parse(req.body);
 
     // Restrict the Stripe success/cancel redirect to the deployed app origin - an
     // external callbackUrl is an open-redirect/phishing vector off Stripe's hosted
@@ -54,7 +55,7 @@ const handler = baseApi()
         type: CustomerType.User,
       });
       req.user.stripeCustomerId = customer.id;
-      await userRepository.update(req.user);
+      await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
     } else {
       // Recreate the customer if missing from Stripe (we recently switched Stripe accounts).
       try {
@@ -67,7 +68,7 @@ const handler = baseApi()
             type: CustomerType.User,
           });
           req.user.stripeCustomerId = customer.id;
-          await userRepository.update(req.user);
+          await userRepository.update({ id: req.user.id, stripeCustomerId: customer.id });
         } else {
           throw error;
         }
@@ -106,6 +107,9 @@ const handler = baseApi()
           userId: req.user.id,
           stage: Config.STAGE,
           ownerType: 'User', // Identifies this as a user subscription (vs organization)
+          // Where the customer came from (first and last campaign touch), carried to the
+          // invoice webhook, which stores it on the subscription row. See acquisition.ts.
+          ...(attributionConsent === true && acquisitionToStripeMetadata(readAcquisitionTouches(req))),
         },
       },
     });

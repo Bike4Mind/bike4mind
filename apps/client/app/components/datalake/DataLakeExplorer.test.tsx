@@ -10,7 +10,7 @@ import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
 // Real store (not mocked): the /new picker case below asserts against it directly, the same way
 // the deferred-creation seam (useCreateDataLakeSession) reads it back.
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
-import DataLakeExplorer from './DataLakeExplorer';
+import DataLakeExplorer, { buildLakePrefixLookup } from './DataLakeExplorer';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
 // and an external-chat host must never have its `layout` touched. setSessionLayout is spied to
@@ -31,7 +31,9 @@ const {
   lakesState,
   workBenchState,
   mockFileOwnerId,
+  lakesHookSessionIds,
 } = vi.hoisted(() => ({
+  lakesHookSessionIds: [] as Array<string | null | undefined>,
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
@@ -52,7 +54,9 @@ const {
   removeFileLakeIds: [] as Array<string | null>,
   // Mutable so delete-gating tests can vary the accessible-lake list per-test.
   lakesState: {
-    value: [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }] as unknown[],
+    value: [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ] as unknown[],
   },
   workBenchState: {
     files: [] as { id: string; fileName: string }[],
@@ -89,6 +93,16 @@ vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
 vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/useSessionLayout')>()),
   setSessionLayout,
+  // The real helper writes through the module's own setSessionLayout, which this spy cannot see;
+  // forwarding to the spy keeps the exact payload assertions below. The helper itself is covered
+  // in useSessionLayout.test.ts.
+  openFileInChatViewer: (file: { id: string }, citedPassage?: unknown) =>
+    setSessionLayout({
+      layout: 'vertical',
+      previewFile: file,
+      selectedArtifactId: file.id,
+      ...(citedPassage !== undefined && { citedPassage }),
+    }),
 }));
 
 // Mutable so a test can supply a real tag tree to navigate into; empty by default, which is
@@ -146,6 +160,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     };
   },
   useGetDataLakes: () => ({ data: lakesState.value }),
+  useGetDataLakesWithRetrievability: (sessionId: string | null | undefined) => {
+    lakesHookSessionIds.push(sessionId);
+    return { data: lakesState.value };
+  },
   useRemoveFileFromDataLake: (lakeId: string | null) => {
     removeFileLakeIds.push(lakeId);
     return { mutate: removeFileMutate, isPending: false };
@@ -235,6 +253,8 @@ vi.mock('./DataLakeChatTree', () => ({
     emptySlot?: React.ReactNode;
     dropHint?: string;
     tree: { segment: string }[];
+    lakeForPath?: (path: string[]) => { name: string; datalakeTag: string } | undefined;
+    lakeFileCounts?: Record<string, number>;
     uncategorized?: { files: { id: string }[]; count: number };
     isError?: boolean;
   }) => {
@@ -252,6 +272,11 @@ vi.mock('./DataLakeChatTree', () => ({
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
         data-error={String(!!props.isError)}
+        data-lake-labels={JSON.stringify({
+          'acme:legal': props.lakeForPath?.(['acme', 'legal'])?.name ?? null,
+          lakea: props.lakeForPath?.(['lakea'])?.name ?? null,
+        })}
+        data-lake-counts={JSON.stringify(props.lakeFileCounts ?? null)}
         data-uncategorized-count={props.uncategorized ? String(props.uncategorized.count) : ''}
         data-uncategorized-files={(props.uncategorized?.files ?? []).map(f => f.id).join(',')}
       >
@@ -318,7 +343,9 @@ describe('DataLakeExplorer chat-first surface', () => {
     vi.clearAllMocks();
     removeFileLakeIds.length = 0;
     mockFileOwnerId.value = 'owner-1';
-    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ];
     workBenchState.files = [];
     // Re-applied each test since clearAllMocks only clears call history, not implementation -
     // runs the functional updater the way the real zustand store does, persists the result, and
@@ -334,6 +361,26 @@ describe('DataLakeExplorer chat-first surface', () => {
     // The store defaults to 'hide'; start from the docked layout an external-chat host runs, so
     // a close request is an actual transition rather than a no-op write.
     useSessionLayoutStore.setState({ layout: 'dockRight' });
+  });
+
+  it('asks for the lake labels of the current session and surfaces a server false on the header', () => {
+    lakesHookSessionIds.length = 0;
+    lakesState.value = [
+      {
+        id: 'lake-1',
+        name: 'Lake A',
+        datalakeTag: 'datalake:lake-a',
+        fileTagPrefix: 'lakea',
+        canManage: true,
+        status: 'active',
+        retrievable: false,
+      },
+    ];
+    sessionState.current = { id: 'sess-1', retrievalTags: ['datalake:lake-a'], lakeScopeExplicit: false };
+    renderExplorer();
+
+    expect(lakesHookSessionIds).toContain('sess-1');
+    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
   });
 
   it('renders chatSlot in the right pane', () => {
@@ -559,13 +606,43 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(setWorkBenchFiles).not.toHaveBeenCalled();
   });
 
+  it('deep-linked article with a passage hands the cited excerpt to the viewer', async () => {
+    renderExplorer({ articleId: 'deep-1', articlePassage: 'cited text' });
+    await vi.waitFor(() =>
+      expect(setSessionLayout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          selectedArtifactId: 'deep-1',
+          citedPassage: { fileId: 'deep-1', chunkId: 'unknown', passage: 'cited text' },
+        })
+      )
+    );
+  });
+
+  it('deep-linked article with a blank passage opens the document without a cited passage', async () => {
+    renderExplorer({ articleId: 'deep-1', articlePassage: '   ' });
+    await vi.waitFor(() =>
+      expect(setSessionLayout).toHaveBeenCalledWith(expect.objectContaining({ selectedArtifactId: 'deep-1' }))
+    );
+    expect(setSessionLayout.mock.calls.every(([arg]) => !('citedPassage' in (arg as object)))).toBe(true);
+  });
+
+  it('deep-linked article with a passage never writes a layout on an overlay host', async () => {
+    renderExplorer({ chatEmbedded: false, articleId: 'deep-1', articlePassage: 'cited text' });
+    await vi.waitFor(() => expect(screen.getByTestId('datalake-rail-viewer')).toBeInTheDocument());
+    expect(setSessionLayout).not.toHaveBeenCalledWith(
+      expect.objectContaining({ layout: expect.anything() as unknown as string })
+    );
+  });
+
   it('delete is offered only for a uniquely-resolved manageable lake', () => {
     renderExplorer();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'true');
   });
 
   it('delete is not offered when the owning lake is not manageable', () => {
-    lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: false }];
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: false },
+    ];
     renderExplorer();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-can-delete', 'false');
   });
@@ -958,5 +1035,80 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 
     expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'all-lakes-empty');
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', '');
+  });
+
+  describe('lake-prefix lookup handed to the tree', () => {
+    afterEach(() => {
+      tagCountsState.tagCounts = [];
+      tagCountsState.total = 0;
+      tagCountsState.lakeFileCounts = {};
+    });
+
+    it('maps a multi-segment prefix by its full path to the lake name', () => {
+      lakesState.value = [
+        { id: 'l1', name: 'Legal Vault', datalakeTag: 'datalake:legal', fileTagPrefix: 'acme:legal:', canManage: true },
+      ];
+      tagCountsState.tagCounts = [{ tag: 'acme:legal:nda', count: 2 }];
+      tagCountsState.total = 2;
+      tagCountsState.lakeFileCounts = { 'datalake:legal': 2 };
+      renderExplorer();
+
+      expect(JSON.parse(screen.getByTestId('mock-tree').dataset.lakeLabels!)).toEqual({
+        'acme:legal': 'Legal Vault',
+        lakea: null,
+      });
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-lake-counts', '{"datalake:legal":2}');
+    });
+
+    it('leaves a prefix shared by two accessible lakes unmapped while mapping a unique one', () => {
+      lakesState.value = [
+        { id: 'l1', name: 'Lake A', datalakeTag: 'datalake:a', fileTagPrefix: 'lakea:', canManage: true },
+        { id: 'l2', name: 'Lake A Copy', datalakeTag: 'datalake:a2', fileTagPrefix: 'lakea', canManage: true },
+        { id: 'l3', name: 'Legal Vault', datalakeTag: 'datalake:legal', fileTagPrefix: 'acme:legal:', canManage: true },
+      ];
+      tagCountsState.tagCounts = [
+        { tag: 'lakea:notes', count: 2 },
+        { tag: 'acme:legal:nda', count: 1 },
+      ];
+      tagCountsState.total = 3;
+      renderExplorer();
+
+      expect(JSON.parse(screen.getByTestId('mock-tree').dataset.lakeLabels!)).toEqual({
+        'acme:legal': 'Legal Vault',
+        lakea: null,
+      });
+    });
+  });
+});
+
+describe('buildLakePrefixLookup', () => {
+  const lake = (name: string, datalakeTag: string, fileTagPrefix: string) => ({ name, datalakeTag, fileTagPrefix });
+  const entries = (m: Map<string, { name: string }>) => Object.fromEntries([...m].map(([k, v]) => [k, v.name]));
+
+  it('keys a lake by its normalized prefix path', () => {
+    expect(entries(buildLakePrefixLookup([lake('Legal Vault', 'datalake:legal', 'acme:legal:')]))).toEqual({
+      'acme:legal': 'Legal Vault',
+    });
+  });
+
+  it('omits a prefix two lakes hold, even when only one is in scope', () => {
+    const a = lake('A', 'datalake:a', 'shared:');
+    const b = lake('B', 'datalake:b', 'shared');
+    expect(entries(buildLakePrefixLookup([a, b]))).toEqual({});
+    expect(entries(buildLakePrefixLookup([a, b], [a]))).toEqual({});
+  });
+
+  it('omits a prefix that nests another lake, whose files sit under it', () => {
+    const outer = lake('Outer', 'datalake:outer', 'acme:');
+    const inner = lake('Inner', 'datalake:inner', 'acme:legal:');
+    expect(entries(buildLakePrefixLookup([outer, inner]))).toEqual({ 'acme:legal': 'Inner' });
+  });
+
+  it('maps only lakes in scope', () => {
+    const outer = lake('Outer', 'datalake:outer', 'acme:');
+    const inner = lake('Inner', 'datalake:inner', 'acme:legal:');
+    const other = lake('Other', 'datalake:other', 'zeta:');
+    expect(entries(buildLakePrefixLookup([outer, inner, other], [inner]))).toEqual({ 'acme:legal': 'Inner' });
+    expect(entries(buildLakePrefixLookup([outer, inner, other], [other]))).toEqual({ zeta: 'Other' });
   });
 });

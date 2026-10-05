@@ -11,9 +11,10 @@ import {
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { NotFoundError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
-import { Request, Response } from 'express';
+import { Request } from 'express';
 import { getFilesStorage } from '@server/utils/storage';
 
 // baseApi() here and nextRouteForContract(sessionUpdateContract) below build two
@@ -128,16 +129,10 @@ const putHandler = nextRouteForContract(sessionUpdateContract).put(async (req, r
   return res.json(redactSessionForClient(updatedSession));
 });
 
-// sessionUpdateContract only declares PUT, and nextRouteForContract's router rejects any
-// other verb registered on it - so GET/DELETE stay on their own plain baseApi() router and
-// this file dispatches by method instead of chaining every verb on one router instance.
-export default function handler(req: Request, res: Response) {
-  // putHandler's declared param type carries the contract's validated req/params fields,
-  // which only exist once its own prelude has run - a plain incoming Request satisfies
-  // that at runtime but not structurally, hence the cast.
-  if (req.method === 'PUT') return putHandler(req as Parameters<typeof putHandler>[0], res);
-  return getAndDeleteHandler(req, res);
-}
+// sessionUpdateContract only declares PUT, and nextRouteForContract's router rejects any other
+// verb registered on it - so GET/DELETE stay on their own plain baseApi() router, and any other
+// verb gets the path-level 405 the contract documents (see dispatchByMethod).
+export default dispatchByMethod({ GET: getAndDeleteHandler, PUT: putHandler, DELETE: getAndDeleteHandler });
 
 export const config = {
   api: {

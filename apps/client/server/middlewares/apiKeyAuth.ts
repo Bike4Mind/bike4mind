@@ -1,7 +1,7 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
@@ -11,8 +11,26 @@ import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
 import { getClientIp } from '@server/utils/ip';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
+import type { z } from 'zod';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 import { assertAccountStateUsable } from '@server/cli/auth';
+
+type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
+
+/**
+ * The typed members of the scope 403 (ScopeForbiddenErrorSchema). Names only what the
+ * route requires - never the key's held scopes, which the caller already knows and a
+ * leaked key should not enumerate. A confined key on a scope-less route gets neither.
+ */
+function scopeForbiddenDetail(
+  requiredScopes: ApiKeyScope[] | undefined,
+  alsoRequiredScopes: ApiKeyScope[] | undefined
+): ScopeForbiddenDetail {
+  return {
+    ...(requiredScopes?.length ? { required_scopes: requiredScopes } : {}),
+    ...(alsoRequiredScopes?.length ? { also_required_scopes: alsoRequiredScopes } : {}),
+  };
+}
 
 /** Staging is irrelevant to a route that declares no gate; reuse one empty set. */
 const NO_STAGED_SCOPES: ReadonlySet<string> = new Set<string>();
@@ -118,7 +136,10 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           req.logger?.warn('API key scope check missed but staged - allowing', context);
         } else {
           req.logger?.warn('API key scope check failed', context);
-          throw new ForbiddenError('Insufficient API key permissions');
+          throw new ForbiddenError(
+            'Insufficient API key permissions',
+            scopeForbiddenDetail(requiredScopes, alsoRequiredScopes)
+          );
         }
       }
 
@@ -134,6 +155,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
         keyId: validation.keyId!,
         scopes: validation.scopes!,
         rateLimit: validation.rateLimit!,
+        expiresAt: validation.expiresAt,
         productId: validation.productId,
         billingOwnerType: validation.billingOwnerType,
         organizationId: validation.organizationId,

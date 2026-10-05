@@ -1182,7 +1182,9 @@ describe('FabFile data lake lifecycle membership', () => {
       await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
       // The losing half's view: the row is enumerated, then someone else clears deletedAt before
       // this write reaches it, so the conditional update matches nothing.
-      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: null } });
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: null } }).setOptions({
+        includeDeleted: true,
+      });
 
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], stamp);
       const restoredIds = restored.map(f => f.id);

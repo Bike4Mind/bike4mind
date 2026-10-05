@@ -6,6 +6,7 @@ import {
   extractSnippetMeta,
   FORMAT_PROMPT_TEMPLATE,
   ICacheRepository,
+  IChatHistoryItem,
   IChatHistoryItemRepository,
   IFabFileChunkRepository,
   IFabFileDocument,
@@ -26,6 +27,9 @@ import {
   SupportedEmbeddingModel,
   isUnlimitedHistory,
   resolveHistoryFetchLimit,
+  formatChoicesBlock,
+  MIN_REPLY_CHOICES,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -350,14 +354,18 @@ function estimateQuestTokenLength(
     structuredReplies?: unknown[];
     toolResults?: unknown[];
     promptMeta?: { functionCalls?: RecordedFunctionCall[] };
+    researchModeResults?: IChatHistoryItem['researchModeResults'];
   },
   disableToolReplay = false
 ): number {
   const parts: string[] = [item.prompt ?? ''];
   if (item.structuredReplies?.length) {
     parts.push(JSON.stringify(item.structuredReplies));
-  } else if (item.replies?.length) {
-    parts.push(item.replies.join('\n'));
+  } else {
+    if (item.replies?.length) parts.push(item.replies.join('\n'));
+    if (!item.replies?.some(r => !r.trim().startsWith('<think>'))) {
+      parts.push(researchModeReplyText(item.researchModeResults));
+    }
   }
   if (item.toolResults?.length) {
     parts.push(JSON.stringify(item.toolResults));
@@ -371,6 +379,53 @@ function estimateQuestTokenLength(
     if (toolCalls.length) parts.push(JSON.stringify(toolCalls));
   }
   return estimateTokenLength(parts.join('\n'));
+}
+
+/**
+ * A Research Mode turn stores each configuration's answer in researchModeResults and leaves
+ * `replies` empty (see ChatCompletionProcess), so history must read the answers from there or the
+ * next turn sees the prior prompt as still unanswered. Every configuration shares one history, so
+ * the successful answers are joined into a single assistant turn.
+ */
+function researchModeReplyText(results: IChatHistoryItem['researchModeResults']): string {
+  const answers = (results ?? []).filter(r => r.success && r.response?.trim()).map(r => r.response!.trim());
+  if (answers.length <= 1) return answers[0] ?? '';
+  return answers.map((answer, i) => `[Response ${i + 1} of ${answers.length}]\n${answer}`).join('\n\n');
+}
+
+/** The turn's text answer for history: the first non-thinking reply, else its Research Mode answers. */
+function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchModeResults'>): string {
+  const reply = item.replies?.find((r: string) => !r.trim().startsWith('<think>'));
+  return reply || researchModeReplyText(item.researchModeResults);
+}
+
+/**
+ * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
+ * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
+ */
+function isFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
+  const replies = item.replies ?? [];
+  const firstNonThinkIndex = replies.findIndex(r => !r.trim().startsWith('<think>'));
+  if (firstNonThinkIndex === -1) return false;
+  let lastVisibleIndex = -1;
+  for (let i = replies.length - 1; i >= 0; i--) {
+    if (visibleReplyText(replies[i])) {
+      lastVisibleIndex = i;
+      break;
+    }
+  }
+  return lastVisibleIndex !== -1 && firstNonThinkIndex === lastVisibleIndex;
+}
+
+/**
+ * The turn's history text with its stored choices re-attached as a ```choices block. Finalize
+ * strips the block from the stored reply, so without this the model sees its own earlier turns end
+ * without one and drifts into omitting it. Model-facing only; the stored quest is never touched.
+ */
+function withStoredChoices(text: string, item: Pick<IChatHistoryItem, 'suggestedChoices'>): string {
+  const options = item.suggestedChoices?.options;
+  if (!text || !options || options.length < MIN_REPLY_CHOICES) return text;
+  return text + formatChoicesBlock(options);
 }
 
 /** Stands in for a tool_result whose returnValue was never recorded; must not be empty. */
@@ -505,6 +560,7 @@ export async function fetchAndProcessPreviousMessages(
     verbatimTokenBudget,
     excludeCurrentPrompt = false,
     model,
+    includeReplyChoices = false,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
@@ -537,6 +593,14 @@ export async function fetchAndProcessPreviousMessages(
      * automatically for every caller instead of depending on each one remembering to opt in.
      */
     model?: string;
+    /**
+     * Re-attach each turn's stored `suggestedChoices` to its assistant text as a choices block.
+     * Set only when REPLY_CHOICES_GUIDANCE was requested this turn (ChatCompletionProcess
+     * `replyChoicesOffered`). That does not guarantee the model actually saw the guidance this
+     * turn - the system-prompt budget can still evict it (see systemPromptSources.ts) - so history
+     * can demonstrate a format offered but not delivered on the current request.
+     */
+    includeReplyChoices?: boolean;
   }
 ): Promise<
   [
@@ -665,13 +729,18 @@ export async function fetchAndProcessPreviousMessages(
     // replaces a genuine answer with a list of tool invocations and empty outcomes.
     else if (toolCalls.length > 0 && !disableToolReplay) {
       // Get text reply (excluding thinking blocks)
-      const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>')) || '';
+      const textReply = historyTextReply(cur);
 
       // Build assistant message with text + tool_use blocks
       const assistantContent: MessageContentObject[] = [];
 
       if (textReply) {
-        assistantContent.push({ type: 'text', text: stripToolOutputMarker(textReply) } as MessageContentText);
+        // No choices block here: this text precedes the tool_use parts, so it would teach the model
+        // to offer choices before calling a tool.
+        assistantContent.push({
+          type: 'text',
+          text: stripToolOutputMarker(textReply),
+        } as MessageContentText);
       }
 
       for (const fc of toolCalls) {
@@ -700,10 +769,15 @@ export async function fetchAndProcessPreviousMessages(
       });
     }
     // Priority 3: Legacy fallback - text-only replies
-    else if (cur.replies && Array.isArray(cur.replies)) {
-      // Do not include thoughts on the chat history. Only actual answers.
-      const validReply = cur.replies.find((reply: string) => !reply.trim().startsWith('<think>'));
-      if (validReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(validReply) });
+    else {
+      const textReply = historyTextReply(cur);
+      if (textReply) {
+        const text = stripToolOutputMarker(textReply);
+        // Only re-attach when the picked slot is also the turn's final visible answer - see
+        // isFinalVisibleReply for why an earlier slot must never get the block.
+        const reattach = includeReplyChoices && isFinalVisibleReply(cur);
+        acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
+      }
     }
 
     return acc;
@@ -790,9 +864,9 @@ export async function fetchAgentConversationHistory(
 
   return items.reduce((acc, cur) => {
     if (cur.prompt) acc.push({ role: 'user', content: cur.prompt });
-    // First reply that isn't a thinking block; matches the text-only fallback in
-    // fetchAndProcessPreviousMessages so the agent sees the actual answer, not internal thoughts.
-    const textReply = cur.replies?.find((reply: string) => !reply.trim().startsWith('<think>'));
+    // Same text-only fallback as fetchAndProcessPreviousMessages, so the agent sees the actual
+    // answer (including Research Mode answers), not internal thoughts.
+    const textReply = historyTextReply(cur);
     if (textReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(textReply) });
     return acc;
   }, new Array<{ role: 'user' | 'assistant'; content: string }>());
@@ -2420,14 +2494,14 @@ export async function buildAndSortMessages(
   tokenBudget = tokenBudget - bufferTokenBudget;
 
   let userPromptContent: string = '';
-  let userPromptTokens: number[] = [];
 
   if (userPrompt.length > 0) {
     userPromptContent = Array.isArray(userPrompt[0].content)
       ? JSON.stringify(userPrompt[0].content)
       : userPrompt[0].content || '';
-    userPromptTokens = await tokenizer.encodeTokens(userPromptContent);
-    tokenBudget = tokenBudget - userPromptTokens.length;
+    // countTokens, not encodeTokens().length: a calibrated tokenizer (withTokenEstimateMultiplier) scales
+    // only countTokens, and every other source in this budget is charged through it.
+    tokenBudget = tokenBudget - (await tokenizer.countTokens(userPromptContent));
   }
   // Everything below divides this figure. Captured before system instructions are charged against it,
   // so the attached-content floor is a share of the whole input budget rather than of whatever the

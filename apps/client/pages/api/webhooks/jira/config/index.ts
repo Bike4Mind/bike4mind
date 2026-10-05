@@ -262,7 +262,7 @@ const handler = baseApi()
       }
 
       const updatedConfig = await jiraWebhookConfigRepository.update({
-        ...existingConfig,
+        id: existingConfig.id,
         ...updates,
       });
 

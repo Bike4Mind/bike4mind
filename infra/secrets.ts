@@ -12,11 +12,17 @@ export const secrets = {
   // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
   // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
   // installation. The private key is the PEM, newlines kept or escaped as \n.
+  // App settings: Callback URL <app origin>/data-lakes/github/callback (the SPA page that finishes a
+  // connect), "Request user authorization (OAuth) during installation" on, "Redirect on update" on.
+  // GitHub greys out the Setup URL once OAuth-during-install is on, so it needs no value.
   GITHUB_LAKE_APP_CLIENT_ID: new sst.Secret('GITHUB_LAKE_APP_CLIENT_ID', 'not-configured'),
   GITHUB_LAKE_APP_CLIENT_SECRET: new sst.Secret('GITHUB_LAKE_APP_CLIENT_SECRET', 'not-configured'),
   GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
   GITHUB_LAKE_APP_PRIVATE_KEY: new sst.Secret('GITHUB_LAKE_APP_PRIVATE_KEY', 'not-configured'),
   GITHUB_LAKE_APP_SLUG: new sst.Secret('GITHUB_LAKE_APP_SLUG', 'not-configured'),
+  // HMAC secret for the App's single webhook (pages/api/webhooks/github/lake.ts: pushes and
+  // installation revokes); unset means deliveries are refused.
+  GITHUB_LAKE_APP_WEBHOOK_SECRET: new sst.Secret('GITHUB_LAKE_APP_WEBHOOK_SECRET', 'not-configured'),
   STRIPE_SECRET_KEY: new sst.Secret('STRIPE_SECRET_KEY', 'not-configured'),
   STRIPE_PUBLISHABLE_KEY: new sst.Secret('STRIPE_PUBLISHABLE_KEY', 'not-configured'),
   STRIPE_WEBHOOK_SECRET: new sst.Secret('STRIPE_WEBHOOK_SECRET', 'not-configured'),
@@ -180,12 +186,10 @@ export const secrets = {
   //     retention history. Set once per stage and leave it. The ingest key rotates freely; this does not.
   // Generate: openssl rand -hex 32
   OVERWATCH_PSEUDONYM_SALT: new sst.Secret('OVERWATCH_PSEUDONYM_SALT', 'not-configured'),
+  // QA status alarm (apps/client/server/qa/evaluateAlarm.ts). JSON map of product slug to a Slack
+  // incoming-webhook URL: {"<product>": "https://hooks..."}. A product without an entry logs only.
+  // Set per stage: sst secret set QA_ALARM_SLACK_WEBHOOKS '<json>' --stage <stage>
+  QA_ALARM_SLACK_WEBHOOKS: new sst.Secret('QA_ALARM_SLACK_WEBHOOKS', 'not-configured'),
 };
 
 export const allSecrets = Object.values(secrets);
-
-// Deliberately outside `secrets`, and therefore outside both `allSecrets` and the
-// `Object.values(secrets)` spread in web.ts - either one links a secret into every
-// Lambda and service on every stage. DataSyncer is the only consumer and links this
-// export directly (infra/dataSyncer.ts); keep it that way when adding a consumer.
-export const b4mProdApiKey = new sst.Secret('B4M_PROD_API_KEY', 'not-configured');

@@ -22,6 +22,7 @@ import {
   fabFileModerationDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
+  generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -37,6 +38,9 @@ import {
   lakeMemoryQueueDLQ,
   lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -96,7 +100,7 @@ if (isMonitoredStage) {
 
   dlqAlarmTopic!.subscribe(
     {
-      handler: 'apps/client/server/events/dlqAlarmToSlack.handler',
+      handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       logging: { retention: '3 days' },
@@ -225,6 +229,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: imageEditDLQ,
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+    queue: generationCallbackQueueDLQ,
+  },
+  {
     label: 'research-engine',
     displayName: 'Research Engine',
     application: 'ResearchEngine',
@@ -328,6 +339,27 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'driveLakeIngestQueue',
     queue: driveLakeIngestQueueDLQ,
+  },
+  {
+    label: 'drive-disconnect-purge',
+    displayName: 'Drive Disconnect Purge',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveDisconnectPurgeQueue',
+    queue: driveDisconnectPurgeQueueDLQ,
+  },
+  {
+    label: 'github-lake-ingest',
+    displayName: 'GitHub Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeIngestQueue',
+    queue: githubLakeIngestQueueDLQ,
+  },
+  {
+    label: 'github-lake-revoke',
+    displayName: 'GitHub Lake Revoke',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeRevokeQueue',
+    queue: githubLakeRevokeQueueDLQ,
   },
   {
     label: 'video-generation',

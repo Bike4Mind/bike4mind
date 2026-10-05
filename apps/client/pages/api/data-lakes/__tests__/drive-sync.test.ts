@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DATA_LAKE_STATUSES } from '@bike4mind/common';
+import type { DriveConnectionOwner } from '@bike4mind/common';
+
+const orgAOwner: DriveConnectionOwner = { kind: 'organization', organizationId: 'orgA' };
 
 // Unit-level test of the connect handler's gate + org-credential capture. The repository layer,
 // AWS/SQS, auth gate, and crypto are mocked; the Drive folder-id validation runs for real.
@@ -17,6 +20,8 @@ const h = vi.hoisted(() => ({
   getValidUserDriveAccessToken: vi.fn(),
   createDriveClient: vi.fn(),
   getFolderAccess: vi.fn(),
+  ghConnFindByDataLakeIdAny: vi.fn(),
+  gatedFlags: [] as string[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -30,7 +35,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
-vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
+// Records which flags the route gates on, so a test can pin that the GitHub flag is not one of them.
+vi.mock('@server/middlewares/featureFlag', () => ({
+  requireFeatureEnabled: (flag: string) => (h.gatedFlags.push(flag), () => {}),
+}));
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 vi.mock('@server/integrations/google/drive/common', () => ({
   getValidUserDriveAccessToken: h.getValidUserDriveAccessToken,
@@ -50,6 +58,10 @@ vi.mock('@bike4mind/database', async importOriginal => {
     ...actual,
     dataLakeRepository: { ...actual.dataLakeRepository, findById: h.dlFindById },
     User: { findById: h.userFindById },
+    orgGitHubLakeConnectionRepository: {
+      ...actual.orgGitHubLakeConnectionRepository,
+      findByDataLakeIdAny: h.ghConnFindByDataLakeIdAny,
+    },
     orgGoogleDriveConnectionRepository: {
       ...actual.orgGoogleDriveConnectionRepository,
       findByDriveFolderId: h.connFindByDriveFolderId,
@@ -90,6 +102,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     h.getValidUserDriveAccessToken.mockResolvedValue('user-access-token');
     h.createDriveClient.mockReturnValue({});
     h.getFolderAccess.mockResolvedValue({ ok: true, exists: true, isFolder: true, canRead: true });
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue(null);
   });
 
   it('captures the org-owned credential on the connection and enqueues ingest', async () => {
@@ -185,13 +198,62 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     expect(h.connCreate).not.toHaveBeenCalled();
   });
 
-  it('rejects a personal (org-less) lake before touching auth or credentials', async () => {
-    h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined, status: 'active' });
-    const { res } = makeRes();
-    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(
-      /organization-scoped/i
-    );
+  it('connects a personal (org-less) lake for its creator, storing no org credential', async () => {
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      organizationId: undefined,
+      status: 'active',
+      origin: 'connector-fed',
+      createdByUserId: 'u1',
+    });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
     expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.connCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        driveFolderId: FOLDER_ID,
+        targetDataLakeId: 'lake1',
+        connectedBy: 'u1',
+      })
+    );
+    // A personal connection carries no org-owned credential copy: it syncs on the owner's live grant.
+    const created = h.connCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect(created).not.toHaveProperty('organizationId');
+    expect(created).not.toHaveProperty('oauthRefreshToken');
+    expect(status).toHaveBeenCalledWith(202);
+  });
+
+  it('404s a non-creator on a personal (org-less) lake, before any Drive call', async () => {
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      organizationId: undefined,
+      status: 'active',
+      origin: 'connector-fed',
+      createdByUserId: 'owner2',
+    });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not found/i);
+
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+    expect(h.getFolderAccess).not.toHaveBeenCalled();
+    expect(h.connCreate).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a personal connection on reuse, writing no credential', async () => {
+    h.dlFindById.mockResolvedValue({
+      id: 'lake1',
+      organizationId: undefined,
+      status: 'active',
+      origin: 'connector-fed',
+      createdByUserId: 'u1',
+    });
+    h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', { kind: 'user', userId: 'u1' }, null, 'u1');
+    expect(status).toHaveBeenCalledWith(202);
   });
 
   it.each(DATA_LAKE_STATUSES.filter(s => s !== 'draft' && s !== 'active'))(
@@ -229,6 +291,41 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     await expect(run(makeReq({ dataLakeId: 'nope', driveFolderId: FOLDER_ID }), res)).rejects.toThrow(/not found/i);
   });
 
+  it('409s a NEW claim on a lake a GitHub repository already feeds (guard runs on the create branch, after the folder probe)', async () => {
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1', targetDataLakeId: 'lake1' });
+    const { res } = makeRes();
+    await expect(run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/already connected to a GitHub repository/i),
+    });
+    expect(h.ghConnFindByDataLakeIdAny).toHaveBeenCalledWith('lake1');
+    // Credential capture and the Drive folder probe now legitimately happen before the guard - only
+    // the write itself must be refused.
+    expect(h.connCreate).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('re-syncs a same-lake same-folder Drive connection even though a GitHub row also feeds the lake (reuse branch never calls the guard)', async () => {
+    // Regression test: the guard used to run before the folder lookup and would 409 every request on
+    // a lake that also carries a GitHub row, including a harmless same-folder Re-sync. It now lives
+    // only on the NEW-claim branch, so a reuse must reach 202 regardless of what else feeds the lake.
+    h.ghConnFindByDataLakeIdAny.mockResolvedValue({ id: 'gh1', targetDataLakeId: 'lake1' });
+    h.connFindByDriveFolderId.mockResolvedValue({ id: 'conn1', targetDataLakeId: 'lake1' });
+    const { res, status } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', orgAOwner, 'enc-refresh', 'u1');
+    expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1', forceFullWalk: true });
+    expect(status).toHaveBeenCalledWith(202);
+    expect(h.ghConnFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('enforces one connector per lake whatever EnableDataLakeGitHub is set to', () => {
+    // The route gates on EnableDataLakes alone, so the GitHub flag (off or on) cannot switch the check
+    // above off - with it off the client cannot see the bound repository, so this route is the guard.
+    expect(h.gatedFlags).toEqual(['EnableDataLakes']);
+  });
+
   it('409s when the folder is already claimed by a different lake', async () => {
     h.connFindByDriveFolderId.mockResolvedValue({ id: 'other', targetDataLakeId: 'lakeOTHER' });
     const { res, status } = makeRes();
@@ -254,12 +351,27 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
     await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
 
     // connectedBy is re-stamped to the re-syncing caller so ingest never runs as a deleted user.
-    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', 'orgA', 'enc-refresh', 'u1');
+    expect(h.connUpdateCredential).toHaveBeenCalledWith('conn1', orgAOwner, 'enc-refresh', 'u1');
     expect(h.connCreate).not.toHaveBeenCalled();
     // This IS the "Re-sync everything" surface (#2396): reconnecting an existing connection forces a
     // full walk rather than trusting its (possibly stale, possibly absent) syncCursor.
     expect(h.sendToQueue).toHaveBeenCalledWith('queue-url', { connectionId: 'conn1', forceFullWalk: true });
     expect(status).toHaveBeenCalledWith(202);
+  });
+
+  it('409s a reconnect while the folder disconnect purge is still queued, without re-enabling it', async () => {
+    h.connFindByDriveFolderId.mockResolvedValue({
+      id: 'conn1',
+      targetDataLakeId: 'lake1',
+      disconnectRequestedAt: new Date(),
+    });
+    const { res, status, json } = makeRes();
+    await run(makeReq({ dataLakeId: 'lake1', driveFolderId: FOLDER_ID }), res);
+
+    expect(status).toHaveBeenCalledWith(409);
+    expect(json).toHaveBeenCalledWith({ error: expect.stringMatching(/still being disconnected/) });
+    expect(h.connUpdateCredential).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('409s (not a false 202) when the reuse-branch credential update matches nothing', async () => {
@@ -283,7 +395,7 @@ describe('POST /api/data-lakes/drive-sync - org-owned connect (D1)', () => {
       /could not queue/i
     );
 
-    expect(h.connRelease).toHaveBeenCalledWith('conn1', 'orgA');
+    expect(h.connRelease).toHaveBeenCalledWith('conn1', orgAOwner);
     expect(status).not.toHaveBeenCalledWith(202);
   });
 

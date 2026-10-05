@@ -1,0 +1,342 @@
+import type { SQSEvent } from 'aws-lambda';
+import { adminSettingsRepository, connectDB } from '@bike4mind/database';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { Logger } from '@bike4mind/observability';
+import { Resource } from 'sst';
+import { Config } from '@server/utils/config';
+import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
+import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
+import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
+import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
+import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
+import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
+import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
+import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
+import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
+import { dispatch as generationCallbackDispatch } from '@server/queueHandlers/generationCallback';
+import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
+import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
+import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
+import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
+import { SelfHostWorker } from './selfHostWorker';
+import { registerTaskScheduler } from './taskScheduler';
+import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerTelemetryCleanup } from './telemetryCleanup';
+import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
+import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
+import { registerQuestTimeoutSweep } from './questTimeoutSweep';
+import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { dispatchSelfHostEvent } from './eventDispatch';
+import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
+import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
+import { CHUNK_SCAN_BATCH } from '@server/s3/chunkScan';
+import {
+  FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
+  FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+} from '@server/queueHandlers/sqsDelivery';
+
+/**
+ * Self-host background worker entrypoint.
+ *
+ * Run as its own compose service (reuses Dockerfile.chatcompletion.selfhost with a
+ * command override, run from apps/workers) via
+ * `tsx --tsconfig tsconfig.selfhost.json --import ../client/server/chatCompletion/selfhostSstAlias.mjs`
+ * so `Resource.*` reads resolve from env. It is the self-host stand-in for the hosted
+ * SST queue consumers (infra/queues.ts) and cron (infra/cron.ts):
+ *   - polls researchEngineQueue -> researchEngineQueue.dispatch (same handler as hosted)
+ *   - polls imageGenerationQueue / imageEditQueue -> the same dispatch handlers hosted uses
+ *   - polls generationCallbackQueue -> generationCallback.dispatch, delivering signed HTTPS
+ *     completion callbacks for those jobs to API-key callers
+ *   - runs taskSchedulerService.process every 5 minutes with the same handler map as
+ *     the hosted cron/scheduler.ts (kept in sync with it).
+ */
+
+const bootLogger = new Logger({ metadata: { service: 'selfHostWorker' } });
+
+/** Research generations can run for minutes; keep the message invisible while in flight. */
+const RESEARCH_VISIBILITY_TIMEOUT_SEC = 900;
+/** Chunking/embedding a file (esp. local Ollama embeddings on CPU) can take minutes. */
+const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
+/** Matches the 11-minute visibility timeout hosted gives both image queues (infra/queues.ts),
+ *  which sits above their 10-minute handler timeout so a slow render is never redelivered
+ *  mid-flight - a duplicate would charge the user's credits a second time. */
+const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
+/** Matches hosted's 12-minute visibility over the purge handler's 10-minute timeout (infra/queues.ts). */
+const DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC = 720;
+/** Both GitHub lake queues mirror hosted: 12-minute visibility over a 10-minute handler timeout (infra/queues.ts). */
+const GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC = 720;
+const GITHUB_LAKE_RUN_BUDGET_MS = 10 * 60_000;
+/** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
+const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
+/** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
+const CHUNK_SCAN_INTERVAL_MS = 60_000;
+/** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
+const DRAIN_GRACE_MS = 20_000;
+
+async function main() {
+  // This process only makes sense in self-host: it uses the env-backed Resource shim and
+  // ElasticMQ. Refuse to run elsewhere so it can never poll a real AWS queue by accident.
+  if (process.env.B4M_SELF_HOST !== 'true') {
+    bootLogger.error('selfHostWorker refuses to start: B4M_SELF_HOST must be "true" (self-host only).');
+    process.exit(1);
+  }
+
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), bootLogger);
+  bootLogger.info('MongoDB connected');
+
+  const worker = new SelfHostWorker(bootLogger);
+  registerAbandonedExecutionSweep(worker);
+  registerQuestTimeoutSweep(worker);
+  registerLakeHealthSweep(worker);
+  registerTelemetryCleanup(worker);
+  registerApiKeyBaselineCalculation(worker);
+
+  worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
+    visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
+  });
+
+  // RAG ingestion pipeline: chunk a fab file, then vectorize its chunks in batches.
+  // The webhook / scan (server/... object-created, scheduler scan) enqueues fabFileChunkQueue;
+  // fabFileChunk fans out to fabFileVectorizeQueue. Same dispatch handlers as hosted.
+  worker.registerQueueHandler('fabFileChunkQueue', Resource.fabFileChunkQueue.url, fabFileChunkDispatch, {
+    visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    // Explicit rather than relying on registerQueueHandler's own default: this is the same
+    // number fabFileChunk.ts's isFinalDeliveryAttempt gate uses, so a future change to one
+    // can't silently drift from the other (previously synced only by a comment).
+    maxReceiveCount: FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
+  });
+  worker.registerQueueHandler('fabFileVectorizeQueue', Resource.fabFileVectorizeQueue.url, fabFileVectorizeDispatch, {
+    visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+    maxReceiveCount: FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  });
+
+  // Image generation and image edit. The app enqueues here from POST /api/ai/generate-image and
+  // POST /api/ai/edit-image (the `/image` chat command), so without a consumer the quest sits at
+  // 'pending' forever. The in-chat image_generation / edit_image LLM tools do NOT come through
+  // here - they render inline in ChatCompletion. Optional in the manifest: an install that
+  // upgraded without adding the env vars keeps the rest of the worker up and says so on boot.
+  const registerImageQueue = (
+    name: string,
+    feature: string,
+    url: string | undefined,
+    dispatch: typeof imageGenerationDispatch
+  ) => {
+    if (!url) {
+      bootLogger.warn(`${name} not configured; ${feature} will not run`);
+      return;
+    }
+    worker.registerQueueHandler(name, url, dispatch, {
+      visibilityTimeoutSec: IMAGE_VISIBILITY_TIMEOUT_SEC,
+      // Explicit rather than registerQueueHandler's default: hosted's dlq.retry is 3
+      // (infra/queues.ts), and image renders cost provider money per attempt.
+      maxReceiveCount: 3,
+    });
+  };
+  registerImageQueue(
+    'imageGenerationQueue',
+    'image generation',
+    Resource.imageGenerationQueue?.url,
+    imageGenerationDispatch
+  );
+  registerImageQueue('imageEditQueue', 'image edit', Resource.imageEditQueue?.url, imageEditDispatch);
+
+  // Signed HTTPS completion callbacks for image/video generation jobs, delivered to API-key
+  // callers. Optional in the manifest: an install without it just skips callback delivery.
+  const generationCallbackQueueUrl = Resource.generationCallbackQueue?.url;
+  if (generationCallbackQueueUrl) {
+    worker.registerQueueHandler('generationCallbackQueue', generationCallbackQueueUrl, generationCallbackDispatch, {
+      // Matches hosted's 2-minute visibilityTimeout (infra/queues.ts).
+      visibilityTimeoutSec: 120,
+      maxReceiveCount: GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+    });
+  } else {
+    bootLogger.warn('generationCallbackQueue not configured; generation completion callbacks will not be delivered');
+  }
+
+  // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
+  // in the self-host manifest - a basic install that never set the env var simply never runs
+  // it (the stuck-job reconciler is what keeps the review UI from spinning forever on that).
+  const taxonomyQueueUrl = Resource.dataLakeTaxonomyQueue?.url;
+  if (taxonomyQueueUrl) {
+    worker.registerQueueHandler('dataLakeTaxonomyQueue', taxonomyQueueUrl, dataLakeTaxonomyAnalysisDispatch, {
+      visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+      // Explicit rather than registerQueueHandler's default of 3: infra/queues.ts's hosted
+      // dataLakeTaxonomyQueue is dlq.retry: 2 (LLM calls cost money), so leaving this on the
+      // default would run one extra taxonomy LLM pass on self-host for every poison message.
+      maxReceiveCount: 2,
+    });
+  } else {
+    bootLogger.warn('dataLakeTaxonomyQueue not configured; background AI tag suggestion will not run');
+  }
+
+  registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+
+  // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
+  // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
+  // one rather than queueing work nothing will pick up.
+  const researchQueueUrl = Resource.dataLakeResearchQueue?.url;
+  if (researchQueueUrl) {
+    worker.registerQueueHandler('dataLakeResearchQueue', researchQueueUrl, dataLakeResearchRunDispatch, {
+      visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+      // 1, matching infra/queues.ts's hosted dlq.retry - the run row's claim already makes a
+      // redelivery a no-op, and an extra delivery on self-host would only add log noise.
+      maxReceiveCount: 1,
+    });
+  } else {
+    bootLogger.warn('dataLakeResearchQueue not configured; data-lake research runs will not run');
+  }
+
+  const driveDisconnectPurgeQueueUrl = Resource.driveDisconnectPurgeQueue?.url;
+  if (driveDisconnectPurgeQueueUrl) {
+    worker.registerQueueHandler(
+      'driveDisconnectPurgeQueue',
+      driveDisconnectPurgeQueueUrl,
+      driveDisconnectPurgeDispatch,
+      {
+        visibilityTimeoutSec: DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC,
+        maxReceiveCount: 3,
+      }
+    );
+  } else {
+    bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
+  }
+
+  // One message per dispatch and a hosted-length deadline, like the Lambda: the ingest slices by
+  // getRemainingTimeInMillis and re-enqueues, so without a budget a large repo would outlive its
+  // visibility and be redelivered mid-run. maxReceiveCount matches each queue's hosted dlq.retry.
+  const githubLakeQueueOpts = {
+    visibilityTimeoutSec: GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC,
+    runBudgetMs: GITHUB_LAKE_RUN_BUDGET_MS,
+    batchSize: 1,
+  };
+  worker.registerQueueHandler('githubLakeIngestQueue', Resource.githubLakeIngestQueue.url, githubLakeIngestDispatch, {
+    ...githubLakeQueueOpts,
+    maxReceiveCount: 2,
+  });
+  worker.registerQueueHandler('githubLakeRevokeQueue', Resource.githubLakeRevokeQueue.url, githubLakeRevokeDispatch, {
+    ...githubLakeQueueOpts,
+    maxReceiveCount: 7,
+  });
+
+  // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
+  // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the
+  // Resource shim): this queue is self-host-only, so it isn't in the hosted SST types.
+  // Optional - unset means enrichment simply doesn't run.
+  const eventQueueUrl = process.env.SELF_HOST_EVENT_QUEUE;
+  if (eventQueueUrl) {
+    worker.registerQueueHandler(
+      'selfHostEventQueue',
+      eventQueueUrl,
+      async (event: SQSEvent) => {
+        const { detailType, detail } = JSON.parse(event.Records[0].body) as { detailType: string; detail: unknown };
+        await dispatchSelfHostEvent(detailType, detail, bootLogger);
+      },
+      // Enrichment handlers make local-LLM calls (naming, summaries) that can run minutes on
+      // CPU: keep the message invisible long enough to avoid mid-run redelivery + duplicate work.
+      { visibilityTimeoutSec: 300, maxReceiveCount: 5 }
+    );
+  } else {
+    bootLogger.warn('SELF_HOST_EVENT_QUEUE not set; enrichment events will not be consumed');
+  }
+
+  registerTaskScheduler(worker, bootLogger);
+
+  // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
+  // notification is missed, sweep un-chunked files and enqueue them, then re-enqueue files whose
+  // vectorize hand-off was stranded. Selection, pause scoping and enqueue accounting for both
+  // passes live in chunkRescueSweep.ts, shared in shape with the hosted daily cron - the per-tick
+  // budget below is the only thing that differs.
+  // Each pass is isolated, as in the hosted twin: neither guards its own FabFile.find, so a Mongo
+  // blip in the first would otherwise reject out of the tick and leave the stranded-vectorize
+  // backlog growing untouched until the error cleared.
+  worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
+    await runChunkRescueSweep({ limit: CHUNK_SCAN_BATCH, logger: bootLogger }).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] un-chunked rescue sweep failed: ${err}`);
+    });
+    await runStrandedVectorizeRescue(bootLogger).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] stranded-vectorize rescue sweep failed: ${err}`);
+    });
+    // Same tick re-scans FabFiles whose moderation scan never completed, so a stranded 'pending'
+    // file does not stay unservable forever. Isolated like the passes above.
+    await runModerationRescueSweep({
+      enabled:
+        getSettingsValue(
+          'ImageModerationEnabled',
+          // Guard the settings read itself: it is awaited as an ARGUMENT to the sweep, evaluated
+          // before the .catch() below is attached, so a settings/DB blip here would otherwise
+          // reject out of the tick. Default to moderation ON (fail-closed) if the read fails.
+          await getSettingsMap({ adminSettings: adminSettingsRepository }).catch(() => ({}))
+        ) ?? true,
+      limit: CHUNK_SCAN_BATCH,
+      logger: bootLogger,
+    }).catch(err => {
+      bootLogger.error(`[fabFileChunkScan] moderation rescue sweep failed: ${err}`);
+    });
+  });
+
+  // Self-host counterpart of the hosted daily dataLakeBatchReconcile cron (infra/cron.ts):
+  // without this, a self-host batch that nobody's list-view revisits stays stuck indefinitely
+  // now that the timeout is 3 hours instead of 30 minutes. Same shared sweep, same timeout.
+  worker.registerDailyUtcTask(
+    'dataLakeBatchReconcile',
+    5,
+    async () => {
+      await runStuckBatchSweep(bootLogger);
+    },
+    { runOnStartup: true }
+  );
+
+  // Self-host counterpart of the hosted dataLakeResearchScheduleCron (infra/cron.ts), same tick.
+  worker.registerScheduledTask('dataLakeResearchSchedule', RESEARCH_SCHEDULE_INTERVAL_MS, async () => {
+    await runResearchScheduleTick(bootLogger);
+  });
+
+  // Remote-provider catalog freshness (sec 6.2). The enableModelDiscovery gate,
+  // the lease and the per-source minimum interval all live inside the service,
+  // so this closure is the same call the hosted cron makes.
+  //
+  // Gated on B4M_DISCOVERY_DRIVER, like the startup leg: the aggregator sources
+  // are configured on every install, so an unflagged self-host would reach the
+  // public internet every interval with no key set and nothing asked of it.
+  if (isDiscoveryDriver()) {
+    worker.registerScheduledTask('modelDiscovery', modelDiscoveryIntervalMs(), async () => {
+      await runScheduledDiscovery(bootLogger, 'selfhost');
+    });
+  } else {
+    bootLogger.info('[model-discovery] off: set B4M_DISCOVERY_DRIVER=true to let this worker refresh the catalog');
+  }
+
+  worker.start();
+
+  // registerScheduledTask arms an interval and does not fire on registration,
+  // so without this a fresh container waits a full interval for its first run.
+  // Held (not fire-and-forget) so shutdown can wait for it: a run abandoned
+  // mid-flight strands its Mongo lease until the TTL expires.
+  const startupLeg = startDiscoveryOnStartup({ logger: bootLogger, host: 'selfhost' });
+
+  const shutdown = async (signal: string) => {
+    bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);
+    // One budget for everything: worker.stop bounds itself, and this bounds the
+    // pair, so a startup leg that outlives the drain cannot delay the exit past
+    // the compose stop grace (compose.selfhost.yaml sets it above DRAIN_GRACE_MS).
+    const drainDeadline = new Promise<void>(resolve => setTimeout(resolve, DRAIN_GRACE_MS));
+    await Promise.race([Promise.all([worker.stop(DRAIN_GRACE_MS), startupLeg]), drainDeadline]);
+    bootLogger.info('selfHostWorker drained; exiting');
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+}
+
+// Boot except under test (vitest sets VITEST) - importing this module for unit tests must
+// not connect Mongo, start pollers, or install signal handlers (mirrors server.ts).
+if (!process.env.VITEST) {
+  main().catch(err => {
+    bootLogger.error('selfHostWorker failed to start', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    process.exit(1);
+  });
+}

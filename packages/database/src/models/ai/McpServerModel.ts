@@ -19,6 +19,7 @@ const McpServerSchema = new Schema<IMcpServerDocument>(
     metadata: {
       type: {
         githubLogin: { type: String },
+        githubUserId: { type: Number },
         scope: { type: String },
         connectedAt: { type: String },
         disconnectedAt: { type: String },

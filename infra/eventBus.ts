@@ -10,7 +10,7 @@ import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
   'stripe-invoice-payment-succeeded',
   {
-    handler: 'apps/client/server/events/stripe/invoicePaymentSucceeded.handler',
+    handler: 'apps/workers/src/events/stripe/invoicePaymentSucceeded.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -37,7 +37,7 @@ const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
 const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
   'stripe-customer-subscription-updated',
   {
-    handler: 'apps/client/server/events/stripe/customerSubscriptionUpdated.handler',
+    handler: 'apps/workers/src/events/stripe/customerSubscriptionUpdated.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -64,7 +64,7 @@ const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
 eventBus.subscribe(
   'email-send',
   {
-    handler: 'apps/client/server/events/sendEmail.handler',
+    handler: 'apps/workers/src/events/sendEmail.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -122,7 +122,7 @@ const sessionEnrichmentRuleDLQ = {
 const sessionAutoNamingSubscription = eventBus.subscribe(
   'session-auto-name',
   {
-    handler: 'apps/client/server/events/sessionAutoNaming.handler',
+    handler: 'apps/workers/src/events/sessionAutoNaming.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     vpc: lambdaVpc,
@@ -150,7 +150,7 @@ const sessionAutoNamingSubscription = eventBus.subscribe(
 const sessionSummarizationSubscription = eventBus.subscribe(
   'session-summarize',
   {
-    handler: 'apps/client/server/events/sessionSummarization.handler',
+    handler: 'apps/workers/src/events/sessionSummarization.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
     vpc: lambdaVpc,
@@ -178,7 +178,7 @@ const sessionSummarizationSubscription = eventBus.subscribe(
 const sessionContextSummarizationSubscription = eventBus.subscribe(
   'session-context-summarize',
   {
-    handler: 'apps/client/server/events/sessionContextSummarization.handler',
+    handler: 'apps/workers/src/events/sessionContextSummarization.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, eventBus],
     vpc: lambdaVpc,
@@ -193,7 +193,7 @@ const sessionContextSummarizationSubscription = eventBus.subscribe(
 const sessionTaggingSubscription = eventBus.subscribe(
   'session-tag',
   {
-    handler: 'apps/client/server/events/sessionTagging.handler',
+    handler: 'apps/workers/src/events/sessionTagging.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
     vpc: lambdaVpc,
@@ -254,7 +254,7 @@ new aws.sqs.QueuePolicy('sessionEnrichmentDLQPolicy', {
 eventBus.subscribe(
   'notebook-curation-start',
   {
-    handler: 'apps/client/server/events/notebookCuration.handler',
+    handler: 'apps/workers/src/events/notebookCuration.handler',
     runtime: 'nodejs24.x',
     link: [
       ...allSecrets,
@@ -288,7 +288,7 @@ eventBus.subscribe(
 eventBus.subscribe(
   'notebook-curation-complete-analytics',
   {
-    handler: 'apps/client/server/events/notebookCurationAnalytics.handler',
+    handler: 'apps/workers/src/events/notebookCurationAnalytics.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, eventBus],
     vpc: lambdaVpc,
@@ -332,7 +332,7 @@ const telemetryAlertRuleDLQ = new sst.aws.Queue('telemetryAlertRuleDLQ', {
 const telemetryAlertSubscription = eventBus.subscribe(
   'telemetry-alert',
   {
-    handler: 'apps/client/server/events/telemetryAlert.handler',
+    handler: 'apps/workers/src/events/telemetryAlert.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, websocketApi, eventBus],
     vpc: lambdaVpc,
@@ -386,7 +386,7 @@ new aws.sqs.QueuePolicy('telemetryAlertRuleDLQPolicy', {
 const spiderSubscription = eventBus.subscribe(
   'spider-start',
   {
-    handler: 'apps/client/server/events/spider.handler',
+    handler: 'apps/workers/src/events/spider.handler',
     link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
     vpc: lambdaVpc,
     timeout: '15 minutes', // Longer timeout for processing many notebooks

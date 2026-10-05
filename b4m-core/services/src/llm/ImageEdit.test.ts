@@ -1,16 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { z } from 'zod';
 import {
+  EditImageRequestBodySchema,
   ImageModels,
   IMAGES_PER_EDIT_REQUEST,
   ModelBackend,
   type IUserDocument,
   type ModelInfo,
 } from '@bike4mind/common';
-import type { Logger } from '@bike4mind/observability';
+import { silentLogger } from '../__tests__/utils/testUtils';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { aiImageService, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
-import { ImageEditService } from './ImageEdit';
+import { deductCreditsWithOrgSupport } from '../creditService';
+import { ImageEditService, type ImageEditBody } from './ImageEdit';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -41,15 +44,14 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   };
 });
 
-vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
+vi.mock('../creditService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../creditService')>();
+  return { ...actual, deductCreditsWithOrgSupport: vi.fn(async () => undefined) };
+});
 
-const silentLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  updateMetadata: vi.fn(),
-} as unknown as Logger;
+vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
+
+vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
 
 const makeModelInfo = (id: string): ModelInfo =>
   ({
@@ -118,7 +120,11 @@ describe('ImageEditService.validateUserCredits', () => {
 describe('ImageEditService.process model dispatch', () => {
   const editSpy = vi.fn();
 
-  const makeService = (dbExtra: Record<string, unknown> = {}) => {
+  const makeService = (
+    dbExtra: Record<string, unknown> = {},
+    // In production this enqueues; pass one that calls process() to drive invoke() end to end.
+    startImageEditProcess: (body: ImageEditBody) => Promise<void> = vi.fn()
+  ) => {
     const quest = {
       id: 'quest1',
       sessionId: 'session1',
@@ -147,12 +153,12 @@ describe('ImageEditService.process model dispatch', () => {
           ]),
         },
       },
-      startImageEditProcess: vi.fn(),
+      startImageEditProcess,
       deleteFabFile: vi.fn(),
       wsHttpsUrl: 'wss://example.invalid',
       abilityGetter: vi.fn(),
       logEvent: vi.fn(),
-      storage: {} as never,
+      storage: { upload: vi.fn(async () => 'edits/result.png') } as never,
       fabFileStorage: { getSignedUrl: vi.fn(async () => 'https://example.invalid/mask.png') } as never,
     } as never);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -196,6 +202,26 @@ describe('ImageEditService.process model dispatch', () => {
 
     expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('bfl');
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.FLUX_PRO_FILL });
+  });
+
+  it('carries a client-sent seed through invoke() to the BFL edit call', async () => {
+    // Goes through invoke() because its EditImageRequestBodySchema parse is what used to strip seed.
+    const serviceRef: { current?: ImageEditService } = {};
+    const { service } = makeService({}, body => serviceRef.current!.process({ body, logger: silentLogger }));
+    serviceRef.current = service;
+
+    const body: z.infer<typeof EditImageRequestBodySchema> = {
+      sessionId: 'session1',
+      questId: 'quest1',
+      prompt: 'make it blue',
+      model: ImageModels.FLUX_PRO_FILL,
+      image: 'https://example.invalid/source.png',
+      fabFileIds: ['mask1'],
+      seed: 12345,
+    };
+    await service.invoke({ body, userId: 'user1' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({ seed: 12345 });
   });
 
   it('sends the selected OpenAI model instead of defaulting to gpt-image-1', async () => {
@@ -283,6 +309,66 @@ describe('ImageEditService.process model dispatch', () => {
       await runBilled({ n: 5 });
 
       expect(editSpy.mock.calls[0][2]).not.toHaveProperty('n');
+    });
+  });
+
+  describe('usage event on a charged edit', () => {
+    const runCharged = (record: ReturnType<typeof vi.fn>) =>
+      run(ImageModels.GPT_IMAGE_1_5, {}, { creditTransactions: { create: vi.fn() }, usageEvents: { record } });
+
+    beforeEach(() => {
+      vi.mocked(deductCreditsWithOrgSupport).mockClear();
+      vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
+      vi.mocked(getSettingsValue).mockImplementation(name => name === 'enforceCredits' || undefined);
+      vi.mocked(silentLogger.warn).mockClear();
+      editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/edited.png' });
+    });
+
+    afterEach(() => {
+      vi.mocked(getSettingsValue).mockImplementation(() => undefined);
+    });
+
+    it('has landed the usage event by the time process() returns', async () => {
+      let landed = false;
+      // Settles on a later macrotask, so an unawaited write is still pending when process() resolves.
+      const record = vi.fn(
+        () =>
+          new Promise<void>(resolve =>
+            setTimeout(() => {
+              landed = true;
+              resolve();
+            }, 0)
+          )
+      );
+
+      const quest = await runCharged(record);
+
+      expect(quest.status).toBe('done');
+      expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: 'quest1', feature: 'image_edit', creditsCharged: 68 })
+      );
+      expect(landed).toBe(true);
+    });
+
+    it('still completes the edit when the usage-event write fails', async () => {
+      const record = vi.fn(async () => {
+        throw new Error('usage store down');
+      });
+
+      const quest = await runCharged(record);
+
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(quest.type).not.toBe('error');
+      expect(quest.status).toBe('done');
+      expect(silentLogger.warn).toHaveBeenCalledWith('Failed to record usage event', expect.any(Error));
+    });
+
+    it('completes a charged run when db.usageEvents is absent', async () => {
+      const quest = await run(ImageModels.GPT_IMAGE_1_5, {}, { creditTransactions: { create: vi.fn() } });
+
+      expect(quest.status).toBe('done');
+      expect(quest.type).not.toBe('error');
     });
   });
 });
@@ -440,13 +526,14 @@ describe('ImageEditService.process mask access (#3069)', () => {
       withResolver?: boolean;
       failLakeAccess?: boolean;
       fabFileIds?: string[];
+      deleteFabFile?: (userId: string, id: string) => unknown;
     } = {}
   ) => {
     const reachable = opts.reachable ?? ((ids: string[]) => ids.map(id => (id === 'mask1' ? maskFile : null)));
     const findAccessibleInIds = vi.fn(async (ids: string[], _access: unknown, lakeAccess: unknown) =>
       reachable(ids || [], lakeAccess).filter(Boolean)
     );
-    const deleteFabFile = vi.fn();
+    const deleteFabFile = vi.fn(opts.deleteFabFile);
     const getSignedUrl = vi.fn(async (path: string) => `https://example.invalid/${path}`);
     const resolveLakeAccess = vi.fn(async () => {
       if (opts.failLakeAccess) throw new Error('lake-resolution-outage');
@@ -569,6 +656,35 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(foreignRun.deleteFabFile).not.toHaveBeenCalled();
   });
 
+  it('finishes deleting the mask before process() resolves', async () => {
+    // The queue Lambda freezes once process() resolves, so a cleanup that is merely started, not
+    // awaited, never completes and the mask outlives a finished edit.
+    let deleted = false;
+    await run({
+      deleteFabFile: async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        deleted = true;
+      },
+    });
+
+    expect(deleted).toBe(true);
+  });
+
+  it('logs a failed mask delete instead of letting it escape the finished edit', async () => {
+    const { quest } = await run({
+      deleteFabFile: async () => {
+        throw new Error('storage-outage');
+      },
+    });
+
+    // The provider stub's rejection is still the quest's outcome; the cleanup failure does not replace it.
+    expect(quest.reply).toBe('stop-after-dispatch');
+    expect(silentLogger.warn).toHaveBeenCalledWith(
+      '[ImageEdit] Failed to delete temporary mask file',
+      expect.objectContaining({ fileId: 'mask1', error: 'storage-outage' })
+    );
+  });
+
   it('degrades to owner/share/global-read when no lake resolver is wired, rather than failing', async () => {
     const { findAccessibleInIds, getSignedUrl } = await run({ withResolver: false });
 
@@ -607,6 +723,46 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(getSignedUrl).not.toHaveBeenCalledWith('masks/own.png');
     expect(quest.type).toBe('error');
     expect(quest.reply).toContain('lake-only-mask');
+  });
+
+  it('keeps the painted mask when a workbench file beside it is inaccessible, so a retry can reuse it', async () => {
+    // [unreachable workbench file, freshly painted mask]: the guard fails the edit before dispatch
+    // and tells the caller to remove the bad file and retry - which only works if the mask id they
+    // retry with still exists. deleteFabFile mutates the store so the retry sees the real outcome.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const live = new Set(['own-mask']);
+    const reachable = (ids: string[]) => ids.map(id => (live.has(id) ? ownMask : null));
+    const deleteFromStore = (_userId: string, id: string) => live.delete(id);
+
+    const failed = await run({ fabFileIds: ['ghost-file', 'own-mask'], reachable, deleteFabFile: deleteFromStore });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(failed.quest.type).toBe('error');
+    expect(failed.quest.reply).toContain('ghost-file');
+    expect(failed.deleteFabFile).not.toHaveBeenCalled();
+
+    const retry = await run({ fabFileIds: ['own-mask'], reachable, deleteFabFile: deleteFromStore });
+
+    expect(retry.getSignedUrl).toHaveBeenCalledWith('masks/own.png');
+    expect(editSpy).toHaveBeenCalledTimes(1);
+    // The run that did reach dispatch still cleans up its temporary mask.
+    expect(retry.deleteFabFile).toHaveBeenCalledWith('user1', 'own-mask');
+    expect(live.has('own-mask')).toBe(false);
+  });
+
+  it('keeps the painted mask when a lake outage leaves a lake-only file beside it unresolved', async () => {
+    // Same guard, outage branch: the first file needs lake membership the failed resolver could
+    // not supply, while the mask resolves by ownership.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const { quest, deleteFabFile } = await run({
+      failLakeAccess: true,
+      fabFileIds: ['lake-only-file', 'own-mask'],
+      reachable: ids => ids.map(id => (id === 'own-mask' ? ownMask : null)),
+    });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.reply).toContain('data-lake lookup failed');
+    expect(deleteFabFile).not.toHaveBeenCalled();
   });
 
   it("sends the caller's own mask when every id in a two-id list resolves", async () => {
@@ -693,7 +849,17 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
     const service = new ImageEditService({
       db: {
         sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
-        quests: { findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId })), update },
+        quests: {
+          findById: vi.fn(async () => ({
+            id: 'quest1',
+            sessionId: questSessionId,
+            // The prior run failed; the retry must not inherit its error state.
+            status: 'done',
+            type: 'error',
+            errorCode: 'insufficient_credits',
+          })),
+          update,
+        },
       },
       startImageEditProcess,
     } as never);
@@ -722,6 +888,168 @@ describe('ImageEditService.invoke (retry quest bound to its session)', () => {
   it('retries a quest from the same session', async () => {
     const { invoke, update } = makeInvokeService('session1');
     await invoke();
-    expect(update).toHaveBeenCalled();
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1', type: 'message' }), {
+      unset: ['status', 'errorCode'],
+    });
+  });
+
+  it('settles the quest as a done error when the process fails to start', async () => {
+    const { invoke, update, startImageEditProcess } = makeInvokeService('session1');
+    startImageEditProcess.mockRejectedValueOnce(new Error('queue unavailable'));
+    await invoke();
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'quest1',
+      type: 'error',
+      status: 'done',
+      reply: 'queue unavailable',
+    });
+  });
+});
+
+describe('ImageEditService quest partial writes', () => {
+  const editSpy = vi.fn();
+  const promptMeta = { marker: 'meta' };
+
+  const makeService = (questSessionId = 'session1') => {
+    const quest: Record<string, unknown> = {
+      id: 'quest1',
+      sessionId: questSessionId,
+      prompt: 'make it blue',
+      type: 'message',
+      replies: ['stale'],
+      images: ['stale.png'],
+      promptMeta,
+    };
+    const update = vi.fn(async () => quest);
+    const startImageEditProcess = vi.fn(async () => undefined);
+    const service = new ImageEditService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
+        quests: { findById: vi.fn(async () => quest), update },
+        users: { findById: vi.fn(async () => richUser) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+      },
+      startImageEditProcess,
+      deleteFabFile: vi.fn(),
+      wsHttpsUrl: 'wss://example.invalid',
+      abilityGetter: vi.fn(),
+      logEvent: vi.fn(),
+      storage: { upload: vi.fn(async () => 'stored/out.png') } as never,
+      fabFileStorage: { getSignedUrl: vi.fn(async () => 'https://example.invalid/x.png') } as never,
+    } as never);
+    (service as unknown as { tokenizer: unknown }).tokenizer = {
+      encodeTokens: vi.fn(async () => [1, 2, 3]),
+      decodeTokens: vi.fn(async () => 'make it blue'),
+    };
+    return { service, quest, update, startImageEditProcess };
+  };
+
+  const process = (service: ImageEditService) =>
+    service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: [],
+      } as never,
+      logger: silentLogger,
+    });
+
+  const invoke = (service: ImageEditService) =>
+    service.invoke({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'make it blue',
+        model: 'gpt-image-1',
+        image: 'https://example.invalid/source.png',
+        fabFileIds: ['mask1'],
+      } as never,
+      userId: 'user1',
+    });
+
+  beforeEach(() => {
+    editSpy.mockReset();
+    vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
+    vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
+  });
+
+  afterEach(() => {
+    vi.mocked(getSettingsValue).mockImplementation(() => undefined);
+  });
+
+  const retryResetWrite = {
+    id: 'quest1',
+    images: [],
+    replies: [],
+    type: 'message',
+    promptMeta: {
+      model: { name: 'gpt-image-1', parameters: {} },
+      session: { id: 'session1', userId: 'user1' },
+    },
+  };
+
+  it('invoke retry writes exactly images, replies, type and promptMeta', async () => {
+    const { service, update } = makeService();
+    await invoke(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).toStrictEqual(retryResetWrite);
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
+  });
+
+  it('invoke catch writes exactly type, status and reply', async () => {
+    const { service, update, startImageEditProcess } = makeService();
+    startImageEditProcess.mockRejectedValue(new Error('queue down'));
+    await invoke(service);
+
+    // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][0]).toStrictEqual(retryResetWrite);
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
+    const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
+    expect(errorCall).toStrictEqual({ id: 'quest1', type: 'error', status: 'done', reply: 'queue down' });
+  });
+
+  it('process success writes exactly reply, replies, images, status and creditsUsed (no promptMeta)', async () => {
+    editSpy.mockResolvedValue({ type: 'success', dataUrl: 'https://example.invalid/out.png' });
+    vi.mocked(getSettingsValue).mockImplementation(key => (key === 'ImageModerationEnabled' ? false : undefined));
+    const { service, update } = makeService();
+    await process(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    const doneCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.status === 'done');
+    expect(doneCall).toStrictEqual({
+      id: 'quest1',
+      reply: '',
+      replies: [],
+      images: ['stored/out.png'],
+      status: 'done',
+      creditsUsed: undefined,
+    });
+  });
+
+  it('process error writes exactly the seven error fields', async () => {
+    editSpy.mockRejectedValue(new Error('provider down'));
+    const { service, update } = makeService();
+    await process(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    const errorCall = update.mock.calls.map(c => c[0] as Record<string, unknown>).find(arg => arg.type === 'error');
+    expect(errorCall).toStrictEqual({
+      id: 'quest1',
+      prompt: 'make it blue',
+      reply: 'provider down',
+      type: 'error',
+      status: 'done',
+      errorCode: undefined,
+      // A literal, not the shared `promptMeta` the quest holds: a test comparing an object with
+      // itself would pass even if process() started mutating it before the write.
+      promptMeta: { marker: 'meta' },
+    });
   });
 });

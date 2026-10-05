@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { spendReconciliationRepository } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
@@ -10,7 +11,7 @@ import { ForbiddenError } from '@server/utils/errors';
  * GET ?view=history -> all snapshots, newest first (audit trail / drift)
  * GET (default)     -> latest per provider
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) throw new ForbiddenError('Admin access required');
 
   const view = req.query.view as string | undefined;

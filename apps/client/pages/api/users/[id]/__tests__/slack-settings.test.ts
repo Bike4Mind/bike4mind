@@ -93,6 +93,34 @@ describe('PATCH /api/users/:id/slack-settings - defaultNotebookId ownership', ()
   });
 });
 
+describe('PATCH /api/users/:id/slack-settings - agentNotebookRouting ownership', () => {
+  it('rejects an agent routing notebook that does not belong to the caller', async () => {
+    mockSessionFindOne.mockReturnValue(null);
+    const { res, promise } = run({ agentNotebookRouting: { dev: FOREIGN_NOTEBOOK } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/routing notebook not found or does not belong/i);
+    expect(mockUserFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts agent routing notebooks the caller owns and persists them', async () => {
+    mockSessionFindOne.mockReturnValue({ _id: OWN_NOTEBOOK });
+    const { res, promise } = run({ agentNotebookRouting: { dev: OWN_NOTEBOOK } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserFindByIdAndUpdate).toHaveBeenCalled();
+    expect(mockSessionFindOne).toHaveBeenCalledWith(expect.objectContaining({ _id: OWN_NOTEBOOK, userId: OWN }));
+  });
+
+  it('rejects a malformed agent routing notebook id before touching the DB', async () => {
+    const { res, promise } = run({ agentNotebookRouting: { pm: 'not-an-object-id' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/invalid notebook id format/i);
+    expect(mockSessionFindOne).not.toHaveBeenCalled();
+  });
+});
+
 describe('PATCH /api/users/:id/slack-settings - defaultProjectId access', () => {
   it('rejects a defaultProjectId the caller cannot access', async () => {
     mockProjectFindOne.mockReturnValue(null);

@@ -288,6 +288,56 @@ const noTreeWalkInPagesTests = [
   },
 ];
 
+// apps/workers/tsconfig.json wires an interim one-way bridge (@server/*, @client/*, etc. resolve
+// into apps/client) so apps/workers can reuse apps/client/server code while it is extracted into
+// its own package. The bridge is one-way: apps/client must never import back from apps/workers, or
+// the two workspaces would cycle. Extracted as a const, spread into every apps/client block that
+// owns no-restricted-imports (see the b4mv3RestrictedPaths comment above for why - flat-config
+// no-restricted-imports is last-rule-wins per file, not merged across blocks).
+const WORKERS_BOUNDARY_MESSAGE =
+  'apps/client must never depend on apps/workers; shared code belongs in apps/client/server (or a ' +
+  'shared package) and workers import it.';
+const noWorkersImportInClient = [
+  {
+    group: ['@workers', '@bike4mind/workers', '**/apps/workers/**', '**/workers/src/**'],
+    message: WORKERS_BOUNDARY_MESSAGE,
+  },
+];
+
+// apps/workers has no react/next/mui dependency (see apps/workers/package.json) and must stay that
+// way - it runs EventBridge Lambda handlers and a self-host job runner, neither of which renders
+// anything. Scoped to apps/client/app specifically (not @client/* broadly), since apps/workers
+// legitimately imports non-UI apps/client code (e.g. @client/lib/entitlements/registry) through the
+// same bridge described above.
+const WORKERS_NO_UI_MESSAGE =
+  'apps/workers must never import UI code (React, Next.js, MUI). Workers are backend job/event ' +
+  'runners; shared logic belongs in apps/client/server (imported via @server/*) or a shared package.';
+const noUiImportsInWorkers = {
+  paths: [
+    { name: 'react', message: WORKERS_NO_UI_MESSAGE },
+    { name: 'react-dom', message: WORKERS_NO_UI_MESSAGE },
+    { name: 'next', message: WORKERS_NO_UI_MESSAGE },
+  ],
+  // @/app and @pages too: apps/workers/tsconfig.json maps @/* and @pages/* into apps/client.
+  // **/client/app catches the same UI code reached by a relative path. Each entry is bare because a
+  // gitignore-style `x` matches `x` and every `x/...`, while `x/*` would miss the bare directory.
+  patterns: [
+    {
+      group: [
+        '@client/app',
+        '@/app',
+        '@pages',
+        '**/client/app',
+        'react/*',
+        'react-dom/*',
+        'next/*',
+        '@mui/*',
+      ],
+      message: WORKERS_NO_UI_MESSAGE,
+    },
+  ],
+};
+
 export default defineConfig([
   // Global ignores (replaces .eslintignore)
   globalIgnores([
@@ -371,15 +421,16 @@ export default defineConfig([
     },
   },
 
-  // TypeScript configuration for all .ts/.tsx files
+  // TypeScript configuration for all .ts/.tsx files, plus apps/client's .mts/.cts, which the
+  // apps/workers boundary block below opts into linting.
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
   })),
 
   // TypeScript custom rules
   {
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['**/*.ts', '**/*.tsx', 'apps/client/**/*.{mts,cts}'],
     rules: {
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
@@ -449,9 +500,10 @@ export default defineConfig([
       'react-hooks/error-boundaries': 'error',
       'react-hooks/preserve-manual-memoization': 'error',
 
-      // Restrict Next.js router imports (use Tanstack Router instead) + B4Mv3 facade guards.
-      // b4mv3RestrictedPaths are spread here so apps/client/** (excluded from the B4Mv3 block
-      // below) still gets error-severity coverage for all non-server client files.
+      // Restrict Next.js router imports (use Tanstack Router instead) + B4Mv3 facade guards +
+      // the apps/workers import boundary. b4mv3RestrictedPaths are spread here so apps/client/**
+      // (excluded from the B4Mv3 block below) still gets error-severity coverage for all
+      // non-server client files.
       'no-restricted-imports': [
         'error',
         {
@@ -468,7 +520,7 @@ export default defineConfig([
                 'Use routing/navigation hooks from @tanstack/react-router instead of Next.js router hooks. We now use Tanstack Router for SPA routing.',
             },
           ],
-          patterns: [...b4mv3RestrictedPatterns],
+          patterns: [...b4mv3RestrictedPatterns, ...noWorkersImportInClient],
         },
       ],
     },
@@ -530,9 +582,12 @@ export default defineConfig([
       'apps/client/server/overwatch/**',
     ],
     rules: {
-      // Overwatch barrel restriction + B4Mv3 facade guards.
+      // Overwatch barrel restriction + B4Mv3 facade guards + the apps/workers import boundary.
       // This block is last-rule-wins for apps/client/server/**, so it must carry b4mv3 restrictions
-      // that the Next.js block above would otherwise cover for non-server files.
+      // that the Next.js block above would otherwise cover for non-server files. (apps/workers
+      // itself is NOT added to this block's `files` - it gets its own block below, which also
+      // needs a UI-import ban that would wrongly flag apps/client/server files, e.g. its legitimate
+      // `next` API-route-type imports.)
       'no-restricted-imports': [
         'error',
         {
@@ -543,9 +598,21 @@ export default defineConfig([
               message: 'Import from @server/overwatch barrel (index.ts) only — do not reach into Overwatch internals.',
             },
             ...b4mv3RestrictedPatterns,
+            ...noWorkersImportInClient,
           ],
         },
       ],
+    },
+  },
+
+  // The apps/workers import boundary for apps/client config and script files, which neither block
+  // above matches (see noWorkersImportInClient). No other block sets no-restricted-imports for
+  // these extensions, so last-rule-wins drops nothing here. The rule sees ESM imports only, not a
+  // CommonJS require().
+  {
+    files: ['apps/client/**/*.{mjs,mts,cjs,cts}'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [...noWorkersImportInClient] }],
     },
   },
 
@@ -592,16 +659,51 @@ export default defineConfig([
   // B4Mv3 Track 1 — deprecated facade imports are now errors (transition window closed, #7850).
   // apps/client/** is excluded here because the Next.js block and Overwatch block above spread
   // b4mv3RestrictedPaths/Patterns directly — flat-config last-rule-wins means only the last
-  // matching no-restricted-imports rule applies per file.
+  // matching no-restricted-imports rule applies per file. apps/workers/** is excluded for the same
+  // reason: the apps/workers block below carries its own copy of these restrictions alongside the
+  // Overwatch barrel + UI-import ban.
   {
     files: ['apps/**/*.{ts,tsx}', 'b4m-core/**/*.{ts,tsx}', 'packages/**/*.{ts,tsx}'],
-    ignores: ['apps/client/**', 'b4m-core/utils/**', 'b4m-core/services/**', 'b4m-core/common/**'],
+    ignores: [
+      'apps/client/**',
+      'apps/workers/**',
+      'b4m-core/utils/**',
+      'b4m-core/services/**',
+      'b4m-core/common/**',
+    ],
     rules: {
       'no-restricted-imports': [
         'error',
         {
           paths: [...b4mv3RestrictedPaths],
           patterns: [...b4mv3RestrictedPatterns],
+        },
+      ],
+    },
+  },
+
+  // apps/workers - the moved apps/workers/src/{events,selfhost,cron} files came from apps/client/server,
+  // so they keep the same enforcement it had there: the Overwatch barrel restriction and B4Mv3
+  // facade guards (mirrored from the apps/client/server block above rather than sharing its `files`
+  // glob - apps/client/server legitimately imports `next` for API route types, so folding the
+  // UI-import ban below into that shared block would wrongly flag those files too). Also bans
+  // importing apps/client's UI layer - see noUiImportsInWorkers above.
+  {
+    files: ['apps/workers/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [...b4mv3RestrictedPaths, ...noUiImportsInWorkers.paths],
+          patterns: [
+            {
+              group: ['**/overwatch/services/*', '**/overwatch/types'],
+              message:
+                'Import from @server/overwatch barrel (index.ts) only - do not reach into Overwatch internals.',
+            },
+            ...b4mv3RestrictedPatterns,
+            ...noUiImportsInWorkers.patterns,
+          ],
         },
       ],
     },

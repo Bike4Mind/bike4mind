@@ -19,8 +19,9 @@ export enum ApiKeyScope {
    * Read the key owner's OWN commercial state - tier, credit balance, entitlement
    * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
    * to generate text has no business enumerating what its owner has paid for. It
-   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
-   * suffix that puts it in the New-Key modal's read-only preset.
+   * reaches only `GET /api/v1/me` and its balance-only subset `GET /api/v1/credits`
+   * (which the AI scopes also open, since spend needs a pre-flight check), so it
+   * carries the `:read` suffix that puts it in the New-Key modal's read-only preset.
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
@@ -108,12 +109,20 @@ export enum ApiKeyScope {
    * the claim - it is a property of the consumer, recorded for the reader.
    */
   OVERWATCH_READ = 'overwatch:read',
+  /**
+   * CI-to-server ingest of Playwright runs for the admin /status page
+   * (`POST /api/qa/uploads`, `POST /api/qa/runs`). Admin-provisioned only,
+   * and confined like {@link OVERWATCH_INGEST_WRITE}: a leaked CI key reaches the
+   * two ingest routes and nothing else. The routes also require the key's owner
+   * to carry the `qa-ingest` user tag (QA_INGEST_USER_TAG in schemas/qa.ts).
+   */
+  QA_INGEST = 'qa:ingest',
 }
 
 /**
  * Scopes bound to a single dedicated flow: bridge pairing, the embed widget,
- * Overwatch ingest. A key carrying ANY of these is *confined* and both ends of the
- * system say the same thing about it in the same words:
+ * Overwatch ingest, QA run ingest. A key carrying ANY of these is *confined* and
+ * both ends of the system say the same thing about it in the same words:
  *  - at mint (createUserApiKey): a confined scope must be the key's only scope, so
  *    a confined key is never persisted alongside reach it would then lose;
  *  - at runtime (apiKeyScopeGate `isConfinedKey`/`decideScopeGate`): it authorizes
@@ -125,6 +134,7 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.CC_BRIDGE,
   ApiKeyScope.EMBED_CHAT,
   ApiKeyScope.OVERWATCH_INGEST_WRITE,
+  ApiKeyScope.QA_INGEST,
 ];
 
 export enum ApiKeyStatus {
@@ -189,6 +199,16 @@ export interface IUserApiKeyRateLimit {
 }
 
 /**
+ * Ceilings a key gets when minted without explicit ones. Lives here rather than
+ * in services so the public OpenAPI overview (openapi/document.ts) can quote the
+ * real numbers; userApiKeyService/rateLimit.ts re-exports it for the enforcer.
+ */
+export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Object.freeze({
+  requestsPerMinute: 60,
+  requestsPerDay: 1000,
+});
+
+/**
  * White-label config for an embed key (epic #41), rendered by the widget serve
  * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
@@ -226,6 +246,14 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /**
+   * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
+   * `select: false`, so it is absent from every read except findCallbackSigningSecret. The
+   * plaintext is returned once, when it is minted.
+   */
+  callbackSigningSecret?: string;
+  /** When the current signing secret was minted; absent = the key has none yet. */
+  callbackSigningSecretCreatedAt?: Date;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;
@@ -252,7 +280,7 @@ export interface IUserApiKey {
   /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
-   * pages/api/sessions/create.ts). Admin-minted only; a key's presence in this list is not itself
+   * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself
    * authority to admit a lake - the caller must still pass the live canManageLake check on every
    * request, this only narrows which lakes that authority may be exercised for.
    */
@@ -283,6 +311,15 @@ export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Or
 
 export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
 
+/**
+ * Which per-user active-key cap a key counts against. Federated-exchange keys
+ * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
+ * and minted by a relying party rather than the user, so they get their own pool
+ * instead of eating the user's dashboard/admin key slots. Caps live in
+ * b4m-core/services/src/userApiKeyService/create.ts.
+ */
+export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
@@ -299,8 +336,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
+  /**
+   * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.
+   * Optional so adding it stays additive: an external implementer of this interface is not broken by the new member.
+   */
+  revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
-  countActiveByUserId: (userId: string) => Promise<number>;
+  /**
+   * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.
+   * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
+   */
+  countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;
@@ -317,4 +363,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Stores (encrypted) a freshly minted signing secret, replacing any previous one. */
+  setCallbackSigningSecret: (id: string, secret: string, createdAt: Date) => Promise<void>;
+  /** The decrypted signing secret plus the fields a delivery must re-check; null if the key is gone or has none. */
+  findCallbackSigningSecret: (
+    id: string
+  ) => Promise<{ secret: string; userId: string; status: ApiKeyStatus; expiresAt?: Date } | null>;
 }
