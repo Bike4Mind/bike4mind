@@ -75,6 +75,10 @@ export enum AdminOrgAuditEvents {
   // the group, but the membership write lands later in sharingService/accept.ts under the
   // recipient's id. Without this event the grant side of that pair has no actor recorded.
   ORG_GROUP_INVITE_CREATED = 'ORG_GROUP_INVITE_CREATED',
+  // A change to the monthly per-member credit budget - the org default or one member's override.
+  // Metadata carries the target (`memberUserId` absent for the default) and before/after values,
+  // so "who raised this member's limit" is answerable.
+  ORG_MEMBER_CREDIT_BUDGET_UPDATED = 'ORG_MEMBER_CREDIT_BUDGET_UPDATED',
 }
 
 export enum DataLakeAuditEvents {

@@ -1,4 +1,4 @@
-import { getPeriodUsedCredits, IOrganizationDocument } from '@bike4mind/common';
+import { getPeriodUsedCredits, IOrganizationDocument, resolveMemberCreditCap } from '@bike4mind/common';
 
 /**
  * Per-member credit cap logic, factored out so the two reservation pre-flights
@@ -74,8 +74,10 @@ export function getMemberUsedCredits(
  * otherwise the org default. null means uncapped.
  */
 export function getMemberCreditCap(organization: MemberCapOrg, userId: string): number | null {
-  const override = organization.userDetails?.find(u => u.id === userId)?.maxCredits;
-  return override ?? organization.maxCreditsPerMember ?? null;
+  return resolveMemberCreditCap(
+    organization.userDetails?.find(u => u.id === userId),
+    organization.maxCreditsPerMember
+  );
 }
 
 /**

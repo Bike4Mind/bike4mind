@@ -18,7 +18,7 @@ const updateOrgBodySchema = z.object({
   billingContact: z.string().optional(),
   currentCredits: z.coerce.number().optional(),
   systemPrompt: z.string().max(10000).optional(),
-  maxCreditsPerMember: z.number().positive().nullable().optional(),
+  maxCreditsPerMember: z.number().int().positive().nullable().optional(),
 });
 
 const handler = baseApi()
