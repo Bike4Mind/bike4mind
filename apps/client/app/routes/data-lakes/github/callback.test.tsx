@@ -5,7 +5,8 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  navigate: vi.fn(),
+  push: vi.fn(),
+  replace: vi.fn(),
   openManager: vi.fn(),
   openGitHubRepoPicker: vi.fn(),
   authorizeMutate: vi.fn(),
@@ -14,7 +15,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => h.navigate,
+  useRouter: () => ({ history: { push: h.push, replace: h.replace } }),
 }));
 vi.mock('@client/app/stores/useDataLakeWizardStore', () => ({
   useDataLakeWizardStore: (
@@ -35,6 +36,8 @@ let currentPathname = '/';
 const setSearch = (params: Record<string, string>) => {
   currentSearch = `?${new URLSearchParams(params).toString()}`;
 };
+const saveRawHandoff = (handoff: Record<string, string>) =>
+  sessionStorage.setItem('b4m:github-lake-connect', JSON.stringify(handoff));
 const RESTART_NOTICE = 'The GitHub connection could not be completed. Start it again from the data lake.';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -108,7 +111,7 @@ describe('GitHubLakeCallbackPage', () => {
     const [, options] = h.authorizeMutate.mock.calls[0];
     options.onSuccess({ dataLakeId: 'lake1' });
 
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).toHaveBeenCalledWith('lake1');
     expect(readGitHubLakeConnectHandoff()).toBeNull();
@@ -124,7 +127,7 @@ describe('GitHubLakeCallbackPage', () => {
       response: { data: { error: 'This authorization already expired.' } },
     });
     expect(h.toastError).toHaveBeenCalledWith('This authorization already expired.');
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).not.toHaveBeenCalled();
   });
@@ -143,7 +146,7 @@ describe('GitHubLakeCallbackPage', () => {
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).not.toHaveBeenCalled();
     expect(h.authorizeMutate).not.toHaveBeenCalled();
@@ -156,7 +159,7 @@ describe('GitHubLakeCallbackPage', () => {
     renderPage();
 
     expect(h.toastError).toHaveBeenCalledWith(RESTART_NOTICE);
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).not.toHaveBeenCalled();
     expect(h.authorizeMutate).not.toHaveBeenCalled();
   });
@@ -189,9 +192,39 @@ describe('GitHubLakeCallbackPage', () => {
     expect(h.toastInfo).toHaveBeenCalledWith(
       'GitHub sent the install request to an organization owner. Once they approve it, refresh the repository list.'
     );
-    expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    expect(h.replace).toHaveBeenCalledWith('/');
     expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
     expect(h.openGitHubRepoPicker).toHaveBeenCalledWith('lake1');
     expect(h.authorizeMutate).not.toHaveBeenCalled();
+  });
+
+  it('returns to the page the connect started from, replacing the callback in history', () => {
+    saveRawHandoff({ dataLakeId: 'lake1', returnPath: '/projects/p1?tab=files#x' });
+    setSearch({ installation_id: '42', state: 's1' });
+    renderPage();
+
+    expect(h.replace).toHaveBeenCalledWith('/projects/p1?tab=files#x');
+    expect(h.push).not.toHaveBeenCalled();
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
+    expect(h.openGitHubRepoPicker).toHaveBeenCalledWith('lake1');
+  });
+
+  it('returns to the starting page without the picker when the user cancels', () => {
+    saveRawHandoff({ dataLakeId: 'lake1', returnPath: '/projects/p1' });
+    setSearch({ error: 'access_denied', state: 's1' });
+    renderPage();
+
+    expect(h.replace).toHaveBeenCalledWith('/projects/p1');
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
+    expect(h.openGitHubRepoPicker).not.toHaveBeenCalled();
+  });
+
+  it('lands on / when the stored return path is not a same-origin path', () => {
+    saveRawHandoff({ dataLakeId: 'lake1', returnPath: '//evil.com' });
+    setSearch({ installation_id: '42', state: 's1' });
+    renderPage();
+
+    expect(h.replace).toHaveBeenCalledWith('/');
+    expect(h.openManager).toHaveBeenCalledWith('mine', 'lake1');
   });
 });

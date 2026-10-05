@@ -273,7 +273,7 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     );
   });
 
-  describe('promptResolution', () => {
+  describe('prompt_resolution', () => {
     const LITERAL_PROMPT = 'a different variant';
     const REWRITTEN_PROMPT = 'a red bicycle on a white background, different variant';
 
@@ -282,8 +282,11 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       mockResolveImagePrompt.mockResolvedValue({ rewrittenPrompt: REWRITTEN_PROMPT, intent: 'continuation' });
     });
 
-    it('rewrites a continuation by default', async () => {
-      const { req, res } = fire({ apiKey: null, body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1' } });
+    it.each([undefined, 'auto'] as const)('rewrites a continuation when prompt_resolution is %s', async mode => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', ...(mode ? { prompt_resolution: mode } : {}) },
+      });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toMatchObject({ promptWasEnhanced: true, intent: 'continuation' });
@@ -292,10 +295,10 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
       );
     });
 
-    it('sends a literal prompt byte-for-byte and skips the history resolver', async () => {
+    it('sends a literal prompt unchanged and skips the history resolver', async () => {
       const { req, res } = fire({
         apiKey: null,
-        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', promptResolution: 'literal' },
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'literal' },
       });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
@@ -312,13 +315,13 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
         intent: 'fresh',
         promptEnhancement: { originalPrompt: LITERAL_PROMPT, enhancedPrompt: LITERAL_PROMPT, promptWasEnhanced: false },
       });
-      expect(invokedBody).not.toHaveProperty('promptResolution');
+      expect(invokedBody).not.toHaveProperty('prompt_resolution');
     });
 
-    it('rejects an unknown promptResolution (422) before enqueuing generation', async () => {
+    it('rejects an unknown prompt_resolution (422) before enqueuing generation', async () => {
       const { req, res } = fire({
         apiKey: null,
-        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', promptResolution: 'verbatim' },
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'verbatim' },
       });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(422);

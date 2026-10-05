@@ -56,7 +56,7 @@ export type PromptIntent = z.infer<typeof PromptIntentSchema>;
 
 /**
  * How the image route treats the caller's prompt. `auto` runs the session-history resolver
- * (pages/api/v1/image-generations.ts); `literal` sends the prompt to the model untouched.
+ * (pages/api/v1/image-generations.ts); `literal` sends it unchanged apart from truncation to the model's prompt limit.
  */
 export const ImagePromptResolutionSchema = z.enum(['auto', 'literal']);
 export type ImagePromptResolution = z.infer<typeof ImagePromptResolutionSchema>;
@@ -109,7 +109,7 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
   sessionName: z.string().optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
-  promptResolution: ImagePromptResolutionSchema.optional().describe(
+  prompt_resolution: ImagePromptResolutionSchema.optional().describe(
     'How the prompt is treated before it reaches the image model. `"auto"` (the default) resolves it ' +
       'against the session history, so a follow-up such as "make it darker" is rewritten to carry the ' +
       'previous subject and the prior image is fed back as input. `"literal"` skips that step: the ' +

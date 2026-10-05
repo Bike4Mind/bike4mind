@@ -39,12 +39,18 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     style: body.style,
     responseFormat: body.response_format,
     promptPreview: body.prompt.substring(0, 100) + '...',
-    promptResolution: body.promptResolution ?? 'auto',
+    promptResolution: body.prompt_resolution ?? 'auto',
   });
 
   assertReferenceImagesSupported(body.model, body.referenceImageFabFileIds);
 
-  const { sessionId: reqSessionId, sessionName, callbackUrl, promptResolution, ...invokeParams } = body;
+  const {
+    sessionId: reqSessionId,
+    sessionName,
+    callbackUrl,
+    prompt_resolution: resolutionMode,
+    ...invokeParams
+  } = body;
   const callback = await resolveGenerationCallback(req, callbackUrl);
 
   const { sessionId, asyncPromises, session } = await getOrCreateSession({
@@ -67,7 +73,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     // model receives it unchanged, bar ImageGeneration's truncation to the model's prompt limit; the
     // 'fresh' intent also stops the prior image being carried forward, except for models that
     // require an input image (ImageGeneration.ts).
-    const shouldResolvePrompt = !!originalPrompt && promptResolution !== 'literal';
+    const shouldResolvePrompt = !!originalPrompt && resolutionMode !== 'literal';
 
     // Resolve the prompt against session history (text + image). Runs whenever the session has any
     // prior turn so coreference ("different variant", "make it darker") and text-grounded follow-ups
@@ -91,7 +97,7 @@ const handler = nextRouteForContract(generateImageContract).post(async (req, res
     // For continuation prompts ("different variant", "the logo we discussed"), the rewrite is
     // non-optional - the user's literal text doesn't carry the subject and the image model would
     // hallucinate without it. So we always use the rewrittenPrompt for continuations, regardless of
-    // the prompt_enhancement tool toggle - only an explicit promptResolution: 'literal' opts out. The
+    // the prompt_enhancement tool toggle - only an explicit prompt_resolution: 'literal' opts out. The
     // toggle only controls rewriting of self-contained 'fresh' prompts, where opting out to keep
     // literal words is a valid user choice.
     const promptEnhancementEnabled = body.tools?.includes('prompt_enhancement') ?? false;

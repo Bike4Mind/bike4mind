@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Import the specific schema files, NOT the barrel (`../../schemas`) - see the
 // note in tools.contract.ts (the barrel drags in an unbuilt dist in the CI
@@ -49,7 +50,7 @@ export const synthesizeSpeechContract = defineEndpoint({
         format: 'mp3',
         contentType: 'audio/mpeg',
         saved: true,
-        fabFileId: '664f1c2b9a1e4d0012ab34cd',
+        fabFileId: EXAMPLE_RESOURCE_ID,
       },
       // Raw-byte bodies for the default encoding. One entry per Content-Type the
       // vendor services can emit, so a generated SDK does not type 200 as JSON only.

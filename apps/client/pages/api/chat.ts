@@ -43,6 +43,7 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
+import { questReplyText } from '@server/utils/questPollBody';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
@@ -268,7 +269,7 @@ const handler = nextRouteForContract(chatContract, {
       message_received: true,
       timestamp: new Date().toISOString(),
       model: internalRequest.params.model,
-      response: completedQuest.reply,
+      response: questReplyText(completedQuest),
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
       // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays

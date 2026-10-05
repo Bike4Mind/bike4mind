@@ -1,5 +1,5 @@
 import { LinearProgress } from '@mui/joy';
-import { useNavigate } from '@tanstack/react-router';
+import { useRouter } from '@tanstack/react-router';
 import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { useAuthorizeLakeGitHubConnect } from '@client/app/hooks/data/githubLake';
@@ -8,6 +8,7 @@ import {
   clearGitHubLakeConnectHandoff,
   readGitHubLakeConnectHandoff,
 } from '@client/app/utils/githubLakeConnectHandoff';
+import { applyRedirect } from '@client/app/utils/authRedirect';
 import { getServerErrorField } from '@client/app/utils/error';
 import { getGitHubLakeCallbackBootSearch } from '@client/app/utils/githubLakeCallbackSearch';
 import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
@@ -19,7 +20,7 @@ import { resolveGitHubLakeCallbackStep, type GitHubLakeCallbackSearch } from '@c
  * reopens the picker or reports why the flow could not continue. Renders no UI of its own.
  */
 const GitHubLakeCallbackPage = () => {
-  const navigate = useNavigate();
+  const router = useRouter();
   const openManager = useDataLakeWizardStore(s => s.openManager);
   const openGitHubRepoPicker = useDataLakeWizardStore(s => s.openGitHubRepoPicker);
   const authorize = useAuthorizeLakeGitHubConnect();
@@ -45,7 +46,8 @@ const GitHubLakeCallbackPage = () => {
 
     const land = (dataLakeId: string | undefined, openPicker: boolean) => {
       clearGitHubLakeConnectHandoff();
-      navigate({ to: '/' });
+      // replace: Back must not return to this single-use callback URL.
+      applyRedirect(router.history, handoff?.returnPath, '/', true);
       if (!dataLakeId) return;
       openManager('mine', dataLakeId);
       if (openPicker) openGitHubRepoPicker(dataLakeId);
@@ -79,7 +81,7 @@ const GitHubLakeCallbackPage = () => {
         );
         return;
     }
-  }, [navigate, openManager, openGitHubRepoPicker, authorize]);
+  }, [router, openManager, openGitHubRepoPicker, authorize]);
 
   return <LinearProgress data-testid="github-lake-callback-progress" />;
 };

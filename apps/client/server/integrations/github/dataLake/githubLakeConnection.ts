@@ -22,7 +22,11 @@ import { Logger } from '@bike4mind/observability';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
-import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
+import {
+  assertLakeConnectorFree,
+  withConnectionId,
+  withLakeConnectorClaim,
+} from '@server/dataLakes/assertLakeConnectorFree';
 import {
   purgeConnectionIngestedFiles,
   type PurgeConnectionLogger,
@@ -139,7 +143,7 @@ export async function resolveConnectableLake(user: LakeUser, dataLakeId: string)
       `"${lake.name}" is curated. Change its origin to connector-fed in the lake's settings before connecting a GitHub repository.`
     );
   }
-  await assertLakeConnectorFree(lake.id);
+  await assertLakeConnectorFree(lake.id, { includeClaim: true });
   return { lakeId: lake.id, organizationId: lake.organizationId };
 }
 
@@ -397,19 +401,22 @@ export async function completeGitHubLakeConnection(params: {
 
   let connection: IOrgGitHubLakeConnectionDocument;
   try {
-    connection = await orgGitHubLakeConnectionRepository.create({
-      organizationId,
-      targetDataLakeId: lakeId,
-      installationId,
-      accountLogin: installation.accountLogin,
-      repositoryId: repository.id,
-      repositoryFullName: repository.fullName,
-      connectedBy: user.id,
-      connectedAt: new Date(),
-    });
+    connection = await withLakeConnectorClaim(lakeId, 'github', claimedId =>
+      orgGitHubLakeConnectionRepository.create(
+        withConnectionId(claimedId, {
+          organizationId,
+          targetDataLakeId: lakeId,
+          installationId,
+          accountLogin: installation.accountLogin,
+          repositoryId: repository.id,
+          repositoryFullName: repository.fullName,
+          connectedBy: user.id,
+          connectedAt: new Date(),
+        })
+      )
+    );
   } catch (error) {
-    // Unique repositoryId / targetDataLakeId: the repository already feeds a lake, or a concurrent
-    // connect won the claim after our checks.
+    // Unique repositoryId / targetDataLakeId: the repository already feeds a lake, or another connect bound it first.
     if (isDuplicateKeyError(error)) {
       throw new ConflictError('That repository or data lake is already connected. Refresh and pick another.');
     }
