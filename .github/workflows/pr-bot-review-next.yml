@@ -34,8 +34,8 @@ jobs:
     # switch this to pull_request_target: it would check out the untrusted head
     # and run an agent over it.
     if: github.event.label.name == 'bot-review-next' || github.event.label.name == 'bot-review-fold-next'
-    # workflow-templates main, 2026-09-30
-    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@468d672ad379ce13565a1f90cac0233bec6d21a7
+    # workflow-templates main, 2026-10-05
+    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@b317b592ea8b299907a0f759e771e208ba6314a9
     secrets: inherit
     with:
       fold_mode: ${{ github.event.label.name == 'bot-review-fold-next' }}
