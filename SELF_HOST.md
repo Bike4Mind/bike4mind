@@ -1072,16 +1072,16 @@ CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-t
 
 The external-service suite skips when its explicit endpoint/bucket are absent. The always-on `dataLakeCleanup.recovery.e2e.test.ts` runs the real handler and replica-set Mongo with controlled storage and existing connector/memory-key test boundaries, including grant-removal recovery and transactional rollback. Mongo fencing and bounded-batch crash tests also run independently. These are application-level controls, not current Kubernetes deployment acceptance.
 
-## Daily lexical inconsistency sweep
+### Daily lexical inconsistency sweep
 
 The single worker runs the existing deterministic inconsistency scan at 04:00 UTC. It reads active lakes and writes findings for human review; it does not change source documents or invoke a model. There is no startup run: starting after 04:00 waits until tomorrow, while starting exactly at 04:00 runs that slot. A delayed wake coalesces missed days into one run. The worker prevents overlapping runs and waits within its existing shutdown grace period; it does not provide distributed coordination or guarantee completion beyond that grace period.
 
-The shared scan retains the limits and between-page time budget defined in `apps/client/server/cron/lakeInconsistencySweep.ts`. Attempted lakes are stamped for fairness even on failure. Findings use stable identities, and dismissed findings stay dismissed. A finding-write failure withholds a fresh summary timestamp; the next scheduled pass can retry. A failure in one lake does not abort the others. The local sweep emits no CloudWatch metrics; the hosted cron retains its run and outcome metrics.
+The shared scan retains the limits and between-page time budget defined in `apps/workers/src/cron/lakeInconsistencySweep.ts`. Attempted lakes are stamped for fairness even on failure. Findings use stable identities, and dismissed findings stay dismissed. A finding-write failure withholds a fresh summary timestamp; the next scheduled pass can retry. A failure in one lake does not abort the others. The local sweep emits no CloudWatch metrics; the hosted cron retains its run and outcome metrics.
 
 Verification uses the actual lexical algorithm and disposable Mongo, asserting persisted source excerpts, finding identity, dismissals, summary timestamps and recovery after injected write failures. This establishes application behavior, not a Kubernetes deployment drill. Model-driven inconsistency detection remains a separate queue workflow.
 
 ```sh
-VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test server/cron/lakeInconsistencySweep.test.ts __tests__/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/lakeInconsistencySweep.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/lakeInconsistencySweep.test.ts
-VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/client test:integration server/cron/lakeInconsistencySweep.e2e.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/lakeInconsistencySweep.e2e.test.ts
 ```

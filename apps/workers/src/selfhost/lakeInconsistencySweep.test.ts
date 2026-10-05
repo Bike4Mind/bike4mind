@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
-vi.mock('@server/cron/lakeInconsistencySweep', () => ({ runLakeInconsistencySweep: run }));
+vi.mock('../cron/lakeInconsistencySweep', () => ({ runLakeInconsistencySweep: run }));
 import { SelfHostWorker } from './selfHostWorker';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;

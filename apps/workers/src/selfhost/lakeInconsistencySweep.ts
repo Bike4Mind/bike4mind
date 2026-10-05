@@ -1,4 +1,4 @@
-import { runLakeInconsistencySweep } from '@server/cron/lakeInconsistencySweep';
+import { runLakeInconsistencySweep } from '../cron/lakeInconsistencySweep';
 import type { SelfHostWorker } from './selfHostWorker';
 
 export function registerLakeInconsistencySweep(worker: Pick<SelfHostWorker, 'registerDailyUtcTask'>): void {
