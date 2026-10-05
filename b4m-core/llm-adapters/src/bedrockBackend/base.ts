@@ -480,11 +480,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               cacheWriteTokens = Math.max(cacheWriteTokens, choice.usage?.cache_creation_input_tokens || 0);
             });
 
-            // While a tool is being streamed, only prose choices are forwarded; argument fragments
-            // (and the tool header) stay out of the text stream even when they share an index with prose.
+            // While a tool is being streamed, only choices an adapter explicitly marked as prose are
+            // forwarded; everything else is dropped as before, so adapters that never set the flag
+            // behave exactly as they always did.
             const toolSeen = func.some(f => f.name);
             const textChoices = toolSeen
-              ? (chunk?.choices ?? []).filter(c => !isToolArgument(c) && c.chunkText)
+              ? (chunk?.choices ?? []).filter(c => c.toolArguments === false && c.chunkText)
               : (chunk?.choices ?? []);
             if (toolSeen && textChoices.length === 0) {
               continue;
