@@ -104,7 +104,7 @@ describe('settleStrandedQuests', () => {
 
     await settle(['exec1']);
 
-    expect(updates).toEqual([{ id: 'q1', status: 'done', finishReason: 'abandoned' }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', finishReason: 'abandoned', fallbackInfo: null }]);
   });
 
   it('treats tool output alone as content worth preserving', async () => {
