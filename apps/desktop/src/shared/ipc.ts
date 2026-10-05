@@ -92,6 +92,7 @@ export const IPC_CHANNELS = {
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetQueued: 'chat:get-queued',
   chatCancelQueued: 'chat:cancel-queued',
+  chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
   chatRespondToApproval: 'chat:respond-to-approval',
@@ -372,6 +373,15 @@ export interface DesktopApi {
     getQueuedMessages(sessionId: string): Promise<ChatQueuedMessage[]>;
     /** Take a queued message back; its text returns to the composer. Unknown ids are ignored. */
     cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
+    /**
+     * Interrupt the live reply and run this queued message next, instead of waiting for the
+     * reply to finish. The result arrives on `onQueueChanged` like every other queue change, so
+     * every window showing the conversation sees it.
+     *
+     * A no-op when the turn has already ended, when the id is unknown, and on a relayed
+     * message. Unlike `stopReply`, the queue is NOT handed back.
+     */
+    sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
     /** Subscribe to queue changes; returns the unsubscribe. */
     onQueueChanged(listener: (event: ChatQueueEvent) => void): () => void;
     /** Open the OS file picker and take in whatever is chosen. Resolves empty if the user cancels. */

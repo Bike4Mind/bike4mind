@@ -52,6 +52,7 @@ export function Composer({
   onRunCommand,
   queued,
   onCancelQueued,
+  onSendQueuedNow,
   returned,
   onReturnedConsumed,
   footer,
@@ -103,6 +104,11 @@ export function Composer({
   /** Typed ahead of the live turn, waiting to be sent. Drawn above the input. */
   queued?: readonly ChatQueuedMessage[];
   onCancelQueued?: (queuedId: string) => void;
+  /**
+   * Cut a queued message in front of the reply it is waiting behind: the live turn is stopped
+   * and this one runs next. Only offered while `streaming` - see QueuedMessageList.
+   */
+  onSendQueuedNow?: (queuedId: string) => void;
   /**
    * Messages the queue handed back, to take into the draft. Anything the user is midway
    * through typing is kept: the returned text is appended to it, never swapped for it.
@@ -391,7 +397,12 @@ export function Composer({
         </Box>
       )}
 
-      <QueuedMessageList messages={queued ?? []} onCancel={onCancelQueued ?? (() => undefined)} />
+      <QueuedMessageList
+        messages={queued ?? []}
+        onCancel={onCancelQueued ?? (() => undefined)}
+        onSendNow={onSendQueuedNow}
+        canSendNow={streaming}
+      />
 
       {attachments.attachments.length > 0 && (
         <Box sx={{ ...contentColumnSx, pt: 1.5 }}>

@@ -596,6 +596,7 @@ export function ChatShell({ account }: { account?: AccountStrip }) {
             onSuggestionDismissed={nextPrompt.dismiss}
             queued={conversation.queued}
             onCancelQueued={conversation.cancelQueued}
+            onSendQueuedNow={conversation.sendQueuedNow}
             returned={conversation.returned}
             onReturnedConsumed={conversation.clearReturned}
             skills={skills}

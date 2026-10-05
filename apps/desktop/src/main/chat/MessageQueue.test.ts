@@ -154,6 +154,43 @@ describe('MessageQueue', () => {
     });
   });
 
+  describe('take and restore', () => {
+    it('takes one message out by id, leaving the rest in order', () => {
+      const relayed = queue.enqueueRelay('a', 'theirs', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+      const mine = queue.enqueue('a', 'mine');
+      events.length = 0;
+
+      // By id, not position: the user's own message is BEHIND a relay here, and "send this
+      // now" means that one rather than whatever happens to be at the head.
+      expect(queue.take('a', mine.id)?.text).toBe('mine');
+      expect(queue.list('a').map(message => message.id)).toEqual([relayed.id]);
+      // Silent, like takeNext: the caller may still have to put it back.
+      expect(events).toEqual([]);
+    });
+
+    it('ignores an unknown id', () => {
+      queue.enqueue('a', 'one');
+      expect(queue.take('a', 'no-such-id')).toBeUndefined();
+      expect(queue.list('a').map(message => message.text)).toEqual(['one']);
+    });
+
+    it('restores a taken message at the head, and says so', () => {
+      const first = queue.enqueue('a', 'mine');
+      queue.take('a', first.id);
+      queue.enqueueRelay('a', 'theirs', { fromSessionId: 'sender', fromTitle: 'Sender', hops: 1 });
+      events.length = 0;
+
+      queue.restore('a', first);
+
+      expect(queue.list('a').map(message => message.text)).toEqual(['mine', 'theirs']);
+      // Announced, unlike take: the row is back on screen, and the renderer replaces rather
+      // than reconciles, so it would otherwise never hear that it returned.
+      expect(events).toHaveLength(1);
+      expect(events[0]?.queued.map(message => message.text)).toEqual(['mine', 'theirs']);
+      expect(events[0]?.returned).toBeUndefined();
+    });
+  });
+
   it('forgets a deleted conversation silently', () => {
     queue.enqueue('a', 'one');
     events.length = 0;

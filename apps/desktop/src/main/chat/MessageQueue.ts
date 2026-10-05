@@ -127,6 +127,34 @@ export class MessageQueue {
     return next;
   }
 
+  /**
+   * Take ONE named message, to send it ahead of the turn it is waiting behind. Silent for the
+   * same reason as takeNext: it may still have to go back.
+   *
+   * By id rather than position because the head is not always the user's: a relay from another
+   * conversation can be sitting in front of what they typed, and "send this now" means this one.
+   */
+  take(sessionId: string, queuedId: string): ChatQueuedMessage | undefined {
+    const messages = this.list(sessionId);
+    const taken = messages.find(entry => entry.id === queuedId);
+    if (!taken) return undefined;
+    this.replace(
+      sessionId,
+      messages.filter(entry => entry.id !== queuedId)
+    );
+    return taken;
+  }
+
+  /**
+   * Put a taken message back at the HEAD, for a caller that could not send it after all but is
+   * not handing it back to the composer either. Announced, unlike take: the row returns to the
+   * screen, and the renderer replaces rather than reconciles.
+   */
+  restore(sessionId: string, message: ChatQueuedMessage): void {
+    this.replace(sessionId, [message, ...this.list(sessionId)]);
+    this.announce(sessionId);
+  }
+
   /** Remove everything without announcing, for a caller that is about to hand it back. */
   drain(sessionId: string): ChatQueuedMessage[] {
     const messages = this.list(sessionId);

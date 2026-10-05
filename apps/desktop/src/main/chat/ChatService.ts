@@ -372,6 +372,16 @@ export class ChatService {
 
   /** One in-flight reply per session; the value aborts it. */
   private readonly active = new Map<string, AbortController>();
+
+  /**
+   * A queued message the user promoted past the live turn with "send now", held between the
+   * interrupt and the moment the interrupted reply settles.
+   *
+   * It is already OUT of the queue while it sits here, which is the whole trick: the ordinary
+   * stop path hands back whatever the queue still holds, and a promoted message is not in it.
+   * See sendQueuedNow.
+   */
+  private readonly promoted = new Map<string, ChatQueuedMessage>();
   private readonly doomLoop = new DoomLoopTracker();
 
   /**
@@ -459,6 +469,48 @@ export class ChatService {
     // A cancelled relay has no composer to go back to, so it lands in the transcript instead:
     // the user declined to let it RUN, which is not the same as never having received it.
     if (cancelled?.relay) void this.strandRelay(sessionId, [cancelled]).catch(() => undefined);
+  }
+
+  /**
+   * Interrupt the live reply and make this queued message the next turn.
+   *
+   * The explicit exception to the rule in ChatQueueReturnReason: a stop normally hands the
+   * queue back, because stopping usually means the user changed their mind about the thing
+   * they were queueing against. Here they said the opposite - not later, now - so the message
+   * goes out instead of coming back.
+   *
+   * It is deliberately NOT "stop, then send". The two steps race: stop hands the queue to the
+   * composer, so a send racing it either loses the message or sends a copy of text that is
+   * already back in the input. Instead the message is taken OUT of the queue and the reply
+   * aborted in one synchronous step - there is no moment at which the stop path can see it -
+   * and settleQueue sends it once that reply actually ends. Everything the interrupted turn
+   * had already produced stays in the transcript, exactly as for an ordinary stop.
+   */
+  sendQueuedNow(sessionId: string, queuedId: string): void {
+    const queue = this.deps.queue;
+    if (!queue) return;
+
+    // The turn can finish between the click and this call, draining the queue the ordinary
+    // way. Nothing to interrupt and, by now, nothing to promote: a no-op, not an error.
+    const controller = this.active.get(sessionId);
+    if (!controller) return;
+
+    // One promotion per interrupt. A second click while the first is still unwinding would
+    // take another message out of the queue with no turn left to carry it, losing it.
+    if (this.promoted.has(sessionId)) return;
+
+    const pending = queue.list(sessionId).find(entry => entry.id === queuedId);
+    // Another conversation's words. Firing them early is not something the user asked for, and
+    // the row offers no control to ask it; this is the guard behind that.
+    if (!pending || pending.relay) return;
+
+    const taken = queue.take(sessionId, queuedId);
+    if (!taken) return;
+    this.promoted.set(sessionId, taken);
+    // Aborting a turn parked at the approval gate DENIES what it was asking for, exactly as
+    // the stop button does - see ApprovalGate.request. That is an interrupt, not an answer
+    // given on the user's behalf: denying ends the turn, where approving would carry it on.
+    controller.abort();
   }
 
   setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null> {
@@ -819,6 +871,7 @@ export class ChatService {
     await this.deps.store.delete(sessionId);
     this.deps.activity?.forget(sessionId);
     this.deps.queue?.forget(sessionId);
+    this.promoted.delete(sessionId);
     // A deleted session is neither a child that can still report nor a parent that can still be
     // told. Dropping the watch here is also what gives its concurrency slot back, so deleting a
     // running spawned session does not leak one for the rest of the run.
@@ -842,6 +895,9 @@ export class ChatService {
   }
 
   dispose(): void {
+    // Dropped BEFORE the aborts, so a promotion still in flight does not start a turn on the
+    // way out: each abort settles a reply, and settleQueue would otherwise send it.
+    this.promoted.clear();
     for (const controller of this.active.values()) controller.abort();
     this.active.clear();
     this.deps.approvals?.dispose();
@@ -1815,6 +1871,16 @@ export class ChatService {
    * to the composer, where the user decides whether it still says what they meant.
    */
   private settleQueue(sessionId: string, outcome: TurnOutcome): void {
+    // A promotion outranks the outcome, and is checked before it rather than under 'aborted',
+    // because the turn may equally have finished by itself in the moment between the click and
+    // the interrupt. Either way the promoted message is the next turn, and the REST of the
+    // queue stays queued: "send this one now" says nothing about the others.
+    const promoted = this.promoted.get(sessionId);
+    if (promoted) {
+      this.promoted.delete(sessionId);
+      this.sendPromoted(sessionId, promoted);
+      return;
+    }
     if (outcome === 'completed') {
       this.flushQueue(sessionId);
       return;
@@ -1838,7 +1904,28 @@ export class ChatService {
 
     const next = queue.takeNext(sessionId);
     if (!next) return;
+    this.sendTaken(sessionId, next);
+  }
 
+  /** Send a message "send now" took out of the queue, now that the turn it interrupted is over. */
+  private sendPromoted(sessionId: string, promoted: ChatQueuedMessage): void {
+    const queue = this.deps.queue;
+    if (!queue) return;
+    // The user started a turn by hand in the gap - the interrupt landed, and they typed into
+    // the idle composer before this ran. The promotion has lost its race, so the message goes
+    // back to the HEAD of the queue to be the turn after that one, rather than being merged
+    // into whatever else is waiting there and losing its identity.
+    if (this.active.has(sessionId)) {
+      queue.restore(sessionId, promoted);
+      return;
+    }
+    this.sendTaken(sessionId, promoted);
+  }
+
+  /** Run one message already taken out of the queue, handing it back if its turn is refused. */
+  private sendTaken(sessionId: string, next: ChatQueuedMessage): void {
+    const queue = this.deps.queue;
+    if (!queue) return;
     void this.send(sessionId, next.text, next.attachments ?? [], next).then(result => {
       if (result.ok) return;
       // Its turn came and main refused it - signed out since, or a model reconciled to one that

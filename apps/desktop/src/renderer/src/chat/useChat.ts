@@ -268,6 +268,11 @@ export interface ConversationController {
   /** Take one back. Its text returns through `returned`, which is also how it is edited. */
   cancelQueued: (queuedId: string) => void;
   /**
+   * Stop the live reply and run this queued message next instead of waiting for it. Unlike
+   * `stop`, the rest of the queue is kept rather than handed back.
+   */
+  sendQueuedNow: (queuedId: string) => void;
+  /**
    * Text the queue handed back, for the composer to take in. A new object each time, so a
    * consumer can key an effect on its identity; `clearReturned` acknowledges it.
    */
@@ -629,6 +634,15 @@ export function useConversation(
     [sessionId]
   );
 
+  // No optimistic update: main owns the queue and pushes the result, and the turn may well
+  // have finished on its own by the time this lands, which makes it a no-op there.
+  const sendQueuedNow = useCallback(
+    (queuedId: string) => {
+      if (sessionId) void window.b4m.chat.sendQueuedMessageNow(sessionId, queuedId);
+    },
+    [sessionId]
+  );
+
   const clearReturned = useCallback(() => setReturned(null), []);
 
   const rename = useCallback(
@@ -803,6 +817,7 @@ export function useConversation(
     commandProgress,
     queued,
     cancelQueued,
+    sendQueuedNow,
     returned,
     clearReturned,
     settledTurns,
