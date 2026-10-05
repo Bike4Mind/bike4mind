@@ -267,6 +267,30 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getByText(/for Grace Hopper/)).toBeInTheDocument();
   });
 
+  it('truncates an unresolved API key id in the Who cell instead of letting it overflow the next column', () => {
+    const keyId = '6650f1c2a9b3e4d5f6071829';
+    const ownerId = '6650f1c2a9b3e4d5f607182c';
+    renderSection({
+      view: view({
+        entries: [
+          entry({ principalKind: 'apiKey', principalId: keyId, principalName: undefined, onBehalfOfUserId: ownerId }),
+        ],
+      }),
+    });
+    const kindLine = `apiKey (for ${ownerId})`;
+    for (const [line, text] of [
+      [screen.getByTestId('datalake-config-history-who'), keyId],
+      [screen.getByText(kindLine), kindLine],
+    ] as const) {
+      expect(line).toHaveTextContent(text);
+      expect(line).toHaveAttribute('title', text);
+      const style = getComputedStyle(line);
+      expect(style.whiteSpace).toBe('nowrap');
+      expect(style.overflow).toBe('hidden');
+      expect(style.textOverflow).toBe('ellipsis');
+    }
+  });
+
   it('renders a long system prompt in the fingerprint form and NEVER the prompt text', () => {
     const secret = 'you are a helpful assistant with privileged instructions';
     renderSection({
