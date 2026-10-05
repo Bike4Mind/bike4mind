@@ -1,7 +1,8 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response, NextFunction } from 'express';
-import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, ForbiddenError } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from './apiKeyScopeGate';
+import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
 
 const { validateUserApiKeyMock, findByIdMock } = vi.hoisted(() => ({
   validateUserApiKeyMock: vi.fn(),
@@ -212,5 +213,54 @@ describe('apiKeyAuth preauthorizedLakeIds binding', () => {
 
     expect((await run(undefined, req)).passed).toBe(true);
     expect(bindingOf(req)).toBeUndefined();
+  });
+});
+
+describe('apiKeyAuth usage log stamping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+  });
+
+  /** Runs the middleware, fires the response 'finish' hook, and returns what was logged. */
+  const loggedUsage = async (headers: Record<string, string>, validationExtra: Record<string, unknown> = {}) => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+      ...validationExtra,
+    });
+    const req = makeReq();
+    req.headers = { ...req.headers, ...headers };
+    const res = makeRes();
+    await apiKeyAuth()(req, res, vi.fn() as unknown as NextFunction);
+
+    const [event, onFinish] = (res.once as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(event).toBe('finish');
+    onFinish();
+    return vi.mocked(ApiKeyUsageManager.logUsage).mock.calls[0][0];
+  };
+
+  it('stamps source cli for the CLI user agent and api otherwise', async () => {
+    expect((await loggedUsage({ 'user-agent': 'b4m-cli/1.2.3' })).source).toBe('cli');
+    vi.clearAllMocks();
+    expect((await loggedUsage({ 'user-agent': 'curl/8.4.0' })).source).toBe('api');
+  });
+
+  it('stamps ownerType organization only for an org-billed key with an organization', async () => {
+    const orgBilled = { billingOwnerType: CreditHolderType.Organization, organizationId: 'org-1' };
+    expect((await loggedUsage({}, orgBilled)).ownerType).toBe(CreditHolderType.Organization);
+    vi.clearAllMocks();
+    expect((await loggedUsage({}, { billingOwnerType: CreditHolderType.Organization })).ownerType).toBe(
+      CreditHolderType.User
+    );
+    vi.clearAllMocks();
+    expect((await loggedUsage({})).ownerType).toBe(CreditHolderType.User);
+    vi.clearAllMocks();
+    expect(
+      (await loggedUsage({}, { billingOwnerType: CreditHolderType.User, organizationId: 'org-1' })).ownerType
+    ).toBe(CreditHolderType.User);
   });
 });
