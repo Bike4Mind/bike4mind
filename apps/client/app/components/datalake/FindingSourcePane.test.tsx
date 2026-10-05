@@ -138,6 +138,16 @@ describe('FindingSourcePane', () => {
     expect(onReturnToRanking).toHaveBeenCalledTimes(1);
   });
 
+  it('disables the restore button while the unsupersede is in flight', () => {
+    const onReturnToRanking = vi.fn();
+    renderPane({}, { superseded: true, onReturnToRanking, returning: true });
+
+    const button = screen.getByTestId('finding-source-return-to-ranking-btn');
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onReturnToRanking).not.toHaveBeenCalled();
+  });
+
   it('shows the retired marker but no restore button when the caller cannot undo the ruling', () => {
     renderPane({}, { superseded: true });
 
