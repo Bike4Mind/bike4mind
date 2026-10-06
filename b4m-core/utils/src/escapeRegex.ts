@@ -23,5 +23,5 @@
  * { name: { $regex: escapeRegex(search), $options: 'i' } }             // contains
  */
 export function escapeRegex(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return input.replace(/[.*?^${}|[\]\\]/g, '\\$&');
 }
