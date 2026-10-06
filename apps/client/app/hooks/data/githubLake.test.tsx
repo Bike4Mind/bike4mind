@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
   useLakeGitHubConnection,
+  useLakeGitHubCanManage,
   useStartLakeGitHubConnect,
   useAuthorizeLakeGitHubConnect,
   useLakeGitHubRepositoryChoices,
@@ -158,6 +159,38 @@ describe('useLakeGitHubConnection', () => {
   it('does not fetch without a lake id', () => {
     renderLakeGitHubConnection(undefined);
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe('useLakeGitHubCanManage', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const renderBoth = (dataLakeId: string) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return renderHook(
+      () => ({ connection: useLakeGitHubConnection(dataLakeId), canManage: useLakeGitHubCanManage(dataLakeId) }),
+      { wrapper: wrapperFor(queryClient) }
+    );
+  };
+
+  it('reads false for an appointed admin, and shares one request with the connection hook', async () => {
+    get.mockResolvedValue({ data: { connection: { id: 'conn1' }, canManage: false } });
+    const { result } = renderBoth('lake1');
+
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
+    expect(result.current.connection.data).toEqual({ id: 'conn1' });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads true for a manager, and when the payload carries no flag (personal lake)', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: true } });
+    const { result, unmount } = renderBoth('lake1');
+    await waitFor(() => expect(result.current.canManage.data).toBe(true));
+    unmount();
+
+    get.mockResolvedValue({ data: { connection: null } });
+    const second = renderBoth('lake2');
+    await waitFor(() => expect(second.result.current.canManage.data).toBe(true));
   });
 });
 
