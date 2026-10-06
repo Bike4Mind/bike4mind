@@ -1,9 +1,10 @@
 import {
   DATA_LAKES,
-  MAX_TAG_PREFIX_LENGTH,
   normalizeTagPrefix,
   tagPrefixesOverlap,
   type IDataLakeDocument,
+  MAX_TAG_PREFIX_SUFFIX_ATTEMPTS,
+  withTagPrefixSuffix,
   type IDataLakeRepository,
 } from '@bike4mind/common';
 
@@ -23,8 +24,6 @@ interface PrefixScope {
   createdByUserId: string;
   organizationId?: string;
 }
-
-const MAX_PREFIX_PREVIEW_ATTEMPTS = 50;
 
 const prefixScopeArms = (scope: PrefixScope): Record<string, unknown>[] => {
   const arms: Record<string, unknown>[] = [{ createdByUserId: scope.createdByUserId }];
@@ -99,22 +98,6 @@ export const collidesWithRegistryPrefix = (rawPrefix: string | undefined | null)
   DATA_LAKES.some(lake => tagPrefixesOverlap(rawPrefix, lake.fileTagPrefix));
 
 /**
- * `acme:` -> `acme-1:`, `docs:legal:` -> `docs:legal-1:`, cut so the result still fits
- * MAX_TAG_PREFIX_LENGTH. Attempt 0 is the base. Numbering mirrors the slug's `-N` (createDataLake's
- * withDisambiguatingSuffix) so a recreated lake reads `acme-1` / `acme-1:`.
- */
-export const withTagPrefixSuffix = (basePrefix: string, attempt: number): string => {
-  if (attempt === 0) return basePrefix;
-  const suffix = `-${attempt}`;
-  // Room comes from `suffix.length`, not a literal: attempts 10+ carry a longer suffix.
-  const stem = basePrefix
-    .slice(0, -1)
-    .slice(0, MAX_TAG_PREFIX_LENGTH - 1 - suffix.length)
-    .replace(/-+$/, '');
-  return `${stem}${suffix}:`;
-};
-
-/**
  * The first `withTagPrefixSuffix` candidate that createDataLake's prefix guard would accept for
  * this scope right now, so the wizard can offer it before create. Advisory only: a concurrent
  * create can still take it first, and create stays the authority. One scope query, then the
@@ -130,7 +113,7 @@ export const previewDataLakeTagPrefix = async (
   const held = ((await dataLakes.find({ $or: prefixScopeArms(scope) })) as PrefixScopeLake[]).map(
     lake => lake.fileTagPrefix
   );
-  for (let attempt = 0; attempt < MAX_PREFIX_PREVIEW_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < MAX_TAG_PREFIX_SUFFIX_ATTEMPTS; attempt++) {
     const candidate = withTagPrefixSuffix(basePrefix, attempt);
     if (collidesWithRegistryPrefix(candidate)) continue;
     if (!held.some(prefix => tagPrefixesOverlap(candidate, prefix))) return candidate;

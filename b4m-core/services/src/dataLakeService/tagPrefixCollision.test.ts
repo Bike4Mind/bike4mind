@@ -1,11 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DATA_LAKES, MAX_TAG_PREFIX_LENGTH } from '@bike4mind/common';
+import { DATA_LAKES, withTagPrefixSuffix } from '@bike4mind/common';
 import {
   collidesWithRegistryPrefix,
   findCollidingPrefixLakes,
   previewDataLakeTagPrefix,
   warnOnPrefixCollision,
-  withTagPrefixSuffix,
 } from './tagPrefixCollision';
 
 const lakeRow = (over: Partial<{ id: string; name: string; fileTagPrefix: string }> = {}) => ({
@@ -155,24 +154,6 @@ describe('warnOnPrefixCollision', () => {
 
     await expect(warnOnPrefixCollision({ dataLakes }, lake, logger)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledOnce();
-  });
-});
-
-describe('withTagPrefixSuffix', () => {
-  it('keeps the base on attempt 0 and numbers later attempts from -1', () => {
-    expect(withTagPrefixSuffix('acme:', 0)).toBe('acme:');
-    expect(withTagPrefixSuffix('acme:', 1)).toBe('acme-1:');
-    expect(withTagPrefixSuffix('docs:legal:', 1)).toBe('docs:legal-1:');
-  });
-
-  it('keeps fitting once the suffix reaches two digits, trimming a trailing hyphen', () => {
-    const base = `${'a'.repeat(MAX_TAG_PREFIX_LENGTH - 4)}-bc:`;
-
-    for (const attempt of [1, 12]) {
-      const candidate = withTagPrefixSuffix(base, attempt);
-      expect(candidate.length).toBeLessThanOrEqual(MAX_TAG_PREFIX_LENGTH);
-      expect(candidate).toMatch(new RegExp(`[^-]-${attempt}:$`));
-    }
   });
 });
 

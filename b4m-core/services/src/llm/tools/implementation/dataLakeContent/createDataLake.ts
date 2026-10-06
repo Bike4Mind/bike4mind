@@ -3,11 +3,12 @@ import {
   MIN_DATA_LAKE_SLUG_LENGTH,
   deriveTagPrefixFromLakeName,
   slugifyDataLakeName,
+  withTagPrefixSuffix,
   type AccessContext,
 } from '@bike4mind/common';
 import type { ToolDefinition } from '../../base/types';
 import { createDataLake } from '../../../../dataLakeService/createDataLake';
-import { TAG_PREFIX_UNAVAILABLE_CODE, withTagPrefixSuffix } from '../../../../dataLakeService/tagPrefixCollision';
+import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPrefixCollision';
 import { buildToolAccessContext, toolAuditPrincipal } from '../../helpers/toolAccessContext';
 import {
   DATA_LAKES_DISABLED_MESSAGE,
