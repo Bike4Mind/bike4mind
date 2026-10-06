@@ -26,7 +26,7 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { fabFilesService, modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
-import { createVideoJobHandler, type VideoJobDeps } from '@bike4mind/services/videoJobs';
+import { createVideoJobHandler, type CreateVideoJobDeps, type VideoJobDeps } from '@bike4mind/services/videoJobs';
 import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
 import { isValidObjectId } from '@server/utils/objectId';
@@ -282,6 +282,11 @@ export const getVideoJobDeps = (): VideoJobDeps => {
   };
   return videoJobDeps;
 };
+
+export const getCreateVideoJobDeps = (): CreateVideoJobDeps => ({
+  ...getVideoJobDeps(),
+  engine: getGenerationJobEngine(),
+});
 
 let generationJobEngine: GenerationJobEngine | undefined;
 export const getGenerationJobEngine = (): GenerationJobEngine => {
