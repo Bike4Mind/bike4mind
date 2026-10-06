@@ -246,6 +246,12 @@ describe('classifyCommandRisk', () => {
       expectAtLeast('echo boom >| /dev/sda', 'high');
     });
 
+    it('flags `&>`, `&>>` and `<>` redirects to a block device', () => {
+      expectAtLeast('echo boom &> /dev/sda', 'high');
+      expectAtLeast('echo boom &>> /dev/sda', 'high');
+      expectAtLeast('echo boom <> /dev/sda', 'high');
+    });
+
     it('flags `tee` writing to a raw block device', () => {
       expectAtLeast('tee /dev/sda', 'high');
       expectAtLeast('echo x | tee /dev/nvme0n1', 'high');
