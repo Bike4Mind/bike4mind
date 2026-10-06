@@ -231,6 +231,27 @@ describe('runTurn', () => {
     expect(useCliStore.getState().pendingMessages).toHaveLength(0);
   });
 
+  it('keeps the steps that ran before an abort on the cancellation message', async () => {
+    seedSession([]);
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    const thought: AgentStep = { type: 'thought', content: 'reading the file', metadata: { timestamp: 0 } };
+    // Stands in for wireAgentEvents' step handler, which appends each step to
+    // the pending assistant message while the run is in flight.
+    const run = vi.fn(async () => {
+      const { pendingMessages, updatePendingMessage } = useCliStore.getState();
+      const last = pendingMessages.length - 1;
+      updatePendingMessage(last, { ...pendingMessages[last], metadata: { steps: [thought, observation('ok')] } });
+      throw abortError;
+    });
+
+    await runTurn('do it', makeCtx({ agent: { run } as unknown as ReActAgent }));
+
+    expect(useCliStore.getState().session!.messages[1]).toMatchObject({
+      metadata: { cancelled: true, steps: [thought, observation('ok')] },
+    });
+  });
+
   it('flushes durable workflow state onto the session when the turn is aborted (regression: #595)', async () => {
     seedSession([]);
     const abortError = new Error('The operation was aborted');
