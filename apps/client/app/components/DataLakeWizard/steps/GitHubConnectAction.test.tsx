@@ -8,6 +8,7 @@ import type { LakeGitHubConnection } from '@client/app/hooks/data/githubLake';
 const h = vi.hoisted(() => ({
   connection: { current: null as LakeGitHubConnection | null },
   isError: { current: false },
+  canManage: { current: true },
   startMutate: vi.fn(),
   resyncMutate: vi.fn(),
   disconnectMutate: vi.fn(),
@@ -18,6 +19,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('@client/app/hooks/data/githubLake', () => ({
   useLakeGitHubConnection: () => ({ data: h.connection.current, isLoading: false, isError: h.isError.current }),
+  useLakeGitHubCanManage: () => ({ data: h.canManage.current }),
   useStartLakeGitHubConnect: () => ({ mutate: h.startMutate, isPending: false }),
   useResyncLakeGitHub: () => ({ mutate: h.resyncMutate, isPending: false }),
   useDisconnectLakeGitHub: () => ({ mutate: h.disconnectMutate, isPending: false }),
@@ -59,6 +61,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.connection.current = null;
   h.isError.current = false;
+  h.canManage.current = true;
   vi.stubGlobal('location', { ...window.location, assign });
 });
 afterEach(() => {
@@ -112,6 +115,23 @@ describe('GitHubConnectAction', () => {
 
   it('disables the action when the status query errors (non-manager)', () => {
     h.isError.current = true;
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connect-unavailable-btn')).toBeDisabled();
+    expect(screen.queryByTestId('github-connect-btn')).toBeNull();
+  });
+
+  it('shows an appointed admin the status but no re-sync or disconnect controls', () => {
+    h.canManage.current = false;
+    h.connection.current = connected({ lastError: 'Rate limited.' });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-connection-status')).toHaveTextContent('acme/docs @ main');
+    expect(screen.getByTestId('github-connection-last-error')).toHaveTextContent('Rate limited.');
+    expect(screen.queryByTestId('github-resync-btn')).toBeNull();
+    expect(screen.queryByTestId('github-disconnect-btn')).toBeNull();
+  });
+
+  it('keeps Connect disabled for an appointed admin on a lake with no connection yet', () => {
+    h.canManage.current = false;
     wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('github-connect-unavailable-btn')).toBeDisabled();
     expect(screen.queryByTestId('github-connect-btn')).toBeNull();
