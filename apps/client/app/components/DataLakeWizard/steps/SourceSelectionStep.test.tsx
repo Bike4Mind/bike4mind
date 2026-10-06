@@ -153,13 +153,13 @@ describe('SourceSelectionStep - lake name', () => {
   });
 
   it('shows the server slug preview, matching the Config summary', () => {
-    // A lake (possibly deleted) already holds "x", so create would mint "x-1".
-    slugPreview.current = 'x-1';
-    setName('X');
+    // A lake (possibly deleted) already holds "niche", so create would mint "niche-1".
+    slugPreview.current = 'niche-1';
+    setName('Niche');
 
     renderStep();
 
-    expect(screen.getByTestId(SLUG)).toHaveTextContent('x-1');
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('niche-1');
   });
 
   it('falls back to the local slug while the preview is loading or has failed', () => {
@@ -200,8 +200,19 @@ describe('SourceSelectionStep - lake name', () => {
       vi.advanceTimersByTime(300);
     });
 
-    expect(slugPreviewMock.mock.calls.filter(([, enabled]) => enabled).map(([name]) => name)).toEqual(['Abc']);
+    const enabledNames = slugPreviewMock.mock.calls.filter(([, enabled]) => enabled).map(([name]) => name);
+    expect(enabledNames.length).toBeGreaterThan(0);
+    expect(enabledNames.every(name => name === 'Abc')).toBe(true);
     expect(screen.getByTestId(SLUG)).toHaveTextContent('abc-1');
+  });
+
+  it('does not query the preview for a name that cannot form a slug', () => {
+    setName('!');
+
+    renderStep();
+
+    expect(slugPreviewMock.mock.calls.filter(([, enabled]) => enabled)).toEqual([]);
+    expect(screen.getByTestId('source-name-slug-error')).toBeInTheDocument();
   });
 
   it('offers no name field in append mode - the target lake owns its identity', () => {

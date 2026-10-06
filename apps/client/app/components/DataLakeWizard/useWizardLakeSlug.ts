@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { slugifyDataLakeName, submittedTagPrefix } from '@bike4mind/common';
+import { isValidDataLakeSlug, slugifyDataLakeName, submittedTagPrefix } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId, useDataLakeSlugPreview } from '@client/app/hooks/data/dataLakes';
 import { canReuseRecoverableLake } from '@client/app/hooks/data/dataLakeUploadPipeline';
@@ -25,7 +25,11 @@ export function useWizardLakeSlug(): string {
   // preview belongs to an older name, so it is ignored in favor of the local slugify.
   const { debouncedValue: debouncedName, setValue: setDebounceName } = useDebounceValue(config.name);
   useEffect(() => setDebounceName(config.name), [config.name, setDebounceName]);
-  const slugPreview = useDataLakeSlugPreview(debouncedName, !targetLake && !reusedLake && !!debouncedName);
+  // A name that cannot form a slug only earns a 400 from the server; the source step blocks it anyway.
+  const slugPreview = useDataLakeSlugPreview(
+    debouncedName,
+    !targetLake && !reusedLake && isValidDataLakeSlug(debouncedName)
+  );
   const settledPreview = debouncedName === config.name ? slugPreview.data : undefined;
 
   if (targetLake) return targetLake.slug;
