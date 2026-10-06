@@ -14,6 +14,13 @@ describe('isVideoModelEnabled', () => {
     );
   });
 
+  it('ships Grok Imagine disabled until the live check passes', () => {
+    expect(isVideoModelEnabled('grok-imagine-video-1.5', undefined)).toBe(false);
+    expect(isVideoModelEnabled('grok-imagine-video-1.5', { enabledModels: { 'grok-imagine-video-1.5': true } })).toBe(
+      true
+    );
+  });
+
   it('an override wins over the catalog default', () => {
     expect(isVideoModelEnabled('test-video', { enabledModels: { 'test-video': false } })).toBe(false);
   });

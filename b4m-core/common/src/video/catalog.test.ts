@@ -88,3 +88,62 @@ describe('gemini-omni-1.1-flash', () => {
     });
   });
 });
+
+describe('grok-imagine-video-1.5', () => {
+  const caps = VIDEO_MODEL_CATALOG['grok-imagine-video-1.5'];
+  const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
+    model: 'grok-imagine-video-1.5',
+    mode: 'text_to_video',
+    prompt: 'a lighthouse at dusk',
+    durationSeconds: 6,
+    aspectRatio: '16:9',
+    resolution: '480p',
+    ...overrides,
+  });
+
+  it('declares the Grok Imagine capabilities', () => {
+    expect(caps).toEqual({
+      provider: 'xai',
+      displayName: 'Grok Imagine Video 1.5',
+      modes: ['text_to_video', 'image_to_video'],
+      duration: { kind: 'range', min: 1, max: 15, step: 1 },
+      aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3'],
+      resolutions: ['480p', '720p'],
+      defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '480p' },
+      audio: 'always',
+      pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.08 } },
+      defaultEnabled: false,
+    });
+  });
+
+  it.each(['480p', '720p'] as const)('prices a 10s %s clip at the flat per-second rate', resolution => {
+    expect(estimateVideoCostUsd(caps, request({ durationSeconds: 10, resolution }))).toBeCloseTo(0.8, 6);
+  });
+
+  it.each([0, 16])('rejects %ss', seconds => {
+    expect(validateAgainstCapabilities(request({ durationSeconds: seconds }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_duration',
+    });
+  });
+
+  it.each([
+    { durationSeconds: 1 },
+    { durationSeconds: 15 },
+    { aspectRatio: '3:2' as const },
+    { aspectRatio: '2:3' as const },
+  ])('accepts %o', overrides => {
+    expect(validateAgainstCapabilities(request(overrides), caps).ok).toBe(true);
+  });
+
+  it('rejects 1080p (deferred until per-resolution pricing is confirmed) and 21:9', () => {
+    expect(validateAgainstCapabilities(request({ resolution: '1080p' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_resolution',
+    });
+    expect(validateAgainstCapabilities(request({ aspectRatio: '21:9' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_aspect_ratio',
+    });
+  });
+});
