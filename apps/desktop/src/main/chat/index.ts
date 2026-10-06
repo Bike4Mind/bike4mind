@@ -171,7 +171,8 @@ function paneBounds(value: unknown): BrowserPaneBounds | null {
  * The downstream half of the chat stream, and a different thing from the upstream SSE frames
  * logged in completions.ts: these are what the UI is actually told, after the agent loop has
  * folded tool calls, reasoning and queue changes into it. Same source, so the same single tag -
- * the direction is a field.
+ * the direction is a field. Seeing both texts side by side is the point: a delta that differs
+ * from the frame it came from is the agent loop having rewritten it.
  *
  * Fields are named one at a time, never spread: a payload carries whatever a session put in it,
  * and an allowlist is the only reason this cannot start carrying something it should not.
@@ -181,12 +182,13 @@ function logDownstream(channel: string, payload: unknown): void {
     const event = (payload ?? {}) as { type?: unknown; sessionId?: unknown; text?: unknown; status?: unknown };
     // The event's own kind, or the channel's name without its namespace.
     const kind = typeof event.type === 'string' ? event.type : (channel.split(':')[1] ?? channel);
-    const textChars = typeof event.text === 'string' ? event.text.length : 0;
+    const text = typeof event.text === 'string' ? event.text : '';
     return {
       tags: [CHAT_STREAM_TAG],
-      message: `downstream ${kind}${textChars ? ` ${textChars} chars` : ''}`,
+      message: `downstream ${kind}${text ? `: ${text}` : ''}`,
       fields: {
         channel,
+        ...(text ? { chars: text.length } : {}),
         ...(typeof event.sessionId === 'string' ? { session: event.sessionId } : {}),
         ...(typeof event.status === 'string' ? { status: event.status } : {}),
       },

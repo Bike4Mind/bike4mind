@@ -61,7 +61,9 @@ describe('formatting', () => {
     expect(line).toContain('chars=4');
   });
 
-  it('copies one line per record', () => {
-    expect(formatForCopy([record(1, ['a']), record(2, ['b'])]).split('\n')).toHaveLength(2);
+  it('copies one line per record, even when a message carried a break', () => {
+    // The sink escapes breaks on the way in, which is what keeps this true - see oneLine.
+    const lines = formatForCopy([record(1, ['a'], 'downstream delta: one\\ntwo'), record(2, ['b'])]);
+    expect(lines.split('\n')).toHaveLength(2);
   });
 });
