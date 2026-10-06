@@ -22,7 +22,8 @@ const deps = (
   providers: createVideoProviderRegistry([fakeGemini(), ...(overrides.withTest ? [new TestVideoProvider()] : [])]),
   getSettings: vi.fn(async () => ({
     enforceCredits: true,
-    videoGeneration: { enabledModels: overrides.enabled ?? {} },
+    // Gemini Omni ships disabled (catalog defaultEnabled: false), so these tests enable it as an admin would.
+    videoGeneration: { enabledModels: overrides.enabled ?? { 'gemini-omni-1.1-flash': true } },
   })),
   resolveApiKey: vi.fn(async (providerId: VideoProviderId, _userId: string) =>
     overrides.keys?.[providerId] === undefined ? 'k' : overrides.keys[providerId]
@@ -47,6 +48,12 @@ describe('listUsableVideoModels', () => {
     expect(
       (await listUsableVideoModels('u1', deps({ withTest: true, keys: { 'gemini-omni': null } }))).map(m => m.id)
     ).toEqual(['test-video']);
+  });
+
+  it('omits Gemini Omni until an admin enables it', async () => {
+    const d = deps({ enabled: {}, withTest: true });
+    expect((await listUsableVideoModels('u1', d)).map(m => m.id)).toEqual(['test-video']);
+    expect(d.resolveApiKey).not.toHaveBeenCalledWith('gemini-omni', 'u1');
   });
 
   it('resolves one key per registered provider for the listing user', async () => {

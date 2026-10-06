@@ -64,7 +64,7 @@ describe('gemini-omni-1.1-flash', () => {
       defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '720p' },
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1014 } },
-      defaultEnabled: true,
+      defaultEnabled: false,
     });
   });
 

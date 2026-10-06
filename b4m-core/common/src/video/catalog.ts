@@ -31,7 +31,8 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '720p' },
     audio: 'always',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1014 } },
-    defaultEnabled: true,
+    // Off until the live provider check passes; an admin enables it per stage via videoGeneration.enabledModels.
+    defaultEnabled: false,
   },
 };
 
