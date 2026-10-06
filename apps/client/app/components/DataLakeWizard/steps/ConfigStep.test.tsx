@@ -422,6 +422,19 @@ describe('ConfigStep - a prefix held by a lake the form cannot see', () => {
     expect(help()).not.toHaveTextContent('held by another lake');
   });
 
+  it('shows no auto-pick note for a differing auto prefix the server never picked', () => {
+    prefixPreview.current = null;
+    seedAuto('Acme');
+    useDataLakeWizardStore.setState(state => ({
+      autoDerivedTagPrefix: 'acme-1:',
+      config: { ...state.config, tagPrefix: 'acme-1:' },
+    }));
+
+    renderStep();
+
+    expect(help()).not.toHaveTextContent('held by another lake');
+  });
+
   it('neither queries nor adopts on a retry that will restore its own archived lake', () => {
     prefixPreview.current = 'acme-2:';
     seedAuto('Acme');
