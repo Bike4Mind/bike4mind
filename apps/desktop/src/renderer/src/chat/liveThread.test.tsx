@@ -5,6 +5,9 @@ import type { ChatStreamEvent, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageThread } from './MessageThread';
 import { TurnStatus } from './TurnStatus';
+import { presentReply } from './codeStream';
+import { roundsOf } from './replyRounds';
+import { describeActivity, writingProse } from './statusLine';
 import { useConversation } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -16,8 +19,18 @@ function call(id: string, name = 'file_read', status: ChatToolCall['status'] = '
   return { id, name, input: { path: `src/${id}.ts` }, status };
 }
 
+// The activity is derived exactly as ChatShell derives it, so what this test reads off the
+// status line is the real wiring rather than a label the harness chose.
 function Harness() {
   const conversation = useConversation(SESSION, () => undefined);
+  const inFlight = conversation.messages[conversation.messages.length - 1];
+  const liveText = inFlight ? (roundsOf(inFlight).at(-1)?.text ?? '') : '';
+  const activity = describeActivity(
+    inFlight?.toolCalls ?? [],
+    writingProse(inFlight),
+    presentReply(liveText, true).pending,
+    conversation.turn?.reasoning
+  );
   return (
     <MessageThread
       messages={conversation.messages}
@@ -25,11 +38,7 @@ function Harness() {
       streaming={conversation.streaming}
       onRespond={() => undefined}
       onContinue={() => undefined}
-      status={
-        conversation.turn && (
-          <TurnStatus turn={conversation.turn} activity={{ kind: 'thinking', label: 'Thinking...' }} />
-        )
-      }
+      status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
     />
   );
 }
@@ -122,6 +131,41 @@ describe('the live thread, driven by stream events', () => {
     });
     expect(container.querySelector('[data-testid="chat-turn-status"]')).toBeNull();
     expect(container.textContent).toContain('All done. Bye.');
+  });
+
+  const statusText = () => container.querySelector('[data-testid="chat-turn-status-text"]')?.textContent ?? '';
+
+  it('reports a model that is reasoning as thinking, not as still responding', async () => {
+    await mount();
+    emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
+    emit(text('I will look into it.'));
+    paint();
+    expect(statusText()).toContain('Responding...');
+
+    // The reply has stopped growing and the model has not: before these events were read, this
+    // was the turn that sat at "Responding..." for ten minutes.
+    emit({ type: 'reasoning', sessionId: SESSION, messageId: MESSAGE, text: 'the schema says ' });
+    expect(statusText()).toContain('Thinking...');
+    expect(container.textContent).not.toContain('the schema says');
+
+    emit(text(' Found it.'));
+    paint();
+    expect(statusText()).toContain('Responding...');
+  });
+
+  it('puts the reasoning behind the line, where the thread cannot show it', async () => {
+    await mount();
+    emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
+    emit({ type: 'reasoning', sessionId: SESSION, messageId: MESSAGE, text: 'checking the index' });
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="chat-turn-status-toggle"]');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[data-testid="chat-turn-status-detail"]')).toBeNull();
+
+    act(() => toggle?.click());
+    expect(container.querySelector('[data-testid="chat-turn-status-detail-body"]')?.textContent).toBe(
+      'checking the index'
+    );
   });
 
   it('does not remount tool rows while later events stream in', async () => {
