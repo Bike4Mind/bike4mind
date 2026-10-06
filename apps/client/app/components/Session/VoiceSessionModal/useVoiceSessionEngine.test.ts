@@ -240,4 +240,41 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
     // The fresh peer connection was closed, not parked in a ref.
     expect(pc.close).toHaveBeenCalled();
   });
+
+  it('surfaces the server message and returns to disconnected when the first connect is rejected', async () => {
+    apiPost.mockRejectedValueOnce({ response: { data: { error: 'Voice sessions are unavailable right now.' } } });
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('Voice sessions are unavailable right now.');
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+    expect(setupRealtimeConnection).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a generic message when the rejection carries no server message', async () => {
+    apiPost.mockRejectedValueOnce(new Error('Network Error'));
+
+    const view = renderHook(() => useVoiceSessionEngine({ sessionId: 's1' }));
+    await act(async () => {
+      await view.result.current.connect();
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('Failed to start voice session.');
+    expect(view.result.current.connectionStatus).toBe('disconnected');
+  });
+
+  it('still rejects a failed reconnect so the backoff owns the retry', async () => {
+    const view = await connectAndConnected();
+    const failure = { response: { data: { error: 'Voice sessions are unavailable right now.' } } };
+    apiPost.mockRejectedValueOnce(failure);
+
+    await act(async () => {
+      await expect(view.result.current.connect({ isReconnect: true })).rejects.toBe(failure);
+    });
+
+    expect(toast.error).not.toHaveBeenCalled();
+  });
 });
