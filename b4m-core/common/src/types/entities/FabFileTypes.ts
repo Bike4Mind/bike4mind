@@ -1165,6 +1165,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Mixed `sourceMetadata` included) to answer a question about existence.
    */
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
+  /**
+   * As `findExistingIdsByIds`, but a soft-deleted row counts as existing. The two answer different
+   * questions and a caller must pick deliberately: this one is "is there a row at all", which is the
+   * only safe basis for destroying a reference to it, because a soft delete is recoverable (a lake
+   * teardown soft-deletes its files and `restoreDeletedDataLake` revives them). Use the filtered
+   * sibling when the question is reachability - whether the document can be read right now.
+   */
+  findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
   /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
@@ -1959,15 +1967,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "all lakes" figure sits above those per-lake rows, so the two describe one population.
    */
   countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
-  /**
-   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
-   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
-   * which judge each lake on its own and so both double-count and over-count.
-   */
-  countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a

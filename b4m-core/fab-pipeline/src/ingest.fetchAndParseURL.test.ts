@@ -66,6 +66,7 @@ describe('fetchAndParseURL redirect handling', () => {
     expect(axiosGet).toHaveBeenCalledTimes(2);
     expect(axiosGet.mock.calls[1][0]).toBe('http://93.184.216.35/article/');
     expect(result.title).toBe('An Article');
+    expect(result.finalUrl).toBe('http://93.184.216.35/article/');
     expect(result.textContent).toContain('Hello');
   });
 

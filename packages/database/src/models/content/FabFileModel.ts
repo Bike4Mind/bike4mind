@@ -1092,6 +1092,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Existence including soft-deleted rows - see IFabFileRepository.findExistingIdsIncludingDeletedByIds
+   * for which of the two probes a caller wants. `includeDeleted` is what makes the difference: the
+   * plugin's pre('find') hook otherwise scopes this to `deletedAt: null`.
+   */
+  async findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsIncludingDeletedByIds') } })
+      .select('_id')
+      .setOptions({ includeDeleted: true })
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
   /** The citability projection only - see IFabFileRepository.findCitableFieldsByIds. */
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
@@ -2969,34 +2983,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     if (scopes.length === 0) return 0;
     return this.fabFileModel.countDocuments({
       $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
-      deletedAt: null,
-      archivedAt: null,
-      status: { $ne: 'pending' },
-    });
-  }
-
-  /**
-   * The same distinct count, narrowed to the files categorized under NONE of the caller's lake
-   * prefixes - the bucket for a MERGED tree, where a file categorized under any one lake is
-   * already reachable through that lake's branch.
-   *
-   * Deliberately not a sum of the per-lake `uncategorized` figures: those judge each lake
-   * separately, so a file uncategorized in two lakes would count twice, and one uncategorized in
-   * A but categorized in B would count despite already being reachable under B's branch.
-   *
-   * Each prefix is its own `$and` conjunct - every fragment's top-level key is `tags`, so merging
-   * them into one object would keep only the last and the count would silently widen. Prefixes
-   * are deduped and unusable ones dropped, matching the browse query this sizes.
-   */
-  async countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number> {
-    if (scopes.length === 0) return 0;
-    const prefixes = usableTagPrefixes(tagPrefixes);
-    return this.fabFileModel.countDocuments({
-      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
-      ...(prefixes.length > 0 ? { $and: prefixes.map(buildLacksContentPrefixTagFilter) } : {}),
       deletedAt: null,
       archivedAt: null,
       status: { $ne: 'pending' },

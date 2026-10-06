@@ -245,6 +245,9 @@ export const ChatQuestPollResultSchema = z.object({
   // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
   // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+  // The visible answer text, derived from `replies` when the poll body is built: thinking blocks
+  // and a choices block in the final answer slot stripped, slots joined. `replies` is the raw
+  // stored slots.
   reply: z.string().nullable().optional(),
   replies: z.array(z.string()).optional(),
   // Present only when the requested model failed and another one answered. The answer in
@@ -289,6 +292,11 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
   // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
   // so a rename there breaks this rather than silently publishing a dead code.
   errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
+});
+
+/** 503 when this deployment has no usable key for a provider the request needs (data-lake search, voice). */
+export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
 });
 
 /**

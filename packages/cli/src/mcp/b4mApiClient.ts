@@ -1,9 +1,14 @@
 import { isAxiosError } from 'axios';
+import type { z } from 'zod';
 import { ApiClient, NotAuthenticatedError } from '../auth/ApiClient.js';
 import { isProviderKeyFailure } from '../auth/providerKeyFailure.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
+import type { ZodType, output } from 'zod';
 import {
+  generatedAudioResponseSchema,
+  type GeneratedAudioResponse,
   ttsBase64ResponseSchema,
+  type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
@@ -40,7 +45,8 @@ export interface ChatWaitResponse {
   // The notebook the turn was recorded in. An API-key caller that sent no `sessionId` (and any
   // caller sending `newConversation: true`) gets a freshly created notebook's id here.
   sessionId?: string;
-  // The wait path returns the reply in `responses`; the scalar `response` is null.
+  // `response` is the visible answer text; `responses` is the raw reply slots. Older servers left
+  // `response` null on the wait path.
   response?: string | null;
   responses?: string[];
   // Failure classifier. A failed turn still resolves 200 with the explanation in the reply
@@ -60,8 +66,12 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
+  promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
 }
+
+export type RawCitable = z.infer<typeof CitableSourceSchema> & { [key: string]: unknown };
 
 /** One matching session from POST /api/sessions/semantic-search (`scores` entries). */
 export interface SessionScore {
@@ -94,21 +104,16 @@ export interface SoundEffectArgs {
   format?: string;
 }
 
-/**
- * Raw result of a sound-effects generation. The route answers with binary audio
- * plus side-channel headers reporting whether it also persisted a browsable copy.
- * `fabFileId`, `fileName`, and `fileUrl` are set only when `saved` is true (see
- * persistGeneratedAudio). `fileUrl` is the signed download URL the route minted at
- * upload; callers must use it as-is rather than re-resolving via GET /api/files/:id,
- * which fails closed until the async moderation scan completes.
- */
-export interface GeneratedSound {
-  audio: Buffer;
-  contentType: string;
-  saved: boolean;
-  fabFileId?: string;
-  fileName?: string;
-  fileUrl?: string;
+/** A data lake as returned by GET /api/v1/data-lakes (`DataLakeResource`, snake_case). */
+export interface RawDataLake {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  built_in?: boolean;
+  status?: string;
+  file_count?: number;
+  [key: string]: unknown;
 }
 
 export interface RawProject {
@@ -179,11 +184,26 @@ export class B4mApiClient {
     return this.client.get<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`);
   }
 
-  async createNotebook(args: { name?: string; projectId?: string }): Promise<RawNotebook> {
+  async createNotebook(args: { name?: string; projectId?: string; dataLakeId?: string }): Promise<RawNotebook> {
     return this.client.post<RawNotebook>('/api/sessions/create', {
       ...(args.name ? { name: args.name } : {}),
       ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.dataLakeId ? { dataLakeId: args.dataLakeId } : {}),
     });
+  }
+
+  /**
+   * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
+   * `{ data, next_cursor }` body), so `toList` does not apply.
+   */
+  async listDataLakes(args: {
+    limit: number;
+    cursor?: string;
+  }): Promise<{ data: RawDataLake[]; nextCursor: string | null }> {
+    const result = await this.client.get<{ data: RawDataLake[]; next_cursor: string | null }>('/api/v1/data-lakes', {
+      params: { limit: args.limit, ...(args.cursor ? { cursor: args.cursor } : {}) },
+    });
+    return { data: result.data ?? [], nextCursor: result.next_cursor ?? null };
   }
 
   async sendChat(args: {
@@ -235,51 +255,31 @@ export class B4mApiClient {
     return this.client.get<RawFile>(`/api/files/${encodeURIComponent(fileId)}`);
   }
 
-  /**
-   * Generate a sound effect. Unlike the JSON routes, this one streams raw audio
-   * bytes, so it goes through the axios instance directly to read the response
-   * headers (content type + the persisted-FabFile side channel). On failure the
-   * error body arrives as bytes; {@link decodeArrayBufferErrorBody} restores the
-   * JSON shape so {@link mapApiError} can surface the server's message.
-   */
-  async generateSoundEffect(args: SoundEffectArgs): Promise<GeneratedSound> {
-    try {
-      const response = await this.client.getAxiosInstance().post<ArrayBuffer>(
-        '/api/ai/sound-effects',
-        {
-          provider: args.provider,
-          text: args.text,
-          ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
-          ...(args.promptInfluence !== undefined ? { promptInfluence: args.promptInfluence } : {}),
-          ...(args.format ? { format: args.format } : {}),
-        },
-        { responseType: 'arraybuffer' }
-      );
-
-      // Node duplicates a repeated header into an array; keep only the scalar string form.
-      const headerString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
-      const saved = String(response.headers['x-b4m-audio-saved'] ?? '') === 'true';
-      return {
-        audio: Buffer.from(response.data),
-        contentType: String(response.headers['content-type'] ?? 'application/octet-stream'),
-        saved,
-        fabFileId: saved ? headerString(response.headers['x-b4m-audio-fab-file-id']) : undefined,
-        fileName: saved ? headerString(response.headers['x-b4m-audio-file-name']) : undefined,
-        fileUrl: saved ? headerString(response.headers['x-b4m-audio-file-url']) : undefined,
-      };
-    } catch (error) {
-      throw decodeArrayBufferErrorBody(error);
-    }
+  /** Generate a sound effect; see {@link postGeneratedAudio} for the normalized response. */
+  async generateSoundEffect(args: SoundEffectArgs): Promise<GeneratedAudioResponse> {
+    return this.postGeneratedAudio(
+      '/api/ai/sound-effects',
+      {
+        provider: args.provider,
+        text: args.text,
+        ...(args.durationSeconds !== undefined ? { durationSeconds: args.durationSeconds } : {}),
+        ...(args.promptInfluence !== undefined ? { promptInfluence: args.promptInfluence } : {}),
+        ...(args.format ? { format: args.format } : {}),
+      },
+      generatedAudioResponseSchema
+    );
   }
 
   async synthesizeSpeech(args: Omit<TTSRequest, 'encoding'>) {
     try {
-      const response: unknown = await this.client.post('/api/ai/tts', { ...args, encoding: 'base64' });
-      return { kind: 'audio' as const, data: ttsBase64ResponseSchema.parse(response) };
+      const data = await this.postGeneratedAudio('/api/ai/tts', args, ttsBase64ResponseSchema);
+      return { kind: 'audio' as const, data };
     } catch (error) {
       if (isAxiosError(error) && error.response?.status === 413) {
-        // The billed audio is only reachable through its FabFile, so keep the id even
-        // when no signed URL was minted. A substitution rides only the header here.
+        // Only a server predating the oversized-audio URL offload puts a saved copy
+        // on the 413. The billed audio is then only reachable through its FabFile, so
+        // keep the id even when no signed URL was minted. A substitution rides only
+        // the header here.
         const oversized = ttsResponseTooLargeSchema.safeParse(error.response.data);
         if (oversized.success && oversized.data.saved && oversized.data.fabFileId) {
           const fallbackFrom = supportedVoiceGenerationVendor.safeParse(
@@ -294,6 +294,48 @@ export class B4mApiClient {
       }
       throw error;
     }
+  }
+
+  /**
+   * POST a generated-audio request with `encoding: 'base64'` and normalize any
+   * server's answer into the JSON shape `schema` describes. Base64 (never binary)
+   * because an oversized result is a 303 in binary mode, and axios drops the
+   * X-B4M headers when following it. A server predating the `encoding` field
+   * ignores it and streams raw bytes with the save result in X-B4M-Audio-* headers;
+   * those are rebuilt into the inline variant. The request is arraybuffer-typed, so
+   * a failure body arrives as bytes; {@link decodeArrayBufferErrorBody} restores
+   * its JSON shape for {@link mapApiError}.
+   */
+  private async postGeneratedAudio<Schema extends ZodType>(
+    path: string,
+    body: Record<string, unknown>,
+    schema: Schema
+  ): Promise<output<Schema>> {
+    const response = await this.client
+      .getAxiosInstance()
+      .post<ArrayBuffer>(path, { ...body, encoding: 'base64' }, { responseType: 'arraybuffer' })
+      .catch((error: unknown) => {
+        throw decodeArrayBufferErrorBody(error);
+      });
+
+    const contentType = String(response.headers['content-type'] ?? 'application/octet-stream');
+    const bytes = Buffer.from(response.data);
+    if (/json/i.test(contentType)) {
+      return schema.parse(JSON.parse(bytes.toString('utf8')));
+    }
+
+    // Node duplicates a repeated header into an array; keep only the scalar string form.
+    const headerString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
+    const saved = String(response.headers['x-b4m-audio-saved'] ?? '') === 'true';
+    return schema.parse({
+      delivery: 'inline',
+      audio: bytes.toString('base64'),
+      contentType,
+      saved,
+      fabFileId: saved ? headerString(response.headers['x-b4m-audio-fab-file-id']) : undefined,
+      fileName: saved ? headerString(response.headers['x-b4m-audio-file-name']) : undefined,
+      fileUrl: saved ? headerString(response.headers['x-b4m-audio-file-url']) : undefined,
+    });
   }
 
   async listProjects(args: {
@@ -365,6 +407,10 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
+      // requireFeatureEnabled answers 403 too; no key scope fixes an instance-disabled feature.
+      if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
+        return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
+      }
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }

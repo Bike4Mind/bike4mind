@@ -167,7 +167,7 @@ export function proxy(request: NextRequest) {
     connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost};
     frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net https://*.googleapis.com;
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com;
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';

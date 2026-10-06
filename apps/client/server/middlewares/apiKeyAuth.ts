@@ -1,7 +1,7 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
-import { ApiKeyScope, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
+import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
@@ -9,6 +9,8 @@ import ability from '@server/auth/ability';
 import { Request, Response, NextFunction } from 'express';
 import { ApiKeyUsageManager } from '@server/managers/apiKeyUsageManager';
 import { getClientIp } from '@server/utils/ip';
+import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import type { z } from 'zod';
@@ -204,13 +206,18 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
         throw new UnauthorizedError('API key validation missing user id');
       }
 
-      const usageInfo = {
+      const usageInfo: Express.ApiKeyUsageInfo = {
         keyId: validation.keyId!,
         userId,
         ipAddress,
         endpoint: endpointPath,
         method: req.method,
         startTime,
+        // The endpoint filters reflect the calling client (User-Agent) and the key's
+        // billing owner. Some routes stamp UsageEvent.source differently, so the
+        // credit sections can disagree with this view.
+        source: resolveApiCompletionSource(flattenHeaders(req.headers)),
+        ownerType: resolveApiKeyOwnerType(validation),
       };
       req._apiKeyUsageInfo = usageInfo;
 
@@ -237,6 +244,8 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
           method: usageInfo.method,
           responseTime: finalResponseTime,
           statusCode,
+          source: usageInfo.source,
+          ownerType: usageInfo.ownerType,
           logger: req.logger,
         }).catch(err => {
           req.logger?.warn('Failed to log detailed API key usage', err);

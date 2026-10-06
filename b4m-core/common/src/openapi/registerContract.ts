@@ -11,7 +11,7 @@ import type { EndpointContract } from '../api-contract';
 type ContractSchema = z.ZodTypeAny | { type: 'string'; contentEncoding: 'binary' };
 type ContractResponse = {
   description: string;
-  content: Record<string, { schema: ContractSchema }>;
+  content?: Record<string, { schema: ContractSchema }>;
   headers?: Record<string, { description: string; schema: { type: 'string' } }>;
 };
 
@@ -168,7 +168,7 @@ export function registerContract(contract: EndpointContract): void {
 
     responses[status] = {
       description: spec.description,
-      content,
+      ...(!spec.noBody && { content }),
       ...(spec.headers && {
         headers: Object.fromEntries(
           Object.entries(spec.headers).map(([name, description]) => [

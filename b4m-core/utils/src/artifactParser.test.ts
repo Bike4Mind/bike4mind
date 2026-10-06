@@ -14,9 +14,12 @@ import {
 } from './artifactParser';
 import { createToolEchoMatcher } from './toolEchoMatcher';
 
-// The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
-// fails fast instead of letting a hang run out the clock. The ratio check is secondary
-// and, in practice, close to a fixed budget rather than a true ratio: every baseline
+// Scaling is judged by a ratio of two timings taken back to back in the same process, never by an
+// absolute wall-clock budget: a budget measures the host, so a loaded runner fails it with no
+// regression. Quadratic input stays small enough to finish well inside the test timeout, so a
+// regression fails the ratio instead of hanging.
+//
+// In practice the ratio is close to a fixed budget rather than a true ratio: every baseline
 // measured here lands under this floor, so flooring the denominator reduces
 // `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * MIN_BASELINE_MS`.
 // The floor exists because a near-instant call is noise-dominated - without it, timer
@@ -25,8 +28,7 @@ const MIN_BASELINE_MS = 25;
 // Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
 // (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
-// Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
-const SMALL_INPUT_MS_CEILING = 500;
+const MEASUREMENT_ATTEMPTS = 5;
 
 /**
  * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
@@ -41,25 +43,26 @@ function assertLinearGrowth(
   run: (input: string) => string = convertCodeBlocksToArtifacts,
   minBaselineMs: number = MIN_BASELINE_MS
 ) {
-  // Best of three, not a single timing: a GC pause landing in one measured window is
-  // worth more than the whole budget here (the current parser needs single-digit
-  // milliseconds), while a genuinely super-linear scan is slow on every attempt.
-  const measure = (n: number) => {
-    const input = build(n);
-    let bestMs = Infinity;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const startedAt = performance.now();
-      const out = run(input);
-      bestMs = Math.min(bestMs, performance.now() - startedAt);
-      if (attempt === 0) checkOutput(out, input);
-    }
-    return bestMs;
+  const smallInput = build(small);
+  const doubledInput = build(small * 2);
+  const timeOnce = (input: string, verifyOutput: boolean) => {
+    const startedAt = performance.now();
+    const out = run(input);
+    const elapsedMs = performance.now() - startedAt;
+    if (verifyOutput) checkOutput(out, input);
+    return elapsedMs;
   };
 
-  const baselineMs = measure(small);
-  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+  // Best of N with the two sizes interleaved: a GC pause or a CPU-starved slice then lands in
+  // both series instead of only one, while a genuinely super-linear scan is slow on every attempt.
+  let baselineMs = Infinity;
+  let doubledMs = Infinity;
+  for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt++) {
+    const verifyOutput = attempt === 0;
+    baselineMs = Math.min(baselineMs, timeOnce(smallInput, verifyOutput));
+    doubledMs = Math.min(doubledMs, timeOnce(doubledInput, verifyOutput));
+  }
 
-  const doubledMs = measure(small * 2);
   const ratio = doubledMs / Math.max(baselineMs, minBaselineMs);
   expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
 }

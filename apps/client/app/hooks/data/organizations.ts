@@ -323,6 +323,63 @@ export function useRemoveMemberFromOrganization() {
   });
 }
 
+/** Shared write-back for the two credit-budget routes, which both return the updated org. */
+function useCreditBudgetMutation<Variables extends { organizationId: string }>(
+  request: (variables: Variables) => Promise<WithId<IOrganizationDocument>>,
+  successMessage: string
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: request,
+    onSuccess: organization => {
+      updateAllQueryData(queryClient, 'organizations', 'write', organization);
+      queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      toast.success(successMessage);
+    },
+    onError: (error: unknown) => {
+      console.error('Failed to update credit limit:', error);
+      toast.error(`Failed to update credit limit: ${getErrorMessage(error)}`);
+    },
+  });
+}
+
+/** Set or clear (null) the org's default monthly credit limit per member. */
+export function useSetMemberCreditDefault() {
+  return useCreditBudgetMutation(
+    async ({ organizationId, maxCreditsPerMember }: { organizationId: string; maxCreditsPerMember: number | null }) => {
+      const response = await api.put<WithId<IOrganizationDocument>>(
+        `/api/organizations/${organizationId}/member-credit-budget`,
+        { maxCreditsPerMember }
+      );
+      return response.data;
+    },
+    'Monthly credit limit updated'
+  );
+}
+
+/** Set or clear (null, inherit the org default) one member's monthly credit limit. */
+export function useSetMemberCreditOverride() {
+  return useCreditBudgetMutation(
+    async ({
+      organizationId,
+      userId,
+      maxCredits,
+    }: {
+      organizationId: string;
+      userId: string;
+      maxCredits: number | null;
+    }) => {
+      const response = await api.put<WithId<IOrganizationDocument>>(
+        `/api/organizations/${organizationId}/members/${userId}/credit-budget`,
+        { maxCredits }
+      );
+      return response.data;
+    },
+    'Member credit limit updated'
+  );
+}
+
 export function useLeaveOrganization() {
   const queryClient = useQueryClient();
 

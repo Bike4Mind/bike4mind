@@ -43,7 +43,13 @@ export type IQuestCallback = {
    */
   eventId: string;
   state: QuestCallbackState;
+  /** When the current claim was made; a stale-dispatch reclaim moves it forward. */
   dispatchedAt?: Date;
+  /**
+   * How many times the sweep backstop re-enqueued a callback stuck at `dispatched`; bounds those
+   * reclaims so a message the handler can never process is not re-enqueued forever.
+   */
+  redispatchCount?: number;
   completedAt?: Date;
   lastStatusCode?: number;
   lastError?: string;

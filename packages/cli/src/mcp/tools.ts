@@ -1,8 +1,14 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { DEFAULT_TTS_PROVIDER, PROMPT_TEXT_MAX, ttsRequestSchema, type TTSRequest } from '@bike4mind/common';
-import { B4mApiClient, mapApiError, type RawNotebook } from './b4mApiClient.js';
+import {
+  DEFAULT_TTS_PROVIDER,
+  PROMPT_TEXT_MAX,
+  ttsRequestSchema,
+  type GeneratedAudioResponse,
+  type TTSRequest,
+} from '@bike4mind/common';
+import { B4mApiClient, mapApiError, type QuestResponse, type RawDataLake, type RawNotebook } from './b4mApiClient.js';
 
 /** Static metadata for each tool, used for registration and the `mcp serve` help text. */
 export interface ToolMeta {
@@ -30,13 +36,14 @@ export const TOOL_META: ToolMeta[] = [
     name: 'create_notebook',
     title: 'Create notebook',
     description:
-      'Create a new notebook, optionally inside a project. Defaults the name to "New Notebook" when omitted.',
+      'Create a new notebook, optionally inside a project or grounded in a data lake (dataLakeId, see list_lakes). Defaults the name to "New Notebook" when omitted.',
     scope: 'notebooks:write',
   },
   {
     name: 'send_message',
     title: 'Send message',
-    description: 'Send a chat message and wait for the assistant reply.',
+    description:
+      'Send a chat message and wait for the assistant reply; returns the cited sources (citables) the answer was grounded in.',
     scope: 'ai:chat',
   },
   {
@@ -44,6 +51,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Search knowledge base',
     description: "Semantic search across the caller's notebooks.",
     scope: 'notebooks:read',
+  },
+  {
+    name: 'list_lakes',
+    title: 'List data lakes',
+    description:
+      "List the data lakes the caller can reach. Pass a lake's id as dataLakeId to create_notebook to ground a notebook in it.",
+    scope: 'datalake:read',
   },
   { name: 'list_files', title: 'List files', description: "Search the caller's files.", scope: 'files:read' },
   {
@@ -83,6 +97,10 @@ const getNotebookShape = {
 const createNotebookShape = {
   name: z.string().optional().describe('Name for the new notebook'),
   projectId: z.string().optional().describe('Project to create the notebook in'),
+  dataLakeId: z
+    .string()
+    .optional()
+    .describe("Data lake id or slug to ground the notebook in (see list_lakes); seeds the lake's retrieval defaults"),
 };
 
 const sendMessageShape = {
@@ -105,6 +123,11 @@ const searchKnowledgeBaseShape = {
   query: z.string().describe('The search query'),
   limit: z.number().int().min(1).max(100).default(10).describe('Maximum results to return'),
   minSimilarity: z.number().min(0).max(1).optional().describe('Minimum cosine similarity threshold'),
+};
+
+const listLakesShape = {
+  limit: z.number().int().min(1).max(100).default(25).describe('Maximum lakes to return'),
+  cursor: z.string().optional().describe('Pass back nextCursor from the previous page'),
 };
 
 const listFilesShape = {
@@ -154,6 +177,18 @@ function notebookSummary(n: RawNotebook) {
   };
 }
 
+function lakeSummary(l: RawDataLake) {
+  return {
+    id: l.id,
+    name: l.name,
+    slug: l.slug,
+    description: l.description ?? undefined,
+    builtIn: l.built_in,
+    status: l.status,
+    fileCount: l.file_count,
+  };
+}
+
 export async function listNotebooks(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
   const { data, hasMore } = await client.listNotebooks(args);
   return { notebooks: data.map(notebookSummary), hasMore };
@@ -163,7 +198,10 @@ export async function getNotebook(client: B4mApiClient, args: { notebookId: stri
   return client.getNotebook(args.notebookId);
 }
 
-export async function createNotebook(client: B4mApiClient, args: { name?: string; projectId?: string }) {
+export async function createNotebook(
+  client: B4mApiClient,
+  args: { name?: string; projectId?: string; dataLakeId?: string }
+) {
   // POST /api/sessions/create hard-requires a name; default to the web app's
   // convention when the caller omits one so a nameless create still succeeds.
   return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
@@ -176,23 +214,33 @@ export async function sendMessage(
   const res = await client.sendChat(args);
   const questId = res.id;
 
-  // The chat response echoes the notebook it recorded the turn in; when the caller supplied one
-  // this is simply that id. Fall back to the quest only if the response somehow omitted it -
-  // best-effort, since the reply already succeeded and the id is a convenience for continuing.
-  let notebookId = args.notebookId ?? res.sessionId;
-  if (!notebookId) {
-    try {
-      notebookId = (await client.getQuest(questId)).sessionId;
-    } catch {
-      notebookId = undefined;
-    }
+  // The wait body carries no citables, so re-fetch the quest for them; it also backs the
+  // notebookId should the response omit the echoed sessionId. Best-effort: the reply already
+  // succeeded, so a failed fetch only costs the citables (and that fallback id).
+  let quest: QuestResponse | undefined;
+  try {
+    quest = await client.getQuest(questId);
+  } catch {
+    quest = undefined;
   }
+  const notebookId = args.notebookId ?? res.sessionId ?? quest?.sessionId;
+  // Drop `metadata`: it can carry `fullContext` passage text that would bloat the MCP client's context.
+  // A failed quest fetch leaves citables undefined (omitted), so it never reads as "no sources".
+  const citables = quest
+    ? (quest.promptMeta?.citables ?? []).map(c => ({
+        id: c.id,
+        type: c.type,
+        title: c.title,
+        url: c.url,
+        description: c.description,
+      }))
+    : undefined;
 
-  // The completed quest carries the assistant reply in `responses` (a string
-  // array); the scalar `response` is null on the wait path, so prefer `responses`.
+  // The completed quest carries the raw reply slots in `responses` and the visible answer
+  // text in `response`. Older servers left `response` null on the wait path, so prefer `responses`.
   const reply = res.responses && res.responses.length > 0 ? res.responses.join('\n\n') : (res.response ?? '');
 
-  return { notebookId, questId, reply, model: res.model };
+  return { notebookId, questId, reply, model: res.model, citables };
 }
 
 export async function searchKnowledgeBase(
@@ -201,6 +249,11 @@ export async function searchKnowledgeBase(
 ) {
   const results = await client.searchKnowledgeBase(args);
   return { results };
+}
+
+export async function listLakes(client: B4mApiClient, args: { limit: number; cursor?: string }) {
+  const { data, nextCursor } = await client.listDataLakes(args);
+  return { lakes: data.map(lakeSummary), nextCursor };
 }
 
 export async function listFiles(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
@@ -212,39 +265,12 @@ export async function getFile(client: B4mApiClient, args: { fileId: string }) {
   return client.getFile(args.fileId);
 }
 
-/**
- * Outcome of a sound-effects generation, in the two shapes the route can yield:
- * a persisted FabFile (id + name + a working signed download URL) when the caller
- * keeps generated audio, or the raw bytes when it does not - so a caller who opted
- * out of persistence, or whose save produced no usable URL, still receives what it
- * was billed for.
- */
-export type SoundEffectOutcome =
-  | {
-      saved: true;
-      provider: string;
-      contentType: string;
-      byteLength: number;
-      file: { id: string; fileName?: string; fileUrl: string };
-    }
-  | { saved: false; provider: string; contentType: string; byteLength: number; audioBase64: string };
-
 export async function generateSoundEffect(
   client: B4mApiClient,
   args: { text: string; provider: string; durationSeconds?: number; promptInfluence?: number; format?: string }
-): Promise<SoundEffectOutcome> {
-  const { audio, contentType, saved, fabFileId, fileName, fileUrl } = await client.generateSoundEffect(args);
-  const base = { provider: args.provider, contentType, byteLength: audio.length };
-
-  // Prefer the persisted-file reference over inlining bytes (mirrors get_file). The
-  // route forwards the signed URL it minted at upload, so we use it directly rather
-  // than re-resolving via getFile, which fails closed on the just-created file until
-  // the async moderation scan runs. If persistence yielded no usable URL, fall back
-  // to inlining the bytes the caller was already billed for, so audio is never lost.
-  if (saved && fabFileId && fileUrl) {
-    return { ...base, saved: true, file: { id: fabFileId, fileName, fileUrl } };
-  }
-  return { ...base, saved: false, audioBase64: audio.toString('base64') };
+): Promise<CallToolResult> {
+  const response = await client.generateSoundEffect(args);
+  return generatedAudioResult(response, { provider: args.provider });
 }
 
 function toResult(value: unknown): CallToolResult {
@@ -263,24 +289,49 @@ function errorResult(message: string): CallToolResult {
 }
 
 /**
- * Render a {@link SoundEffectOutcome} as an MCP result. A persisted file becomes
- * a JSON metadata result (carrying the signed URL), exactly like get_file. When
- * the audio was not persisted, it is returned inline as an `audio` content block
- * so the bytes are not lost; the base64 is kept out of structuredContent to avoid
- * duplicating a potentially large payload.
+ * Render a generated-audio response as an MCP result, shared by every audio tool.
+ * Oversized audio is reported by its signed URL; a saved copy with a usable URL is
+ * reported as a file (like get_file) with no inline bytes. Otherwise the audio rides
+ * inline as an `audio` block so a billed result is never lost, with any saved copy
+ * still named by id and a skipped save explained. The route forwards the signed URL
+ * it minted at upload, so no getFile re-fetch is needed (that fails closed until
+ * the async moderation scan runs).
  */
-function soundEffectResult(outcome: SoundEffectOutcome): CallToolResult {
-  if (outcome.saved) {
+function generatedAudioResult(
+  response: GeneratedAudioResponse,
+  endpointMetadata: Record<string, unknown>
+): CallToolResult {
+  const metadata = { ...endpointMetadata, contentType: response.contentType };
+  const saveSkippedReason = response.saveSkippedReason ? { saveSkippedReason: response.saveSkippedReason } : {};
+  const file = response.fabFileId
+    ? {
+        id: response.fabFileId,
+        ...(response.fileName ? { fileName: response.fileName } : {}),
+        ...(response.fileUrl ? { fileUrl: response.fileUrl } : {}),
+      }
+    : undefined;
+
+  if (response.delivery === 'url') {
     return toResult({
-      saved: true,
-      provider: outcome.provider,
-      contentType: outcome.contentType,
-      byteLength: outcome.byteLength,
-      file: outcome.file,
+      ...metadata,
+      byteLength: response.bytes,
+      url: response.url,
+      saved: response.saved === true,
+      ...(response.saved && file ? { file } : {}),
+      ...saveSkippedReason,
     });
   }
-  const { audioBase64, ...meta } = outcome;
-  return inlineAudioResult(meta, audioBase64, outcome.contentType);
+
+  const byteLength = Buffer.from(response.audio, 'base64').length;
+  if (response.saved && file && file.fileUrl) {
+    return toResult({ ...metadata, byteLength, saved: true, file });
+  }
+
+  const inlineMetadata =
+    response.saved && file
+      ? { ...metadata, byteLength, saved: true, file }
+      : { ...metadata, byteLength, saved: false, ...saveSkippedReason };
+  return inlineAudioResult(inlineMetadata, response.audio, response.contentType);
 }
 
 /**
@@ -300,8 +351,9 @@ function inlineAudioResult(meta: Record<string, unknown>, audioBase64: string, m
 export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 'encoding'>): Promise<CallToolResult> {
   const response = await client.synthesizeSpeech(args);
   if (response.kind === 'saved-too-large') {
-    // Too large to inline, so the FabFile is the only way back to the audio; it is
-    // reported even without a signed URL so the agent can still name the file.
+    // A server predating the oversized-audio URL offload answers 413, leaving the
+    // FabFile as the only way back to the audio; it is reported even without a
+    // signed URL so the agent can still name the file.
     const { provider, fabFileId, fileUrl } = response.data;
     return toResult({
       saved: true,
@@ -312,30 +364,11 @@ export async function textToSpeech(client: B4mApiClient, args: Omit<TTSRequest, 
   }
 
   const result = response.data;
-  const provider = result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER;
-  const metadata = {
-    provider,
+  return generatedAudioResult(result, {
+    provider: result.provider ?? args.provider ?? DEFAULT_TTS_PROVIDER,
     ...(result.fallbackFrom ? { fallbackFrom: result.fallbackFrom } : {}),
     format: result.format,
-    contentType: result.contentType,
-    byteLength: Buffer.from(result.audio, 'base64').length,
-  };
-
-  if (result.saved && result.fabFileId && result.fileUrl) {
-    return toResult({ ...metadata, saved: true, file: { id: result.fabFileId, fileUrl: result.fileUrl } });
-  }
-
-  // No usable URL: inline the billed audio, but still report a saved copy by id,
-  // and why a copy was skipped (quota vs. preference) when the route says.
-  const inlineMetadata =
-    result.saved && result.fabFileId
-      ? { ...metadata, saved: true, file: { id: result.fabFileId } }
-      : {
-          ...metadata,
-          saved: false,
-          ...(result.saveSkippedReason ? { saveSkippedReason: result.saveSkippedReason } : {}),
-        };
-  return inlineAudioResult(inlineMetadata, result.audio, result.contentType);
+  });
 }
 
 /**
@@ -398,6 +431,12 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
   );
 
   server.registerTool(
+    'list_lakes',
+    { title: meta('list_lakes').title, description: meta('list_lakes').description, inputSchema: listLakesShape },
+    args => run('datalake:read', () => listLakes(client, args))
+  );
+
+  server.registerTool(
     'list_files',
     { title: meta('list_files').title, description: meta('list_files').description, inputSchema: listFilesShape },
     args => run('files:read', () => listFiles(client, args))
@@ -418,7 +457,7 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
     },
     async args => {
       try {
-        return soundEffectResult(await generateSoundEffect(client, args));
+        return await generateSoundEffect(client, args);
       } catch (err) {
         return errorResult(mapApiError(err, baseURL, 'ai:generate'));
       }

@@ -133,9 +133,10 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | --- | --- | --- |
 | `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
 | `get_notebook` | Fetch one notebook by id | `notebooks:read` |
-| `create_notebook` | Create a notebook (optionally in a project) | `notebooks:write` |
-| `send_message` | Send a chat message and wait for the reply | `ai:chat` |
+| `create_notebook` | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`) | `notebooks:write` |
+| `send_message` | Send a chat message and wait for the reply; returns the reply's cited sources (`citables`) | `ai:chat` |
 | `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
+| `list_lakes` | List the data lakes you can reach (cursor-paged via `nextCursor`) | `datalake:read` |
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 | `generate_sound_effect` | Generate a sound effect from a text description | `ai:generate` |
@@ -145,7 +146,9 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 - **Saved with a URL** - `saved: true` and `file: { id, fileUrl }`, the signed download URL.
 - **Inline audio** - an MCP audio block plus metadata. If a copy was saved but no URL could be signed, the metadata reports `saved: true` and `file: { id }`; if no copy was saved, it reports `saved: false` and, when the route says why (e.g. a full storage quota versus `preview: true`), a `saveSkippedReason`.
-- **Too large to inline** - no audio block; `saved: true` and `file: { id }` (with `fileUrl` when one was signed), so the billed audio is still reachable through the file.
+- **Too large to inline** - no audio block; a time-limited `url` to the audio and its `byteLength`, plus `saved` and `file` describing any saved copy (`saved: false` when none was kept, e.g. with `preview: true`).
+
+`generate_sound_effect` returns the same three shapes.
 
 It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 
@@ -157,6 +160,8 @@ It also exposes four resource templates, each with a working `list` and `read` t
 | `b4m://artifact/{id}` | Artifact metadata plus its current content | none (see below) |
 
 Alongside those, `b4m://agent-quest` is a single fixed-URI resource (nothing to list) holding the manifest for **The Open Door**, the onboarding quest for agents. It is the one resource that needs no credentials and makes no API call - the document is served straight from the CLI, because completing the quest is how an agent earns a key in the first place. The same manifest is published over plain HTTP at `/api/agent-quest/manifest`, and each of its steps carries a `status`: only an `available` step has an `endpoint` to call.
+
+For a lake-grounded answer, chain `list_lakes` -> `create_notebook { dataLakeId }` -> `send_message { notebookId }`; the reply comes back with its `citables`. Unlike most tools here, the data-lake routes do enforce their scopes, the instance must have data lakes enabled, and a key used with a lake must be bound to it.
 
 Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
 

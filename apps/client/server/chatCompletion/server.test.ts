@@ -32,10 +32,11 @@ vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProce
 // route (executeCompletion + credit attribution); stubbed so importing the route doesn't drag
 // in real DB models.
 const mockQuestSettleIfUnfinished = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockQuestFindById = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   mongoose: { connection: { readyState: 1 } },
-  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished },
+  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished, findById: mockQuestFindById },
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key1', name: 'Test Key' }) },
   adminSettingsRepository: {},
   apiKeyRepository: {},
@@ -105,6 +106,7 @@ vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%ST
 
 import { createApp, drainInFlight } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
+import { questReplyText } from '@server/utils/questPollBody';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -187,7 +189,21 @@ describe('ChatCompletion /process', () => {
       status: 'stopped',
       type: 'error',
       reply: GENERIC_PROCESSING_FAILURE_REPLY,
+      replies: [GENERIC_PROCESSING_FAILURE_REPLY],
     });
+  });
+
+  // The poll body derives `reply` from visible slots, so a failure written only to `reply` would be
+  // hidden behind the partial answer that had already streamed.
+  it('appends the failure to already-streamed slots so the poll body still reports it', async () => {
+    mockQuestFindById.mockResolvedValueOnce({ replies: ['<think>plan</think>', 'Partial answer'] });
+    mockProcessQuest.mockRejectedValueOnce(new Error('boom'));
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const patch = mockQuestSettleIfUnfinished.mock.calls[0][1];
+    expect(patch.replies).toEqual(['Partial answer', GENERIC_PROCESSING_FAILURE_REPLY]);
+    expect(questReplyText(patch)).toBe(`Partial answer${GENERIC_PROCESSING_FAILURE_REPLY}`);
   });
 
   // Operator-facing signal: a quest-processing failure must emit a metric even though the user
