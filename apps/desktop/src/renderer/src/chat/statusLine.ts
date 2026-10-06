@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatToolCall, ChatUsage } from '@shared/chat';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
-import { activePhrase } from './toolRows';
+import { activePhrase, namedAction } from './toolRows';
 
 /**
  * What the status line under the transcript knows about the turn in flight.
@@ -162,6 +162,19 @@ function oneLine(text: string): string {
   return flat.length <= MAX_LABEL_CHARS ? flat : `${flat.slice(0, MAX_LABEL_CHARS - 3)}...`;
 }
 
+/** A named action as a clause rather than a sentence, so a count can follow it. */
+function withoutTrail(label: string): string {
+  return label.endsWith('...') ? label.slice(0, -3) : label;
+}
+
+/**
+ * What a running call is doing, in the order the line can say it: the tool and what it was
+ * called on, else whatever the tool reports about its own progress, else its bare phrase.
+ */
+function runningLabel(call: ChatToolCall): string {
+  return namedAction(call) || oneLine(call.progress ?? '') || activePhrase(call.name);
+}
+
 /**
  * Whether prose for the ROUND IN FLIGHT is arriving.
  *
@@ -191,12 +204,18 @@ export function describeActivity(
   if (calls.some(call => call.status === 'awaiting-approval'))
     return { kind: 'approval', label: 'Waiting for your answer...' };
 
+  // What the model is doing, named: the tool's own word for itself and the thing it was called
+  // on, which is the only part of a turn the user cannot work out from the thread while it is
+  // still in flight. "Running a command" for seven minutes names nothing - it is true of every
+  // command this app has ever run.
   const running = calls.filter(call => call.status === 'running');
-  if (running.length === 1) {
-    const only = running[0];
-    return { kind: 'tool', label: oneLine(only.progress ?? '') || activePhrase(only.name) };
+  if (running.length === 1) return { kind: 'tool', label: runningLabel(running[0]) };
+  if (running.length > 1) {
+    // The newest, because it is the one that just started and the one the rows have not settled
+    // yet; the others are named in full by their own rows a few lines above.
+    const newest = running[running.length - 1];
+    return { kind: 'tools', label: `${withoutTrail(runningLabel(newest))} and ${running.length - 1} more...` };
   }
-  if (running.length > 1) return { kind: 'tools', label: `Running ${running.length} tools...` };
   if (pending) return { kind: 'code', label: pendingCodePhrase(pending), pending };
 
   // Reasoning outranks both words below it, and only those two. A model that wrote a sentence
