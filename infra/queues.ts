@@ -507,7 +507,7 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/whatsNewGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/whatsNewGeneration.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [
@@ -1058,7 +1058,7 @@ const whatsNewHighlightsQueue = new sst.aws.Queue('whatsNewHighlightsQueue', {
 });
 const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/whatsNewHighlights.dispatch',
+    handler: 'apps/workers/src/queueHandlers/whatsNewHighlights.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi],

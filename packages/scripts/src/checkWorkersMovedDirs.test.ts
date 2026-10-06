@@ -42,6 +42,8 @@ const MOVED_MODULES = [
       'sreJob',
       'sreRevision',
       'webhookDelivery',
+      'whatsNewGeneration',
+      'whatsNewHighlights',
     ],
   },
 ] as const;
