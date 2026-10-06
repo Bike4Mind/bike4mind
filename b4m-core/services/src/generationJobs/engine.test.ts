@@ -268,6 +268,15 @@ describe('GenerationJobEngine', () => {
       expect(vi.mocked(t.handler.cancelAtProvider).mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     });
 
+    it('gives the cancel a fresh signal when the step signal already aborted', async () => {
+      const t = setup();
+      vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(AbortSignal.abort());
+      const job = await t.create({ state: 'running', attempts: MAX_STEP_ATTEMPTS - 1 });
+      t.results.poll.push({ next: 'retry', reason: 'poll timed out' });
+      await t.engine.step(job.id);
+      expect(vi.mocked(t.handler.cancelAtProvider).mock.calls[0][1].signal.aborted).toBe(false);
+    });
+
     it.each([
       ['succeeded', { next: 'succeeded', payload }],
       ['blocked', { next: 'blocked', error: { code: 'content_blocked', message: 'policy' } }],

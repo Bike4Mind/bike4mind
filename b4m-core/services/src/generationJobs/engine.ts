@@ -23,6 +23,9 @@ const EARLY_DELIVERY_GRACE_MS = 2000;
 // Time left between a step's abort and its lease expiring, for the step's own commit.
 const STEP_COMMIT_MARGIN_MS = 30_000;
 
+// Fresh budget for a failure-path cancel when the step signal already fired; must fit inside STEP_COMMIT_MARGIN_MS.
+const FAILURE_CANCEL_BUDGET_MS = 10_000;
+
 export type StepOptions = {
   /** Lambda `getRemainingTimeInMillis()` at delivery; absent outside Lambda (inline dev path). */
   remainingMs?: number;
@@ -305,7 +308,13 @@ export class GenerationJobEngine {
     handler: GenerationJobHandler,
     context: GenerationJobStepContext
   ) {
-    if (job.state === 'running') await this.bestEffortCancel(job, handler, context);
+    if (job.state !== 'running') return;
+    // A step that timed out leaves its signal aborted, which would make this cancel a no-op in exactly the case
+    // that most needs it.
+    const cancelContext = context.signal.aborted
+      ? { ...context, signal: AbortSignal.timeout(FAILURE_CANCEL_BUDGET_MS) }
+      : context;
+    await this.bestEffortCancel(job, handler, cancelContext);
   }
 
   private async bestEffortCancel(
