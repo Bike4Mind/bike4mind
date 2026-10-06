@@ -6,7 +6,7 @@ import { cloneSession } from './clone';
 const LAKE_FILE_ID = '507f1f77bcf86cd799439001';
 
 /**
- * Regression for cgtorniado's 4th review: `findAccessibleById` matches on ownership OR a
+ * Regression: `findAccessibleById` matches on ownership OR a
  * share grant (users[]/groups[] read/write), so a read-only share holder can clone a session
  * and become the OWNER of the copy - reading promptMeta.functionCalls[].returnValue/.error
  * unredacted through the owner branch of every route this PR added redaction to. Only the
@@ -114,12 +114,23 @@ describe('cloneSession - redaction at the copy boundary', () => {
       knowledgeIds: [],
       tags: [],
       citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
       forceKnowledgeRetrieval: true,
     });
 
     await cloneSession('caller-1', { id: 'session-1' }, { db });
 
-    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ citationStyle: 'indexed' }));
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+      })
+    );
+    const created = db.sessions.create.mock.calls[0][0];
+    expect(created.corpusGroundingMode).toBe(ownerId === 'caller-1' ? 'retrieve' : undefined);
   });
 
   /**

@@ -65,13 +65,23 @@ describe('forkSession', () => {
       knowledgeIds: [],
       tags: [],
       citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
       forceKnowledgeRetrieval: true,
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
 
     await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
 
-    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ citationStyle: 'indexed' }));
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        corpusGroundingMode: 'retrieve',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+      })
+    );
   });
 
   /**
