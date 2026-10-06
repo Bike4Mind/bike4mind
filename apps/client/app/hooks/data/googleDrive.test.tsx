@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -110,6 +110,37 @@ describe('useLakeDriveConnection', () => {
 // The DELETE route purges every FabFile the connection ingested (see drive-connection.ts) - a
 // disconnect used to delete nothing, so before this fix the mutation only invalidated the
 // connection-status query, leaving the lake's own file list/counts stale until a full reload.
+// The query data is { connection, canManage } while consumers read only the connection, so the poll
+// cadence has to key off `data.connection` - reading the wrapper would silently stop polling.
+describe('useLakeDriveConnection polling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps polling an existing connection at the idle cadence', async () => {
+    get.mockResolvedValue({
+      data: { connection: { id: 'c1', status: 'connected', syncStale: false, disconnecting: false, fileCount: 1 } },
+    });
+    renderLakeDriveConnection('lake_1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(DRIVE_CONNECTION_IDLE_POLL_MS);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poll when the lake has no connection', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: false } });
+    renderLakeDriveConnection('lake_1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(DRIVE_CONNECTION_IDLE_POLL_MS * 3);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('useLakeDriveCanManage', () => {
   beforeEach(() => vi.clearAllMocks());
 
