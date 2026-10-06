@@ -65,6 +65,7 @@ import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4m
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   CONVERGENCE_ORIGIN,
+  DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   DATA_LAKES,
   KnowledgeType,
   isChunkStalled,
@@ -563,6 +564,20 @@ async function main(opts: Options): Promise<number> {
     opts.slug,
     opts.organizationId ? [opts.organizationId] : undefined
   );
+  // findBySlug skips deleted/purging lakes, so a miss (or an org-less hit under --organizationId)
+  // may be a fall-through past the scope's own lake: look it up unfiltered and refuse if so.
+  const scopeOrg = opts.organizationId;
+  let shadow: { status: string; organizationId?: string } | null = null;
+  if (!dbLake || (scopeOrg && String(dbLake.organizationId ?? '') !== scopeOrg)) {
+    const sameScope = await dataLakeRepository.find({
+      ...(scopeOrg ? { organizationId: scopeOrg } : { organizationId: { $in: [null, ''] } }),
+      slug: opts.slug,
+    });
+    const hidden = sameScope.find(l =>
+      (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(l.status ?? '')
+    );
+    if (hidden?.status) shadow = { status: hidden.status, organizationId: scopeOrg };
+  }
   const lake = resolveLakeTarget(
     opts.slug,
     dbLake
@@ -575,7 +590,8 @@ async function main(opts: Options): Promise<number> {
           createdByUserId: dbLake.createdByUserId,
         }
       : null,
-    DATA_LAKES
+    DATA_LAKES,
+    shadow
   );
   if (!lake)
     throw new Error(
