@@ -273,6 +273,16 @@ describe('resolveRetrievalLakeScope', () => {
     expect(out.scopedTagPrefixes).toEqual(['dyn:']);
   });
 
+  it('withholds the registry widening from an admin when the caller opts out (the list route labels chat reach)', async () => {
+    mockGetDynamicDataLakeAccess.mockResolvedValue(scopeOf({ scopedTagPrefixes: ['dyn:'] }));
+
+    const out = await resolveRetrievalLakeScope(asReq({ id: 'admin', isAdmin: true }), { staticRegistryBypass: false });
+
+    expect(out.dataLakeTags).toEqual([]);
+    expect(out.lakes).toEqual([]);
+    expect(out.scopedTagPrefixes).toEqual(['dyn:']);
+  });
+
   it('treats a developer tag as privileged too', async () => {
     const out = await resolveRetrievalLakeScope(asReq({ id: 'u1', tags: ['Developer'] }));
 

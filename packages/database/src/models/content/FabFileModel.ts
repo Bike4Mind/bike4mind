@@ -29,7 +29,7 @@ import {
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
-import BaseRepository from '@bike4mind/db-core';
+import BaseRepository, { withTransaction } from '@bike4mind/db-core';
 import { addLowercaseField } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import {
@@ -1092,6 +1092,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => String(d._id));
   }
 
+  /**
+   * Existence including soft-deleted rows - see IFabFileRepository.findExistingIdsIncludingDeletedByIds
+   * for which of the two probes a caller wants. `includeDeleted` is what makes the difference: the
+   * plugin's pre('find') hook otherwise scopes this to `deletedAt: null`.
+   */
+  async findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findExistingIdsIncludingDeletedByIds') } })
+      .select('_id')
+      .setOptions({ includeDeleted: true })
+      .lean<{ _id: unknown }[]>();
+    return docs.map(d => String(d._id));
+  }
+
   /** The citability projection only - see IFabFileRepository.findCitableFieldsByIds. */
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
@@ -1249,6 +1263,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
     }
   ): Promise<{ tag: string; count: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -1305,6 +1321,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
+      lakeMemberships?: DataLakeMembershipScope[];
     }
   ): Promise<{ total: number; byPrefix: Record<string, number> }> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);
@@ -1863,12 +1881,34 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ driveConnectionId }, datalakeTag));
   }
 
+  async findLiveNonMembersByDriveConnectionId(
+    driveConnectionId: string,
+    datalakeTag: string
+  ): Promise<IFabFileDocument[]> {
+    // No element of `tags` may name this lake: the unpick pulled exactly that meta-tag, so a row
+    // still carrying the connection's provenance but not the tag is the orphan this connection's
+    // meta-tag-scoped purge cannot see. `find` (unlike `countDocuments` above) is soft-delete
+    // plugin-filtered, so leaving deletedAt unmentioned is exactly the intent: skip reaped rows.
+    const docs = await this.fabFileModel.find({
+      driveConnectionId,
+      'tags.name': { $ne: datalakeTag },
+      status: { $ne: 'pending' },
+      archivedAt: null,
+    });
+    return docs.map(d => d.toJSON());
+  }
+
   async findByGitHubConnectionIdInDataLake(
     githubConnectionId: string,
     datalakeTag: string,
     options?: { includeDeleted?: boolean; limit?: number }
   ): Promise<IFabFileDocument[]> {
     return this.findByConnectorInDataLake({ githubConnectionId }, datalakeTag, options);
+  }
+
+  async countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number> {
+    // Same includeDeleted set the disconnect purge reaches, as countByDriveConnectionIdInDataLake.
+    return this.fabFileModel.countDocuments(this.connectorInDataLakeFilter({ githubConnectionId }, datalakeTag));
   }
 
   async findDriveFileIdsByBatchId(batchId: string): Promise<string[]> {
@@ -2949,34 +2989,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     });
   }
 
-  /**
-   * The same distinct count, narrowed to the files categorized under NONE of the caller's lake
-   * prefixes - the bucket for a MERGED tree, where a file categorized under any one lake is
-   * already reachable through that lake's branch.
-   *
-   * Deliberately not a sum of the per-lake `uncategorized` figures: those judge each lake
-   * separately, so a file uncategorized in two lakes would count twice, and one uncategorized in
-   * A but categorized in B would count despite already being reachable under B's branch.
-   *
-   * Each prefix is its own `$and` conjunct - every fragment's top-level key is `tags`, so merging
-   * them into one object would keep only the last and the count would silently widen. Prefixes
-   * are deduped and unusable ones dropped, matching the browse query this sizes.
-   */
-  async countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number> {
-    if (scopes.length === 0) return 0;
-    const prefixes = usableTagPrefixes(tagPrefixes);
-    return this.fabFileModel.countDocuments({
-      $or: scopes.map(scope => buildDataLakeMembershipFilter(scope)),
-      ...(prefixes.length > 0 ? { $and: prefixes.map(buildLacksContentPrefixTagFilter) } : {}),
-      deletedAt: null,
-      archivedAt: null,
-      status: { $ne: 'pending' },
-    });
-  }
-
   // The delete/restore pair below is stamp-keyed. Phase-1 delete passes `at` to write one shared
   // stamp across every row it flips, records that value on the lake, and restore passes it back as
   // `stampedAt` to reverse exactly that batch. Equality, not a range: a lower bound would also match
@@ -3137,6 +3149,35 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // hardDelete bypasses the soft-delete plugin's deleteMany override (phase-2 purge).
     await this.fabFileModel.deleteMany({ _id: { $in: fabFileIds } }, { hardDelete: true } as Record<string, unknown>);
     return fabFileIds;
+  }
+
+  async hardDeleteWithChunks(fabFileId: string, chunkBatchSize = 1000): Promise<void> {
+    if (!Number.isInteger(chunkBatchSize) || chunkBatchSize < 1 || chunkBatchSize > 1000) {
+      throw new Error('Cleanup chunk batch size must be between 1 and 1000');
+    }
+    for (;;) {
+      const chunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+        .limit(chunkBatchSize + 1)
+        .lean();
+      const ids = chunks.slice(0, chunkBatchSize).map(chunk => chunk._id);
+      const removeBatch = () => FabFileChunk.deleteMany({ fabFileId, _id: { $in: ids } });
+      if (chunks.length > chunkBatchSize) {
+        // Keep the row as a retry locator while earlier chunk batches make partial progress.
+        await removeBatch();
+        continue;
+      }
+      const completed = await withTransaction(async () => {
+        // Include chunks committed between the candidate read and transaction start.
+        const finalChunks = await FabFileChunk.find({ fabFileId }, { _id: 1 })
+          .limit(chunkBatchSize + 1)
+          .lean();
+        if (finalChunks.length > chunkBatchSize) return false;
+        await this.hardDeleteOneById(fabFileId);
+        await FabFileChunk.deleteMany({ fabFileId, _id: { $in: finalChunks.map(chunk => chunk._id) } });
+        return true;
+      });
+      if (completed) return;
+    }
   }
 
   async hardDeleteOneById(fabFileId: string): Promise<boolean> {
@@ -3433,6 +3474,18 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // object-style inclusion projection on a sub-path does not.
     const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
     return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
+  }
+
+  async listLakeSupersededIds(fabFileIds: string[], dataLakeId: string): Promise<string[]> {
+    if (fabFileIds.length === 0) return [];
+    const docs = await this.fabFileModel
+      .find({
+        _id: { $in: usableObjectIds(fabFileIds, 'FabFileModel.listLakeSupersededIds') },
+        'supersededInLakes.dataLakeId': dataLakeId,
+      })
+      .select('_id')
+      .lean();
+    return docs.map(doc => String(doc._id));
   }
 }
 

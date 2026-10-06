@@ -26,9 +26,6 @@ name: pr-bot-review
 # a comment is posted instead asking for human review. On `gh pr view` API
 # failure, the size guard treats the PR as oversize and skips the review
 # (fail-closed by design - cost control over transient API resilience).
-# PRs where either side is the `prod` branch are skipped (deployment kickoffs
-# from `main`, hotfixes into `prod`, and `prod -> main` back-merges - all are
-# deployment plumbing rather than code review candidates).
 # After a label-triggered run, the label is auto-removed so the next "add"
 # cleanly triggers another review.
 #
@@ -94,8 +91,6 @@ jobs:
     if: |
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false &&
-      github.event.pull_request.base.ref != 'prod' &&
-      github.event.pull_request.head.ref != 'prod' &&
       !startsWith(github.event.pull_request.head.ref, 'changeset-release/') &&
       (github.event.label.name == 'bot-review' || github.event.label.name == 'bot-fold')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}

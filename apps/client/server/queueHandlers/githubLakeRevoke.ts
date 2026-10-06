@@ -7,9 +7,10 @@ import { z, ZodError } from 'zod';
 const Payload = z.object({ connectionId: z.string(), installationId: z.number() });
 
 /**
- * Purges what one GitHub lake connection ingested once the data-lake App loses access to it
- * (webhooks/github/lake.ts: installation deleted, or the repository dropped from the installation's
- * selection). One message per connection. A live sync's ConflictError is left to throw so SQS
+ * Purges what one GitHub lake connection ingested, then releases it, once the data-lake App loses
+ * access to it (webhooks/github/lake.ts: installation deleted, or the repository dropped from the
+ * installation's selection) or a user disconnects it (requestGitHubLakeDisconnect). One message per
+ * connection. A live sync's ConflictError is left to throw so SQS
  * retries the message once the sync releases its claim, rather than dropping a delivery GitHub
  * will not resend on its own.
  */

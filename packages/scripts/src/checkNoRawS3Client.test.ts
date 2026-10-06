@@ -17,7 +17,7 @@ const ALLOWLIST = new Set([
   'b4m-core/fab-pipeline/src/storage/createS3Client.ts',
   'apps/client/server/tools/modalImageHandler.ts',
   'apps/client/server/security/cloudScan.ts',
-  'apps/client/server/emailIngestion/emailParser.ts',
+  'apps/workers/src/emailIngestion/emailParser.ts',
   'apps/client/pages/api/files/presigned-url.ts',
   'apps/client/pages/api/app-files/serve/[...key].ts',
   'apps/client/pages/api/ai/transcribe/index.ts',

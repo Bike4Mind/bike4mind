@@ -8,8 +8,9 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services/llm';
-import { isAudioMimeType } from '@bike4mind/common';
+import { isMediaOnlyMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
+import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
@@ -31,18 +32,7 @@ export const func = withContext(async (event, context, logger) => {
 
     logger.updateMetadata({ objectKey });
 
-    // Skip files that intentionally have no FabFile metadata record.
-    // Keep in sync with appFileUploadComplete.ts skip list.
-    if (
-      objectKey.includes('/backups/') ||
-      objectKey.startsWith('temp/') ||
-      objectKey.startsWith('tmp/') ||
-      objectKey.startsWith('exports/') ||
-      objectKey.startsWith('proxied-images/') ||
-      objectKey.startsWith('tavern-sounds/') ||
-      objectKey.startsWith('cc-bridge/') ||
-      objectKey.startsWith('cc-bridge-downloads/')
-    ) {
+    if (isUntrackedFabFileKey(objectKey)) {
       logger.info(`Skipping S3 event for untracked file: ${objectKey}`);
       continue;
     }
@@ -191,7 +181,7 @@ export const func = withContext(async (event, context, logger) => {
         if (result.correctedMimeType && result.correctedMimeType !== metadata.mimeType) {
           // Persist the byte-sniffed real type so downstream consumers (e.g.
           // isImageServeable) see the truth instead of the client-declared mimeType. Left on
-          // `metadata` (so the save below writes it, and the isAudioMimeType check after the
+          // `metadata` (so the save below writes it, and the isMediaOnlyMimeType check after the
           // transaction sees it) rather than folded into the guarded verdict: unlike the verdict, a
           // sniffed type is derived from the bytes, so a superseded write only ever restates what
           // the successor computes.
@@ -257,10 +247,10 @@ export const func = withContext(async (event, context, logger) => {
 
     const enableKnowledgeAutoChunk = await adminSettingsRepository.getSettingsValue('enableAutoChunk');
 
-    // Audio (generated TTS / sound effects) is never chunked/vectorized - it is
+    // Audio and video (generated media) are never chunked/vectorized - they are
     // not attachable to an LLM, and the chunker would only produce 0 chunks.
     // Skip the enqueue so audio doesn't make a wasteful no-op queue round-trip.
-    if (enableKnowledgeAutoChunk && !isAudioMimeType(metadata.mimeType)) {
+    if (enableKnowledgeAutoChunk && !isMediaOnlyMimeType(metadata.mimeType)) {
       try {
         const queueUrl = Resource.fabFileChunkQueue.url;
         if (!queueUrl) throw new Error('Chunk queue URL not found');

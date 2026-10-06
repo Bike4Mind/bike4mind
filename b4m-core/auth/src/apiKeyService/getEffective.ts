@@ -74,10 +74,13 @@ export const getSerperKey = async (adapters: GetEffectiveApiKeyAdapters) => {
 
 // Base URL of an admin- or env-configured SearXNG instance for local web search,
 // or null when unconfigured. Consumed by resolveWebSearchProvider (services).
+//
+// SEARXNG_BASE_URL skips envKey's B4M_SELF_HOST gate because SearXNG is the first sidecar also
+// deployed into hosted infra (infra/searxng.ts), which never sets B4M_SELF_HOST.
 export const getSearxngUrl = async (adapters: GetEffectiveApiKeyAdapters): Promise<string | null> => {
   const { db } = adapters;
   const settings = await db.adminSettings.findBySettingName('SearxngUrl');
-  return settings?.settingValue?.trim() || envKey('SEARXNG_BASE_URL');
+  return settings?.settingValue?.trim() || process.env.SEARXNG_BASE_URL?.trim() || null;
 };
 
 // Admin's chosen web-search provider ('auto' | 'serpapi' | 'searxng'), or null

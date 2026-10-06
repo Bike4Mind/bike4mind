@@ -6,7 +6,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
 import { emitMetric } from '@server/utils/cloudwatch';
 import { resolveQuestTimeoutRecovery, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
 import { RUN_TIMED_OUT_FINISH_REASON } from '@bike4mind/common';
-import * as sweepModule from '@server/cron/questTimeoutSweep';
+import * as sweepModule from '@workers/cron/questTimeoutSweep';
 import { SelfHostWorker } from './selfHostWorker';
 import { QUEST_TIMEOUT_SWEEP_INTERVAL_MS, registerQuestTimeoutSweep } from './questTimeoutSweep';
 

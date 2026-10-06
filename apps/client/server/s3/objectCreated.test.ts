@@ -39,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
 }));
 vi.mock('@bike4mind/services/llm', () => ({ moderateImageOrThrow: vi.fn() }));
-vi.mock('@bike4mind/common', () => ({ isAudioMimeType: () => false }));
+vi.mock('@bike4mind/common', () => ({ isMediaOnlyMimeType: () => false }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
@@ -60,8 +60,12 @@ vi.mock('sst', () => ({
 import { func } from './objectCreated';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() };
-const event = { Records: [{ s3: { object: { key: 'uploads/report.pdf', size: 10 } } }] };
-const run = () => (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(event, {}, logger);
+const run = (key = 'uploads/report.pdf') =>
+  (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(
+    { Records: [{ s3: { object: { key, size: 10 } } }] },
+    {},
+    logger
+  );
 
 const metadata = (over: Record<string, unknown> = {}) => ({
   id: 'ff1',
@@ -82,6 +86,28 @@ beforeEach(() => {
   h.getSettingsValue.mockResolvedValue(false);
   h.claimFileStatus.mockResolvedValue(true);
   h.incrementCounter.mockResolvedValue({ uploadedFiles: 1 });
+});
+
+describe('objectCreated - untracked-file skip list', () => {
+  it('skips a libreoncology/mock-oral/ object before any metadata lookup', async () => {
+    await run('libreoncology/mock-oral/scene-1/audio.mp3');
+
+    expect(h.findOne).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      'Skipping S3 event for untracked file: libreoncology/mock-oral/scene-1/audio.mp3'
+    );
+  });
+
+  it.each(['libreoncology/mock-oral-archive/x', 'uploads/libreoncology/mock-oral/x'])(
+    'still looks up %s, which only contains the prefix text',
+    async key => {
+      h.findOne.mockResolvedValue(null);
+
+      await run(key);
+
+      expect(h.findOne).toHaveBeenCalledWith({ filePath: key });
+    }
+  );
 });
 
 describe('objectCreated - data lake stats (#1342)', () => {

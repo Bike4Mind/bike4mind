@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type { ISessionDocument } from '@bike4mind/common';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import { updateAllQueryData } from '@client/app/utils/react-query';
+import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 
 export type ApplySessionCreatedDeps = {
   queryClient: QueryClient;
@@ -30,9 +30,9 @@ export async function applySessionCreated(
   const { pendingOptimisticId: tmpId } = useSessionLayout.getState();
 
   // Otherwise the list only learns of a session through the viewed session's own subscription.
-  updateAllQueryData(deps.queryClient, 'sessions', 'write', realSession, {
-    keysAllowedToCreate: [['sessions', 'own']],
-  });
+  // Filter-gated: a fan-out to every tab must not insert into a tab's filtered sidebar view
+  // (e.g. "Hide API") if the session doesn't actually match that view's filter.
+  updateSessionsQueryData(deps.queryClient, 'write', realSession);
 
   // Every other creator - Data Lake, agent dispatch, the admin chat - adopts its own create
   // response, and a tab that created nothing must stay where it is. Merging into an

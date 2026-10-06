@@ -655,6 +655,15 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       totals: result?.totals?.[0] ?? emptyTotals,
     };
   }
+
+  async lakeResearchLifetimeUsd(dataLakeId: string): Promise<number> {
+    const [result] = await this.model.aggregate<{ usd: number }>([
+      { $match: { dataLakeId, feature: 'operations' } },
+      { $group: { _id: null, usd: { $sum: '$costUsd' } } },
+      { $project: { _id: 0, usd: 1 } },
+    ]);
+    return result?.usd ?? 0;
+  }
 }
 
 export const UsageEvent =

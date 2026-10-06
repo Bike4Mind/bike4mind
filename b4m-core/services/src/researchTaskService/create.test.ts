@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, Mock, vi } from 'vitest';
 import { create } from './create';
 import {
   IResearchTask,
@@ -62,6 +62,10 @@ describe('researchTaskService - create', () => {
       },
       logger: mockLogger,
     };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('should create a scrape research task', async () => {
@@ -164,6 +168,8 @@ describe('researchTaskService - create', () => {
 
   it('should handle process failure gracefully', async () => {
     // Arrange
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-02T03:04:05.000Z'));
     const params = {
       title: 'Test Research Task',
       description: 'Test Description',
@@ -193,6 +199,13 @@ describe('researchTaskService - create', () => {
     expect(mockLogger.error).toHaveBeenCalledWith(
       `Failed to process research task ${expectedTask.id}: Error: Process failed`
     );
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledTimes(1);
+    expect(mockResearchTaskRepo.update.mock.calls[0][0]).toStrictEqual({
+      id: 'test-task-id',
+      status: ResearchTaskStatus.FAILED,
+      statusFailedMessage: 'Failed to process research task: Process failed',
+      statusFailedAt: new Date('2026-01-02T03:04:05.000Z'),
+    });
   });
 
   it('should throw validation error for invalid parameters', async () => {

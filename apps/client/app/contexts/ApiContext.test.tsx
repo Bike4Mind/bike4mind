@@ -13,7 +13,7 @@ const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
   new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
     status: 401,
     statusText: 'Unauthorized',
-    data: { error: 'Unauthorized', message: 'Authentication required' },
+    data: { error: 'Authentication required', request_id: 'req-1' },
     headers: {},
     config,
   } as AxiosResponse);

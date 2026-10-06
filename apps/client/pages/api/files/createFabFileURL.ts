@@ -14,8 +14,9 @@ import { BadRequestError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .use((req, res, next) => {
     if (!req.ability?.can(Permission.create, FabFile)) {
       throw new BadRequestError('Unauthorized');

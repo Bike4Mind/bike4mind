@@ -47,3 +47,36 @@ describe('PromptMetaZodSchema after a JSON round trip', () => {
     expect(() => PromptMetaZodSchema.parse(withDates)).not.toThrow();
   });
 });
+
+describe('PromptMetaZodSchema citable sourceOrigin', () => {
+  const withOrigin = (sourceOrigin: unknown) => ({
+    citables: [{ id: 'f1', type: 'document', title: 'Doc', metadata: { sourceOrigin } }],
+  });
+
+  it('accepts a lake origin with two lakes', () => {
+    const origin = {
+      kind: 'lake',
+      lakes: [
+        { id: 'a', name: 'Lake A' },
+        { id: 'b', name: 'Lake B' },
+      ],
+    };
+    expect(PromptMetaZodSchema.parse(withOrigin(origin)).citables?.[0]?.metadata?.sourceOrigin).toEqual(origin);
+  });
+
+  it('accepts a library origin', () => {
+    expect(() => PromptMetaZodSchema.parse(withOrigin({ kind: 'library', owned: false }))).not.toThrow();
+  });
+
+  it('rejects a lake origin with no lakes', () => {
+    expect(() => PromptMetaZodSchema.parse(withOrigin({ kind: 'lake', lakes: [] }))).toThrow();
+  });
+
+  it('rejects a library origin missing owned', () => {
+    expect(() => PromptMetaZodSchema.parse(withOrigin({ kind: 'library' }))).toThrow();
+  });
+
+  it('rejects an unknown kind', () => {
+    expect(() => PromptMetaZodSchema.parse(withOrigin({ kind: 'mystery' }))).toThrow();
+  });
+});

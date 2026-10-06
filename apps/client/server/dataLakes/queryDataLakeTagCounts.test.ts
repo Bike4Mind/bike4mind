@@ -15,7 +15,6 @@ const h = vi.hoisted(() => ({
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
-  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -48,7 +47,6 @@ vi.mock('@bike4mind/database', async () => {
       countDataLakeFilesByMembership: h.countDataLakeFilesByMembership,
       countDataLakeFilesByMembershipArm: h.countDataLakeFilesByMembershipArm,
       countDistinctDataLakeFilesByMembership: h.countDistinctDataLakeFilesByMembership,
-      countDistinctUncategorizedDataLakeFilesByMembership: h.countDistinctUncategorizedDataLakeFilesByMembership,
     },
   };
 });
@@ -72,7 +70,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     h.countDataLakeFilesByMembership.mockReset().mockResolvedValue({});
     h.countDataLakeFilesByMembershipArm.mockReset().mockResolvedValue({});
     h.countDistinctDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
-    h.countDistinctUncategorizedDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
   });
 
   it('reads the lake documents in ONE call whatever the lake count', async () => {
@@ -140,7 +137,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
       lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
-      totalUncategorizedFileCount: 0,
     });
     expect(h.findByDatalakeTags).not.toHaveBeenCalled();
   });
@@ -194,35 +190,30 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     expect(result.uniqueArticleCounts.total).toBe(0);
   });
 
-  it('sizes the merged bucket from a distinct count, not a sum of the per-lake figures', async () => {
-    // Summing would be wrong on both edges: it double-counts a file loose in two lakes, and counts
-    // one that another lake already files under a branch the merged tree renders.
-    h.countDataLakeFilesByMembership.mockResolvedValue({
-      'datalake:lake-0': { total: 3, uncategorized: 2 },
-      'datalake:lake-1': { total: 3, uncategorized: 2 },
-    });
-    h.countDistinctUncategorizedDataLakeFilesByMembership.mockResolvedValue(1);
-
-    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
-
-    expect(result.totalUncategorizedFileCount).toBe(1);
-  });
-
-  it('narrows the merged bucket against every accessible prefix, not just the open ones', async () => {
-    // A dynamic lake's prefix is exactly where the merged tree DOES have a branch, so leaving it
-    // out would put already reachable files back in the bucket.
-    await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
-
-    const [scopeArg, prefixArg] = h.countDistinctUncategorizedDataLakeFilesByMembership.mock.calls[0];
-    expect(scopeArg).toEqual(scopes());
-    expect(prefixArg).toEqual(expect.arrayContaining(['lake0:', 'lake1:']));
-  });
-
   it('passes the SAME scopes to the distinct total as to the per-lake counts', async () => {
     // The two numbers sit above and below each other in the picker; resolving them from different
     // scope sets is exactly how they would start describing different populations again.
     await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
 
     expect(h.countDistinctDataLakeFilesByMembership.mock.calls[0][0]).toEqual(scopes());
+  });
+
+  it('hands both tree counters the creator-anchored scopes only, never the registry scope', async () => {
+    // Without them a prefix-only member (no lake meta-tag, owned by the creator) is listed on open
+    // but missing from the tree counts for a non-creator viewer. The registry scope is unanchored,
+    // so it must stay out of these shared-`$or` counters (it keeps matching via the open prefix arm).
+    const registryLake = DATA_LAKES[0];
+    h.findByDatalakeTags.mockResolvedValue([
+      { datalakeTag: 'datalake:lake-0', fileTagPrefix: 'stored0:', createdByUserId: 'creator-0' },
+    ]);
+
+    await queryDataLakeTagCounts(req, [lake(0), registryLake as never]);
+
+    const owned = [
+      { kind: 'owned', datalakeTag: 'datalake:lake-0', fileTagPrefix: 'stored0:', creatorUserId: 'creator-0' },
+    ];
+    expect(h.countDataLakeTagsByPrefix.mock.calls[0][2].lakeMemberships).toEqual(owned);
+    expect(h.countDataLakeUniqueFilesByPrefix.mock.calls[0][2].lakeMemberships).toEqual(owned);
+    expect(scopes().some((s: { kind: string }) => s.kind === 'registry')).toBe(true);
   });
 });

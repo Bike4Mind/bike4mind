@@ -100,7 +100,7 @@ function makeHarness(lake: { id: string; status?: string; origin?: string } | nu
         ),
       } as never,
       dataLakes: {
-        findBySlug: vi.fn(async () =>
+        findByDatalakeTag: vi.fn(async () =>
           lake ? ({ status: 'active', origin: 'connector-fed', ...lake } as never) : null
         ),
         create: vi.fn(async (data: Record<string, unknown>) => {
@@ -419,6 +419,17 @@ describe('ingestHelpDatalake', () => {
       createdByUserId: USER_ID,
       status: 'active',
     });
+  });
+
+  it('reactivates a deleted lake rather than re-creating it into the unique datalakeTag', async () => {
+    writeCorpus([makeEntry('features/a')], { 'features/a': '## One\n\nalpha\n' });
+    const h = makeHarness({ id: 'lake-1', status: 'deleted' });
+
+    await ingestHelpDatalake(h.deps, opts());
+
+    expect(h.deps.db.dataLakes.findByDatalakeTag).toHaveBeenCalledWith(HELP_DATALAKE_TAG);
+    expect(h.lakeCreates).toEqual([]);
+    expect(h.lakeUpdates).toContainEqual({ id: 'lake-1', status: 'active' });
   });
 
   it('repairs a lake whose origin drifted to curated, since this script owns that field unattended', async () => {

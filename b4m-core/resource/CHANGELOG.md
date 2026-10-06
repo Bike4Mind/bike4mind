@@ -1,5 +1,41 @@
 # @bike4mind/resource
 
+## 0.10.0
+
+### Minor Changes
+
+- [#3899](https://github.com/Bike4Mind/bike4mind/pull/3899) [`254ae9f`](https://github.com/Bike4Mind/bike4mind/commit/254ae9ff0702b92b3a41d620d5a020c9c026afb6) Thanks [@onoya](https://github.com/onoya)! - add the generation job engine and video job foundation
+
+### Patch Changes
+
+- [#3925](https://github.com/Bike4Mind/bike4mind/pull/3925) [`494fe07`](https://github.com/Bike4Mind/bike4mind/commit/494fe079285c89f834f5089edd42a7c7766ff3f5) Thanks [@onoya](https://github.com/onoya)! - consume driveLakeIngestQueue and single-batch the Drive purge
+
+## 0.9.1
+
+### Patch Changes
+
+- [#3835](https://github.com/Bike4Mind/bike4mind/pull/3835) [`83fb75f`](https://github.com/Bike4Mind/bike4mind/commit/83fb75feff292c71203c2f22a7ae8795635eb25f) Thanks [@poysama](https://github.com/poysama)! - retain and recover permanent lake cleanup
+
+## 0.9.0
+
+### Minor Changes
+
+- [#3450](https://github.com/Bike4Mind/bike4mind/pull/3450) [`54fc4b3`](https://github.com/Bike4Mind/bike4mind/commit/54fc4b35367733f35396eac6fba51ac3d6114d26) Thanks [@ktdejesus](https://github.com/ktdejesus)! - admin /status page for E2E runs with state-change Slack alarms
+
+- [#3472](https://github.com/Bike4Mind/bike4mind/pull/3472) [`0008ad7`](https://github.com/Bike4Mind/bike4mind/commit/0008ad7aad57b40a93c712b9973fcc5cff4602f1) Thanks [@jarlacut](https://github.com/jarlacut)! - ingest a connected GitHub repository into its lake
+
+- [#3487](https://github.com/Bike4Mind/bike4mind/pull/3487) [`4adcf55`](https://github.com/Bike4Mind/bike4mind/commit/4adcf5576bf96c6293c6b3a0d633230985066d36) Thanks [@onoya](https://github.com/onoya)! - completion callback for queued image and video generation
+
+- [#3542](https://github.com/Bike4Mind/bike4mind/pull/3542) [`2eb7177`](https://github.com/Bike4Mind/bike4mind/commit/2eb71774f1137bb9b991ed90085b9ae5223275bf) Thanks [@onoya](https://github.com/onoya)! - re-sync a GitHub lake when its default branch is pushed
+
+- [#3544](https://github.com/Bike4Mind/bike4mind/pull/3544) [`81f16c6`](https://github.com/Bike4Mind/bike4mind/commit/81f16c6fc9f6bf6d75865a7f9dd290c985f10574) Thanks [@onoya](https://github.com/onoya)! - purge a GitHub lake connection when the App loses access
+
+### Patch Changes
+
+- [#3501](https://github.com/Bike4Mind/bike4mind/pull/3501) [`448494a`](https://github.com/Bike4Mind/bike4mind/commit/448494ac1735f7e8e5d4781df76810e768b95031) Thanks [@aflordelis](https://github.com/aflordelis)! - move event handlers and self-host runner into apps/workers
+
+- [#3687](https://github.com/Bike4Mind/bike4mind/pull/3687) [`d3ad08e`](https://github.com/Bike4Mind/bike4mind/commit/d3ad08e9f47d83b8e9a6f1ace9b341d2e9e3095b) Thanks [@onoya](https://github.com/onoya)! - close GitHub lake revoke/release gaps
+
 ## 0.8.0
 
 ### Minor Changes

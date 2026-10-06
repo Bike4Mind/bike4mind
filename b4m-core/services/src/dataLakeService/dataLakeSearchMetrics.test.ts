@@ -256,4 +256,14 @@ describe('infra/alarms.ts stays in sync', () => {
     );
     expect(dashboardBody).toContain("{ value: 60000, label: 'Server Lambda timeout'");
   });
+
+  // Routing invariant: every alarmActions entry must target dlqAlarmTopic, the only topic in
+  // this file with a Slack-forwarding subscriber. A dedicated unsubscribed topic would route
+  // alarm transitions into a void -- the original bug in #2334. CI would otherwise stay green
+  // while a new alarm silently re-creates the void routing.
+  it('routes every alarmActions entry to dlqAlarmTopic', () => {
+    const total = (alarms.match(/alarmActions:/g) ?? []).length;
+    const routed = (alarms.match(/alarmActions: \[dlqAlarmTopic\.arn\]/g) ?? []).length;
+    expect(routed).toBe(total);
+  });
 });

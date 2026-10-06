@@ -35,11 +35,13 @@ function makeContext({
   enabled = true,
   withAudit = true,
   isAdmin = false,
-}: { enabled?: boolean; withAudit?: boolean; isAdmin?: boolean } = {}) {
+  apiKeyId,
+}: { enabled?: boolean; withAudit?: boolean; isAdmin?: boolean; apiKeyId?: string } = {}) {
   const statusUpdate = vi.fn().mockResolvedValue(undefined);
   const context = {
     userId: 'u1',
     user: { id: 'u1', isAdmin },
+    apiKeyId,
     logger,
     statusUpdate,
     storage: { upload: vi.fn(), getSignedUrl: vi.fn() },
@@ -100,6 +102,22 @@ describe('save_content_to_data_lake', () => {
     expect(statusUpdate).toHaveBeenCalledWith({}, 'Saving notes.md to Research...');
     expect(result).toContain('Saved "notes.md" to the data lake "Research" (file id: file1)');
     expect(result).not.toContain('DRAFT');
+  });
+
+  it('attributes a key-driven save to the API key, keeping the owner as on-behalf-of', async () => {
+    await run(makeContext({ apiKeyId: 'key1' }).context);
+
+    expect(addFileToDataLakeMock.mock.calls[0][0].auditPrincipal).toEqual({
+      principalKind: 'apiKey',
+      principalId: 'key1',
+      onBehalfOfUserId: 'u1',
+    });
+  });
+
+  it('attaches no audit principal to a session save, so the audit falls back to the user', async () => {
+    await run(makeContext().context);
+
+    expect(addFileToDataLakeMock.mock.calls[0][0]).not.toHaveProperty('auditPrincipal');
   });
 
   it('warns that a draft lake is not searchable yet', async () => {
