@@ -3,3 +3,4 @@
 export * from './types';
 export * from './registry';
 export { TestVideoProvider } from './test/TestVideoProvider';
+export { GeminiOmniVideoProvider } from './geminiOmni/GeminiOmniVideoProvider';
