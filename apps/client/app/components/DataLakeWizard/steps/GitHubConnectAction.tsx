@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import {
   useDisconnectLakeGitHub,
   useLakeGitHubConnection,
+  useLakeGitHubCanManage,
   useResyncLakeGitHub,
   type LakeGitHubConnection,
 } from '@client/app/hooks/data/githubLake';
@@ -37,6 +38,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   const { data: connection, isLoading, isError } = useLakeGitHubConnection(lake.id);
+  const canManage = useLakeGitHubCanManage(lake.id).data ?? true;
   const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
@@ -45,8 +47,8 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
     return <CircularProgress size="sm" data-testid="github-connection-loading" />;
   }
 
-  if (isError) {
-    // Same steady state as DriveConnectAction: the read needs org owner/manager, narrower than canManage.
+  if (isError || (!connection && !canManage)) {
+    // Same as DriveConnectAction: the read admits an appointed org admin, but connecting is owner/manager only.
     return (
       <Tooltip title="GitHub connect is available to organization owners/managers on an organization data lake.">
         <span>
@@ -99,7 +101,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
         {label}
       </Chip>
       {/* A pending disconnect is disabled too, so the archive-pause tooltip would misread it. */}
-      {!connection.disconnecting && (
+      {canManage && !connection.disconnecting && (
         <Tooltip title={blockedReason ?? ''} disableHoverListener={!blockedReason}>
           <span>
             <Button
@@ -130,65 +132,71 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string } }) 
             : `Removing ${connection.fileCount} remaining file${connection.fileCount === 1 ? '' : 's'} in the background.`}
         </Typography>
       )}
-      {confirmingDisconnect ? (
-        <>
-          <Typography level="body-xs" color="danger" data-testid="github-disconnect-warning" sx={{ flexBasis: '100%' }}>
-            Disconnecting permanently deletes the {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'}{' '}
-            this repository synced into the data lake.
-          </Typography>
+      {canManage &&
+        (confirmingDisconnect ? (
+          <>
+            <Typography
+              level="body-xs"
+              color="danger"
+              data-testid="github-disconnect-warning"
+              sx={{ flexBasis: '100%' }}
+            >
+              Disconnecting permanently deletes the {connection.fileCount} file{connection.fileCount === 1 ? '' : 's'}{' '}
+              this repository synced into the data lake.
+            </Typography>
+            <Button
+              data-testid="github-disconnect-confirm-btn"
+              size="sm"
+              variant="soft"
+              color="danger"
+              startDecorator={<LinkOffIcon />}
+              loading={disconnect.isPending}
+              onClick={() =>
+                disconnect.mutate(lake.id, {
+                  onSuccess: () => {
+                    setConfirmingDisconnect(false);
+                    toast.success(
+                      `Disconnecting ${connection.repositoryFullName}. Its files are being removed in the background.`
+                    );
+                  },
+                  // Surfaces the 409 "a sync is in progress" so the user knows to retry later.
+                  onError: (e: unknown) =>
+                    toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
+                })
+              }
+            >
+              Confirm disconnect
+            </Button>
+            <Button
+              data-testid="github-disconnect-cancel-btn"
+              size="sm"
+              variant="plain"
+              color="neutral"
+              disabled={disconnect.isPending}
+              onClick={() => setConfirmingDisconnect(false)}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : (
           <Button
-            data-testid="github-disconnect-confirm-btn"
-            size="sm"
-            variant="soft"
-            color="danger"
-            startDecorator={<LinkOffIcon />}
-            loading={disconnect.isPending}
-            onClick={() =>
-              disconnect.mutate(lake.id, {
-                onSuccess: () => {
-                  setConfirmingDisconnect(false);
-                  toast.success(
-                    `Disconnecting ${connection.repositoryFullName}. Its files are being removed in the background.`
-                  );
-                },
-                // Surfaces the 409 "a sync is in progress" so the user knows to retry later.
-                onError: (e: unknown) =>
-                  toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
-              })
-            }
-          >
-            Confirm disconnect
-          </Button>
-          <Button
-            data-testid="github-disconnect-cancel-btn"
+            data-testid="github-disconnect-btn"
             size="sm"
             variant="plain"
-            color="neutral"
-            disabled={disconnect.isPending}
-            onClick={() => setConfirmingDisconnect(false)}
+            color="danger"
+            startDecorator={<LinkOffIcon />}
+            // The route declines to re-queue a purge that is still progressing, so only offer a retry
+            // once it looks stalled.
+            disabled={connection.disconnecting && !connection.disconnectStalled}
+            onClick={() => setConfirmingDisconnect(true)}
           >
-            Cancel
+            {!connection.disconnecting
+              ? 'Disconnect'
+              : connection.disconnectStalled
+                ? 'Retry disconnect'
+                : 'Disconnecting'}
           </Button>
-        </>
-      ) : (
-        <Button
-          data-testid="github-disconnect-btn"
-          size="sm"
-          variant="plain"
-          color="danger"
-          startDecorator={<LinkOffIcon />}
-          // The route declines to re-queue a purge that is still progressing, so only offer a retry
-          // once it looks stalled.
-          disabled={connection.disconnecting && !connection.disconnectStalled}
-          onClick={() => setConfirmingDisconnect(true)}
-        >
-          {!connection.disconnecting
-            ? 'Disconnect'
-            : connection.disconnectStalled
-              ? 'Retry disconnect'
-              : 'Disconnecting'}
-        </Button>
-      )}
+        ))}
       {connection.lastError && (
         <Box sx={{ flexBasis: '100%' }}>
           <Typography level="body-xs" color={color} data-testid="github-connection-last-error">
