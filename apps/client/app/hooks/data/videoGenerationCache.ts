@@ -53,7 +53,7 @@ export function prependVideoGeneration(queryClient: QueryClient, job: VideoGener
 }
 
 /**
- * Writes an authoritative server response (create, cancel) into the detail entry and its list row. Both writes obey
+ * Writes an authoritative server response (the cancel mutation) into the detail entry and its list row. Both writes obey
  * shouldReplaceVideoGeneration, so a late response never reverts a newer or terminal job. A job the cache has not
  * seen at all is prepended like a new create.
  */
