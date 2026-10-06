@@ -16,7 +16,7 @@ import type { Request } from 'express';
  * Returns the validated org id when the caller supplied one they belong to, or `undefined` when
  * none was supplied (personal scope - the default). For a non-admin, an org they can't access and
  * an org that doesn't exist both throw `ForbiddenError` (`findAccessibleById` returns null for
- * either), deliberately, so the caller can't probe whether an org id exists. Only the admin branch
+ * either), which also means the caller can't probe whether an org id exists. Only the admin branch
  * throws `NotFoundError`, for a missing org. Both branches fail closed on a non-existent org, so a
  * typo can never stamp a garbage `organizationId`.
  *

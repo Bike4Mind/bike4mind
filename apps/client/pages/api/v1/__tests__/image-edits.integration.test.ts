@@ -329,7 +329,7 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(403);
-      expect(mockOrgFindAccessibleById).toHaveBeenCalled();
+      expect(mockOrgFindAccessibleById).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
       expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
       expect(mockInvoke).not.toHaveBeenCalled();
     });
