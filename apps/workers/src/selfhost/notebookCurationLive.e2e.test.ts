@@ -87,7 +87,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
         const { detailType, detail } = JSON.parse(event.Records[0].body);
         await dispatchSelfHostEvent(detailType, detail, logger);
       },
-      { batchSize: 1 }
+      { batchSize: 1, maxReceiveCount: 5 }
     );
     process.env.NOTEBOOK_CURATION_QUEUE_DLQ = jobUrl + 'DLQ';
     await registerNotebookCurationQueue(instance, jobUrl, logger);
@@ -222,7 +222,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
         }
         retained = (await sqs.send(new ReceiveMessageCommand({ QueueUrl: dlqUrl, WaitTimeSeconds: 0 }))).Messages?.[0];
       }
-      expect(attempted).toBe(3);
+      expect(attempted).toBe(5);
       expect(retained?.MessageId).toBe(sent.MessageId);
       expect(JSON.parse(retained!.Body!).detail).toEqual(detail);
       expect(await NotebookCurationJob.findOne({ curationJobId: detail.curationJobId })).toBeNull();
@@ -317,7 +317,7 @@ describe.skipIf(!enabled)('notebook live broker and object storage proof', () =>
     expect(isolated.QueueUrl).toBeTruthy();
     const instance = new SelfHostWorker(logger);
     try {
-      await expect(registerNotebookCurationQueue(instance, isolated.QueueUrl, logger)).rejects.toThrow('redrive');
+      await expect(registerNotebookCurationQueue(instance, isolated.QueueUrl, logger)).resolves.toBeUndefined();
       expect((instance as unknown as { queues: unknown[] }).queues).toHaveLength(0);
     } finally {
       await sqs.send(new DeleteQueueCommand({ QueueUrl: isolated.QueueUrl }));

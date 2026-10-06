@@ -7,7 +7,7 @@ const { dispatch, renew, attributes, deleteMessage } = vi.hoisted(() => ({
   deleteMessage: vi.fn(),
 }));
 vi.mock('@server/utils/sqs', () => ({ deleteFromQueue: deleteMessage }));
-vi.mock('@server/queueHandlers/notebookCuration', () => ({ dispatch }));
+vi.mock('@workers/queueHandlers/notebookCuration', () => ({ dispatch }));
 vi.mock('@aws-sdk/client-sqs', () => ({
   SQSClient: class {
     send = (command: { kind?: string }) => (command.kind === 'attributes' ? attributes(command) : renew(command));
@@ -22,7 +22,7 @@ vi.mock('@aws-sdk/client-sqs', () => ({
 }));
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { SelfHostWorker } from './selfHostWorker';
-const logger = { warn: vi.fn() };
+const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
 const event = { Records: [{ receiptHandle: 'receipt' }] } as SQSEvent;
 const context = { getRemainingTimeInMillis: () => 999999 } as Context;
 beforeEach(() => {
@@ -111,14 +111,16 @@ it.each([
 ])('refuses registration for invalid redrive policy %s', async policy => {
   const worker = { registerQueueHandler: vi.fn() };
   attributes.mockResolvedValueOnce({ Attributes: { RedrivePolicy: policy } });
-  await expect(registerNotebookCurationQueue(worker, 'http://queue/notebook', logger)).rejects.toThrow('redrive');
+  await expect(registerNotebookCurationQueue(worker, 'http://queue/notebook', logger)).resolves.toBeUndefined();
+  expect(logger.error).toHaveBeenCalledOnce();
   expect(worker.registerQueueHandler).not.toHaveBeenCalled();
   expect(dispatch).not.toHaveBeenCalled();
 });
 it('refuses registration when the configured DLQ cannot be verified', async () => {
   const worker = { registerQueueHandler: vi.fn() };
   attributes.mockRejectedValueOnce(new Error('DLQ unavailable'));
-  await expect(registerNotebookCurationQueue(worker, 'http://queue/notebook', logger)).rejects.toThrow();
+  await expect(registerNotebookCurationQueue(worker, 'http://queue/notebook', logger)).resolves.toBeUndefined();
+  expect(logger.error).toHaveBeenCalledOnce();
   expect(worker.registerQueueHandler).not.toHaveBeenCalled();
 });
 it('allows the third delivery but preserves overflow without running curation', async () => {
@@ -161,4 +163,19 @@ it('does not acknowledge an overflow message through the actual worker', async (
   expect(context.getRemainingTimeInMillis()).toBe(600000);
   await vi.advanceTimersByTimeAsync(15000);
   expect(context.getRemainingTimeInMillis()).toBe(585000);
+});
+
+it('skips notebook admission without its DLQ and continues unrelated queue and cron startup', async () => {
+  vi.stubEnv('NOTEBOOK_CURATION_QUEUE_DLQ', '');
+  const worker = new SelfHostWorker(logger as unknown as ConstructorParameters<typeof SelfHostWorker>[0]);
+  await registerNotebookCurationQueue(worker, 'http://queue/notebook', logger);
+  const unrelated = vi.fn();
+  worker.registerQueueHandler('other', 'http://queue/other', unrelated);
+  worker.registerScheduledTask('maintenance', 60000, unrelated);
+  const state = worker as unknown as { queues: { name: string }[]; scheduled: { name: string }[] };
+  expect(state.queues.map(queue => queue.name)).toEqual(['other']);
+  expect(state.scheduled.map(task => task.name)).toEqual(['maintenance']);
+  expect(logger.error).toHaveBeenCalledOnce();
+  expect(attributes).not.toHaveBeenCalled();
+  expect(dispatch).not.toHaveBeenCalled();
 });

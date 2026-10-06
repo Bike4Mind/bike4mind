@@ -21,7 +21,7 @@ import {
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../packages/database/src/__test__/createMongoServer';
 import { NotebookCurationService } from '../../../../b4m-core/services/src/notebookCurationService';
-import { createNotebookCommit } from '@server/queueHandlers/notebookCurationCommit';
+import { createNotebookCommit } from '@workers/queueHandlers/notebookCurationCommit';
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 let mongo: Awaited<ReturnType<typeof createMongoReplSet>>;
 let userId: string;

@@ -1,39 +1,44 @@
 import { ChangeMessageVisibilityCommand, GetQueueAttributesCommand, SQSClient } from '@aws-sdk/client-sqs';
-import { dispatch } from '@server/queueHandlers/notebookCuration';
+import { dispatch } from '@workers/queueHandlers/notebookCuration';
 import type { SelfHostWorker } from './selfHostWorker';
 
 export async function registerNotebookCurationQueue(
   worker: Pick<SelfHostWorker, 'registerQueueHandler'>,
   queueUrl: string | undefined,
-  logger: { warn: (message: string) => void }
+  logger: { warn: (message: string) => void; error: (message: string, error: unknown) => void }
 ): Promise<void> {
   if (!queueUrl) {
     logger.warn('notebookCurationQueue not configured; notebook curation is unavailable');
     return;
   }
   const client = new SQSClient({ region: process.env.AWS_REGION || 'us-east-2' });
-  const deadLetterQueueUrl = process.env.NOTEBOOK_CURATION_QUEUE_DLQ;
-  if (!deadLetterQueueUrl) throw new Error('Notebook redrive requires NOTEBOOK_CURATION_QUEUE_DLQ');
-  const [source, target] = await Promise.all([
-    client.send(new GetQueueAttributesCommand({ QueueUrl: queueUrl, AttributeNames: ['RedrivePolicy'] })),
-    client.send(new GetQueueAttributesCommand({ QueueUrl: deadLetterQueueUrl, AttributeNames: ['QueueArn'] })),
-  ]);
-  let policy: unknown;
   try {
-    policy = JSON.parse(source.Attributes?.RedrivePolicy ?? 'null');
-  } catch {
-    throw new Error('Notebook redrive policy is invalid');
-  }
-  if (
-    !policy ||
-    typeof policy !== 'object' ||
-    !('maxReceiveCount' in policy) ||
-    Number(policy.maxReceiveCount) !== 3 ||
-    !('deadLetterTargetArn' in policy) ||
-    !target.Attributes?.QueueArn ||
-    policy.deadLetterTargetArn !== target.Attributes.QueueArn
-  ) {
-    throw new Error('Notebook redrive must target the configured DLQ after three deliveries');
+    const deadLetterQueueUrl = process.env.NOTEBOOK_CURATION_QUEUE_DLQ;
+    if (!deadLetterQueueUrl) throw new Error('Notebook redrive requires NOTEBOOK_CURATION_QUEUE_DLQ');
+    const [source, target] = await Promise.all([
+      client.send(new GetQueueAttributesCommand({ QueueUrl: queueUrl, AttributeNames: ['RedrivePolicy'] })),
+      client.send(new GetQueueAttributesCommand({ QueueUrl: deadLetterQueueUrl, AttributeNames: ['QueueArn'] })),
+    ]);
+    let policy: unknown;
+    try {
+      policy = JSON.parse(source.Attributes?.RedrivePolicy ?? 'null');
+    } catch {
+      throw new Error('Notebook redrive policy is invalid');
+    }
+    if (
+      !policy ||
+      typeof policy !== 'object' ||
+      !('maxReceiveCount' in policy) ||
+      Number(policy.maxReceiveCount) !== 3 ||
+      !('deadLetterTargetArn' in policy) ||
+      !target.Attributes?.QueueArn ||
+      policy.deadLetterTargetArn !== target.Attributes.QueueArn
+    ) {
+      throw new Error('Notebook redrive must target the configured DLQ after three deliveries');
+    }
+  } catch (error) {
+    logger.error('Notebook curation consumer disabled: redrive verification failed', error);
+    return;
   }
   worker.registerQueueHandler(
     'notebookCurationQueue',
