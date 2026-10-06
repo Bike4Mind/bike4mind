@@ -1,7 +1,6 @@
 {
-  "scenario": "blocked.synthetic",
-  "synthetic": true,
-  "basis": "Hand-built: the raiMediaFilteredCount / raiMediaFilteredReasons names are the Veo response fields as documented outside the Gemini API pages and are unverified against this endpoint. The reason text is a placeholder. A live attempt with a gory-footage prompt was not blocked (Veo generated a normal video), so the block shape is still unverified live. Replace with a recording.",
+  "scenario": "image-to-video",
+  "recordedAt": "2026-10-06T15:49:39.650Z",
   "exchanges": [
     {
       "name": "submit",
@@ -11,13 +10,18 @@
         "body": {
           "instances": [
             {
-              "prompt": "<redacted:blocked-prompt>"
+              "prompt": "The color slowly ripples like water, camera static.",
+              "image": {
+                "bytesBase64Encoded": "<redacted:base64 1008 chars>",
+                "mimeType": "image/png"
+              }
             }
           ],
           "parameters": {
             "durationSeconds": 4,
             "aspectRatio": "16:9",
-            "resolution": "720p"
+            "resolution": "720p",
+            "personGeneration": "allow_adult"
           }
         }
       },
@@ -27,7 +31,7 @@
           "content-type": "application/json; charset=UTF-8"
         },
         "body": {
-          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+          "name": "models/veo-3.1-fast-generate-preview/operations/jl7hr2ey2vt1"
         }
       }
     },
@@ -35,7 +39,7 @@
       "name": "poll_first",
       "request": {
         "method": "GET",
-        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/jl7hr2ey2vt1"
       },
       "response": {
         "status": 200,
@@ -43,7 +47,7 @@
           "content-type": "application/json; charset=UTF-8"
         },
         "body": {
-          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+          "name": "models/veo-3.1-fast-generate-preview/operations/jl7hr2ey2vt1"
         }
       }
     },
@@ -51,7 +55,7 @@
       "name": "poll_terminal",
       "request": {
         "method": "GET",
-        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/jl7hr2ey2vt1"
       },
       "response": {
         "status": 200,
@@ -59,15 +63,33 @@
           "content-type": "application/json; charset=UTF-8"
         },
         "body": {
-          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticblocked",
+          "name": "models/veo-3.1-fast-generate-preview/operations/jl7hr2ey2vt1",
           "done": true,
           "response": {
             "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningResponse",
             "generateVideoResponse": {
-              "raiMediaFilteredCount": 1,
-              "raiMediaFilteredReasons": ["<redacted:filter-reason>"]
+              "generatedSamples": [
+                {
+                  "video": {
+                    "uri": "https://generativelanguage.googleapis.com/v1beta/files/lwngp4r1n91i:download"
+                  }
+                }
+              ]
             }
           }
+        }
+      }
+    },
+    {
+      "name": "download",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/files/lwngp4r1n91i:download"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "video/mp4"
         }
       }
     }

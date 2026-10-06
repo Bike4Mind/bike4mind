@@ -212,7 +212,12 @@ const scenarios: Record<string, () => Promise<void>> = {
     process.stdout.write(`blocked: submit ${blocked.exchange.response.status}\n`);
     const exchanges: Exchange[] = [{ name: 'submit', ...blocked.exchange }];
     if (blocked.exchange.response.status < 400) {
-      exchanges.push(...(await pollToTerminal(operationNameOf(blocked.parsed))).exchanges);
+      const { exchanges: polls, terminal } = await pollToTerminal(operationNameOf(blocked.parsed));
+      // The prompt did not trigger a block (a billed video was generated): a success recording must not pass as one.
+      if (findVideoUri(terminal)) {
+        throw new Error('blocked: the operation produced a video, so the prompt was not blocked; nothing written');
+      }
+      exchanges.push(...polls);
     }
     const redacted = redactBlocked(exchanges, blockedPrompt);
     if (!Array.isArray(redacted)) throw new Error('redaction changed the exchange list shape');
