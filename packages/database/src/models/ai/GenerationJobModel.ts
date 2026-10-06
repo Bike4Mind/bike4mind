@@ -10,6 +10,7 @@ import {
   type GenerationJobCommitGuard,
   type GenerationJobCreateInput,
   type GenerationJobState,
+  type StalledJobLimits,
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
@@ -153,19 +154,21 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
   }
 
   /**
-   * Oldest first: in-flight jobs by nextPollAt, then terminal jobs by updatedAt. Two queries because Mongo sorts a
-   * null nextPollAt (every terminal job) first. A stuck-claimed terminal job matches every sweep forever, so it must
+   * Oldest first: in-flight jobs by nextPollAt, then terminal jobs by updatedAt, each within its own limit. Two
+   * queries because Mongo sorts a null nextPollAt (every terminal job) first. A stuck-claimed terminal job matches every sweep forever, so it must
    * never crowd out real recovery; each sweep's lease bumps its updatedAt, which also rotates it behind older ones.
    * Served by the { state, nextPollAt } and { state, terminalHandledAt, updatedAt } indexes.
    */
-  async findStalled(overdueBefore: Date, limit: number) {
-    const inFlight = await this.jobModel
-      .find({ state: { $in: NON_TERMINAL }, nextPollAt: { $lt: overdueBefore } })
-      .sort({ nextPollAt: 1 })
-      .limit(limit);
-    const remaining = limit - inFlight.length;
+  async findStalled(overdueBefore: Date, limits: StalledJobLimits) {
+    const inFlight =
+      limits.inFlight > 0
+        ? await this.jobModel
+            .find({ state: { $in: NON_TERMINAL }, nextPollAt: { $lt: overdueBefore } })
+            .sort({ nextPollAt: 1 })
+            .limit(limits.inFlight)
+        : [];
     const terminal =
-      remaining > 0
+      limits.terminal > 0
         ? await this.jobModel
             .find({
               state: { $in: TERMINAL_GENERATION_JOB_STATES },
@@ -179,7 +182,7 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
               ],
             })
             .sort({ updatedAt: 1 })
-            .limit(remaining)
+            .limit(limits.terminal)
         : [];
     return [...inFlight, ...terminal].map(doc => doc.toJSON() as IGenerationJobDocument);
   }

@@ -127,6 +127,8 @@ export type GenerationJobCreateInput = Omit<IGenerationJob, 'createdAt' | 'updat
   id?: string;
 };
 
+export type StalledJobLimits = { inFlight: number; terminal: number };
+
 export interface IGenerationJobRepository extends IBaseRepository<IGenerationJobDocument> {
   createJob(input: GenerationJobCreateInput): Promise<IGenerationJobDocument>;
   findByIdempotencyKey(
@@ -152,5 +154,6 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;
   markTerminalHandled(id: string, at: Date): Promise<void>;
-  findStalled(overdueBefore: Date, limit: number): Promise<IGenerationJobDocument[]>;
+  /** Separate limits so an in-flight backlog can never starve terminal handling (credit release). */
+  findStalled(overdueBefore: Date, limits: StalledJobLimits): Promise<IGenerationJobDocument[]>;
 }

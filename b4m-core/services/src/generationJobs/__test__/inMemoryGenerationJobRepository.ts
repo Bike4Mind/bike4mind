@@ -7,6 +7,7 @@ import {
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
+  type StalledJobLimits,
 } from '@bike4mind/common';
 
 /**
@@ -124,7 +125,7 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       touch(job);
     },
 
-    async findStalled(overdueBefore: Date, limit: number) {
+    async findStalled(overdueBefore: Date, limits: StalledJobLimits) {
       const time = (date: Date | null | undefined) => date?.getTime() ?? 0;
       const inFlight = [...jobs.values()]
         .filter(job => !isTerminal(job) && !!job.nextPollAt && job.nextPollAt < overdueBefore)
@@ -139,7 +140,9 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
               : time(job.updatedAt) < overdueBefore.getTime())
         )
         .sort((a, b) => time(a.updatedAt) - time(b.updatedAt));
-      return [...inFlight, ...terminal].slice(0, limit).map(job => structuredClone(job));
+      return [...inFlight.slice(0, limits.inFlight), ...terminal.slice(0, limits.terminal)].map(job =>
+        structuredClone(job)
+      );
     },
   };
 
