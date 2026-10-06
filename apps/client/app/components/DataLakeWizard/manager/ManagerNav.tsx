@@ -29,10 +29,10 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import ReplayIcon from '@mui/icons-material/Replay';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
 import { isDraftLake } from '@client/app/components/datalake/lakeVisibility';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
@@ -452,19 +452,7 @@ export default function ManagerNav({
                                   opening each one. The owner name is already on the row, so this
                                   costs no extra request. */}
                               {lake.isOwn === false && (
-                                <Tooltip
-                                  title={
-                                    lake.ownerDisplayName
-                                      ? `Owned by ${lake.ownerDisplayName}`
-                                      : 'Owned by another user'
-                                  }
-                                  size="sm"
-                                >
-                                  <PersonOutlineIcon
-                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
-                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
-                                  />
-                                </Tooltip>
+                                <LakeOwnerIcon lake={lake} testId={`datalake-manager-owner-icon-${lake.id}`} />
                               )}
                               {/* Background AI-tag suggestion gates (progress, review, failed) -
                                   an independent clock from ingest, so these can appear well

@@ -15,13 +15,13 @@ import {
   Typography,
 } from '@mui/joy';
 import SearchIcon from '@mui/icons-material/Search';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { useGetDataLakesWithRetrievability } from '@client/app/hooks/data/dataLakes';
 import {
   isUnsearchableInNewTestSession,
   willPreauthorizeInNewTestSession,
   UnsearchableLakeIcon,
 } from '@client/app/components/datalake/lakeRetrievability';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 
 /** Below this many lakes a filter box is noise rather than help - mirrors DataLakeLakePicker. */
 const SEARCH_THRESHOLD = 8;
@@ -144,10 +144,7 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
                       <Stack direction="row" gap={0.5} alignItems="center">
                         <Typography level="body-sm">{lake.name}</Typography>
                         {lake.isOwn === false && (
-                          <PersonOutlineIcon
-                            data-testid={`test-lake-scope-owner-icon-${lake.id}`}
-                            sx={{ fontSize: 14, color: 'warning.400' }}
-                          />
+                          <LakeOwnerIcon lake={lake} testId={`test-lake-scope-owner-icon-${lake.id}`} />
                         )}
                         {isUnsearchableInNewTestSession(lake) && (
                           <UnsearchableLakeIcon lake={lake} testId={`test-lake-scope-unsearchable-${lake.id}`} />
