@@ -35,7 +35,7 @@ jobs:
     # and run an agent over it.
     if: github.event.label.name == 'bot-review-next' || github.event.label.name == 'bot-review-fold-next'
     # workflow-templates main, 2026-10-05
-    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@b317b592ea8b299907a0f759e771e208ba6314a9
+    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@e03464f7337e4d03a245f4b93a1a65c1d67b8673
     secrets: inherit
     with:
       fold_mode: ${{ github.event.label.name == 'bot-review-fold-next' }}
