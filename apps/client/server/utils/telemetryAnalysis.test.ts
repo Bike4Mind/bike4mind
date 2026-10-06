@@ -190,6 +190,54 @@ describe('buildAnalysisPrompt token distribution', () => {
   });
 });
 
+// formatTtfvtSeconds feeds three renderer call sites; the rule-based finding is covered above.
+// These pin the two prompt/issue-body lines so a mutant that reverts either to the old N/A/0.0s
+// text cannot survive on the rule-based test alone.
+describe('TTFVT rendering in buildAnalysisPrompt and formatIssueBody', () => {
+  function promptFor(performance: ContextTelemetry['performance']): string {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = performance;
+    return buildAnalysisPrompt(telemetry);
+  }
+
+  function bodyFor(performance: ContextTelemetry['performance']): string {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = performance;
+    return formatIssueBody(telemetry);
+  }
+
+  it('buildAnalysisPrompt prints a measured TTFVT in seconds', () => {
+    expect(promptFor({ totalResponseTimeMs: 5000, firstTokenTimeMs: 12_000 })).toContain('Time to First Token: 12.00s');
+  });
+
+  it('buildAnalysisPrompt prints never-rendered, not N/A, for a streamed-but-invisible turn', () => {
+    const prompt = promptFor({ totalResponseTimeMs: 5000, firstChunkTimeMs: 500 });
+
+    expect(prompt).toContain('Time to First Token: never rendered (streamed, nothing visible)');
+    expect(prompt).not.toContain('Time to First Token: N/A');
+  });
+
+  it('buildAnalysisPrompt prints N/A only when neither stamp was recorded', () => {
+    expect(promptFor({ totalResponseTimeMs: 5000 })).toContain('Time to First Token: N/A');
+  });
+
+  it('formatIssueBody prints the measured TTFVT line', () => {
+    expect(bodyFor({ totalResponseTimeMs: 5000, firstTokenTimeMs: 12_000 })).toContain(
+      '- **Time to First Token:** 12.00s'
+    );
+  });
+
+  it('formatIssueBody prints never-rendered for a streamed-but-invisible turn', () => {
+    expect(bodyFor({ totalResponseTimeMs: 5000, firstChunkTimeMs: 500 })).toContain(
+      '- **Time to First Token:** never rendered (streamed, nothing visible)'
+    );
+  });
+
+  it('formatIssueBody omits the TTFVT line when neither stamp was recorded', () => {
+    expect(bodyFor({ totalResponseTimeMs: 5000 })).not.toContain('Time to First Token');
+  });
+});
+
 describe('extractAnalysisJson', () => {
   function oldExtract(responseText: string): string {
     let jsonStr = responseText.trim();

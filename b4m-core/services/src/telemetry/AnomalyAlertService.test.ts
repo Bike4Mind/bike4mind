@@ -60,10 +60,11 @@ function firstTokenField(performance: ContextTelemetry['performance']): string {
   return field?.text ?? '';
 }
 
-/** Concatenated mrkdwn text across all Slack blocks. */
-function allText(performance: ContextTelemetry['performance']): string {
+/** The "*Detected Anomalies:*" section body, or '' when absent. */
+function anomalyDetailsText(performance: ContextTelemetry['performance']): string {
   const message = service.formatSlackMessage(telemetry(performance));
-  return JSON.stringify(message.blocks);
+  const block = message.blocks.find(b => b.text?.text.startsWith('*Detected Anomalies:*'));
+  return block?.text?.text ?? '';
 }
 
 describe('AnomalyAlertService TTFVT rendering', () => {
@@ -81,11 +82,23 @@ describe('AnomalyAlertService TTFVT rendering', () => {
 
   it('renders N/A when neither timing was recorded', () => {
     const field = firstTokenField({ totalResponseTimeMs: 20_000 });
-    expect(field).toContain('N/A');
+    expect(field).toBe('*First Token:*\nN/A');
   });
 
-  it('labels the anomaly as never-rendered, distinct from a slow measured turn', () => {
-    expect(allText({ totalResponseTimeMs: 20_000, firstChunkTimeMs: 500 })).toContain('never rendered');
-    expect(allText({ totalResponseTimeMs: 20_000, firstTokenTimeMs: 12_000 })).toContain('Slow first token');
+  // Assert on the anomaly-details section specifically: `allText`/the First Token field already
+  // contains "never rendered", so only this pins the details line and kills a revert to the
+  // always-"Slow first token" branch.
+  it('labels the anomaly never-rendered in the anomaly details', () => {
+    const details = anomalyDetailsText({ totalResponseTimeMs: 20_000, firstChunkTimeMs: 500 });
+
+    expect(details).toContain('First token never rendered');
+    expect(details).not.toContain('Slow first token');
+  });
+
+  it('labels a slow measured turn as a slow first token in the anomaly details', () => {
+    const details = anomalyDetailsText({ totalResponseTimeMs: 20_000, firstTokenTimeMs: 12_000 });
+
+    expect(details).toContain('Slow first token');
+    expect(details).not.toContain('never rendered');
   });
 });

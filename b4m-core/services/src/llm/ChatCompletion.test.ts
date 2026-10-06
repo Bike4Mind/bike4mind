@@ -19,6 +19,7 @@ import {
   calculateTotalTokenLength,
   fetchAndProcessPreviousMessages,
   processUrlsFromPrompt,
+  getSettingByName,
   shouldTriggerFallback,
   isOverloadedError,
   getLlmWithFallback,
@@ -1508,6 +1509,58 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    // The root cause of the slow-first-token anomaly never firing was THIS call site dropping
+    // the TTFVT pair. Every other test drives `performanceFromPromptMeta` directly, so only a
+    // test through the real finalisation fails if the call site regresses to the two-field
+    // literal. Do not replace it with a direct helper call.
+    describe('first-token telemetry forwarding', () => {
+      beforeEach(() => {
+        vi.mocked(getSettingByName).mockResolvedValue('true');
+      });
+
+      afterEach(() => {
+        vi.mocked(getSettingByName).mockResolvedValue(null);
+      });
+
+      it('forwards promptMeta.performance TTFVT into the persisted context telemetry', async () => {
+        const body = wireMinimalTurn();
+
+        await service.process({ body, logger: mockLogger });
+
+        const telemetry = mockQuest.promptMeta.contextTelemetry;
+        expect(telemetry).toBeDefined();
+        // A visible token streamed, so both stamps are measured numbers. Reverting the call site
+        // to `{ totalResponseTimeMs, modelInferenceMs }` leaves these undefined.
+        expect(typeof telemetry.performance.firstTokenTimeMs).toBe('number');
+        expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
+        expect(telemetry.anomalies.slowFirstToken).toBe(false);
+      });
+
+      it('classifies a thinking-only turn as never-rendered and fires slowFirstToken', async () => {
+        const body = wireMinimalTurn();
+        // Reasoning streams (so firstChunkTime stamps) but nothing visible ever renders - the
+        // frozen turn the anomaly exists to catch. Without the forwarded pair both stamps read
+        // as absent, the state collapses to 'unknown', and this comes back false.
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+            // A real tick: ttfvtState reads a 0 firstChunkTime as "not recorded", and an
+            // all-microtask test can stamp 0ms, which would collapse this to 'unknown'.
+            await new Promise(resolve => setTimeout(resolve, 5));
+            await cb(['<think>weighing the options</think>']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        } as any); // any: minimal backend shape, as elsewhere in this file
+
+        await service.process({ body, logger: mockLogger });
+
+        const telemetry = mockQuest.promptMeta.contextTelemetry;
+        expect(telemetry.performance.firstTokenTimeMs).toBeUndefined();
+        expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
+        expect(telemetry.anomalies.slowFirstToken).toBe(true);
+      });
     });
 
     it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
