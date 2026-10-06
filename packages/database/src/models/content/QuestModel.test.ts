@@ -142,3 +142,17 @@ describe('QuestRepository.recordAttachmentOutcomeByAgentExecutionId', () => {
     ).resolves.not.toThrow();
   });
 });
+
+describe('QuestRepository.getMostRecentChatHistory', () => {
+  it('returns the persisted pinned value for pinned and unpinned rows', async () => {
+    await makeQuest({ prompt: 'older', pinned: true, timestamp: new Date('2026-01-01T00:00:00Z') });
+    await makeQuest({ prompt: 'newer', timestamp: new Date('2026-01-02T00:00:00Z') });
+
+    const history = await questRepository.getMostRecentChatHistory('session-1', 10);
+
+    expect(history.map(h => [h.prompt, h.pinned])).toEqual([
+      ['newer', false],
+      ['older', true],
+    ]);
+  });
+});
