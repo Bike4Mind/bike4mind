@@ -5,6 +5,7 @@ import { ConflictError, InternalServerError } from '@server/utils/errors';
 // the githubLakeConnection lib (which has its own dedicated unit tests) are mocked.
 const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
+  verifyOrgAdminRead: vi.fn(),
   dlFindById: vi.fn(),
   connFindByDataLakeIdAny: vi.fn(),
   countByGitHubConnectionIdInDataLake: vi.fn(),
@@ -32,7 +33,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: (flag: string) => h.requireFeatureEnabled(flag),
 }));
-vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
+vi.mock('@server/utils/orgAccess', () => ({
+  verifyOrgAccess: h.verifyOrgAccess,
+  verifyOrgAdminRead: h.verifyOrgAdminRead,
+}));
 vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({
   getGitHubLakeAppConfig: h.getGitHubLakeAppConfig,
 }));
@@ -80,6 +84,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
     vi.clearAllMocks();
     h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: 'orgA' });
     h.verifyOrgAccess.mockResolvedValue({ id: 'orgA' });
+    h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: true });
     h.requireGitHubLakeAppConfig.mockImplementation(config => {
       if (!config) throw new InternalServerError('The data-lake GitHub App is not configured');
       return config;
@@ -96,6 +101,7 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
       expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
       expect(h.verifyOrgAccess).not.toHaveBeenCalled();
     });
 
@@ -114,15 +120,26 @@ describe('/api/data-lakes/[id]/github-connection', () => {
       await run(makeReq('GET'), res);
       expect(h.countByGitHubConnectionIdInDataLake).toHaveBeenCalledWith('conn1', 'datalake:one');
       expect(h.toGitHubLakeConnectionResponse).toHaveBeenCalledWith({ id: 'conn1', organizationId: 'orgA' }, 7);
-      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 7 } });
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1', fileCount: 7 }, canManage: true });
     });
 
     it('resolves null without counting when the org lake has no connection', async () => {
       h.connFindByDataLakeIdAny.mockResolvedValue(null);
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(json).toHaveBeenCalledWith({ connection: null, canManage: true });
       expect(h.countByGitHubConnectionIdInDataLake).not.toHaveBeenCalled();
+    });
+
+    it('reads through the read gate and hands its canManage verdict to the response', async () => {
+      h.verifyOrgAdminRead.mockResolvedValue({ org: { id: 'orgA' }, canManage: false });
+      h.connFindByDataLakeIdAny.mockResolvedValue({ id: 'conn1', organizationId: 'orgA' });
+      h.toGitHubLakeConnectionResponse.mockReturnValue({ id: 'conn1' });
+      const { res, json } = makeRes();
+      await run(makeReq('GET'), res);
+      expect(h.verifyOrgAdminRead).toHaveBeenCalledWith(expect.anything(), 'orgA');
+      expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+      expect(json).toHaveBeenCalledWith({ connection: { id: 'conn1' }, canManage: false });
     });
 
     it('404s a connection whose org does not match the lake (global finder, org-scoped defence)', async () => {
