@@ -1,19 +1,26 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore, type WizardTargetLake } from '@client/app/stores/useDataLakeWizardStore';
 import SourceSelectionStep from './SourceSelectionStep';
 
-const { lakes, selectedAccount, toastInfo } = vi.hoisted(() => ({
-  lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
-  selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
-  toastInfo: vi.fn(),
-}));
+const { lakes, selectedAccount, toastInfo, slugPreview, slugPreviewMock } = vi.hoisted(() => {
+  const slugPreview = { current: undefined as string | undefined };
+  return {
+    lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
+    selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
+    toastInfo: vi.fn(),
+    slugPreview,
+    slugPreviewMock: vi.fn((_name: string, _enabled: boolean) => ({ data: slugPreview.current })),
+  };
+});
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: lakes.current }),
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: (name: string, enabled: boolean) => slugPreviewMock(name, enabled),
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: (selector: (s: { selectedAccount: unknown }) => unknown) =>
@@ -60,9 +67,12 @@ beforeEach(() => {
   lakes.current = [];
   selectedAccount.current = { id: 'me', personal: true };
   toastInfo.mockClear();
+  slugPreview.current = undefined;
+  slugPreviewMock.mockClear();
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   useDataLakeWizardStore.getState().resetWizard();
 });
 
@@ -73,6 +83,7 @@ afterEach(() => {
 describe('SourceSelectionStep - lake name', () => {
   const WARNING = 'source-name-duplicate-warning';
   const SLUG_ERROR = 'source-name-slug-error';
+  const SLUG = 'source-name-slug';
 
   it('warns when a personal lake already uses the name, ignoring case and padding', () => {
     lakes.current = [{ id: 'lake-1', name: 'Niche' }];
@@ -139,6 +150,58 @@ describe('SourceSelectionStep - lake name', () => {
     renderStep();
 
     expect(screen.queryByTestId(SLUG_ERROR)).toBeNull();
+  });
+
+  it('shows the server slug preview, matching the Config summary', () => {
+    // A lake (possibly deleted) already holds "x", so create would mint "x-1".
+    slugPreview.current = 'x-1';
+    setName('X');
+
+    renderStep();
+
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('x-1');
+  });
+
+  it('falls back to the local slug while the preview is loading or has failed', () => {
+    setName('Legal Contracts');
+
+    renderStep();
+
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('legal-contracts');
+  });
+
+  it('keeps the slug of the lake a same-prefix retry will restore, not the preview', () => {
+    slugPreview.current = 'legal-contracts-1';
+    useDataLakeWizardStore.setState(state => ({
+      config: { ...state.config, name: 'Legal Contracts', tagPrefix: 'legal:' },
+    }));
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByTestId(SLUG)).toHaveTextContent(/^legal-contracts$/);
+  });
+
+  it('queries the preview with the settled name, not on every keystroke', () => {
+    vi.useFakeTimers();
+    slugPreview.current = 'abc-1';
+    renderStep();
+    const input = screen.getByTestId('source-name-input').querySelector('input') as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: 'A' } });
+    fireEvent.change(input, { target: { value: 'Ab' } });
+    fireEvent.change(input, { target: { value: 'Abc' } });
+
+    // The preview of an older (empty) name is never shown in place of the typed one.
+    expect(screen.getByTestId(SLUG)).toHaveTextContent(/^abc$/);
+    expect(slugPreviewMock.mock.calls.filter(([, enabled]) => enabled)).toEqual([]);
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(slugPreviewMock.mock.calls.filter(([, enabled]) => enabled).map(([name]) => name)).toEqual(['Abc']);
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('abc-1');
   });
 
   it('offers no name field in append mode - the target lake owns its identity', () => {
