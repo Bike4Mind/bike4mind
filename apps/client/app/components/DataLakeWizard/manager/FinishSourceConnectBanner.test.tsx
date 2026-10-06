@@ -128,14 +128,37 @@ describe('FinishSourceConnectBanner', () => {
     expect(h.begin).not.toHaveBeenCalled();
   });
 
-  it('shows the Drive banner while EnableDataLakeGitHub is off, without reading the GitHub connection', () => {
+  it('hides the Drive banner while EnableDataLakeGitHub is off, without reading the GitHub connection', () => {
+    // A bound repository still owns the lake with the flag off, and its read 403s, so "no source" is unknowable.
     h.gitHubFlag = false;
     h.gitHub = { isSuccess: false, data: undefined };
     wrap(<FinishSourceConnectBanner lake={DRIVE_LAKE} fileCount={0} />);
 
-    expect(screen.getByTestId(DRIVE_BANNER)).toBeInTheDocument();
+    expect(screen.queryByTestId(DRIVE_BANNER)).toBeNull();
     expect(h.gitHubEnabledArg).toBe(false);
     expect(h.driveEnabledArg).toBe(true);
+  });
+
+  it.each([
+    ['the GitHub read is pending or failed', () => (h.gitHub = { isSuccess: false, data: undefined })],
+    ['the Drive read is pending or failed', () => (h.drive = { isSuccess: false, data: undefined })],
+  ])('hides the Drive banner while %s', (_label, arrange) => {
+    arrange();
+    wrap(<FinishSourceConnectBanner lake={DRIVE_LAKE} fileCount={0} />);
+
+    expect(screen.queryByTestId(DRIVE_BANNER)).toBeNull();
+    expect(h.gitHubEnabledArg).toBe(true);
+    expect(h.driveEnabledArg).toBe(true);
+  });
+
+  it('renders the Drive access disclosure on the Drive banner only', () => {
+    const { unmount } = wrap(<FinishSourceConnectBanner lake={DRIVE_LAKE} fileCount={0} />);
+    expect(screen.getByTestId(DRIVE_BANNER)).toContainElement(screen.getByTestId('drive-access-disclosure'));
+    unmount();
+
+    wrap(<FinishSourceConnectBanner lake={LAKE} fileCount={0} />);
+    expect(screen.getByTestId(BANNER)).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-access-disclosure')).toBeNull();
   });
 
   it('hides the Drive banner on a lake the user cannot manage, without reading connections', () => {

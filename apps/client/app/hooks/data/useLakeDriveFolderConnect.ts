@@ -6,7 +6,8 @@ import { getServerErrorField } from '@client/app/utils/error';
 /**
  * Pick a Drive folder and bind it to an existing lake straight away, toasting the outcome. Shared by
  * DriveConnectAction and FinishSourceConnectBanner. A user with no linked Google account is sent to
- * Google's consent screen by the picker (see useDriveFolderPicker) and picks on return.
+ * Google's consent screen by the picker (see useDriveFolderPicker); the Drive callback route lands on
+ * the home page, so they reopen the lake and pick from there.
  */
 export function useLakeDriveFolderConnect(lakeId: string) {
   const connect = useConnectDriveFolderToLake();

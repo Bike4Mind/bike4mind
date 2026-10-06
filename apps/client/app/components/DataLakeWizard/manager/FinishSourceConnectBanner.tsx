@@ -29,10 +29,10 @@ const PICKED_THING: Record<LakeSourceKind, string> = { github: 'repository', goo
  * an empty connector-fed org lake with no source attached. Targets the connector the lake was created
  * for (`pendingConnector`); an absent or unrecognized value falls back to GitHub.
  *
- * Shown only once the connection reads have resolved to "none": a failed or in-flight read, a bound
- * Drive folder, a bound GitHub repository (read only while EnableDataLakeGitHub is on), or any file in
- * the lake hides it. The reads, not `pendingConnector`, decide "no source", because clearing that
- * field on bind is best-effort server-side.
+ * Shown only once both connection reads have resolved to "none": a failed or in-flight read, a bound
+ * Drive folder or GitHub repository, or any file in the lake hides it. The reads, not
+ * `pendingConnector`, decide "no source", because clearing that field on bind is best-effort
+ * server-side.
  */
 export default function FinishSourceConnectBanner({
   lake,
@@ -48,12 +48,13 @@ export default function FinishSourceConnectBanner({
     lake.origin === 'connector-fed' &&
     resolveLakeSourceAvailability(source, lake, isAdminFeatureEnabled).status === 'available';
 
-  // With GitHub flagged off its route 403s, so there is no GitHub source to wait on.
+  // A bound repository still owns the lake with EnableDataLakeGitHub off (assertLakeConnectorFree is
+  // flag-free), but its read route 403s then, so "no GitHub source" cannot be confirmed: stay hidden.
   const gitHubFlag = isAdminFeatureEnabled('EnableDataLakeGitHub');
   const gitHub = useLakeGitHubConnection(lake.id, eligible && gitHubFlag);
   const drive = useLakeDriveConnection(lake.id, eligible);
 
-  const gitHubNone = !gitHubFlag || (gitHub.isSuccess && gitHub.data === null);
+  const gitHubNone = gitHubFlag && gitHub.isSuccess && gitHub.data === null;
   const hasNoSource = gitHubNone && drive.isSuccess && drive.data === null;
   if (!eligible || !hasNoSource || fileCount !== 0) return null;
 
