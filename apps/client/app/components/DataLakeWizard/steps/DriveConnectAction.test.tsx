@@ -8,6 +8,7 @@ import type { LakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 const h = vi.hoisted(() => ({
   connection: { current: null as LakeDriveConnection | null },
   isError: { current: false },
+  canManage: { current: true },
   connectMutate: vi.fn(),
   disconnectMutate: vi.fn(),
   openPicker: vi.fn(),
@@ -18,6 +19,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: 'gcid' } }) }));
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => ({ data: h.connection.current, isLoading: false, isError: h.isError.current }),
+  useLakeDriveCanManage: () => ({ data: h.canManage.current }),
   useConnectDriveFolderToLake: () => ({ mutate: h.connectMutate, isPending: false }),
   useDisconnectLakeDrive: () => ({ mutate: h.disconnectMutate, isPending: false }),
 }));
@@ -60,6 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.connection.current = null;
   h.isError.current = false;
+  h.canManage.current = true;
 });
 
 describe('DriveConnectAction', () => {
@@ -83,6 +86,23 @@ describe('DriveConnectAction', () => {
   it('disables the action when the status query errors (personal lake / non-manager)', () => {
     // A 403/404 from the status endpoint must not render an enabled button that can only ever fail.
     h.isError.current = true;
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connect-unavailable-btn')).toBeDisabled();
+    expect(screen.queryByTestId('drive-connect-btn')).toBeNull();
+  });
+
+  it('shows an appointed admin the status but no connect, re-sync or disconnect controls', () => {
+    h.canManage.current = false;
+    h.connection.current = connected({ lastError: 'Sync stopped short.' });
+    wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('drive-connection-status')).toHaveTextContent('Docs');
+    expect(screen.getByTestId('drive-connection-last-error')).toHaveTextContent('Sync stopped short.');
+    expect(screen.queryByTestId('drive-resync-btn')).toBeNull();
+    expect(screen.queryByTestId('drive-disconnect-btn')).toBeNull();
+  });
+
+  it('keeps Connect disabled for an appointed admin on a lake with no connection yet', () => {
+    h.canManage.current = false;
     wrap(<DriveConnectAction lake={{ id: 'lake1' }} />);
     expect(screen.getByTestId('drive-connect-unavailable-btn')).toBeDisabled();
     expect(screen.queryByTestId('drive-connect-btn')).toBeNull();
