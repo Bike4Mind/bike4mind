@@ -291,6 +291,8 @@ To fix a failing gate (or the tracking issue):
 3. Run the gate locally: `pnpm audit --json > r.json; PACKAGES_JSON_REPORT_PATH=r.json node scripts/audit-gate.mjs`.
 4. Only if no patched version exists, or the vulnerable code path is not reachable, add the GHSA id to `scripts/audit-allowlist.json` instead, and explain why in the PR.
 
+When the scheduled audit finds advisories on `main`, it also opens an auto-fix PR from the `ci/dependency-audit-autofix` branch that applies steps 1 and 2. A human reviews its lockfile diff and merges it; prefer that PR over writing the same bump by hand.
+
 ### Preview deploys
 
 Preview environments (`pr<N>.preview.bike4mind.com`) are created **on demand by maintainers** through an internal deploy pipeline — there is no label or comment command on this repo that triggers one. Every PR still runs the full CI suite (typecheck, lint, tests). When a maintainer wants to exercise your change in a live environment, they trigger a preview and a bot comment with the URL appears on the PR; previews are torn down automatically when the PR closes or after 3 days without a redeploy. The required **Deploy** check stays green either way — the absence of a preview is expected, not a failure.
