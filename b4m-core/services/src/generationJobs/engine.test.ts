@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
@@ -426,4 +426,43 @@ describe('GenerationJobEngine', () => {
     t.results.submit.push({ next: 'running', payload });
     await expect(t.engine.step(job.id)).resolves.toBe('advanced');
   });
+});
+
+describe('step time budget', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const running = {
+    next: 'running' as const,
+    payload: { ...payload, providerHandle: { provider: 'test' as const, data: {} } },
+  };
+
+  it('caps the step signal by the remaining invocation time', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.results.submit.push(running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(job.id, { remainingMs: 31_000 });
+    expect(timeout).toHaveBeenCalledWith(1_000);
+  });
+
+  it('uses the lease when the remaining time is unknown or longer', async () => {
+    const t = setup();
+    const first = await t.create();
+    const second = await t.create();
+    t.results.submit.push(running, running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(first.id);
+    await t.engine.step(second.id, { remainingMs: 24 * 3_600_000 });
+    expect(timeout.mock.calls).toEqual([[LEASE_MS - 30_000], [LEASE_MS - 30_000]]);
+  });
+
+  it.each([20_000, 30_000, Number.NaN])(
+    'refuses a step with no budget (%s ms left) and leaves the job unleased',
+    async remainingMs => {
+      const t = setup();
+      const job = await t.create();
+      await expect(t.engine.step(job.id, { remainingMs })).rejects.toThrow(/no time budget/);
+      expect(t.repository.jobs.get(job.id)?.leaseUntil ?? null).toBeNull();
+      expect(t.handler.submit).not.toHaveBeenCalled();
+    }
+  );
 });

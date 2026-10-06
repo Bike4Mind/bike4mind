@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Context, SQSEvent } from 'aws-lambda';
 
-const { step } = vi.hoisted(() => ({ step: vi.fn(async () => 'advanced') }));
+const { step } = vi.hoisted(() => ({
+  step: vi.fn(async (_jobId: string, _options?: { remainingMs?: number }) => 'advanced'),
+}));
 
 vi.mock('@server/generationJobs/wiring', () => ({ getGenerationJobEngine: () => ({ step }) }));
 // The real wrapper connects to Mongo; its own contract is covered where it is defined.
@@ -23,7 +25,13 @@ describe('generationJob dispatch', () => {
   it('runs exactly one engine step for the message job id', async () => {
     await dispatch(event({ jobId: 'job1' }), context);
     expect(step).toHaveBeenCalledTimes(1);
-    expect(step).toHaveBeenCalledWith('job1');
+    expect(step).toHaveBeenCalledWith('job1', { remainingMs: undefined });
+  });
+
+  it('passes the invocation remaining time to the engine', async () => {
+    const lambdaContext = { awsRequestId: 'r2', getRemainingTimeInMillis: () => 120_000 } as unknown as Context;
+    await dispatch(event({ jobId: 'job1' }), lambdaContext);
+    expect(step).toHaveBeenCalledWith('job1', { remainingMs: 120_000 });
   });
 
   it('drops a malformed message instead of retrying it forever', async () => {

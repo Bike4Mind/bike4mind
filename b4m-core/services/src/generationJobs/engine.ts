@@ -23,6 +23,11 @@ const EARLY_DELIVERY_GRACE_MS = 2000;
 // Time left between a step's abort and its lease expiring, for the step's own commit.
 const STEP_COMMIT_MARGIN_MS = 30_000;
 
+export type StepOptions = {
+  /** Lambda `getRemainingTimeInMillis()` at delivery; absent outside Lambda (inline dev path). */
+  remainingMs?: number;
+};
+
 const orphaned = (message: string): StepResult => ({ next: 'failed', error: { code: 'orphaned_submit', message } });
 
 type Lease = Extract<GenerationJobCommitGuard, { kind: 'lease' }>;
@@ -65,7 +70,13 @@ export class GenerationJobEngine {
     return 'failed';
   }
 
-  async step(jobId: string): Promise<StepOutcome> {
+  async step(jobId: string, options: StepOptions = {}): Promise<StepOutcome> {
+    // The step must commit before both the lease and the invocation end, whichever is first.
+    const stepBudgetMs = Math.floor(
+      Math.min(this.deps.leaseMs, options.remainingMs ?? Number.POSITIVE_INFINITY) - STEP_COMMIT_MARGIN_MS
+    );
+    // Thrown before leasing so SQS redelivers to a fresh invocation; an already-aborted submit would orphan the job.
+    if (!(stepBudgetMs > 0)) throw new Error(`generation job step has no time budget (${stepBudgetMs}ms)`);
     const now = this.deps.now();
     const lease: Lease = { kind: 'lease', leaseToken: new Date(now.getTime() + this.deps.leaseMs) };
     const job = await this.deps.repository.acquireLease(jobId, now, lease.leaseToken);
@@ -93,9 +104,7 @@ export class GenerationJobEngine {
       );
     }
 
-    const context: GenerationJobStepContext = {
-      signal: AbortSignal.timeout(this.deps.leaseMs - STEP_COMMIT_MARGIN_MS),
-    };
+    const context: GenerationJobStepContext = { signal: AbortSignal.timeout(stepBudgetMs) };
 
     // Storing means the provider already produced (and billed) the output, so a cancel no longer saves anything.
     if (job.cancelRequested && job.state !== 'storing') {
