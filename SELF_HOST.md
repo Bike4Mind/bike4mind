@@ -631,7 +631,7 @@ This is also the one place OpenAI specifically is required: help vectors are alw
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
 
-- **consumes queues** - research tasks, image generation and image edit, and the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`);
+- **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
 - **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
 
@@ -676,6 +676,40 @@ The age comparison uses elapsed time, not a local-time calendar schedule. Restar
 The worker runs the shared quest timeout sweep at startup and every five minutes, the same cadence as the hosted cron. A quest still `running` with no update for more than two minutes is settled as `done`: any reply, image, or tool output it produced is kept, and a quest with nothing to show gets a timeout error instead. A live run refreshes its quest every ten seconds, so only a run that has stopped ages past the threshold. The sweep writes the database only and sends no client notification; an open chat picks up the settled quest on its next fetch. Quests last updated more than seven days ago are left alone, and one run settles at most 500, so a backlog drains over several ticks. After an upgrade, the first runs also settle quests left `running` during the previous seven days.
 
 The age comparison uses elapsed time, not a calendar schedule. Restart runs one sweep immediately; missed slots coalesce into that scan. Startup and interval runs share the worker's in-flight guard, and shutdown drains a running sweep within the worker grace period. Each quest is written only if it is still unfinished at that moment, so a run that completes, or a client's read-time recovery that settles the quest first, is never overwritten. Keep the single worker replica. Self-host logs this sweep locally and sends no CloudWatch metrics; the hosted cron keeps its metrics.
+
+## GitHub repository data lakes
+
+A data lake can sync from a GitHub repository through a GitHub App you create and own. The integration is off until you configure it: with the App settings blank, connecting a repository fails with "The data-lake GitHub App is not configured on this deployment", and the webhook answers `503`.
+
+**GitHub must be able to reach your instance.** Pushes and uninstalls arrive as webhooks on `<APP_URL>/api/webhooks/github/lake`. A tailnet-only install ([Path A](#path-a-tailscale-tailnet-recommended-for-friends)) is not reachable from GitHub, so repositories connect and sync once but never re-sync on push, and an uninstall is never seen. Use [Path B](#path-b-public-domain-with-the-bundled-caddy-proxy), whose Caddy proxy already forwards that path, or another public HTTPS front.
+
+Create the App under **Settings -> Developer settings -> GitHub Apps** (personal or organization):
+
+| GitHub App field | Value |
+|---|---|
+| Callback URL | `<APP_URL>/data-lakes/github/callback` (list it first) |
+| Request user authorization (OAuth) during installation | on (this greys out Setup URL; leave it empty) |
+| Redirect on update | on |
+| Webhook URL | `<APP_URL>/api/webhooks/github/lake` |
+| Webhook secret | a long random string (`openssl rand -hex 32`) |
+| Repository permissions | Contents: read-only, Metadata: read-only |
+| Subscribe to events | Push (installation events are always delivered) |
+| Where can this App be installed | your choice; users pick repositories when installing |
+
+`APP_URL` must be the exact public origin, the same value the CSRF allow-list uses. Then generate a client secret and a private key on the App page and fill these in `.env.selfhost`:
+
+```bash
+GITHUB_LAKE_APP_ID=123456                 # "App ID" on the App page
+GITHUB_LAKE_APP_SLUG=my-b4m-lakes         # the github.com/apps/<slug> part
+GITHUB_LAKE_APP_CLIENT_ID=Iv23...
+GITHUB_LAKE_APP_CLIENT_SECRET=...
+GITHUB_LAKE_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_LAKE_APP_WEBHOOK_SECRET=...        # the same string as the App's webhook secret
+```
+
+The private key can be written on one line with literal `\n` separators, as above. All five App credentials are needed together: if any is missing, connecting stays refused. Re-run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d` after changing them so `app` and `worker` pick them up.
+
+This App is separate from the GitHub OAuth app behind `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`; don't reuse one for the other. The `worker` consumes the ingest and revoke queues, so nothing else needs to run. Default-branch pushes trigger a re-sync, and uninstalling the App or removing a repository from it disconnects the lake.
 
 ## Queue storage and container replacement
 
