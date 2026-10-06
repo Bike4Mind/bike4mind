@@ -1,9 +1,11 @@
 import {
+  ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
   ChatModels,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   NO_TEMPERATURE_MODELS,
   REASONING_SUPPORTED_MODELS,
   type ModelInfo,
+  type ReasoningEffort,
 } from '@bike4mind/common';
 
 /**
@@ -14,7 +16,95 @@ import {
  */
 export type ThinkingConfig =
   | { thinking: { type: 'enabled'; budget_tokens: number }; output_config?: never }
-  | { thinking: { type: 'adaptive' }; output_config: { effort: 'high' | 'medium' | 'low' } };
+  | { thinking: { type: 'adaptive' }; output_config: { effort: AnthropicEffort } };
+
+/**
+ * Anthropic's effort vocabulary for `output_config.effort`, which is not OpenAI's and
+ * not B4M's. All five are GA on the current Claude models; Opus 5 accepts every one and
+ * defaults to 'high', Opus 5.5 defaults to 'medium' and cannot disable thinking at all,
+ * so there is no "off" level to express and none is offered here.
+ *
+ * @see ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS for which ids take the parameter, and why
+ * that set is not OpenAI's REASONING_SUPPORTED_MODELS.
+ */
+export const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type AnthropicEffort = (typeof ANTHROPIC_EFFORT_LEVELS)[number];
+
+/**
+ * The effort a Claude turn runs at when the caller states none: 'high' normally, 'medium'
+ * for QuestMaster. These are the values the two Anthropic backends hardcoded before effort
+ * was wired, kept as the default so an unstated turn is priced exactly as it was.
+ */
+export const DEFAULT_ANTHROPIC_EFFORT: AnthropicEffort = 'high';
+export const DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT: AnthropicEffort = 'medium';
+
+/**
+ * B4M's six-level `ReasoningEffort` onto Anthropic's five.
+ *
+ * 'low' | 'medium' | 'high' | 'xhigh' pass through unchanged: the names mean the same
+ * depth on both sides. Deliberately NOT the Kimi/DeepSeek treatment of promoting 'xhigh'
+ * to the provider's top level - those providers have three levels and no 'xhigh', so the
+ * promotion loses nothing. Anthropic has both, and promoting would silently buy (and bill)
+ * more reasoning than was asked for.
+ *
+ * 'none' and 'minimal' are OpenAI levels with no Anthropic counterpart, and they never
+ * reach the wire. They resolve to 'low' rather than to omission because omitting the
+ * parameter leaves the caller on DEFAULT_ANTHROPIC_EFFORT ('high'), so dropping a
+ * least-effort request would bill MORE reasoning than was asked for, not less. 'low' is
+ * the least Anthropic can express.
+ *
+ * Anthropic's 'max' is unreachable from this vocabulary on purpose: `ReasoningEffort` is
+ * shared with the OpenAI path, which forwards it to `reasoning_effort` verbatim, and 'max'
+ * is not an OpenAI level. Callers that want 'max' pass `ICompletionOptions.anthropicEffort`,
+ * which is typed in Anthropic's own vocabulary.
+ */
+export function toAnthropicEffort(effort: ReasoningEffort | undefined): AnthropicEffort | undefined {
+  switch (effort) {
+    case 'none':
+    case 'minimal':
+    case 'low':
+      return 'low';
+    case 'medium':
+      return 'medium';
+    case 'high':
+      return 'high';
+    case 'xhigh':
+      return 'xhigh';
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Whether this model takes `output_config.effort`.
+ *
+ * Set first, then the record: ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS is what the shipped
+ * build asserts, and `thinkingStyle: 'adaptive'` is the same statement in record form for
+ * a model only the catalog knows - the same table-first/record-second shape
+ * anthropicBackend's omitsSamplingParams uses, and the two agree on every id in the table
+ * today.
+ */
+export function supportsAnthropicEffort(model: string, modelInfo: ModelInfo | undefined): boolean {
+  return ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS.has(model) || modelInfo?.thinkingStyle === 'adaptive';
+}
+
+/**
+ * The effort for one Claude turn. Precedence: the Anthropic-native option, then the
+ * cross-provider `reasoningEffort` mapped into Anthropic's vocabulary, then the default
+ * for the turn type. A caller stating nothing lands on the default, which is what the
+ * backends sent before this was wired.
+ */
+export function resolveAnthropicEffort(input: {
+  questMaster?: boolean;
+  anthropicEffort?: AnthropicEffort;
+  reasoningEffort?: ReasoningEffort;
+}): AnthropicEffort {
+  return (
+    input.anthropicEffort ??
+    toAnthropicEffort(input.reasoningEffort) ??
+    (input.questMaster === true ? DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT : DEFAULT_ANTHROPIC_EFFORT)
+  );
+}
 
 /**
  * max_tokens floor for adaptive reasoning models (Claude 4.7+/Opus 5). These
@@ -192,16 +282,16 @@ export interface ThinkingResult {
  * @param modelInfo - The ModelInfo object for this model
  * @param budgetTokens - The desired thinking budget (used for legacy models; ignored for adaptive)
  * @param currentMaxTokens - The caller-supplied max_tokens value
- * @param effort - The effort level for adaptive models (default: 'high')
+ * @param effort - The effort level for adaptive models (default: DEFAULT_ANTHROPIC_EFFORT)
  */
 export function buildThinkingParams(
   model: string,
   modelInfo: ModelInfo,
   budgetTokens: number,
   currentMaxTokens: number,
-  effort: 'high' | 'medium' | 'low' = 'high'
+  effort: AnthropicEffort = DEFAULT_ANTHROPIC_EFFORT
 ): ThinkingResult {
-  const isAdaptive = modelInfo.thinkingStyle === 'adaptive';
+  const isAdaptive = supportsAnthropicEffort(model, modelInfo);
   const rejectsTemperature = NO_TEMPERATURE_MODELS.has(model);
 
   if (isAdaptive) {

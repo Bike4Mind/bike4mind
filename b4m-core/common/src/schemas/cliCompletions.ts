@@ -4,6 +4,20 @@ import { z } from 'zod';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import type { ReasoningEffort } from '../types/common';
 
+/**
+ * The cross-provider effort vocabulary, deliberately NOT any one provider's.
+ *
+ * It is OpenAI's `reasoning_effort` levels, which the OpenAI path forwards verbatim.
+ * Every other backend translates: Kimi and DeepSeek collapse these six onto their three
+ * (toKimiEffort / toDeepSeekEffort), and Anthropic maps them onto `output_config.effort`
+ * (toAnthropicEffort). Anthropic's five levels are 'low' | 'medium' | 'high' | 'xhigh' |
+ * 'max', so the two vocabularies disagree at both ends: 'none' and 'minimal' have no
+ * Anthropic meaning and never reach the wire (they resolve to 'low', the least effort
+ * Anthropic can express - a Claude model cannot be asked not to think), and 'max' is
+ * absent here because adding it would also hand an invalid value to OpenAI's
+ * `reasoning_effort`. Anthropic's 'max' is reached through
+ * `ICompletionOptions.anthropicEffort` instead, which is typed in Anthropic's vocabulary.
+ */
 const REASONING_EFFORT_VALUES = [
   'none',
   'minimal',
