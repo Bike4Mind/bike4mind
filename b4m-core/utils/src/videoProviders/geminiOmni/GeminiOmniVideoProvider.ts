@@ -1,9 +1,16 @@
 import { z } from 'zod';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
+import { readJson } from '../http';
 import {
-  ProviderOutputUnavailableError,
+  classifyGeminiSubmitFailure,
+  fetchGeminiOutput,
+  GEMINI_BASE_URL,
+  GeminiErrorSchema,
+  geminiErrorOf,
+  isGeminiSafetyError,
+} from '../gemini/geminiHttp';
+import {
   ProviderSubmitError,
-  readBoundedResponse,
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
@@ -13,38 +20,20 @@ import {
 } from '../types';
 
 // Wire shapes are pinned by __fixtures__ (see record.ts; each synthetic fixture names its evidence).
-const API_HOST = 'generativelanguage.googleapis.com';
-const BASE_URL = `https://${API_HOST}`;
-const INTERACTIONS_URL = `${BASE_URL}/v1beta/interactions`;
-// Whole-token match on enum-like fields (status, code, finish_reason). Not a substring match: auth failures
-// carry API_KEY_SERVICE_BLOCKED, and invalid-param messages can name fields such as safety_settings.
-const SAFETY_TOKEN = /^(IMAGE_)?(SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII)$/i;
-// Free-text messages count only in the block phrasing ("... blocked for safety reasons").
-const SAFETY_PHRASE = /\bblocked\b[^.]*\b(safety|policy|policies)\b/i;
+const INTERACTIONS_URL = `${GEMINI_BASE_URL}/v1beta/interactions`;
 // The only poll 400 that proves the interaction is gone; other 400s (an auth bug seen live) may be transient.
 const UNKNOWN_INTERACTION = /Invalid interaction name/i;
 // Unrecognised statuses that still read as terminal failures (the documented enum is not fully observed).
 const FAILURE_LIKE_STATUS = /fail|error|cancel|expire|reject/i;
-// The submit 4xx statuses a resubmit can get past; any other 4xx is deterministic for this request and key.
-const RETRYABLE_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
 const SAFETY_REASON = 'gemini_omni_safety';
 const NO_VIDEO_REASON = 'gemini_omni_no_video';
-
-const ProviderErrorSchema = z.looseObject({
-  // A string ("invalid_request") on Interactions endpoints, a number on Google front-end errors.
-  code: z.union([z.string(), z.number()]).optional(),
-  message: z.string().optional(),
-  status: z.string().optional(),
-});
-type ProviderError = z.infer<typeof ProviderErrorSchema>;
-const ErrorEnvelopeSchema = z.looseObject({ error: ProviderErrorSchema });
 
 const ContentSchema = z.looseObject({ type: z.string(), uri: z.string().optional(), mime_type: z.string().optional() });
 const InteractionSchema = z.looseObject({
   id: z.string().min(1),
   status: z.string(),
   steps: z.array(z.looseObject({ type: z.string(), content: z.array(ContentSchema).optional() })).optional(),
-  error: ProviderErrorSchema.optional(),
+  error: GeminiErrorSchema.optional(),
   finish_reason: z.string().optional(),
   usage: z
     .looseObject({
@@ -54,25 +43,6 @@ const InteractionSchema = z.looseObject({
 });
 type Interaction = z.infer<typeof InteractionSchema>;
 
-const readJson = async (response: Response): Promise<unknown> => {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-};
-
-/** `{ error }` from Interactions endpoints, `[{ error }]` from the Google front end. */
-const providerErrorOf = (raw: unknown): ProviderError | undefined => {
-  const parsed = ErrorEnvelopeSchema.safeParse(Array.isArray(raw) ? raw[0] : raw);
-  return parsed.success ? parsed.data.error : undefined;
-};
-
-const isSafetyError = (error: ProviderError | undefined, finishReason?: string): boolean =>
-  [error?.status, error?.code, finishReason].some(value => typeof value === 'string' && SAFETY_TOKEN.test(value)) ||
-  (error?.message !== undefined && SAFETY_PHRASE.test(error.message));
-
 const interactionIdOf = (handle: ProviderJobHandle): string => {
   const id = handle.data.interactionId;
   if (typeof id !== 'string' || id.length === 0) throw new Error('gemini_omni_handle_without_interaction_id');
@@ -80,7 +50,7 @@ const interactionIdOf = (handle: ProviderJobHandle): string => {
 };
 
 const isUnknownInteraction = (raw: unknown): boolean => {
-  const message = providerErrorOf(raw)?.message;
+  const message = geminiErrorOf(raw)?.message;
   return message !== undefined && UNKNOWN_INTERACTION.test(message);
 };
 
@@ -131,7 +101,7 @@ const failed = (code: string, retryable: boolean, raw: unknown): ProviderPollRes
 });
 
 const toFailure = (interaction: Interaction, code: string): ProviderPollResult =>
-  isSafetyError(interaction.error, interaction.finish_reason)
+  isGeminiSafetyError(interaction.error, interaction.finish_reason)
     ? { status: 'blocked', reason: SAFETY_REASON, raw: interaction }
     : failed(code, false, interaction);
 
@@ -172,14 +142,6 @@ const toPollResult = (interaction: Interaction, ctx: VideoProviderContext): Prov
   }
 };
 
-// The live uri carries ?alt=media, which the fixture scrubber strips; without it the endpoint is not the media.
-const downloadUrlOf = (raw: string): URL => {
-  const url = new URL(raw);
-  if (url.protocol !== 'https:' || url.host !== API_HOST) throw new Error('gemini_omni_untrusted_output_url');
-  if (!url.searchParams.has('alt')) url.searchParams.set('alt', 'media');
-  return url;
-};
-
 /** Gemini Omni Flash over the Interactions REST API. Every method is one bounded call; the engine owns waiting. */
 export class GeminiOmniVideoProvider implements VideoProvider {
   readonly id = 'gemini-omni' as const;
@@ -205,19 +167,10 @@ export class GeminiOmniVideoProvider implements VideoProvider {
     }
     const raw = await readJson(response);
     if (!response.ok) {
-      // A safety 400 is a content outcome, not a request error: a definitive ProviderSubmitError would let the
-      // engine resubmit the same prompt. The handle carries the verdict and poll() returns it offline.
-      if (response.status === 400 && isSafetyError(providerErrorOf(raw))) {
-        return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
-      }
-      // A 4xx (invalid parameter, undecodable image, auth, quota) created nothing; a 5xx may have. Only a
-      // throttle is worth resubmitting: a 400/401/403 fails the job at once.
-      throw new ProviderSubmitError(
-        `gemini_omni_http_${response.status}`,
-        response.status < 500,
-        raw,
-        RETRYABLE_SUBMIT_STATUSES.has(response.status)
-      );
+      // The handle carries a safety verdict and poll() returns it offline.
+      const failure = classifyGeminiSubmitFailure(response.status, raw, 'gemini_omni');
+      if (failure === 'blocked') return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
+      throw failure;
     }
     const parsed = InteractionSchema.safeParse(raw);
     if (!parsed.success) throw new ProviderSubmitError('gemini_omni_submit_unparseable', false, raw);
@@ -246,26 +199,8 @@ export class GeminiOmniVideoProvider implements VideoProvider {
     return toPollResult(parsed.data, ctx);
   }
 
-  async fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer> {
-    if (output.kind !== 'url') throw new Error('gemini_omni_unexpected_inline_output');
-    const url = downloadUrlOf(output.url);
-    let response = await fetch(url, {
-      headers: { 'x-goog-api-key': ctx.apiKey },
-      redirect: 'manual',
-      signal: ctx.signal,
-    });
-    // The live download is a direct 200; a redirect to storage is still followed once, without the key.
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (!location) throw new Error('gemini_omni_redirect_without_location');
-      const target = new URL(location, url);
-      if (target.protocol !== 'https:') throw new Error('gemini_omni_untrusted_output_url');
-      await response.body?.cancel();
-      response = await fetch(target, { redirect: 'error', signal: ctx.signal });
-    }
-    if (response.status === 404 || response.status === 410) throw new ProviderOutputUnavailableError(response.status);
-    if (!response.ok) throw new Error(`gemini_omni_download_http_${response.status}`);
-    return readBoundedResponse(response);
+  fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer> {
+    return fetchGeminiOutput(output, ctx, 'gemini_omni');
   }
 
   // Best effort: the engine cancels the job either way, so a refused cancel is logged, not thrown.

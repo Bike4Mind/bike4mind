@@ -1,7 +1,7 @@
 {
   "scenario": "image-to-video.synthetic",
   "synthetic": true,
-  "basis": "Hand-built: the submit body follows the documented image-to-video instance (image.inlineData.mimeType/data, unpaid and unverified live); responses mirror text-to-video.synthetic. Replace with a recording.",
+  "basis": "Hand-built: the submit body uses the Veo predict image shape (image.bytesBase64Encoded + mimeType) after a live run showed image.inlineData rejected with 400; responses mirror text-to-video.synthetic. Replace with a recording.",
   "exchanges": [
     {
       "name": "submit",
@@ -13,17 +13,16 @@
             {
               "prompt": "The color slowly ripples like water, camera static.",
               "image": {
-                "inlineData": {
-                  "mimeType": "image/png",
-                  "data": "<redacted:base64 1132 chars>"
-                }
+                "bytesBase64Encoded": "<redacted:base64 1132 chars>",
+                "mimeType": "image/png"
               }
             }
           ],
           "parameters": {
             "durationSeconds": 4,
             "aspectRatio": "16:9",
-            "resolution": "720p"
+            "resolution": "720p",
+            "personGeneration": "allow_adult"
           }
         }
       },

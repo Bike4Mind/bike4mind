@@ -3,9 +3,9 @@ import { assertNoSecret, scrubBody, scrubUrl } from './scrub';
 
 describe('veo fixture scrubber', () => {
   it('redacts inline image data but keeps its size', () => {
-    const body = { instances: [{ prompt: 'p', image: { inlineData: { mimeType: 'image/png', data: 'QUJDRA==' } } }] };
+    const body = { instances: [{ prompt: 'p', image: { bytesBase64Encoded: 'QUJDRA==', mimeType: 'image/png' } }] };
     expect(scrubBody(body)).toEqual({
-      instances: [{ prompt: 'p', image: { inlineData: { mimeType: 'image/png', data: '<redacted:base64 8 chars>' } } }],
+      instances: [{ prompt: 'p', image: { bytesBase64Encoded: '<redacted:base64 8 chars>', mimeType: 'image/png' } }],
     });
   });
 

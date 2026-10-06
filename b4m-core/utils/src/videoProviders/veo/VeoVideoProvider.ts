@@ -1,9 +1,17 @@
 import { z } from 'zod';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
+import { readJson } from '../http';
 import {
-  ProviderOutputUnavailableError,
+  classifyGeminiSubmitFailure,
+  fetchGeminiOutput,
+  GEMINI_BASE_URL,
+  GeminiErrorSchema,
+  geminiErrorOf,
+  isGeminiSafetyError,
+  type GeminiError,
+} from '../gemini/geminiHttp';
+import {
   ProviderSubmitError,
-  readBoundedResponse,
   type ProviderJobHandle,
   type ProviderOutput,
   type ProviderPollResult,
@@ -13,36 +21,24 @@ import {
 } from '../types';
 
 // Wire shapes are pinned by __fixtures__ (see record.ts; each synthetic fixture names its evidence).
-const API_HOST = 'generativelanguage.googleapis.com';
-const BASE_URL = `https://${API_HOST}`;
 const MODEL = 'veo-3.1-fast-generate-preview';
-const SUBMIT_URL = `${BASE_URL}/v1beta/models/${MODEL}:predictLongRunning`;
-// The operation name is interpolated into a URL path, so only the documented shape is accepted.
-const OPERATION_NAME = /^models\/[\w.-]+\/operations\/[\w-]+$/;
-// Whole-token match on enum-like fields (status, code). Not a substring match: auth failures carry
-// API_KEY_SERVICE_BLOCKED, and invalid-param messages can name fields such as safety_settings.
-const SAFETY_TOKEN = /^(IMAGE_)?(SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII)$/i;
-// Free-text messages count only in the block phrasing ("... blocked for safety reasons").
-const SAFETY_PHRASE = /\bblocked\b[^.]*\b(safety|policy|policies)\b/i;
+const SUBMIT_URL = `${GEMINI_BASE_URL}/v1beta/models/${MODEL}:predictLongRunning`;
+// The operation name is interpolated into a URL path, so only this adapter's model and a plain id are accepted.
+const OPERATION_NAME = new RegExp(`^models/${MODEL.replaceAll('.', '\\.')}/operations/[\\w-]+$`);
 // A poll of an unknown operation answers 403 PERMISSION_DENIED "... may not exist"; a bare 403 is an auth problem.
+// A key from another project gets the same answer, so rotating the key mid-flight fails in-flight jobs here, which
+// is right: the operation is unreachable with the new key.
 const UNKNOWN_OPERATION = /may not exist/i;
-// The submit 4xx statuses a resubmit can get past; any other 4xx is deterministic for this request and key.
-const RETRYABLE_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
+// A finished operation's error is a google.rpc.Status with a numeric code and no status token (seen live), so
+// its safety refusals can only be recognised by wording; the shared phrase covers "blocked ... safety".
+const VEO_POLICY_PHRASE = /responsible ai|usage guidelines|content polic/i;
 const SAFETY_REASON = 'veo_safety';
-
-const ProviderErrorSchema = z.looseObject({
-  code: z.union([z.string(), z.number()]).optional(),
-  message: z.string().optional(),
-  status: z.string().optional(),
-});
-type ProviderError = z.infer<typeof ProviderErrorSchema>;
-const ErrorEnvelopeSchema = z.looseObject({ error: ProviderErrorSchema });
 
 const GeneratedSampleSchema = z.looseObject({ video: z.looseObject({ uri: z.string().optional() }).optional() });
 const OperationSchema = z.looseObject({
   name: z.string().min(1),
   done: z.boolean().optional(),
-  error: ProviderErrorSchema.optional(),
+  error: GeminiErrorSchema.optional(),
   response: z
     .looseObject({
       generateVideoResponse: z
@@ -57,24 +53,8 @@ const OperationSchema = z.looseObject({
 });
 type Operation = z.infer<typeof OperationSchema>;
 
-const readJson = async (response: Response): Promise<unknown> => {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-};
-
-/** `{ error }` from the API, `[{ error }]` from the Google front end. */
-const providerErrorOf = (raw: unknown): ProviderError | undefined => {
-  const parsed = ErrorEnvelopeSchema.safeParse(Array.isArray(raw) ? raw[0] : raw);
-  return parsed.success ? parsed.data.error : undefined;
-};
-
-const isSafetyError = (error: ProviderError | undefined): boolean =>
-  [error?.status, error?.code].some(value => typeof value === 'string' && SAFETY_TOKEN.test(value)) ||
-  (error?.message !== undefined && SAFETY_PHRASE.test(error.message));
+const isSafetyOperationError = (error: GeminiError): boolean =>
+  isGeminiSafetyError(error) || (error.message !== undefined && VEO_POLICY_PHRASE.test(error.message));
 
 const operationNameOf = (handle: ProviderJobHandle): string => {
   const name = handle.data.operationName;
@@ -90,7 +70,8 @@ const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs)
     request.mode === 'image_to_video' && inputs.inputImage
       ? {
           image: {
-            inlineData: { mimeType: inputs.inputImage.mimeType, data: inputs.inputImage.bytes.toString('base64') },
+            bytesBase64Encoded: inputs.inputImage.bytes.toString('base64'),
+            mimeType: inputs.inputImage.mimeType,
           },
         }
       : {};
@@ -100,6 +81,8 @@ const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs)
       durationSeconds: request.durationSeconds,
       aspectRatio: request.aspectRatio,
       resolution: request.resolution,
+      // The docs allow only this value for image-to-video; sent explicitly so a per-region default cannot 400 it.
+      ...(request.mode === 'image_to_video' && { personGeneration: 'allow_adult' }),
     },
   };
 };
@@ -120,7 +103,9 @@ const isFiltered = (operation: Operation): boolean => {
 const toPollResult = (operation: Operation): ProviderPollResult => {
   if (!operation.done) return { status: 'running' };
   if (operation.error) {
-    return isSafetyError(operation.error)
+    // Not retryable even for code 13 (seen live, "internal server issue ... try again"): a retry re-polls the same
+    // finished operation, which stays failed. The clip is not charged, so the user can simply resubmit.
+    return isSafetyOperationError(operation.error)
       ? { status: 'blocked', reason: SAFETY_REASON, raw: operation }
       : failed('failed', operation);
   }
@@ -131,14 +116,6 @@ const toPollResult = (operation: Operation): ProviderPollResult => {
   if (isFiltered(operation)) return { status: 'blocked', reason: SAFETY_REASON, raw: operation };
   // Done with neither a video nor a filter verdict: a shape change to fix, not a content block.
   return failed('no_video', operation);
-};
-
-// The live uri carries ?alt=media, which the fixture scrubber strips; without it the endpoint is not the media.
-const downloadUrlOf = (raw: string): URL => {
-  const url = new URL(raw);
-  if (url.protocol !== 'https:' || url.host !== API_HOST) throw new Error('veo_untrusted_output_url');
-  if (!url.searchParams.has('alt')) url.searchParams.set('alt', 'media');
-  return url;
 };
 
 /**
@@ -169,17 +146,9 @@ export class VeoVideoProvider implements VideoProvider {
     }
     const raw = await readJson(response);
     if (!response.ok) {
-      // A safety 400 is a content outcome: a definitive error would let the engine resubmit the same prompt.
-      if (response.status === 400 && isSafetyError(providerErrorOf(raw))) {
-        return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
-      }
-      // A 4xx created nothing; a 5xx may have. Only a throttle is worth resubmitting.
-      throw new ProviderSubmitError(
-        `veo_http_${response.status}`,
-        response.status < 500,
-        raw,
-        RETRYABLE_SUBMIT_STATUSES.has(response.status)
-      );
+      const failure = classifyGeminiSubmitFailure(response.status, raw, 'veo');
+      if (failure === 'blocked') return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
+      throw failure;
     }
     const parsed = OperationSchema.safeParse(raw);
     if (!parsed.success || !OPERATION_NAME.test(parsed.data.name)) {
@@ -191,12 +160,12 @@ export class VeoVideoProvider implements VideoProvider {
   async poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult> {
     if (handle.data.blocked === true) return { status: 'blocked', reason: SAFETY_REASON, raw: handle.data };
     const name = operationNameOf(handle);
-    const response = await fetch(`${BASE_URL}/v1beta/${name}`, {
+    const response = await fetch(`${GEMINI_BASE_URL}/v1beta/${name}`, {
       headers: { 'x-goog-api-key': ctx.apiKey },
       signal: ctx.signal,
     });
     const raw = await readJson(response);
-    const message = providerErrorOf(raw)?.message;
+    const message = geminiErrorOf(raw)?.message;
     const unknownOperation = response.status === 403 && message !== undefined && UNKNOWN_OPERATION.test(message);
     if (response.status === 404 || unknownOperation) return failed('operation_not_found', raw);
     if (!response.ok) throw new Error(`veo_poll_http_${response.status}`);
@@ -205,25 +174,7 @@ export class VeoVideoProvider implements VideoProvider {
     return toPollResult(parsed.data);
   }
 
-  async fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer> {
-    if (output.kind !== 'url') throw new Error('veo_unexpected_inline_output');
-    const url = downloadUrlOf(output.url);
-    let response = await fetch(url, {
-      headers: { 'x-goog-api-key': ctx.apiKey },
-      redirect: 'manual',
-      signal: ctx.signal,
-    });
-    // A redirect to storage is followed once, without the key.
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (!location) throw new Error('veo_redirect_without_location');
-      const target = new URL(location, url);
-      if (target.protocol !== 'https:') throw new Error('veo_untrusted_output_url');
-      await response.body?.cancel();
-      response = await fetch(target, { redirect: 'error', signal: ctx.signal });
-    }
-    if (response.status === 404 || response.status === 410) throw new ProviderOutputUnavailableError(response.status);
-    if (!response.ok) throw new Error(`veo_download_http_${response.status}`);
-    return readBoundedResponse(response);
+  fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer> {
+    return fetchGeminiOutput(output, ctx, 'veo');
   }
 }

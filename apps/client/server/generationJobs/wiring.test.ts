@@ -178,7 +178,7 @@ describe('buildProviders', () => {
     delete process.env.ENABLE_TEST_VIDEO_PROVIDER;
   });
 
-  it('registers Gemini Omni and xAI unconditionally, Gemini first', () => {
+  it('registers Gemini Omni, xAI and Veo unconditionally, Gemini first', () => {
     expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo']);
   });
 

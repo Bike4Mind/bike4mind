@@ -152,8 +152,12 @@ const write = (scenario: string, exchanges: Exchange[]) => {
   process.stdout.write(`wrote ${scenario}.json\n`);
 };
 
-const recordGeneration = async (scenario: string, instance: Record<string, unknown>) => {
-  const submit = await call('POST', SUBMIT_PATH, submitBody(instance));
+const recordGeneration = async (
+  scenario: string,
+  instance: Record<string, unknown>,
+  parameters: Record<string, unknown> = {}
+) => {
+  const submit = await call('POST', SUBMIT_PATH, submitBody(instance, parameters));
   process.stdout.write(`${scenario}: submit ${submit.exchange.response.status}\n`);
   if (submit.exchange.response.status >= 400) {
     throw new Error(
@@ -163,8 +167,14 @@ const recordGeneration = async (scenario: string, instance: Record<string, unkno
   const { exchanges, terminal } = await pollToTerminal(operationNameOf(submit.parsed));
   // The raw (unscrubbed) URI is needed to probe the download; only its scrubbed path is written.
   const uri = findVideoUri(terminal);
-  const download = uri ? [await probeDownload(uri)] : [];
-  write(scenario, [{ name: 'submit', ...submit.exchange }, ...exchanges, ...download]);
+  if (!uri) {
+    // A success scenario without a video would win over the synthetic fixture and break the conformance suite, so
+    // it is kept as a failure fixture (a real provider failure is worth replaying) and the run exits non-zero.
+    write(`failed-${scenario}`, [{ name: 'submit', ...submit.exchange }, ...exchanges]);
+    throw new Error(`${scenario} finished without a video; saved as failed-${scenario}.json, not as ${scenario}.json`);
+  }
+  const download = await probeDownload(uri);
+  write(scenario, [{ name: 'submit', ...submit.exchange }, ...exchanges, download]);
 };
 
 const BLOCKED_REDACTION = '<redacted:blocked-prompt>';
@@ -184,10 +194,15 @@ const scenarios: Record<string, () => Promise<void>> = {
     }),
 
   'image-to-video': () =>
-    recordGeneration('image-to-video', {
-      prompt: 'The color slowly ripples like water, camera static.',
-      image: { inlineData: { mimeType: 'image/png', data: solidPng() } },
-    }),
+    recordGeneration(
+      'image-to-video',
+      {
+        prompt: 'The color slowly ripples like water, camera static.',
+        image: { bytesBase64Encoded: solidPng(), mimeType: 'image/png' },
+      },
+      // The docs allow only this value for image-to-video.
+      { personGeneration: 'allow_adult' }
+    ),
 
   blocked: async () => {
     // Prompt kept generic and redacted in the fixture; override locally if it does not trigger a block.

@@ -32,12 +32,17 @@ const load = (name: string): Fixture => {
   const file = existsSync(recorded) ? recorded : synthetic;
   return JSON.parse(readFileSync(file, 'utf8')) as Fixture;
 };
-const FIXTURES: Record<ConformanceScenario | 'image' | 'unknownOperation', Fixture> = {
+const FIXTURES: Record<
+  ConformanceScenario | 'image' | 'imageRejected' | 'failedInternal' | 'unknownOperation',
+  Fixture
+> = {
   succeeds: load('text-to-video'),
   image: load('image-to-video'),
   blocked: load('blocked'),
   fails: load('failed'),
   rejects: load('invalid-param'),
+  imageRejected: load('image-inline-data-rejected'),
+  failedInternal: load('failed-internal'),
   unknownOperation: load('unknown-operation'),
 };
 const exchange = (fixture: Fixture, name: string): Exchange => {
@@ -143,7 +148,6 @@ describe('VeoVideoProvider specifics', () => {
     );
     expect(sent).toEqual(recorded);
     expect(handle).toEqual({ provider: 'veo', data: { operationName: expect.stringMatching(/^models\//) } });
-    expect(seenKeys).toEqual([]);
   });
 
   it('sends the key header on submit and poll', async () => {
@@ -153,25 +157,53 @@ describe('VeoVideoProvider specifics', () => {
     expect(seenKeys).toEqual([KEY, KEY]);
   });
 
-  it('sends the prompt with an inline image for image-to-video', async () => {
-    let sent: { instances?: unknown } = {};
+  it('sends exactly the fixture submit body for image-to-video (bytesBase64Encoded, allow_adult)', async () => {
+    let sent: unknown;
     server.use(
       http.post(SUBMIT, async ({ request: r }) => {
-        sent = (await r.json()) as typeof sent;
+        sent = await r.json();
         return reply(exchange(FIXTURES.image, 'submit'));
       })
     );
+    const recorded = exchange(FIXTURES.image, 'submit').request.body as {
+      instances: Array<{ prompt: string; image: { bytesBase64Encoded: string } }>;
+    };
+    const bytes = Buffer.from('png');
     await new VeoVideoProvider().submit(
-      request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
-      { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+      request({ mode: 'image_to_video', inputImageFileId: 'f1', prompt: recorded.instances[0].prompt }),
+      { inputImage: { bytes, mimeType: 'image/png' } },
       ctx()
     );
-    expect(sent.instances).toEqual([
-      {
-        prompt: 'a lighthouse',
-        image: { inlineData: { mimeType: 'image/png', data: Buffer.from('png').toString('base64') } },
-      },
-    ]);
+    // The recording redacts the image bytes, so compare with them redacted in the sent body too.
+    const redact = (body: unknown) =>
+      JSON.parse(
+        JSON.stringify(body).replace(bytes.toString('base64'), recorded.instances[0].image.bytesBase64Encoded)
+      ) as unknown;
+    expect(redact(sent)).toEqual(recorded);
+  });
+
+  it('does not send personGeneration for text-to-video', async () => {
+    let sent: { parameters?: Record<string, unknown> } = {};
+    server.use(
+      http.post(SUBMIT, async ({ request: r }) => {
+        sent = (await r.json()) as typeof sent;
+        return reply(exchange(FIXTURES.succeeds, 'submit'));
+      })
+    );
+    await new VeoVideoProvider().submit(request(), {}, ctx());
+    expect(sent.parameters).not.toHaveProperty('personGeneration');
+  });
+
+  it('maps the rejected inlineData 400 to a definitive non-retryable error', async () => {
+    active = FIXTURES.imageRejected;
+    const error = await new VeoVideoProvider()
+      .submit(
+        request({ mode: 'image_to_video', inputImageFileId: 'f1' }),
+        { inputImage: { bytes: Buffer.from('png'), mimeType: 'image/png' } },
+        ctx()
+      )
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ definitive: true, retryable: false, message: 'veo_http_400' });
   });
 
   it('carries image-to-video through to a succeeded url output', async () => {
@@ -286,6 +318,16 @@ describe('VeoVideoProvider specifics', () => {
     expect(result.status === 'failed' && result.raw).toEqual(exchange(FIXTURES.fails, 'poll_terminal').response.body);
   });
 
+  it('reads the live internal failure (done, code 13, no video) as a non-retryable failure', async () => {
+    active = FIXTURES.failedInternal;
+    settled = true;
+    const result = await new VeoVideoProvider().poll(handleFor(OPERATION), ctx());
+    expect(result).toMatchObject({ status: 'failed', retryable: false, message: 'veo_failed' });
+    expect(result.status === 'failed' && result.raw).toEqual(
+      exchange(FIXTURES.failedInternal, 'poll_terminal').response.body
+    );
+  });
+
   it('reads the fixture RAI filter as blocked without marking it billed', async () => {
     active = FIXTURES.blocked;
     settled = true;
@@ -322,6 +364,16 @@ describe('VeoVideoProvider specifics', () => {
     });
     expect(result).toMatchObject({ status: 'blocked' });
   });
+
+  it.each(['Rejected under our usage guidelines.', 'Violates Responsible AI practices.', 'Content policy violation.'])(
+    'reads a done operation error worded %j as blocked',
+    async message => {
+      expect(await pollWith({ name: OPERATION, done: true, error: { code: 3, message } })).toMatchObject({
+        status: 'blocked',
+        reason: 'veo_safety',
+      });
+    }
+  );
 
   it('fails a done operation with neither a video nor a filter verdict', async () => {
     expect(await pollWith(doneWith({ generatedSamples: [] }))).toMatchObject({

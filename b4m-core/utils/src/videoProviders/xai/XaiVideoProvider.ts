@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
+import { readJson } from '../http';
 import {
   ProviderOutputUnavailableError,
   ProviderSubmitError,
@@ -55,15 +56,6 @@ const PollSchema = z.looseObject({
   error: ErrorObjectSchema.nullish(),
 });
 type PollBody = z.infer<typeof PollSchema>;
-
-const readJson = async (response: Response): Promise<unknown> => {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-};
 
 // Live codes are hyphenated and may carry a namespace ("imagine:content-moderated"): drop the namespace, read `-` as `_`.
 const normaliseCode = (code: string | undefined): string | undefined =>

@@ -17,7 +17,8 @@ export const scrubBody = (value: unknown): unknown => {
   if (typeof value === 'string') return looksLikeUrl(value) ? scrubUrl(value) : value;
   if (typeof value !== 'object' || value === null) return value;
   const entries = Object.entries(value).map(([key, inner]): [string, unknown] => {
-    if (key === 'data' && typeof inner === 'string') return [key, `<redacted:base64 ${inner.length} chars>`];
+    if ((key === 'data' || key === 'bytesBase64Encoded') && typeof inner === 'string')
+      return [key, `<redacted:base64 ${inner.length} chars>`];
     return [key, scrubBody(inner)];
   });
   return Object.fromEntries(entries);
