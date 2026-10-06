@@ -53,7 +53,7 @@ export const generateImageContract = defineEndpoint({
     'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
     'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +
     '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
-    'of `GET /api/models`. Credits are checked when the render runs, so ' +
+    'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-image` ' +
     'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,

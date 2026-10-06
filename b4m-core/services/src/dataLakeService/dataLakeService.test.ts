@@ -1456,6 +1456,129 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
 
     expect(fallback?.isOwn).toBe(false);
     expect(fallback && 'ownerDisplayName' in fallback).toBe(false);
+    expect(fallback && 'ownerUserId' in fallback).toBe(false);
+  });
+
+  const ownerGrants = (rows: { dataLakeId: string; principalId: string }[]) => ({
+    listByPrincipal: vi.fn().mockResolvedValue([]),
+    listActiveByLakes: vi.fn().mockResolvedValue(rows.map(r => ({ ...r, principalType: 'user', role: 'owner' }))),
+  });
+  const listDb = (lakes: IDataLakeDocument[], extra: Record<string, unknown> = {}) => ({
+    dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      findAccessible: vi.fn().mockResolvedValue(lakes),
+      find: vi.fn().mockResolvedValue(lakes),
+    },
+    ...extra,
+  });
+
+  it('keys two same-named creators apart by ownerUserId and carries each username', async () => {
+    const a = lake({ id: 'a', slug: 'a', createdByUserId: 'u1', isPublic: true });
+    const b = lake({ id: 'b', slug: 'b', createdByUserId: 'u2', isPublic: true });
+    const users = usersPort([
+      { id: 'u1', name: 'Dana', username: 'dana42' },
+      { id: 'u2', name: 'Dana', username: 'dana7' },
+    ]);
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db: listDb([a, b], { users }) });
+
+    expect(result.find(l => l.id === 'a')).toMatchObject({
+      ownerDisplayName: 'Dana',
+      ownerUserId: 'u1',
+      ownerUsername: 'dana42',
+    });
+    expect(result.find(l => l.id === 'b')).toMatchObject({
+      ownerDisplayName: 'Dana',
+      ownerUserId: 'u2',
+      ownerUsername: 'dana7',
+    });
+  });
+
+  it.each([
+    ['listDataLakes', listDataLakes, false],
+    ['listAllDataLakes', listAllDataLakes, true],
+  ] as const)('%s labels a transferred lake with the owner-grant holder, not the creator', async (_, list, isAdmin) => {
+    const moved = lake({ id: 'moved', slug: 'moved', createdByUserId: 'creator', isPublic: true });
+    const users = usersPort([
+      { id: 'creator', name: 'Cora Creator' },
+      { id: 'grantee', name: 'Gus Grantee', username: 'gus' },
+    ]);
+    const db = listDb([moved], {
+      users,
+      dataLakeAccessGrants: ownerGrants([{ dataLakeId: 'moved', principalId: 'grantee' }]),
+    });
+
+    const result = await list(ctx({ userId: 'caller', isAdmin }), { db });
+
+    expect(users.findByIds).toHaveBeenCalledTimes(1);
+    expect(users.findByIds).toHaveBeenCalledWith(['grantee']);
+    expect(result.find(l => l.id === 'moved')).toMatchObject({
+      isOwn: false,
+      ownerDisplayName: 'Gus Grantee',
+      ownerUserId: 'grantee',
+      ownerUsername: 'gus',
+    });
+  });
+
+  it('shows the creator their transferred-away lake under the new owner, and the new owner as their own', async () => {
+    const moved = lake({ id: 'moved', slug: 'moved', createdByUserId: 'creator', isPublic: true });
+    const dbFor = () =>
+      listDb([moved], {
+        users: usersPort([{ id: 'grantee', name: 'Gus Grantee' }]),
+        dataLakeAccessGrants: ownerGrants([{ dataLakeId: 'moved', principalId: 'grantee' }]),
+      });
+
+    const asCreator = (await listDataLakes(ctx({ userId: 'creator' }), { db: dbFor() })).find(l => l.id === 'moved');
+    expect(asCreator).toMatchObject({ isOwn: false, ownerDisplayName: 'Gus Grantee', ownerUserId: 'grantee' });
+
+    const asGrantee = (await listDataLakes(ctx({ userId: 'grantee' }), { db: dbFor() })).find(l => l.id === 'moved');
+    expect(asGrantee?.isOwn).toBe(true);
+    expect(asGrantee && ('ownerDisplayName' in asGrantee || 'ownerUserId' in asGrantee)).toBe(false);
+  });
+
+  it('picks the lexically smallest owner id when a lake has two owner grants, whatever the row order', async () => {
+    const shared = lake({ id: 'shared', slug: 'shared', createdByUserId: 'creator', isPublic: true });
+    const db = listDb([shared], {
+      users: usersPort([
+        { id: 'owner-a', name: 'Ann' },
+        { id: 'owner-b', name: 'Bob' },
+      ]),
+      dataLakeAccessGrants: ownerGrants([
+        { dataLakeId: 'shared', principalId: 'owner-b' },
+        { dataLakeId: 'shared', principalId: 'owner-a' },
+      ]),
+    });
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'shared')).toMatchObject({ ownerDisplayName: 'Ann', ownerUserId: 'owner-a' });
+  });
+
+  it('omits every owner field on own lakes, without a user lookup, and when no name resolves', async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const ownerFields = (l?: object) => ['ownerDisplayName', 'ownerUserId', 'ownerUsername'].filter(k => l && k in l);
+
+    const withNameless = await listDataLakes(ctx({ userId: 'me' }), {
+      db: listDb([mine, theirs], { users: usersPort([{ id: 'other' }]) }),
+    });
+    expect(ownerFields(withNameless.find(l => l.id === 'mine'))).toEqual([]);
+    expect(ownerFields(withNameless.find(l => l.id === 'theirs'))).toEqual([]);
+
+    const noLookup = await listDataLakes(ctx({ userId: 'me' }), { db: listDb([theirs]) });
+    expect(ownerFields(noLookup.find(l => l.id === 'theirs'))).toEqual([]);
+  });
+
+  it('omits ownerUsername alone when the owner has a name but no username', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), {
+      db: listDb([theirs], { users: usersPort([{ id: 'other', name: 'Ada' }]) }),
+    });
+    const theirsResult = result.find(l => l.id === 'theirs');
+
+    expect(theirsResult).toMatchObject({ ownerDisplayName: 'Ada', ownerUserId: 'other' });
+    expect(theirsResult && 'ownerUsername' in theirsResult).toBe(false);
   });
 });
 

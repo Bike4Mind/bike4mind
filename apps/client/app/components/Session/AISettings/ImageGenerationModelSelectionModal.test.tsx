@@ -284,6 +284,43 @@ describe('ImageGenerationModelSelectionModal - settings the selected model ignor
   });
 });
 
+describe('ImageGenerationModelSelectionModal - Image Size row', () => {
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+  });
+
+  const renderModal = () =>
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+  it.each([
+    ImageModels.FLUX_PRO_ULTRA,
+    ImageModels.FLUX_PRO_FILL,
+    ImageModels.FLUX_KONTEXT_PRO,
+    ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
+    ImageModels.GEMINI_3_PRO_IMAGE,
+  ])('hides the row for %s, which takes no size', model => {
+    mockImageModel = model;
+
+    const { queryByTestId, getByTestId } = renderModal();
+
+    expect(queryByTestId('image-setting-size-select')).toBeNull();
+    // The rest of the settings still render, so the row is gone rather than the whole form.
+    expect(getByTestId('image-setting-quality-select')).toBeInTheDocument();
+  });
+
+  it.each([ImageModels.FLUX_PRO_1_1, ImageModels.GPT_IMAGE_2])('shows the row for %s', model => {
+    mockImageModel = model;
+
+    const { getByTestId } = renderModal();
+
+    expect(getByTestId('image-setting-size-select')).toBeInTheDocument();
+  });
+});
+
 describe('ImageGenerationModelSelectionModal - Quality select', () => {
   beforeEach(() => {
     mockSetLLM.mockClear();

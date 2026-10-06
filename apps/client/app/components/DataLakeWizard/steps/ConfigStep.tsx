@@ -21,9 +21,9 @@ import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dat
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
-import { slugifyDataLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
-import { activeOrgId, useDataLakeSlugPreview, useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
-import { canReuseRecoverableLake } from '@client/app/hooks/data/dataLakeUploadPipeline';
+import { submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
+import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
@@ -45,20 +45,8 @@ export default function ConfigStep() {
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
 
-  // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
-  // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
-  // on the source step; they appear here read-only in the summary. Create mode asks the server,
-  // because a lake (even a deleted one) already holding the slug pushes the new one to "-1";
-  // slugify is only the fallback while that loads or if it fails. A retry that will restore the
-  // lake a failed attempt archived (same rule as resolveCreateModeLake) keeps that lake's slug.
-  const recoverableLake = useDataLakeWizardStore(s => s.recoverableLake);
-  const reusedLake = canReuseRecoverableLake(recoverableLake, submittedTagPrefix(config.tagPrefix), activeOrgId())
-    ? recoverableLake
-    : null;
-  const slugPreview = useDataLakeSlugPreview(config.name, !targetLake && !reusedLake && !!config.name);
-  const slug = targetLake
-    ? targetLake.slug
-    : (reusedLake?.slug ?? slugPreview.data ?? slugifyDataLakeName(config.name));
+  // Name and slug are set on the source step; they appear here read-only in the summary.
+  const slug = useWizardLakeSlug();
 
   // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
   // owner, was removed - AI tag suggestion now runs post-upload and never touches the prefix).

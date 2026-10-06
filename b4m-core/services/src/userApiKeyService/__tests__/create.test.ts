@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createHash } from 'crypto';
 import {
   createUserApiKey,
   EMBED_SPEND_CAP_MAX_CREDITS,
@@ -6,7 +7,7 @@ import {
   MAX_ACTIVE_EXCHANGE_KEYS_PER_USER,
   MAX_ACTIVE_KEYS_PER_USER,
 } from '../create';
-import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, BadRequestError, CreditHolderType, IUserApiKeyRepository } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -161,6 +162,22 @@ describe('createUserApiKey - callback signing secret', () => {
     const [document] = repo.create.mock.calls[0];
     expect(typeof document.callbackSigningSecret).toBe('string');
     expect(result.callbackSigningSecret).toMatch(/^whsec_/);
+  });
+});
+
+describe('createUserApiKey - SHA-256 key digest', () => {
+  it('persists the hex SHA-256 of the raw key alongside the bcrypt hash, and never returns either', async () => {
+    const repo = makeRepo();
+    const result = await createUserApiKey('sys-1', baseParams, {
+      db: { userApiKeys: repo as any },
+      systemUserId: 'sys-1',
+    });
+
+    const [document] = repo.create.mock.calls[0];
+    expect(document.keyDigest).toBe(createHash('sha256').update(result.key).digest('hex'));
+    expect(document.keyHash).toEqual(expect.any(String));
+    expect(result).not.toHaveProperty('keyDigest');
+    expect(result).not.toHaveProperty('keyHash');
   });
 });
 
@@ -500,5 +517,238 @@ describe('createUserApiKey - per-user cap pools', () => {
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error?.message).toBe('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
     expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+const chatParams = {
+  name: 'Test key',
+  scopes: [ApiKeyScope.AI_CHAT],
+  metadata: { createdFrom: 'dashboard' as const },
+};
+
+describe('userApiKeyService - createUserApiKey org billing', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('defaults to User billing when no billing target is given', async () => {
+    const result = await createUserApiKey('user1', chatParams, { db: { userApiKeys: repo } });
+
+    expect(result.billingOwnerType).toBe(CreditHolderType.User);
+    expect(result.organizationId).toBeUndefined();
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOwnerType: CreditHolderType.User, organizationId: undefined })
+    );
+  });
+
+  it('persists an org billing target when both fields agree', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
+    expect(result.organizationId).toBe('org1');
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ billingOwnerType: CreditHolderType.Organization, organizationId: 'org1' })
+    );
+  });
+
+  it('rejects Organization billing without an organizationId', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, billingOwnerType: CreditHolderType.Organization },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/organizationId must be set/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an organizationId without Organization billing', async () => {
+    await expect(
+      createUserApiKey('user1', { ...chatParams, organizationId: 'org1' }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow(/organizationId must be set/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects billing an API key to an agent', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, billingOwnerType: CreditHolderType.Agent, organizationId: 'org1' },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/cannot be billed to an agent/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - createUserApiKey confined-scope mint guard', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('rejects a confined scope (overwatch-ingest:write) minted alongside an ordinary scope', async () => {
+    // The runtime gate confines such a key anyway, so the ordinary scope is reach the
+    // key would immediately lose - refuse it at mint instead of persisting the hole.
+    await expect(
+      createUserApiKey(
+        'user1',
+        {
+          ...chatParams,
+          scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE, ApiKeyScope.READ_NOTEBOOKS],
+          productId: 'prod-1',
+        },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/confined scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a confined scope minted on its own', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.OVERWATCH_INGEST_WRITE], productId: 'prod-1' },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.id).toBe('key-1');
+    expect(repo.create).toHaveBeenCalled();
+  });
+
+  it('reports the confined-scope reason before the embed agentId requirement', async () => {
+    // embed:chat + an ordinary scope with no agentId: the actionable error is the
+    // single-scope rule, not the downstream missing agentId.
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, scopes: [ApiKeyScope.EMBED_CHAT, ApiKeyScope.READ_NOTEBOOKS] },
+        { db: { userApiKeys: repo } }
+      )
+    ).rejects.toThrow(/confined scope/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - createUserApiKey preauthorizedLakeIds', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('persists preauthorizedLakeIds without any existence or manage check at mint time', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...chatParams, preauthorizedLakeIds: ['lake1', 'lake2'] },
+      { db: { userApiKeys: repo } }
+    );
+
+    expect(result.preauthorizedLakeIds).toEqual(['lake1', 'lake2']);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ preauthorizedLakeIds: ['lake1', 'lake2'] }));
+  });
+
+  it('leaves preauthorizedLakeIds undefined when not given', async () => {
+    const result = await createUserApiKey('user1', chatParams, { db: { userApiKeys: repo } });
+
+    expect(result.preauthorizedLakeIds).toBeUndefined();
+  });
+
+  it('rejects more than 25 pre-authorized lake ids', async () => {
+    const ids = Array.from({ length: 26 }, (_, i) => `lake${i}`);
+    await expect(
+      createUserApiKey('user1', { ...chatParams, preauthorizedLakeIds: ids }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('userApiKeyService - createUserApiKey no escalation by minting', () => {
+  let repo: IUserApiKeyRepository;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    repo = makeRepo() as unknown as IUserApiKeyRepository;
+  });
+
+  it('refuses an API-key caller minting a scope it does not hold', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
+        { db: { userApiKeys: repo }, callerScopes: [ApiKeyScope.AI_CHAT] }
+      )
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('does not treat admin:* as a superset of other scopes', async () => {
+    await expect(
+      createUserApiKey('user1', chatParams, { db: { userApiKeys: repo }, callerScopes: [ApiKeyScope.ADMIN] })
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('denies every mint for a caller key with no scopes', async () => {
+    await expect(
+      createUserApiKey('user1', chatParams, { db: { userApiKeys: repo }, callerScopes: [] })
+    ).rejects.toThrow(/scopes the calling key does not have/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an API-key caller minting a subset of its own scopes', async () => {
+    await createUserApiKey('user1', chatParams, {
+      db: { userApiKeys: repo },
+      callerScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES],
+    });
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ scopes: [ApiKeyScope.AI_CHAT] }));
+  });
+
+  it('leaves a browser/JWT caller (no callerScopes) unrestricted', async () => {
+    await createUserApiKey(
+      'user1',
+      { ...chatParams, scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.WRITE_FILES] },
+      { db: { userApiKeys: repo } }
+    );
+    expect(repo.create).toHaveBeenCalled();
+  });
+
+  it('refuses a non-expiring child key when the caller key expires', async () => {
+    await expect(
+      createUserApiKey('user1', chatParams, {
+        db: { userApiKeys: repo },
+        callerExpiresAt: new Date('2027-01-01'),
+      })
+    ).rejects.toThrow(/outlives the calling key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a child key whose expiry is later than the caller key', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...chatParams, expiresAt: new Date('2027-06-01') },
+        { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
+      )
+    ).rejects.toThrow(/outlives the calling key/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a child key whose expiry is on or before the caller key', async () => {
+    await createUserApiKey(
+      'user1',
+      { ...chatParams, expiresAt: new Date('2027-01-01') },
+      { db: { userApiKeys: repo }, callerExpiresAt: new Date('2027-01-01') }
+    );
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ expiresAt: new Date('2027-01-01') }));
   });
 });

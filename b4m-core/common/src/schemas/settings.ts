@@ -540,6 +540,9 @@ export const SettingKeySchema = z.enum([
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
 
+  // VIDEO GENERATION
+  'videoGeneration',
+
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
   'modelDiscoveryMode',
@@ -1079,6 +1082,13 @@ export const RapidReplySettingsSchema = z.object({
 });
 
 export type RapidReplySettings = z.infer<typeof RapidReplySettingsSchema>;
+
+export const VideoGenerationSettingsSchema = z.object({
+  // Per-model override of VIDEO_MODEL_CATALOG[id].defaultEnabled; see isVideoModelEnabled in ../video/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -4766,6 +4776,17 @@ export const settingsMap = {
     category: 'AI',
     order: 140,
     schema: OrchestrationDefaultsSchema,
+  }),
+  videoGeneration: makeObjectSetting({
+    key: 'videoGeneration',
+    userReadable: true,
+    name: 'Video Generation',
+    defaultValue: VideoGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual video generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 145,
+    schema: VideoGenerationSettingsSchema,
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

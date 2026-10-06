@@ -17,7 +17,8 @@ const markdownStyles = {
     py: 0.25,
     borderRadius: 'sm',
     fontSize: '0.85em',
-    bgcolor: 'neutral.100',
+    bgcolor: 'background.level1',
+    color: 'text.primary',
   },
   '& pre': {
     p: 2,
@@ -38,20 +39,21 @@ const markdownStyles = {
     mb: 2,
     '& th, & td': {
       border: '1px solid',
-      borderColor: 'neutral.300',
+      borderColor: 'divider',
       px: 1.5,
       py: 1,
       textAlign: 'left',
       fontSize: '0.875rem',
     },
     '& th': {
-      bgcolor: 'neutral.100',
+      bgcolor: 'background.level1',
+      color: 'text.primary',
       fontWeight: 600,
     },
   },
   '& hr': {
     my: 3,
-    borderColor: 'neutral.200',
+    borderColor: 'divider',
   },
   '& strong': {
     fontWeight: 600,

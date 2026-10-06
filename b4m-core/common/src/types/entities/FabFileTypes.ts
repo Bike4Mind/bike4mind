@@ -28,6 +28,8 @@ export enum KnowledgeType {
    * excluded from every LLM-attachment and vectorization path.
    */
   AUDIO = 'AUDIO',
+  /** Generated video. Media-only like AUDIO: storable and browsable, never ingested. */
+  VIDEO = 'VIDEO',
 }
 
 // Data Lake source types
@@ -39,6 +41,12 @@ export enum FabFileSourceType {
   /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
   PROPOSAL_APPROVAL = 'proposal_approval',
   GITHUB = 'github',
+  /**
+   * Produced by an in-chat tool (image/audio/music/Excel generation). `sourceMetadata.sessionId`
+   * links it to the notebook it was made in - see persistGeneratedFileAsFabFile for why that link
+   * is not the top-level `sessionId`.
+   */
+  TOOL_GENERATED = 'tool_generated',
 }
 
 /**
@@ -1180,6 +1188,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
+  /** Every non-deleted file an in-chat tool generated in the given session (`FabFileSourceType.TOOL_GENERATED`). */
+  findToolGeneratedBySessionId(sessionId: string): Promise<IFabFileDocument[]>;
 
   /**
    * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one

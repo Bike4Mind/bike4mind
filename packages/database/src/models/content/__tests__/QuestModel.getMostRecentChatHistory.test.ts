@@ -72,4 +72,20 @@ describe('QuestModel.getMostRecentChatHistory', () => {
       { label: 'Option B', description: 'Do the second thing.' },
     ]);
   });
+
+  // Regression lock, same inclusion-mode trap as above: pinned is typed on IChatHistoryItemDocument
+  // but was missing from the projection, so every caller would have read undefined.
+  it('returns the persisted pinned value for pinned and unpinned rows', async () => {
+    await Quest.create(makeQuest({ prompt: 'older', pinned: true, timestamp: new Date(1_000) }));
+    await Quest.create(makeQuest({ prompt: 'newer', timestamp: new Date(2_000) }));
+
+    const history = await questRepository.getMostRecentChatHistory('session-1', 10);
+
+    // 'newer' reads back false because Quest.create stores the schema default; the read is .lean(),
+    // so a row written before the field existed would still read undefined.
+    expect(history.map(m => [m.prompt, m.pinned])).toEqual([
+      ['newer', false],
+      ['older', true],
+    ]);
+  });
 });

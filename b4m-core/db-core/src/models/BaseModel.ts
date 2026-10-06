@@ -216,6 +216,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     // past ours. Only the race is worth surfacing; a genuine not-found keeps `update`'s null contract.
     if (versioned) {
       const existsQuery = this.model.exists(idFilter as mongoose.FilterQuery<T>);
+      // A write that may reach a tombstone must also see one here, or a race on it reads as not-found.
+      if (queryOptions.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
       if (this._txn) existsQuery.session(this._txn);
       if (await existsQuery) {
         throw new ConcurrencyConflictError(this.model.modelName, { filter: idFilter });

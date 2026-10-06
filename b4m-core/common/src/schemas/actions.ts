@@ -11,6 +11,7 @@ import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
+import { GENERATION_JOB_KINDS, GENERATION_JOB_STATES } from '../types/entities/GenerationJobTypes';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 
 // Schemas for actions sent over the WebSocket connection.
@@ -344,6 +345,21 @@ export const PiHistoryErrorAction = z.object({
   clientId: z.string().optional(),
 });
 export type IPiHistoryErrorAction = z.infer<typeof PiHistoryErrorAction>;
+
+export const GenerationJobUpdatedAction = z.object({
+  action: z.literal('generation_job_updated'),
+  job: z.object({
+    id: z.string(),
+    kind: z.enum(GENERATION_JOB_KINDS),
+    state: z.enum(GENERATION_JOB_STATES),
+    progress: z.number().min(0).max(1).optional(),
+    error: z.object({ code: z.string(), message: z.string() }).optional(),
+    output: z
+      .object({ fileId: z.string().optional(), contentType: z.string(), durationSeconds: z.number() })
+      .optional(),
+  }),
+});
+export type IGenerationJobUpdatedAction = z.infer<typeof GenerationJobUpdatedAction>;
 
 export const StreamedChatCompletionAction = z.object({
   action: z.literal('streamed_chat_completion'),
@@ -1553,6 +1569,7 @@ export const OptiHashiRunUpdatedAction = z.object({
 export type IOptiHashiRunUpdatedAction = z.infer<typeof OptiHashiRunUpdatedAction>;
 
 export const MessageDataToClient = z.discriminatedUnion('action', [
+  GenerationJobUpdatedAction,
   DataSubscriptionUpdateAction,
   DataSubscribeErrorAction,
   InboxRefetchAction,

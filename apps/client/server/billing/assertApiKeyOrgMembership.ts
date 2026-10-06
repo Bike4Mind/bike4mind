@@ -9,13 +9,12 @@ import { BadRequestError } from '@server/utils/errors';
  * and never revisited, so a key whose minting user has since left the org would keep drawing on that
  * org's shared pool. Scoped to the API-key path only: that caller asked for org billing explicitly,
  * whereas the implicit JWT own-org fallback must degrade rather than refuse a caller on a stale
- * pointer. Mirrors the check in executeCompletion (b4m-core/services/src/cliCompletions.ts).
+ * pointer. executeCompletion (b4m-core/services/src/cliCompletions.ts) applies the same rule on the
+ * completions path but throws a plain Error, so keep the two rules in step when either changes.
  *
  * A platform admin mints org-billed keys on a customer org's behalf (user-api-keys/index.ts admits
  * them explicitly) and is never on that org's roster, so the authority arm is checked here rather
  * than inside isCurrentOrgMember, which reports roster attachment only.
- *
- * Shared by reserveRequestCredits and runLakeSemanticSearch.
  */
 export function assertApiKeyOrgMembership({
   billingOrg,

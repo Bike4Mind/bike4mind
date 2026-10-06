@@ -296,6 +296,7 @@ describe('buildOpenApiDocument', () => {
       ['/api/sessions/{id}', 'put'],
       ['/api/v1/me', 'get'],
       ['/api/v1/credits', 'get'],
+      ['/api/v1/models', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;
