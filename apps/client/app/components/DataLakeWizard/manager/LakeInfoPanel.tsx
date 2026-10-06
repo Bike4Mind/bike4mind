@@ -52,7 +52,7 @@ import LakeGitHubStatusChip from '@client/app/components/datalake/LakeGitHubStat
 import { isDraftLake, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
 import AddExistingFilesModal from './AddExistingFilesModal';
-import FinishGitHubConnectBanner from './FinishGitHubConnectBanner';
+import FinishSourceConnectBanner from './FinishSourceConnectBanner';
 import type { ManagerLake } from './shared';
 
 // Right pane: selected lake's details + management actions
@@ -228,7 +228,7 @@ export function LakeInfoPanel({
         >
           {lake.name}
         </Typography>
-        <FinishGitHubConnectBanner lake={lake} fileCount={fileCount} />
+        <FinishSourceConnectBanner lake={lake} fileCount={fileCount} />
         <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 1, mb: 1 }}>
           {/* Start chat is available to ANY user who can reach the lake (not manage-gated; draft
               lakes confirm first): it opens a session scoped to this lake, applying the lake's preferred prompt server-side.
