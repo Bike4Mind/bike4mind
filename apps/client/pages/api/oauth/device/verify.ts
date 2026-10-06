@@ -1,8 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { deviceAuthorizationRepository, DeviceAuthorizationModel } from '@bike4mind/database';
+import { cacheRepository, deviceAuthorizationRepository, DeviceAuthorizationModel } from '@bike4mind/database';
 import { z } from 'zod';
 import { LEGACY_DEVICE_CLIENT_ID, oauthClientDisplayName } from '@bike4mind/common';
+import { LIVE_PENDING_COUNTER_KEY } from '@server/utils/oauth/deviceAuthHelpers';
 
 const VerifyRequestSchema = z.object({
   user_code: z.string(),
@@ -45,14 +46,25 @@ const handler = baseApi()
 
     // direct model update: BaseRepository.update() strips userId to avoid path
     // ambiguity with ShareableDocumentSchema, but DeviceAuthorization needs it set here.
-    await DeviceAuthorizationModel.findByIdAndUpdate(authorization.id, {
-      $set: {
-        status: action === 'approve' ? 'approved' : 'denied',
-        userId: action === 'approve' ? userId : null,
-        approvedAt: action === 'approve' ? new Date() : null,
-        verificationAttempts: authorization.verificationAttempts + 1,
+    // status: 'pending' guard makes this atomic: if two requests arrive for the same
+    // user_code, only the first findByIdAndUpdate matches and returns a document; the
+    // second returns null and skips the counter decrement, preventing a double-decrement.
+    const transitioned = await DeviceAuthorizationModel.findByIdAndUpdate(
+      { _id: authorization.id, status: 'pending' },
+      {
+        $set: {
+          status: action === 'approve' ? 'approved' : 'denied',
+          userId: action === 'approve' ? userId : null,
+          approvedAt: action === 'approve' ? new Date() : null,
+          verificationAttempts: authorization.verificationAttempts + 1,
+        },
       },
-    });
+      { new: false }
+    );
+
+    if (transitioned) {
+      await cacheRepository.decrementCounter(LIVE_PENDING_COUNTER_KEY);
+    }
 
     // TODO: Add audit logging for security
 

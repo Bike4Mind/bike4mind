@@ -928,6 +928,27 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Device auth counter reconciliation - resets the live-pending Cache counter to the
+// true DB count once per minute, correcting drift from TTL-expired documents that
+// never went through device/verify.
+const deviceAuthCounterReconcileCron = new sst.aws.Cron('deviceAuthCounterReconcile', {
+  schedule: 'rate(1 minute)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/deviceAuthCounterReconcile.handler',
+    runtime: 'nodejs24.x',
+    timeout: '1 minute',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '3 days',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 /**
  * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
  * Computes computeLakeHealth for every active lake and persists one row per lake per day, so a
@@ -1035,4 +1056,5 @@ export {
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
   lakeInconsistencySweepCron,
+  deviceAuthCounterReconcileCron,
 };

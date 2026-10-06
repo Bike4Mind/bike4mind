@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 
 /**
  * POST /api/oauth/device/verify feeds the browser approval screen's device_info.
@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findByUserCode: vi.fn(),
-  findByIdAndUpdate: vi.fn(async () => undefined),
+  findByIdAndUpdate: vi.fn(async () => ({ id: 'auth-1' })), // non-null = transition fired
+  decrementCounter: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -22,7 +23,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@server/utils/oauth/deviceAuthHelpers', () => ({
+  LIVE_PENDING_COUNTER_KEY: 'device-auth:live-pending-count',
+}));
+vi.mock('@bike4mind/common', () => ({
+  LEGACY_DEVICE_CLIENT_ID: 'b4m-cli',
+  oauthClientDisplayName: (id: string) => (id === 'b4m-cli' ? 'B4M CLI' : id === 'b4m-desktop' ? 'B4M Desktop' : id),
+}));
 vi.mock('@bike4mind/database', () => ({
+  cacheRepository: { decrementCounter: h.decrementCounter },
   deviceAuthorizationRepository: { findByUserCode: h.findByUserCode },
   DeviceAuthorizationModel: { findByIdAndUpdate: h.findByIdAndUpdate },
 }));
@@ -65,6 +74,7 @@ const pendingFor = (clientId?: string) => ({
 
 describe('POST /api/oauth/device/verify consent screen client', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   it('reports the CLI when the CLI initiated the flow', async () => {
     (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
@@ -90,5 +100,53 @@ describe('POST /api/oauth/device/verify consent screen client', () => {
     const res = await call();
 
     expect(res.body?.device_info?.client_type).toBe('b4m-cli');
+  });
+});
+
+describe('POST /api/oauth/device/verify live-pending counter decrement', () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  const callWith = (action: 'approve' | 'deny') => {
+    const res = mockRes();
+    const req = { body: { user_code: 'WXYZ-1234', action }, user: { id: 'u1' } };
+    return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)(req, res).then(() => res);
+  };
+
+  it('decrements the live-pending counter once when approving', async () => {
+    (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
+    (h.findByIdAndUpdate as Mock).mockResolvedValue({ id: 'auth-1' });
+
+    await callWith('approve');
+
+    expect(h.decrementCounter).toHaveBeenCalledTimes(1);
+  });
+
+  it('decrements the live-pending counter once when denying', async () => {
+    (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
+    (h.findByIdAndUpdate as Mock).mockResolvedValue({ id: 'auth-1' });
+
+    await callWith('deny');
+
+    expect(h.decrementCounter).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not decrement when findByIdAndUpdate returns null (concurrent double-verify guard)', async () => {
+    (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
+    // null = another concurrent verify already transitioned the doc; $set on status:'pending' matched nothing
+    (h.findByIdAndUpdate as Mock).mockResolvedValue(null);
+
+    await callWith('approve');
+
+    expect(h.decrementCounter).not.toHaveBeenCalled();
+  });
+
+  it('does not decrement when the authorization is not found', async () => {
+    (h.findByUserCode as Mock).mockResolvedValue(null);
+
+    const res = await callWith('approve');
+
+    expect(res.statusCode).toBe(404);
+    expect(h.decrementCounter).not.toHaveBeenCalled();
   });
 });
