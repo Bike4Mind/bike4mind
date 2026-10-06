@@ -283,6 +283,24 @@ async function isLakeConvergencePaused(lake: LakeTarget): Promise<boolean> {
   }
 }
 
+// findBySlug skips deleted/purging lakes, so a miss (or an org-less hit under --organizationId) may
+// be a fall-through past the scope's own lake. Returns that skipped lake for resolveLakeTarget to refuse.
+export async function findUnresolvableShadow(
+  slug: string,
+  scopeOrg: string | undefined,
+  dbLake: { organizationId?: unknown } | null
+): Promise<{ status: string; organizationId?: string } | null> {
+  if (dbLake && (!scopeOrg || String(dbLake.organizationId ?? '') === scopeOrg)) return null;
+  const sameScope = await dataLakeRepository.find({
+    ...(scopeOrg ? { organizationId: scopeOrg } : { organizationId: { $in: [null, ''] } }),
+    slug,
+  });
+  const hidden = sameScope.find(l =>
+    (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(l.status ?? '')
+  );
+  return hidden?.status ? { status: hidden.status, organizationId: scopeOrg } : null;
+}
+
 export async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
   // Refuse BEFORE touching anything, the same argument as the pre-check in
   // pages/api/data-lakes/[id]/converge.ts: the consumer's halt only fires once the message is off the
@@ -564,20 +582,7 @@ async function main(opts: Options): Promise<number> {
     opts.slug,
     opts.organizationId ? [opts.organizationId] : undefined
   );
-  // findBySlug skips deleted/purging lakes, so a miss (or an org-less hit under --organizationId)
-  // may be a fall-through past the scope's own lake: look it up unfiltered and refuse if so.
-  const scopeOrg = opts.organizationId;
-  let shadow: { status: string; organizationId?: string } | null = null;
-  if (!dbLake || (scopeOrg && String(dbLake.organizationId ?? '') !== scopeOrg)) {
-    const sameScope = await dataLakeRepository.find({
-      ...(scopeOrg ? { organizationId: scopeOrg } : { organizationId: { $in: [null, ''] } }),
-      slug: opts.slug,
-    });
-    const hidden = sameScope.find(l =>
-      (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(l.status ?? '')
-    );
-    if (hidden?.status) shadow = { status: hidden.status, organizationId: scopeOrg };
-  }
+  const shadow = await findUnresolvableShadow(opts.slug, opts.organizationId, dbLake);
   const lake = resolveLakeTarget(
     opts.slug,
     dbLake
