@@ -172,6 +172,7 @@ const ACTIVE_LAKE = { id: 'lake1', organizationId: 'orgA', status: 'active', ori
 const INSTALLATION: GitHubLakeInstallation = {
   id: 42,
   accountLogin: 'acme',
+  accountId: 9001,
   repositorySelection: 'selected',
   permissions: { contents: 'read', metadata: 'read' },
 };
@@ -205,6 +206,8 @@ describe('toGitHubLakeConnectionResponse', () => {
     connectedAt,
   };
 
+  beforeEach(() => h.getGitHubLakeAppConfig.mockReturnValue(CONFIG));
+
   it('exposes sync state and the file count, never credentials or claim fields', () => {
     const lastSyncedAt = new Date('2026-02-01');
     const conn = {
@@ -236,7 +239,33 @@ describe('toGitHubLakeConnectionResponse', () => {
       fileCount: 5,
       disconnecting: false,
       disconnectStalled: false,
+      fixAccessUrl: `https://github.com/apps/${CONFIG.slug}/installations/new`,
     });
+  });
+
+  it('targets the fix link at the account, so a non-owner is not sent to the settings page GitHub 404s', () => {
+    const conn = { ...base, accountId: 9001 } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0).fixAccessUrl).toBe(
+      `https://github.com/apps/${CONFIG.slug}/installations/new/permissions?target_id=9001`
+    );
+  });
+
+  it('falls back to the untargeted install page for a row written before accountId was recorded', () => {
+    const conn = base as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0).fixAccessUrl).toBe(
+      `https://github.com/apps/${CONFIG.slug}/installations/new`
+    );
+  });
+
+  it('reports no fix link at all when the data-lake App is unconfigured on this deployment', () => {
+    h.getGitHubLakeAppConfig.mockReturnValue(null);
+    const conn = { ...base, accountId: 9001 } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0).fixAccessUrl).toBeNull();
+  });
+
+  it('carries access_lost through to the client rather than flattening it to a generic error', () => {
+    const conn = { ...base, status: 'access_lost' } as unknown as IOrgGitHubLakeConnectionDocument;
+    expect(toGitHubLakeConnectionResponse(conn, 0)).toMatchObject({ status: 'access_lost' });
   });
 
   it('fills the model defaults for a row that predates them', () => {

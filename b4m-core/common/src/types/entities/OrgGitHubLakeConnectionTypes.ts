@@ -11,8 +11,36 @@ import { IMongoDocument } from './common';
  * A GitHub App has ONE installation per GitHub account, so several connections can share an
  * installationId (two lakes fed by two repos of the same org). The binding is therefore
  * (installationId, repositoryId); the installation itself is only removed with its last binding.
+ *
+ * 'access_lost' is the subset of 'error' the App cannot retry its way out of: GitHub answered 404/422
+ * because the installation was deleted or the repository left its selection. It stays claimable, so a
+ * Re-sync still recovers it once access is restored on GitHub.
  */
-export type GitHubLakeConnectionStatus = 'connected' | 'syncing' | 'error';
+export type GitHubLakeConnectionStatus = 'connected' | 'syncing' | 'error' | 'access_lost';
+
+/** What a sync may park a connection in when it releases its claim: never 'syncing'. */
+export type GitHubLakeReleaseStatus = Exclude<GitHubLakeConnectionStatus, 'syncing'>;
+
+/** A status a release must carry forward rather than heal, when it resolved nothing itself. */
+export function isGitHubLakeFailureStatus(
+  status: GitHubLakeConnectionStatus | undefined
+): status is 'error' | 'access_lost' {
+  return status === 'error' || status === 'access_lost';
+}
+
+/**
+ * The App lost its read on the repository (uninstalled, or the repository left the installation's
+ * selection). The UI answers this with the Access lost state - Fix on GitHub plus Disconnect -
+ * instead of the plain error chip, because a Re-sync alone cannot resolve it.
+ */
+export function isGitHubLakeAccessLost(connection: {
+  status: GitHubLakeConnectionStatus;
+  enabled: boolean;
+  disconnecting: boolean;
+}): boolean {
+  // A paused or disconnecting connection is not asking the user to repair anything on GitHub.
+  return connection.status === 'access_lost' && connection.enabled && !connection.disconnecting;
+}
 
 export interface IOrgGitHubLakeConnection {
   organizationId: string;
@@ -21,6 +49,11 @@ export interface IOrgGitHubLakeConnection {
   installationId: number;
   /** Login of the GitHub user/org account the App is installed on. */
   accountLogin: string;
+  /**
+   * The account's immutable numeric GitHub id, the `target_id` of a targeted install link. Absent on
+   * rows written before it was recorded, which then fall back to the untargeted install page.
+   */
+  accountId?: number;
   /** GitHub's immutable numeric repository id - survives renames and transfers, unlike the name. */
   repositoryId: number;
   /** `owner/name` at connect time; display only, may go stale after a rename. */
@@ -30,7 +63,7 @@ export interface IOrgGitHubLakeConnection {
   connectedAt: Date;
   /** Model default true; archiving or deleting the lake turns it off, unarchive/restore back on. */
   enabled?: boolean;
-  /** Model default 'connected'. 'error' means the App lost the repository and the user must reconnect. */
+  /** Model default 'connected'. See GitHubLakeConnectionStatus for what 'error' and 'access_lost' mean. */
   status?: GitHubLakeConnectionStatus;
   lastError?: string | null;
   /** Re-read from GitHub on every sync; the branch can be renamed there. */
@@ -101,6 +134,13 @@ export interface IOrgGitHubLakeConnectionResponse {
   disconnecting: boolean;
   /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
   disconnectStalled: boolean;
+  /**
+   * Where "Fix on GitHub" sends a user whose App lost access: GitHub's install page targeted at this
+   * installation's account, which opens its repository access for an owner and lets any other member
+   * request the change. Deliberately NOT the installation's settings page, which GitHub 404s for a
+   * non-owner. Null when the data-lake App is unconfigured on this deployment.
+   */
+  fixAccessUrl: string | null;
 }
 
 /** Why an installation cannot feed a lake (lakeAppPolicy.ts findInstallationPolicyViolation). */
@@ -175,7 +215,7 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
     id: string,
     expectedToken: string,
     lastError: string | null,
-    status?: 'connected' | 'error'
+    status?: GitHubLakeReleaseStatus
   ): Promise<IOrgGitHubLakeConnectionDocument | null>;
   /** The clean-finish release: records the applied commit and clears lastError. */
   recordSynced(

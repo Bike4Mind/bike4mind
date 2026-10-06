@@ -5,6 +5,7 @@ import {
   IMongoDocument,
   GITHUB_DISCONNECT_STALL_MS,
   type GitHubLakeTreeCounts,
+  type GitHubLakeReleaseStatus,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -58,12 +59,13 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     targetDataLakeId: { type: String, required: true },
     installationId: { type: Number, required: true },
     accountLogin: { type: String, required: true, trim: true },
+    accountId: { type: Number },
     repositoryId: { type: Number, required: true },
     repositoryFullName: { type: String, required: true, trim: true },
     connectedBy: { type: String, required: true },
     connectedAt: { type: Date, required: true },
     enabled: { type: Boolean, default: true },
-    status: { type: String, enum: ['connected', 'syncing', 'error'], default: 'connected' },
+    status: { type: String, enum: ['connected', 'syncing', 'error', 'access_lost'], default: 'connected' },
     lastError: { type: String },
     defaultBranch: { type: String },
     lastSyncedCommitSha: { type: String },
@@ -145,8 +147,9 @@ class OrgGitHubLakeConnectionRepository
         _id: id,
         ...NOT_DISABLED,
         $or: [
-          // null matches a binding written before status existed; 'error' lets a manual re-sync retry a reconnect.
-          { status: { $in: ['connected', 'error', null] } },
+          // null matches a binding written before status existed; 'error' and 'access_lost' let a manual
+          // re-sync retry once the user has restored access on GitHub.
+          { status: { $in: ['connected', 'error', 'access_lost', null] } },
           ...staleSyncClaimClauses().map(clause => ({ status: 'syncing', ...clause })),
         ],
       },
@@ -251,7 +254,7 @@ class OrgGitHubLakeConnectionRepository
     id: string,
     expectedToken: string,
     lastError: string | null,
-    status: 'connected' | 'error' = 'connected'
+    status: GitHubLakeReleaseStatus = 'connected'
   ): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument) | null> {
     return this.model.findOneAndUpdate(
       { _id: id, status: 'syncing', ingestClaimToken: expectedToken },

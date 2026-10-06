@@ -91,10 +91,27 @@ const POLICY_MESSAGES: Record<GitHubLakeInstallationPolicyViolation, string> = {
     'The GitHub App installation cannot read repository contents. Accept its requested permissions in the installation settings, then refresh.',
 };
 
+/**
+ * Where the Access lost state's "Fix on GitHub" sends the user: GitHub's install page targeted at the
+ * installation's account, NOT the installation's settingsUrl, which 404s for a non-owner. Unsigned
+ * (no `state`): this is a repair link out of a broken connection, not a leg of the connect flow, so
+ * the user returns through a fresh Re-sync or Connect rather than a callback. Null when the App is
+ * unconfigured, or when the row predates `accountId` and has nothing to target.
+ */
+export function buildGitHubLakeFixAccessUrl(
+  config: GitHubLakeAppConfig | null,
+  accountId: number | undefined
+): string | null {
+  if (!config) return null;
+  const base = `https://github.com/apps/${encodeURIComponent(config.slug)}/installations/new`;
+  return accountId === undefined ? base : `${base}/permissions?target_id=${accountId}`;
+}
+
 /** Model defaults (enabled true, status 'connected') are applied here too, for rows that predate them. */
 export function toGitHubLakeConnectionResponse(
   conn: IOrgGitHubLakeConnectionDocument,
-  fileCount: number
+  fileCount: number,
+  config: GitHubLakeAppConfig | null = getGitHubLakeAppConfig()
 ): IOrgGitHubLakeConnectionResponse {
   return {
     id: conn.id,
@@ -115,6 +132,7 @@ export function toGitHubLakeConnectionResponse(
     fileCount,
     disconnecting: !!conn.disconnectRequestedAt,
     disconnectStalled: !!conn.disconnectRequestedAt && isGitHubDisconnectStalled(conn.disconnectRequestedAt),
+    fixAccessUrl: buildGitHubLakeFixAccessUrl(config, conn.accountId),
   };
 }
 
@@ -416,6 +434,7 @@ export async function completeGitHubLakeConnection(params: {
           targetDataLakeId: lakeId,
           installationId,
           accountLogin: installation.accountLogin,
+          accountId: installation.accountId ?? undefined,
           repositoryId: repository.id,
           repositoryFullName: repository.fullName,
           connectedBy: user.id,

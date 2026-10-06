@@ -32,6 +32,8 @@ export type LakeGitHubConnection = {
   disconnecting: boolean;
   /** The pending purge has made no progress for GITHUB_DISCONNECT_STALL_MS, so a retry may re-queue it. */
   disconnectStalled: boolean;
+  /** Where the Access lost state's "Fix on GitHub" goes; null when the App is unconfigured. */
+  fixAccessUrl: string | null;
 };
 
 export const GITHUB_CONNECTION_ACTIVE_POLL_MS = 4_000;

@@ -187,6 +187,14 @@ describe('githubLakeIngest - gates', () => {
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', 'reconnect', 'error');
   });
 
+  // A drop must not quietly downgrade access_lost to a plain error and strand the UI's repair state.
+  it('keeps an access_lost state when a drop releases', async () => {
+    h.getSettingByName.mockResolvedValue(false);
+    h.connFindById.mockResolvedValue({ ...CONNECTION, status: 'access_lost', lastError: 'reconnect' });
+    await run();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', 'reconnect', 'access_lost');
+  });
+
   it('drops when the GitHub source flag is off', async () => {
     h.getSettingByName.mockImplementation(async (key: string) => key !== 'EnableDataLakeGitHub');
     await run();
@@ -245,23 +253,24 @@ describe('githubLakeIngest - HEAD', () => {
 });
 
 describe('githubLakeIngest - errors', () => {
-  it('parks the connection in error when the repository read 404s', async () => {
+  // access_lost, not a generic error: only this status drives the UI's Access lost state.
+  it('parks the connection in access_lost when the repository read 404s', async () => {
     h.getRepository.mockRejectedValue(httpError(404));
     await expect(run()).resolves.toBeUndefined();
-    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', GITHUB_LAKE_RECONNECT_MESSAGE, 'error');
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', GITHUB_LAKE_RECONNECT_MESSAGE, 'access_lost');
   });
 
-  it('parks the connection in error when the token mint says the repository left the installation (422)', async () => {
+  it('parks the connection in access_lost when the token mint says the repository left the installation (422)', async () => {
     h.getInstallationOctokit.mockRejectedValue(httpError(422));
     await expect(run()).resolves.toBeUndefined();
-    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', GITHUB_LAKE_RECONNECT_MESSAGE, 'error');
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', GITHUB_LAKE_RECONNECT_MESSAGE, 'access_lost');
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
-  it('parks the connection in error on a 404 mid-slice without rethrowing', async () => {
+  it('parks the connection in access_lost on a 404 mid-slice without rethrowing', async () => {
     h.runGitHubLakeSlice.mockRejectedValue(httpError(404));
     await expect(run()).resolves.toBeUndefined();
-    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', GITHUB_LAKE_RECONNECT_MESSAGE, 'error');
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'tok-claim', GITHUB_LAKE_RECONNECT_MESSAGE, 'access_lost');
   });
 
   it('releases with the failure and rethrows anything else for SQS retry', async () => {

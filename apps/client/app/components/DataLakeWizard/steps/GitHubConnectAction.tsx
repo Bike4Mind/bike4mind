@@ -17,6 +17,8 @@ import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGi
 import { useUpdateDataLake } from '@client/app/hooks/data/dataLakes';
 import { describeGitHubConnection } from '@client/app/hooks/data/githubConnectionDisplay';
 import { getServerErrorField } from '@client/app/utils/error';
+import { isGitHubLakeAccessLost } from '@bike4mind/common';
+import GitHubAccessLostState from './GitHubAccessLostState';
 import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import GitHubLakeSyncProgress from '@client/app/components/datalake/GitHubLakeSyncProgress';
 import GitHubLakeSyncRulesModal from '@client/app/components/datalake/GitHubLakeSyncRulesModal';
@@ -214,6 +216,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
 
   const { label, color } = describeGitHubConnection(connection);
   const blockedReason = resyncBlockedReason(connection);
+  const accessLost = isGitHubLakeAccessLost(connection);
 
   return (
     <Sheet
@@ -339,10 +342,19 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
           </Button>
         )}
       </Stack>
-      {connection.lastError && (
-        <Typography level="body-xs" color={color} data-testid="github-connection-last-error">
-          {connection.lastError}
-        </Typography>
+      {/* Replaces the raw lastError line: the Access lost state says the same thing actionably. */}
+      {accessLost ? (
+        <GitHubAccessLostState
+          connection={connection}
+          onDisconnect={() => setConfirmingDisconnect(true)}
+          disconnectDisabled={confirmingDisconnect}
+        />
+      ) : (
+        connection.lastError && (
+          <Typography level="body-xs" color={color} data-testid="github-connection-last-error">
+            {connection.lastError}
+          </Typography>
+        )
       )}
     </Sheet>
   );

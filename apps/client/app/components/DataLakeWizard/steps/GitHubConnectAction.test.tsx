@@ -43,6 +43,8 @@ import GitHubConnectAction from './GitHubConnectAction';
 const appTheme = extendTheme({ ...getThemeConfig() });
 const wrap = (ui: ReactNode) => render(<CssVarsProvider theme={appTheme}>{ui}</CssVarsProvider>);
 
+const FIX_URL = 'https://github.com/apps/b4m-lake/installations/new/permissions?target_id=501';
+
 const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnection => ({
   id: 'c1',
   accountLogin: 'acme',
@@ -62,6 +64,7 @@ const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnecti
   fileCount: 3,
   disconnecting: false,
   disconnectStalled: false,
+  fixAccessUrl: FIX_URL,
   ...over,
 });
 
@@ -292,6 +295,50 @@ describe('GitHubConnectAction', () => {
     h.connection.current = connected({ disconnecting: true, fileCount: 1 });
     wrap(<GitHubConnectAction lake={FED_LAKE} />);
     expect(screen.getByTestId('github-disconnecting-note')).toHaveTextContent('Removing 1 remaining file in');
+  });
+
+  it('replaces the raw error line with the Access lost state once the App lost its read', () => {
+    h.connection.current = connected({ status: 'access_lost', lastError: 'The App can no longer read this.' });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Access lost');
+    expect(screen.getByTestId('github-access-lost-state')).toBeInTheDocument();
+    expect(screen.queryByTestId('github-connection-last-error')).toBeNull();
+  });
+
+  // Restoring access on GitHub is only half the repair; the lake still has to re-read the repository.
+  it('keeps Re-sync enabled alongside the Access lost state', () => {
+    h.connection.current = connected({ status: 'access_lost' });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+    expect(screen.getByTestId('github-resync-btn')).toBeEnabled();
+  });
+
+  it("routes the Access lost state's Disconnect through the same confirm step, not straight to a purge", () => {
+    h.connection.current = connected({ status: 'access_lost', fileCount: 9 });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    fireEvent.click(screen.getByTestId('github-access-lost-disconnect-btn'));
+    expect(h.disconnectMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('github-disconnect-warning')).toHaveTextContent(/permanently deletes the 9 files/);
+
+    fireEvent.click(screen.getByTestId('github-disconnect-confirm-btn'));
+    expect(h.disconnectMutate).toHaveBeenCalledWith('lake1', expect.any(Object));
+  });
+
+  it('does not show the Access lost state on a paused lake, which needs no repair on GitHub', () => {
+    h.connection.current = connected({ status: 'access_lost', enabled: false });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.queryByTestId('github-access-lost-state')).toBeNull();
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Paused');
+  });
+
+  it('does not show the Access lost state once a disconnect is already purging the source', () => {
+    h.connection.current = connected({ status: 'access_lost', enabled: false, disconnecting: true });
+    wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+    expect(screen.queryByTestId('github-access-lost-state')).toBeNull();
+    expect(screen.getByTestId('github-connection-status-chip')).toHaveTextContent('Disconnecting');
   });
 
   it('offers Retry disconnect once the purge looks stalled, so it can be re-queued', () => {
