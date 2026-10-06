@@ -69,6 +69,7 @@ import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
+import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
 import { pickTitleModel, sanitizeGeneratedTitle, TITLE_MAX_TOKENS, titleRequestMessages } from './sessionTitle';
 import {
@@ -1561,7 +1562,10 @@ export class ChatService {
         const round: RawRound = {
           text: turnText,
           toolCallIds: [],
-          reasoning: turnReasoning,
+          // Two paths, never both: a model that writes its thinking into the text stream is split
+          // out by the filter as it arrives, and Anthropic's blocks are only readable once the
+          // round has stopped. See readableThinking.
+          reasoning: turnReasoning || readableThinking(turnThinking),
           timing,
           ...(turnUsage ? { usage: turnUsage } : {}),
         };
