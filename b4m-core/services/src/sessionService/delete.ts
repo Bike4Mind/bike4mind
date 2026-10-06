@@ -9,6 +9,7 @@ import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { bestEffortAdjustOwnerStorage, groupStorageDeltaByOwner } from '../dataLakeService/ports';
+import { grantWrite } from '../sharingService/grantWrite';
 
 const deleteSessionSchema = z.object({
   id: z.string(),
@@ -86,9 +87,9 @@ export const deleteSession = async (
     const remaining = file.users.filter(user => user.sessionId !== session.id);
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
-    // Whole-doc grant write on a revocation path, so it takes the version guard for the same
-    // reason sharingService/revoke.ts does: a racing guarded write must conflict, not clobber.
-    await db.fabFiles.updateGuarded!(file);
+    // Grant write on a revocation path, so it takes the version guard and reaches tombstones for
+    // the same reasons sharingService/grantWrite.ts describes.
+    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
   }
 
   session.deletedAt = new Date();
