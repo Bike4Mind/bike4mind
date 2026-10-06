@@ -54,6 +54,10 @@ vi.mock('@server/dataLakes/assertLakeResearchManage', () => ({
   assertLakeResearchManage: h.assertLakeResearchManage,
 }));
 
+vi.mock('@server/dataLakes/toAccessContext', () => ({
+  toAccessContext: vi.fn(async () => ({ userId: 'user-1', isAdmin: false })),
+}));
+
 import indexHandler from '../configs/index';
 import byIdHandler from '../configs/[configId]';
 

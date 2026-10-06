@@ -10,6 +10,7 @@ import {
   fabFileRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { isSupportedEmbeddingModel } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -196,7 +197,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // itself remains the chunk worker's compare-and-set. Same shape as /rechunk on purpose - the
       // two doors must not drift on how a re-chunk is handed off.
       const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const resetIds = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
+      // Gated a second time inside the transaction: the early gate keeps strangers from triggering
+      // detection, and this one is what serializes the reset against a concurrent grant revoke (see
+      // WRITE-TIME RESIDUAL on `canManageLake`). The sends below are external and run after commit.
+      const resetIds = await withTransaction(async () => {
+        await dataLakeService.assertLakeRebuildAccess(lake.id, ctx, gateDeps);
+        // Sequential: the ambient transaction session rejects concurrent operations.
+        const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()], { concurrency: 1 });
+        // A fallback lake has no Mongo doc and no grants to revoke, and its slug id is not a valid _id.
+        if (!dataLakeService.isFallbackLake(lake)) await dataLakeRepository.touchIfStable(lake.id);
+        return reset;
+      });
       const results = await Promise.allSettled(
         resetIds.map(fabFileId =>
           sendToQueue(queueUrl, {
