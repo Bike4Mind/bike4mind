@@ -78,6 +78,28 @@ describe('toPublicVideoGeneration', () => {
     expect(sign).not.toHaveBeenCalled();
   });
 
+  it('shows the settled credits of a blocked job the provider billed, without exposing the billing flag', async () => {
+    const sign = vi.fn();
+    const resource = await toPublicVideoGeneration(
+      job({
+        state: 'blocked',
+        settledCredits: 6085,
+        error: { code: 'content_blocked', message: 'provider wording' },
+        payload: { ...job().payload, billedBlock: true },
+      }),
+      { sign, now }
+    );
+    expect(VideoGenerationSchema.parse(resource)).toEqual(resource);
+    expect(resource).toMatchObject({
+      state: 'blocked',
+      output: null,
+      error: { code: 'content_blocked' },
+      credits: { reserved: 6085, settled: 6085 },
+    });
+    expect(JSON.stringify(resource)).not.toContain('billedBlock');
+    expect(sign).not.toHaveBeenCalled();
+  });
+
   it('mints a fresh 900s URL on every read and reports expires_at', async () => {
     let n = 0;
     const sign = vi.fn(async () => ({ availability: 'ready' as const, url: `https://signed.example/${++n}` }));

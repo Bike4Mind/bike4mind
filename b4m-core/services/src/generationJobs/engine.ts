@@ -224,6 +224,8 @@ export class GenerationJobEngine {
           state: result.next,
           error: result.error,
           rawProviderError: result.rawProviderError,
+          // Only when set: payload is required, and the commit must never clear it.
+          ...(result.payload && { payload: result.payload }),
         });
     }
   }

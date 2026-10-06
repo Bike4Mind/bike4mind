@@ -15,7 +15,11 @@ export type { ProviderJobHandle, ProviderOutput };
 export type ProviderPollResult =
   | { status: 'running'; /** Fraction complete, 0..1; the job handler clamps anything outside. */ progress?: number }
   | { status: 'succeeded'; output: ProviderOutput; reportedDurationSeconds?: number }
-  | { status: 'blocked'; reason?: string; raw: unknown }
+  /**
+   * `billed`: set only when the provider is known to have charged for the blocked generation (it generated the clip,
+   * then withheld it). The job then settles the user's hold instead of releasing it; leave it unset when unsure.
+   */
+  | { status: 'blocked'; reason?: string; billed?: boolean; raw: unknown }
   | { status: 'failed'; retryable: boolean; message: string; raw: unknown };
 
 export type ResolvedInputs = { inputImage?: { bytes: Buffer; mimeType: string } };

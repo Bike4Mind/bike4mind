@@ -86,7 +86,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     try {
       const caps = getVideoModelCapabilities(request.model);
       if (!caps) throw new Error(`Video model ${request.model} is no longer in the catalog`);
-      const billed = billedVideoRequest(caps, request, job.payload.reportedDurationSeconds);
+      // A billed block has no output to measure, so it is charged at the requested duration.
+      const reported = job.state === 'succeeded' ? job.payload.reportedDurationSeconds : undefined;
+      const billed = billedVideoRequest(caps, request, reported);
       return { billed, credits: estimateVideoCostCredits(caps, billed), usd: estimateVideoCostUsd(caps, billed) };
     } catch (error) {
       deps.logger.error('video_job_estimate_failed', { jobId: job.id, model: request.model, error });
@@ -223,6 +225,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
             next: 'blocked',
             error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
             rawProviderError: result.raw,
+            ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
           };
         case 'failed':
           return result.retryable
@@ -294,8 +297,10 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       await provider.cancel(handle, ctx);
     },
 
+    // Reads only the committed job, so the sweep's recovery of an unhandled terminal job settles or releases alike.
     async onTerminal(job) {
-      if (job.state === 'succeeded') await settle(job);
+      const charged = job.state === 'succeeded' || (job.state === 'blocked' && job.payload.billedBlock === true);
+      if (charged) await settle(job);
       else await release(job);
     },
   };

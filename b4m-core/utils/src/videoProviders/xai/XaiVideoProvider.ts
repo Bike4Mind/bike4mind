@@ -121,8 +121,9 @@ const toPollResult = (body: PollBody, ctx: VideoProviderContext): ProviderPollRe
         ? { status: 'running', progress: body.progress / 100 }
         : { status: 'running' };
     case 'done': {
+      // Done means generated, and xAI bills a generated clip even when moderation then withholds it.
       if (body.video?.respect_moderation === false) {
-        return { status: 'blocked', reason: MODERATION_REASON, raw: body };
+        return { status: 'blocked', reason: MODERATION_REASON, billed: true, raw: body };
       }
       if (body.video?.url) {
         return {
@@ -209,7 +210,7 @@ export class XaiVideoProvider implements VideoProvider {
     // Seen live: a moderated output is a poll 400 (code "imagine:content-moderated"), not a done or failed status,
     // and xAI still bills it. Throwing would retry it to exhaustion, so it is a blocked verdict.
     if (!response.ok && isModeration(errorInfoOf(raw))) {
-      return { status: 'blocked', reason: MODERATION_REASON, raw };
+      return { status: 'blocked', reason: MODERATION_REASON, billed: true, raw };
     }
     // A malformed or unknown request id never recovers on retry.
     if (

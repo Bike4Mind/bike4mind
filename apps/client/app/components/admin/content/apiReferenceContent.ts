@@ -744,6 +744,9 @@ lists the ones enabled and usable on this deployment, with their durations, aspe
 > 15 minutes; re-read the job for a fresh URL); \`pending_scan\` means the saved file is still being scanned,
 > so keep re-reading the job (self-hosted installs can stay there for up to ~30 minutes); \`unavailable\`
 > means the file was blocked or deleted and \`output.url\` stays \`null\`, so stop polling.
+> Credits for the requested duration are held up front. A \`failed\` or \`cancelled\` job is not charged, and
+> neither is a \`blocked\` one unless the provider generated the clip before rejecting it (and billed for it):
+> that job is charged for the requested duration, shown in \`credits.settled\`.
 > Send \`Idempotency-Key\` to make retries safe. \`POST /api/ai/generate-video\` was removed and answers \`410\`.
 
 #### Voice Sessions

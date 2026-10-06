@@ -229,7 +229,10 @@ describe('XaiVideoProvider specifics', () => {
     );
     const handle = await provider.submit(request(), {}, ctx());
     expect(handle.data).toEqual({ blocked: true, reason: 'xai_moderation' });
-    expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
+    const result = await provider.poll(handle, ctx());
+    expect(result).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
+    // Nothing was generated at submit time, so nothing was billed.
+    expect(result).not.toHaveProperty('billed');
     expect(polls).toBe(0);
   });
 
@@ -329,13 +332,18 @@ describe('XaiVideoProvider specifics', () => {
   it('maps done with respect_moderation false to blocked, even when a url is present', async () => {
     expect(
       await pollWith({ status: 'done', video: { url: VIDEO_URL, duration: 2, respect_moderation: false } })
-    ).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
+    ).toEqual(expect.objectContaining({ status: 'blocked', reason: 'xai_moderation', billed: true }));
   });
 
   it('maps a moderated output seen live (a poll 400, still billed) to blocked instead of throwing', async () => {
     const { status, body } = exchange(FIXTURES.blockedOutput, 'poll_terminal').response;
     expect(status).toBe(400);
-    expect(await pollWith(body, status)).toEqual({ status: 'blocked', reason: 'xai_moderation', raw: body });
+    expect(await pollWith(body, status)).toEqual({
+      status: 'blocked',
+      reason: 'xai_moderation',
+      billed: true,
+      raw: body,
+    });
   });
 
   it('carries the blocked-output fixture through submit, pending poll and a blocked poll', async () => {
@@ -390,7 +398,9 @@ describe('XaiVideoProvider specifics', () => {
     [{ code: 'internal_error', message: 'Rejected by safety filters' }],
     [{ code: 'failed_precondition', message: 'Prompt violates usage policy' }],
   ])('maps a failed job whose error indicates moderation (%o) to blocked', async error => {
-    expect(await pollWith({ status: 'failed', error })).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
+    const result = await pollWith({ status: 'failed', error });
+    expect(result).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
+    expect(result).not.toHaveProperty('billed');
   });
 
   it.each([

@@ -72,8 +72,9 @@ export const createVideoGenerationContract = defineEndpoint({
     '(re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep ' +
     're-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the ' +
     'file was blocked or deleted and `output.url` will never be set, so stop polling. ' +
-    'Credits for the requested duration are reserved up front and settled on completion; a failed, blocked ' +
-    'or cancelled job is not charged. ' +
+    'Credits for the requested duration are reserved up front and settled on completion; a failed or ' +
+    'cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip ' +
+    'before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. ' +
     'Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with ' +
     'the same key and body returns the original job, and the same key with a different body is a 422 ' +
     '`idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`.',

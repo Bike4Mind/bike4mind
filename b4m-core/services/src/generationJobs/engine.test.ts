@@ -375,6 +375,20 @@ describe('GenerationJobEngine', () => {
     expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
   });
 
+  it('commits the payload a blocked result carries, so terminal handling can read it after a crash', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    const billedPayload = { ...payload, billedBlock: true };
+    t.results.poll.push({
+      next: 'blocked',
+      error: { code: 'content_blocked', message: 'policy' },
+      payload: billedPayload,
+    });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.payload).toEqual(billedPayload);
+    expect(vi.mocked(t.handler.onTerminal).mock.calls[0][0].payload).toEqual(billedPayload);
+  });
+
   it.each(['pending', 'running'] as const)('cancel requested while %s cancels', async state => {
     const t = setup();
     const job = await t.create({ state });

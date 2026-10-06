@@ -12,6 +12,7 @@ import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from '../generationJobs/__test__/inMemoryGenerationJobRepository';
 import { GenerationJobEngine } from '../generationJobs/engine';
 import { MAX_STEP_ATTEMPTS } from '../generationJobs/backoff';
+import { runGenerationJobSweep, SWEEP_OVERDUE_MS } from '../generationJobs/sweep';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import { createVideoJob } from './createVideoJob';
@@ -309,6 +310,73 @@ describe('video job end to end with the test provider', () => {
     expect(releaseCreditHold).toHaveBeenCalledTimes(1);
     expect(settleCreditHold).not.toHaveBeenCalled();
     expect(t.deps.recordUsage).not.toHaveBeenCalled();
+  });
+
+  describe('a block the provider billed', () => {
+    const billedBlock: VideoProvider['poll'] = async () => ({
+      status: 'blocked',
+      reason: 'moderation',
+      billed: true,
+      raw: { code: 'content-moderated' },
+    });
+
+    it('stays blocked but settles the hold at the requested duration instead of releasing it', async () => {
+      const t = setup({ providers: createVideoProviderRegistry([stubProvider({ poll: billedBlock })]) });
+      const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+      await t.runToCompletion();
+      const job = t.jobOf(created);
+      const hold = job.creditHold;
+      if (!hold) throw new Error('expected a hold');
+      expect(job).toMatchObject({ state: 'blocked', error: { code: 'content_blocked' } });
+      expect(job.payload.billedBlock).toBe(true);
+      expect(settleCreditHold).toHaveBeenCalledTimes(1);
+      // test-video: the requested 4s at $0.01/s is exactly what was held.
+      const [settledHold, charged] = vi.mocked(settleCreditHold).mock.calls[0];
+      expect(settledHold).toEqual(hold);
+      expect(charged).toBe(hold.reservedCredits);
+      expect(job.settledCredits).toBe(charged);
+      expect(releaseCreditHold).not.toHaveBeenCalled();
+      expect(t.deps.recordUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4 })
+      );
+    });
+
+    it('settles, not releases, when the sweep recovers it after a crash before terminal handling', async () => {
+      const t = setup({ providers: createVideoProviderRegistry([stubProvider({ poll: billedBlock })]) });
+      const claim = t.repository.claimTerminalHandling.bind(t.repository);
+      const claimTerminalHandling = vi
+        .spyOn(t.repository, 'claimTerminalHandling')
+        .mockRejectedValueOnce(new Error('worker died'))
+        .mockImplementation(claim);
+      const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+      await expect(t.runToCompletion()).rejects.toThrow('worker died');
+      expect(t.jobOf(created)).toMatchObject({ state: 'blocked', terminalHandlingClaimedAt: null });
+      expect(settleCreditHold).not.toHaveBeenCalled();
+
+      t.advance(SWEEP_OVERDUE_MS + 60_000);
+      const { requeued } = await runGenerationJobSweep(t.deps);
+      expect(requeued).toBe(1);
+      await t.runToCompletion();
+
+      const job = t.jobOf(created);
+      expect(claimTerminalHandling).toHaveBeenCalledTimes(2);
+      expect(job.terminalHandledAt).toBeTruthy();
+      expect(settleCreditHold).toHaveBeenCalledTimes(1);
+      expect(job.settledCredits).toBe(job.creditHold?.reservedCredits);
+      expect(releaseCreditHold).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a block at submit time, where nothing was generated, still releases the whole hold', async () => {
+    const submitBlocked: VideoProvider['poll'] = async () => ({ status: 'blocked', reason: 'submit', raw: null });
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ poll: submitBlocked })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    const job = t.jobOf(created);
+    expect(job).toMatchObject({ state: 'blocked', settledCredits: 0 });
+    expect(job.payload.billedBlock).toBeUndefined();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
   });
 
   it('a provider failure releases the hold', async () => {

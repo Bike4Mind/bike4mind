@@ -58,6 +58,11 @@ export type VideoJobPayload = {
   providerOutput?: ProviderOutput;
   reportedDurationSeconds?: number;
   output?: VideoJobOutput;
+  /**
+   * The provider generated the clip, billed it, then blocked it: terminal handling settles the hold instead of
+   * releasing it. Persisted with the blocked state so a sweep recovery after a crash makes the same choice.
+   */
+  billedBlock?: boolean;
 };
 
 export interface IGenerationJob {
