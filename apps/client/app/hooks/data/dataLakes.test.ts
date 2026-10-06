@@ -2716,3 +2716,34 @@ describe('useApplyCorpusAction', () => {
     expect(toast.error).toHaveBeenCalledWith('This finding has already been ruled on');
   });
 });
+
+describe('useUpdateDataLake success toast', () => {
+  const mount = (opts?: { notifySuccess?: boolean }) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useUpdateDataLake(opts), { wrapper });
+  };
+
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+  });
+
+  it('toasts success by default', async () => {
+    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', name: 'Renamed' });
+    });
+    expect(toast.success).toHaveBeenCalledWith('Data lake updated');
+  });
+
+  it('stays silent when notifySuccess is false', async () => {
+    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+    const { result } = mount({ notifySuccess: false });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', name: 'Renamed' });
+    });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});

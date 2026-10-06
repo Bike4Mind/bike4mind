@@ -18,6 +18,8 @@ import { NotebookCurationEvents } from '@server/utils/eventBus';
 import { getFilesStorage } from '@server/utils/storage';
 import { z } from 'zod';
 import { Resource } from 'sst';
+import { createHash } from 'crypto';
+import { createNotebookCommit } from './notebookCurationCommit';
 
 export const CurateNotebookPayload = z.object({
   sessionId: z.string(),
@@ -72,6 +74,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // completions are recorded; failures stay retryable via SQS's native
   // retry/DLQ machinery, so they are not guarded here.
   const existingJob = await NotebookCurationJob.findOne({ curationJobId }).lean();
+  if (existingJob && (existingJob.sessionId !== sessionId || existingJob.userId !== userId)) {
+    throw new Error('Curation receipt identity mismatch');
+  }
   if (existingJob && existingJob.status === 'completed') {
     logger.info(
       `Duplicate SQS message, skipping — curation job ${curationJobId} already completed for session ${sessionId}`
@@ -120,6 +125,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     ]);
   };
 
+  let committed = false;
   try {
     // Create LLM service adapter if executive summary is requested
     let llmService: any = undefined;
@@ -167,6 +173,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     };
 
     const curationService = new notebookCurationService.NotebookCurationService({
+      commitCuration: createNotebookCommit(
+        { curationJobId, sessionId, userId },
+        path => getFilesStorage().delete(path),
+        message => logger.warn(message)
+      ),
+      objectKeyPrefix: `curated-notebooks/jobs/${createHash('sha256').update(curationJobId).digest('hex')}`,
+      checkDeadline: () => {
+        if (context.getRemainingTimeInMillis() <= 0) throw new Error('Curation execution budget exhausted');
+      },
       sessionRepository,
       chatHistoryRepository: questRepository, // Quests are the chat history items
       fabFileRepository,
@@ -265,6 +280,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       tokensDeducted: result.tokensDeducted,
     });
 
+    committed = true;
     // Send completion via WebSocket
     await sendToClient(userId, websocketEndpoint, {
       action: 'notebook_curation_progress',
@@ -291,15 +307,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       artifactTypes,
     });
 
-    // Record successful completion for idempotency on redelivery.
-    await NotebookCurationJob.updateOne(
-      { curationJobId },
-      { $set: { status: 'completed', sessionId, userId } },
-      { upsert: true }
-    );
-
     logger.info(`Successfully completed notebook curation for session ${sessionId}`, result);
   } catch (error) {
+    if (committed) {
+      logger.warn('Curation persisted but completion notification failed', { curationJobId });
+      return;
+    }
     logger.error(`Failed to curate notebook ${sessionId}:`, error);
 
     await notifyFailure(error instanceof Error ? error.message : 'Unknown error');

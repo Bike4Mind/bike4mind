@@ -27,6 +27,7 @@ import { readDroppedItems } from '@client/app/utils/dropReader';
 import { countExcludedFiles, formatBytes } from '@client/app/utils/folderTreeParser';
 import { MIN_DATA_LAKE_SLUG_LENGTH, slugifyDataLakeName } from '@bike4mind/common';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
@@ -77,8 +78,10 @@ export default function SourceSelectionStep() {
   // Gates on the same MIN_DATA_LAKE_SLUG_LENGTH the create schema validates against, so a name
   // that slugifies to empty/too-short is caught before the user commits files instead of failing
   // at the final upload step.
-  const slug = slugifyDataLakeName(config.name);
-  const slugTooShort = config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
+  // Validated locally, never against the server preview, so the gate doesn't wait on the network.
+  const localSlug = slugifyDataLakeName(config.name);
+  const slugTooShort = config.name.trim().length > 0 && localSlug.length < MIN_DATA_LAKE_SLUG_LENGTH;
+  const displaySlug = useWizardLakeSlug();
 
   const includedFiles = allFiles.filter(f => !f.excluded);
   const includedSize = includedFiles.reduce((sum, f) => sum + f.size, 0);
@@ -174,7 +177,7 @@ export default function SourceSelectionStep() {
             autoFocus
           />
           <FormHelperText>
-            Slug: <code>{slug || '...'}</code>
+            Slug: <code data-testid="source-name-slug">{displaySlug || '...'}</code>
           </FormHelperText>
           {slugTooShort && (
             <FormHelperText data-testid="source-name-slug-error">

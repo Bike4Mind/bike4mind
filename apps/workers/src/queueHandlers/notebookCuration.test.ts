@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockCurateNotebook, mockSendToClient, NotebookCurationJob, Session, User } = vi.hoisted(() => ({
   mockCurateNotebook: vi.fn(),
   mockSendToClient: vi.fn(),
-  NotebookCurationJob: { findOne: vi.fn(), updateOne: vi.fn() },
+  NotebookCurationJob: { findOne: vi.fn() },
   Session: { findById: vi.fn() },
   User: { findById: vi.fn() },
 }));
@@ -145,7 +145,6 @@ describe('notebookCuration queue handler idempotency', () => {
     Session.findById.mockResolvedValue({ _id: 'session-123', userId: 'user-456' });
     User.findById.mockResolvedValue({ _id: 'user-456' });
     NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
-    NotebookCurationJob.updateOne.mockResolvedValue({ acknowledged: true });
     mockCurateNotebook.mockResolvedValue({
       success: true,
       curatedFileId: 'file-1',
@@ -160,7 +159,13 @@ describe('notebookCuration queue handler idempotency', () => {
 
   it('skips a redelivered message whose curation job already completed', async () => {
     NotebookCurationJob.findOne.mockReturnValue({
-      lean: () => Promise.resolve({ curationJobId: 'job-789', sessionId: 'session-123', status: 'completed' }),
+      lean: () =>
+        Promise.resolve({
+          curationJobId: 'job-789',
+          sessionId: 'session-123',
+          userId: 'user-456',
+          status: 'completed',
+        }),
     });
 
     await dispatch(createEvent(basePayload), mockContext);
@@ -178,18 +183,10 @@ describe('notebookCuration queue handler idempotency', () => {
     expect(mockCurateNotebook).toHaveBeenCalledTimes(1);
   });
 
-  it('records a terminal completed status after a successful curation', async () => {
-    NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
-
-    await dispatch(createEvent(basePayload), mockContext);
-
-    expect(NotebookCurationJob.updateOne).toHaveBeenCalledWith(
-      { curationJobId: 'job-789' },
-      expect.objectContaining({
-        $set: expect.objectContaining({ status: 'completed' }),
-      }),
-      expect.objectContaining({ upsert: true })
-    );
+  it('does not turn a committed result into a failure when notification fails', async () => {
+    mockSendToClient.mockRejectedValueOnce(new Error('notification unavailable'));
+    await expect(dispatch(createEvent(basePayload), mockContext)).resolves.toBeUndefined();
+    expect(NotebookCurationEvents.Error.publish).not.toHaveBeenCalled();
   });
 
   it('does NOT record a status when curation throws, so SQS can retry', async () => {
@@ -201,7 +198,6 @@ describe('notebookCuration queue handler idempotency', () => {
 
     // No idempotency record is written on failure - a redelivery must be free
     // to re-attempt (transient-failure resilience), not silently skipped.
-    expect(NotebookCurationJob.updateOne).not.toHaveBeenCalled();
   });
 });
 
@@ -211,7 +207,6 @@ describe('notebookCuration queue handler - curateNotebook returning success: fal
     Session.findById.mockResolvedValue({ _id: 'session-123', userId: 'user-456' });
     User.findById.mockResolvedValue({ _id: 'user-456' });
     NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
-    NotebookCurationJob.updateOne.mockResolvedValue({ acknowledged: true });
   });
 
   it('notifies the user but does NOT rethrow a permanent admission refusal, so SQS does not retry it', async () => {
