@@ -60,7 +60,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
-import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
+import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -302,8 +302,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       },
       testId: 'image-setting-temperature-input',
     },
-    // Image Size (hidden for Kontext)
-    ...(!isKontextModel
+    // Image Size (hidden when the model's sizing takes no size)
+    ...(showsImageSizeRow(contextImageModel)
       ? [
           {
             label: 'Image Size',
