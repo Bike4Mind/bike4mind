@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   billIteration,
+  reseedCounters,
   addToolUsage,
   takeToolUsage,
   foldGeneratedMediaUsd,
@@ -21,7 +22,7 @@ import { estimateGeneratedMediaUsd } from '@bike4mind/services';
 
 // input rate = 1, everything else 0, so `getTextModelCost` reduces to
 // `1 * inputTokens` and cost math in the assertions stays trivial.
-function makeModelInfo(contextWindow: number): ModelInfo {
+function makeModelInfo(contextWindow: number, inputRate = 1): ModelInfo {
   return {
     id: 'test-model',
     type: 'text',
@@ -30,7 +31,7 @@ function makeModelInfo(contextWindow: number): ModelInfo {
     contextWindow,
     max_tokens: 4096,
     supportsImageVariation: false,
-    pricing: { [Number.MAX_SAFE_INTEGER]: { input: 1, output: 0, cache_read: 0, cache_write: 0 } },
+    pricing: { [Number.MAX_SAFE_INTEGER]: { input: inputRate, output: 0, cache_read: 0, cache_write: 0 } },
   } as ModelInfo;
 }
 
@@ -53,6 +54,7 @@ function makeEffects(usdToCredits: (usd: number) => number = usd => usd): {
     addIterationBilling: ReturnType<typeof vi.fn>;
     sendProgress: ReturnType<typeof vi.fn>;
     logGuardTrip: ReturnType<typeof vi.fn>;
+    logNegativeDelta: ReturnType<typeof vi.fn>;
   };
 } {
   const spies = {
@@ -61,6 +63,7 @@ function makeEffects(usdToCredits: (usd: number) => number = usd => usd): {
     addIterationBilling: vi.fn(async () => {}),
     sendProgress: vi.fn(async () => {}),
     logGuardTrip: vi.fn(),
+    logNegativeDelta: vi.fn(),
   };
   return {
     spies,
@@ -511,5 +514,115 @@ describe('foldGeneratedMediaUsd', () => {
     ).not.toThrow();
     expect(onError).toHaveBeenCalledWith(boom);
     expect(pending.costUsd).toBe(0);
+  });
+});
+
+describe('billIteration (negative cost delta)', () => {
+  it('a price drop across a resume still bills the next iteration at the new rate', async () => {
+    const rateA = makeModelInfo(10_000, 2);
+    const rateB = makeModelInfo(10_000, 1);
+    const first = makeEffects();
+    await billIteration({
+      iterationIndex: 1,
+      checkpoint: checkpoint(1000),
+      counters: makeCounters(),
+      modelInfo: rateA,
+      model: 'test-model',
+      startTime: 0,
+      effects: first.effects,
+    });
+    expect(first.spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 2000 }));
+
+    // Resume on a new invocation with the cheaper model, reseeding from what iteration 1 persisted.
+    const recorded = first.spies.addIterationBilling.mock.calls.map(([billing]) => billing);
+    const resumed = reseedCounters(recorded, rateB);
+    expect(resumed).toEqual(makeCounters({ inputTokens: 1000, cumulativeCost: 1000 }));
+
+    const second = makeEffects();
+    await billIteration({
+      iterationIndex: 2,
+      checkpoint: checkpoint(1500),
+      counters: resumed,
+      modelInfo: rateB,
+      model: 'test-model',
+      startTime: 0,
+      effects: second.effects,
+    });
+
+    expect(second.spies.logNegativeDelta).not.toHaveBeenCalled();
+    expect(second.spies.deductCredits).toHaveBeenCalledTimes(1);
+    expect(second.spies.deductCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ credits: 500, inputTokens: 500 })
+    );
+  });
+
+  it('negative delta: warns once and charges, records, and persists nothing', async () => {
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 3,
+      checkpoint: checkpoint(1000),
+      counters,
+      modelInfo: makeModelInfo(10_000),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    expect(spies.logNegativeDelta).toHaveBeenCalledTimes(1);
+    expect(spies.logNegativeDelta).toHaveBeenCalledWith({
+      costDelta: -1000,
+      toolCostUsd: 0,
+      cumulativeCost: 1000,
+      previousCumulativeCost: 2000,
+    });
+    expect(spies.deductCredits).not.toHaveBeenCalled();
+    expect(spies.addIterationBilling).not.toHaveBeenCalled();
+    expect(spies.recordUsageEvent).not.toHaveBeenCalled();
+    expect(spies.sendProgress).not.toHaveBeenCalled();
+    expect(counters).toEqual(makeCounters({ cumulativeCost: 2000, inputTokens: 1000 }));
+  });
+
+  it('negative agent delta is warned even when tool spend nets the iteration positive', async () => {
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 3,
+      checkpoint: checkpoint(1000),
+      counters,
+      modelInfo: makeModelInfo(10_000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: { costUsd: 1500, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      effects,
+    });
+
+    expect(spies.logNegativeDelta).toHaveBeenCalledWith({
+      costDelta: -1000,
+      toolCostUsd: 1500,
+      cumulativeCost: 1000,
+      previousCumulativeCost: 2000,
+    });
+    // Settlement is unchanged: the positive net (1500 - 1000) is still charged.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 500 }));
+  });
+
+  it('zero delta: stays a silent no-op', async () => {
+    const counters = makeCounters({ cumulativeCost: 1000, inputTokens: 1000 });
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 3,
+      checkpoint: checkpoint(1000),
+      counters,
+      modelInfo: makeModelInfo(10_000),
+      model: 'test-model',
+      startTime: 0,
+      effects,
+    });
+
+    for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
   });
 });

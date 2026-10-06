@@ -84,21 +84,29 @@ export function DataLakeSpendPanel({
 
   if (!summary) return null;
 
-  const lifetimeUsd = summary.embeddingSpendMicroUsd !== null ? microToUsd(summary.embeddingSpendMicroUsd) : null;
+  const ingestionLifetimeUsd =
+    summary.embeddingSpendMicroUsd !== null ? microToUsd(summary.embeddingSpendMicroUsd) : null;
+  const researchLifetimeUsd = summary.researchLifetimeUsd ?? 0;
+  const lifetimeUsd = ingestionLifetimeUsd !== null ? ingestionLifetimeUsd + researchLifetimeUsd : null;
   const windowUsd = summary.ledger.totals.cogsUsd;
   const lakeBudgetUsd = microToUsd(summary.perLakeBudgetMicroUsd);
   const periodBudgetUsd = microToUsd(summary.perPeriodBudgetMicroUsd);
   const runBudgetUsd = microToUsd(summary.perRunBudgetMicroUsd);
+  // The per-lake budget caps INGESTION only, so the bar reads the embedding meter only - the same
+  // number `enforceEmbeddingSpendGate` compares against (must stay in sync). Research is not part of
+  // this percentage; it gets its own line below, labelled as uncapped by this budget.
   const lakePct =
-    summary.perLakeBudgetMicroUsd > 0 && summary.embeddingSpendMicroUsd !== null
-      ? (summary.embeddingSpendMicroUsd / summary.perLakeBudgetMicroUsd) * 100
+    summary.perLakeBudgetMicroUsd > 0 && ingestionLifetimeUsd !== null
+      ? (ingestionLifetimeUsd / lakeBudgetUsd) * 100
       : null;
 
-  // A lake with no ledger rows yet is either brand-new (lifetime meter also 0) or predates this
-  // feature's ship date (lifetime meter nonzero) - the two need distinct copy.
+  // A lake with no ledger rows yet is either brand-new (no lifetime spend of either kind) or predates
+  // this feature's ship date (lifetime spend nonzero) - the two need distinct copy. Research counts
+  // toward lifetime spend so the empty state never contradicts the Lifetime chip.
   const hasNoLedgerRows = summary.ledger.totals.requests === 0;
-  const isBrandNew = hasNoLedgerRows && (summary.embeddingSpendMicroUsd ?? 0) === 0;
-  const predatesLedger = hasNoLedgerRows && (summary.embeddingSpendMicroUsd ?? 0) > 0;
+  const hasLifetimeSpend = (summary.embeddingSpendMicroUsd ?? 0) > 0 || researchLifetimeUsd > 0;
+  const isBrandNew = hasNoLedgerRows && !hasLifetimeSpend;
+  const predatesLedger = hasNoLedgerRows && hasLifetimeSpend;
 
   return (
     <Stack gap={2} data-testid="datalake-spend-panel">
@@ -149,7 +157,8 @@ export function DataLakeSpendPanel({
           {summary.perLakeBudgetMicroUsd > 0 && lakePct !== null ? (
             <Box data-testid="datalake-spend-lake-progress">
               <Typography level="body-sm">
-                Per-lake budget: {formatUsd(lifetimeUsd ?? 0)} of {formatUsd(lakeBudgetUsd)} ({Math.round(lakePct)}%)
+                Per-lake ingestion budget: {formatUsd(ingestionLifetimeUsd ?? 0)} of {formatUsd(lakeBudgetUsd)} (
+                {Math.round(lakePct)}%)
               </Typography>
               <LinearProgress
                 determinate
@@ -160,7 +169,13 @@ export function DataLakeSpendPanel({
             </Box>
           ) : (
             <Typography level="body-sm" data-testid="datalake-spend-lake-uncapped">
-              Per-lake budget: uncapped
+              Per-lake ingestion budget: uncapped
+            </Typography>
+          )}
+          {researchLifetimeUsd > 0 && (
+            <Typography level="body-sm" data-testid="datalake-spend-research-lifetime">
+              Research: {formatUsd(researchLifetimeUsd)} lifetime (not capped by the per-lake budget; each research run
+              has its own cost ceiling)
             </Typography>
           )}
           <Typography level="body-sm" data-testid="datalake-spend-perrun-cap">

@@ -36,7 +36,7 @@ vi.mock('@client/app/utils/pyodideManager', () => {
         return packages;
       }),
       isReady: vi.fn(() => false),
-      getSupportedPackages: vi.fn(() => ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn']),
+      getSupportedPackages: vi.fn(() => ['numpy', 'pandas', 'matplotlib', 'scipy', 'scikit-learn']),
       // Helper for tests to simulate state changes
       _triggerStateChange: (newState: Partial<typeof mockState>) => {
         Object.assign(mockState, newState);

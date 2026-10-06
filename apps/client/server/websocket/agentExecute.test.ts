@@ -94,7 +94,10 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { handlePermissionResponse, handleGateResponse } from './agentExecute';
+import { ApiKeyScope } from '@bike4mind/common';
+import { verifyApiKey, verifyJwtToken, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import { startAgentExecution } from '@server/utils/startAgentExecution';
+import { func, handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -594,5 +597,85 @@ describe('permission resume preparation failure', () => {
     expect(mockRestoreRejectedResume).not.toHaveBeenCalled();
     await handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
     expect(mockLambdaSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('start command credential threading', () => {
+  const startEvent = (accessToken: string) => ({
+    requestContext: { connectionId: 'conn-1', domainName: 'example.com', stage: 'dev' },
+    body: JSON.stringify({
+      accessToken,
+      action: 'agent_execute',
+      command: 'start',
+      sessionId: 's1',
+      questId: 'q1',
+      query: 'go',
+      model: 'm',
+    }),
+  });
+
+  beforeEach(() => {
+    vi.mocked(startAgentExecution)
+      .mockReset()
+      .mockResolvedValue({ ok: true } as never);
+  });
+
+  it('hands the verified key to the run as apiKeyInfo for a b4m_live_ key', async () => {
+    const key = { keyId: 'key-1', userId: 'user-1', scopes: [ApiKeyScope.AI_CHAT] };
+    vi.mocked(verifyApiKey).mockResolvedValueOnce(key as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('b4m_live_x'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBe(key);
+  });
+
+  it('drops the key credential when its rate-limit check throws, so the JWT fallback runs unscoped', async () => {
+    vi.mocked(verifyApiKey).mockResolvedValueOnce({
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+    } as never);
+    vi.mocked(checkApiKeyRateLimitOrThrow).mockRejectedValueOnce(new Error('rate limited'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-2' } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.userId).toBe('user-2');
+    expect(input.apiKeyInfo).toBeUndefined();
+  });
+
+  it('never takes a key credential from the message body', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+    const event = startEvent('jwt');
+    event.body = JSON.stringify({
+      ...JSON.parse(event.body),
+      apiKeyId: 'spoofed',
+      scopeDeniedTools: [],
+      apiKeyInfo: { keyId: 'spoofed', scopes: Object.values(ApiKeyScope) },
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(event, {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBeUndefined();
+    expect(input).not.toHaveProperty('apiKeyId');
+    expect(input).not.toHaveProperty('scopeDeniedTools');
+  });
+
+  it('passes no key credential for a session JWT', async () => {
+    vi.mocked(verifyApiKey).mockRejectedValueOnce(new Error('not a key'));
+    vi.mocked(verifyJwtToken).mockResolvedValueOnce({ id: 'user-1' } as never);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(startEvent('jwt'), {}, noopLogger);
+
+    const input = vi.mocked(startAgentExecution).mock.calls[0][0];
+    expect(input.apiKeyInfo).toBeUndefined();
   });
 });

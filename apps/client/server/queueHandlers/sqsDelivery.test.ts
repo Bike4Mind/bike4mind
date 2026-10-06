@@ -7,6 +7,8 @@ import {
   isFinalDeliveryAttempt,
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
 } from './sqsDelivery';
 
 // infra/queues.ts constructs real SST cloud resources at import time (no plain data export), so
@@ -20,6 +22,15 @@ function retryFromInfra(queueVarName: string): number {
   );
   if (!match) throw new Error(`Could not find a dlq.retry value for ${queueVarName} in infra/queues.ts`);
   return Number(match[1]);
+}
+
+function visibilityTimeoutSecFromInfra(queueVarName: string): number {
+  const src = readFileSync(join(__dirname, '../../../../infra/queues.ts'), 'utf8');
+  const match = src.match(
+    new RegExp(`const ${queueVarName}\\s*=\\s*new sst\\.aws\\.Queue\\([^)]*?visibilityTimeout:\\s*'(\\d+) minutes'`)
+  );
+  if (!match) throw new Error(`Could not find a visibilityTimeout in minutes for ${queueVarName} in infra/queues.ts`);
+  return Number(match[1]) * 60;
 }
 
 function eventWithReceiveCount(value: string | undefined): SQSEvent {
@@ -72,12 +83,20 @@ describe('isFinalDeliveryAttempt', () => {
   );
 });
 
-describe('per-queue max-receive constants', () => {
+describe('per-queue delivery constants', () => {
   it('matches infra/queues.ts dlq.retry for fabFileChunkQueue', () => {
     expect(FAB_FILE_CHUNK_MAX_RECEIVE_COUNT).toBe(retryFromInfra('fabFileChunkQueue'));
   });
 
   it('matches infra/queues.ts dlq.retry for fabFileVectorizeQueue', () => {
     expect(FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT).toBe(retryFromInfra('fabFileVectorizeQueue'));
+  });
+
+  it('matches infra/queues.ts dlq.retry for generationCallbackQueue', () => {
+    expect(GENERATION_CALLBACK_MAX_RECEIVE_COUNT).toBe(retryFromInfra('generationCallbackQueue'));
+  });
+
+  it('matches infra/queues.ts visibilityTimeout for generationCallbackQueue', () => {
+    expect(GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC).toBe(visibilityTimeoutSecFromInfra('generationCallbackQueue'));
   });
 });

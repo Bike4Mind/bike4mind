@@ -1,17 +1,9 @@
 name: Production Release
 
-# Legacy auto-trigger: fired after the app workflow (renamed "Deploy" -> "CI")
-# completed on the `prod` branch. The `prod` branch is being retired (production
-# is promoted from the deploy console via workflow_dispatch below), so this path
-# is effectively inert; CI no longer runs on `prod`. Kept in sync with the
-# workflow name until the prod-branch retirement removes it.
+# Dispatched by the deployer right after it
+# promotes a commit to production, passing that commit's SHA in `deployed_sha`.
+# `target_branch` is a deprecated alias kept only while the deployer migrates.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches:
-      - prod
-  # Allow manual trigger for testing
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,8 +20,12 @@ on:
         description: 'Optional Slack webhook URL for release notifications'
         required: false
         type: string
+      deployed_sha:
+        description: 'Exact commit SHA that was deployed to production. Required for real (non-dry-run) runs.'
+        required: false
+        type: string
       target_branch:
-        description: 'Branch to compare against for commits (defaults to HEAD for testing)'
+        description: "DEPRECATED: use deployed_sha. Commit SHA that was deployed (defaults to HEAD for testing)"
         required: false
         type: string
         default: 'HEAD'
@@ -46,8 +42,6 @@ env:
 jobs:
   create-release:
     name: Create Production Release
-    # Only run if Deploy workflow succeeded OR manually triggered
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
@@ -77,40 +71,47 @@ jobs:
             exit 1
           fi
 
+      - name: Resolve deployed commit SHA
+        id: resolve-sha
+        env:
+          DEPLOYED_SHA_INPUT: ${{ github.event.inputs.deployed_sha }}
+          TARGET_BRANCH_INPUT: ${{ github.event.inputs.target_branch }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          DEPLOYED_SHA="${DEPLOYED_SHA_INPUT:-$TARGET_BRANCH_INPUT}"
+
+          if [[ "$DEPLOYED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            : # valid commit SHA
+          elif [ "$DEPLOYED_SHA" = "HEAD" ] && [ "$DRY_RUN" = "true" ]; then
+            : # HEAD is only allowed as a placeholder for dry-run testing
+          else
+            echo "::error::deployed_sha must be the exact 40-character commit SHA that was deployed (got '$DEPLOYED_SHA'). 'HEAD' is only accepted when dry_run is true."
+            exit 1
+          fi
+
+          echo "deployed_sha=$DEPLOYED_SHA" | tee -a "$GITHUB_OUTPUT"
+
       - name: Determine configuration
         id: config
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF: ${{ github.ref }}
-          AWS_PROD_ROLE_ARN: ${{ secrets.AWS_PROD_ROLE_ARN }}
           AWS_DEV_ROLE_ARN: ${{ secrets.AWS_DEV_ROLE_ARN }}
           APP_NAME: ${{ vars.SEED_APP_NAME || 'bike4mind' }}
         run: |
-          # Determine stage based on event and branch
-          if [ "$EVENT_NAME" = "workflow_run" ]; then
-            # For workflow_run events, the branch is from the triggering workflow
-            # Since we filter by prod branch, this should always be production
-            echo "stage=production" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=$AWS_PROD_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
-          elif [ "$REF" = "refs/heads/prod" ]; then
-            echo "stage=production" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=$AWS_PROD_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
-          elif [ "$REF" = "refs/heads/main" ]; then
-            echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=$AWS_DEV_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
-          else
-            # For manual workflow_dispatch on other branches, use dev
-            echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
-            echo "aws_role_arn=$AWS_DEV_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
-          fi
+          # The release only needs GitHub + Bedrock access, which the dev stage
+          # provides; every deployer dispatch has always resolved to dev.
+          echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
+          echo "aws_role_arn=$AWS_DEV_ROLE_ARN" | tee -a "$GITHUB_OUTPUT"
 
           echo "app_name=$APP_NAME" | tee -a "$GITHUB_OUTPUT"
 
+      # Check out the dispatch ref, never the deployed SHA: the scripts must match
+      # this workflow, and an older deployed commit's createProductionRelease.ts
+      # ignores --target-sha. The commit range and tag target both go through the
+      # GitHub API, so the deployed tree is never needed locally.
       - name: Checkout code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Fetch all history for proper commit comparison
-          ref: ${{ github.event_name == 'workflow_run' && 'prod' || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -157,30 +158,23 @@ jobs:
           # the release-tag-protection ruleset (App is a bypass actor).
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # For workflow_run events (auto-trigger), always send Slack
-          # For manual runs, send only if the input is true
-          SEND_SLACK_NOTIFICATION: ${{ github.event_name == 'workflow_run' || github.event.inputs.send_slack_notification == 'true' }}
+          SEND_SLACK_NOTIFICATION: ${{ github.event.inputs.send_slack_notification == 'true' }}
           # Allow manual override of the webhook; otherwise use the secret
           SLACK_WEBHOOK_URL: ${{ github.event.inputs.slack_webhook_url || secrets.CHANGELOG_SLACK_WEBHOOK_URL }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-          # For workflow_run (auto), explicitly use 'prod'. For manual dispatch, use input (defaults to 'HEAD')
-          TARGET_BRANCH: ${{ github.event_name == 'workflow_run' && 'prod' || github.event.inputs.target_branch || 'HEAD' }}
+          DEPLOYED_SHA: ${{ steps.resolve-sha.outputs.deployed_sha }}
           SST_STAGE: ${{ steps.config.outputs.stage }}
         run: |
-          pnpm sst shell --stage "$SST_STAGE" --print-logs -- pnpm --filter @bike4mind/scripts create-prod-release --target-branch "$TARGET_BRANCH"
+          pnpm sst shell --stage "$SST_STAGE" --print-logs -- pnpm --filter @bike4mind/scripts create-prod-release --target-sha "$DEPLOYED_SHA"
 
       - name: Summary
         if: success()
         env:
-          EVENT_NAME: ${{ github.event_name }}
           SST_STAGE: ${{ steps.config.outputs.stage }}
+          DEPLOYED_SHA: ${{ steps.resolve-sha.outputs.deployed_sha }}
         run: |
-          echo "✅ Production release created successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "Production release created successfully." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "$EVENT_NAME" = "workflow_run" ]; then
-            echo "**Triggered by**: Deploy workflow completion" >> $GITHUB_STEP_SUMMARY
-            echo "**Branch**: prod" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**Triggered by**: Manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
-            echo "**Stage**: $SST_STAGE" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "**Triggered by**: workflow_dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "**Stage**: $SST_STAGE" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed SHA**: $DEPLOYED_SHA" >> $GITHUB_STEP_SUMMARY

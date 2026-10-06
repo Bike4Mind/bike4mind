@@ -19,7 +19,7 @@ import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/er
 import { z } from 'zod';
 import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import type { LiveOpsTriageJobMessage } from '@server/cron/liveopsTriageDispatcher';
+import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
 
 const DEBOUNCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 

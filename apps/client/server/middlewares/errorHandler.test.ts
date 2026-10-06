@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ApiErrorSchema, BadGatewayError, BadRequestError } from '@bike4mind/common';
+import { API_KEY_USER_CAP_ERROR_CODE, ApiErrorSchema, BadGatewayError, BadRequestError } from '@bike4mind/common';
 import { z } from 'zod';
 import errorHandler from './errorHandler';
 
@@ -74,6 +74,24 @@ describe('errorHandler - the body carries no keys the envelope does not document
     expect(bodyOf(new BadRequestError('no credits', { errorCode: 'insufficient_credits' }))).toMatchObject({
       errorCode: 'insufficient_credits',
       error: 'no credits',
+    });
+  });
+
+  it('serializes the API key cap using the shared errorCode field', () => {
+    const { req, res, status, json } = makeReqRes();
+    errorHandler(
+      new BadRequestError('Maximum 10 active API keys allowed per user', {
+        errorCode: API_KEY_USER_CAP_ERROR_CODE,
+      }),
+      req,
+      res
+    );
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      errorCode: 'api_key_user_cap',
+      error: 'Maximum 10 active API keys allowed per user',
+      name: 'BadRequestError',
+      request_id: 'trace-err-1',
     });
   });
 

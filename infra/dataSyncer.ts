@@ -25,7 +25,7 @@ import { lambdaVpc } from './vpc';
  * - MONGODB_URI: Connection string template with %STAGE% placeholder
  */
 export const dataSyncer = new sst.aws.Function('DataSyncer', {
-  handler: 'apps/client/server/jobs/dataSyncerHandler.handler',
+  handler: 'apps/workers/src/jobs/dataSyncerHandler.handler',
   timeout: '5 minutes', // Generous timeout for copying collections
   memory: '512 MB',
   vpc: lambdaVpc,

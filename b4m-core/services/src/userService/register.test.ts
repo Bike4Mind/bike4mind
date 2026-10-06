@@ -38,6 +38,7 @@ describe('registerUser', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mockInvite = {
+      id: 'invite-1',
       code: 'INVITE123',
       used: null,
       userId: 'inviterId',
@@ -93,14 +94,17 @@ describe('registerUser', () => {
     // This path is OTC-only (the sole caller always passes password: ''), so the
     // account is passwordless by construction regardless of what `password` was set to here.
     expect(createdUser.hasUsablePassword).toBe(false);
-    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: RegInviteStatusType.used,
-        usedbyId: 'newUserId',
-        usageHistory: [expect.objectContaining({ userId: 'newUserId' })],
-      }),
-      undefined
-    );
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(1);
+    expect(mockAdapters.db.registrationInvites.update.mock.calls[0][0]).toStrictEqual({
+      id: 'invite-1',
+      usageHistory: [{ userId: 'newUserId', usedAt: expect.any(Date) }],
+      used: expect.any(Date),
+      usedbyId: 'newUserId',
+      status: RegInviteStatusType.used,
+    });
+    const limitedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
+    expect(limitedInvite.used).toBe(limitedInvite.usageHistory[0].usedAt);
+    expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
   // --- disposable-email blocking ---
@@ -234,10 +238,16 @@ describe('registerUser', () => {
 
     await expect(registerUser(reuseParams, mockAdapters)).resolves.toBeDefined();
 
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(2);
     const updatedUnlimitedInvite = mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[0];
-    expect(updatedUnlimitedInvite?.status).toBe(RegInviteStatusType.open);
-    expect(updatedUnlimitedInvite?.used).toBeUndefined();
-    expect(updatedUnlimitedInvite?.usedbyId).toBeUndefined();
+    expect(updatedUnlimitedInvite).toStrictEqual({
+      id: 'invite-1',
+      usageHistory: [
+        { userId: 'newUserId', usedAt: expect.any(Date) },
+        { userId: 'newUserId', usedAt: expect.any(Date) },
+      ],
+      status: RegInviteStatusType.open,
+    });
     expect(mockAdapters.db.registrationInvites.update.mock.calls.at(-1)?.[1]).toEqual({ unset: ['used', 'usedbyId'] });
     expect(updatedUnlimitedInvite?.usageHistory?.length).toBe(2);
   });
@@ -261,10 +271,17 @@ describe('registerUser', () => {
 
   it('marks invite as used and updates status', async () => {
     await registerUser(baseParams, mockAdapters);
+    expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledTimes(1);
     const updatedInvite = mockAdapters.db.registrationInvites.update.mock.calls[0][0];
-    expect(updatedInvite.used).toBeInstanceOf(Date);
-    expect(updatedInvite.status).toBe(RegInviteStatusType.used);
-    expect(updatedInvite.usageHistory?.length).toBe(1);
+    expect(updatedInvite).toStrictEqual({
+      id: 'invite-1',
+      usageHistory: [{ userId: 'newUserId', usedAt: expect.any(Date) }],
+      used: expect.any(Date),
+      usedbyId: 'newUserId',
+      status: RegInviteStatusType.used,
+    });
+    expect(updatedInvite.used).toBe(updatedInvite.usageHistory[0].usedAt);
+    expect(mockAdapters.db.registrationInvites.update.mock.calls[0][1]).toBeUndefined();
   });
 
   // P0-B abuse gate: server-side enforcement, independent of the UI checkboxes.

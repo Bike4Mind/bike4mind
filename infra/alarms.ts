@@ -20,130 +20,12 @@ import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
-// --- Conditional SNS topic exports (undefined when not monitored) ---
-
-export const whatsNewFailureAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewFailureAlarm') : undefined;
-
-export const whatsNewDurationAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewDurationAlarm') : undefined;
-
-export const whatsNewCostAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewCostAlarm') : undefined;
-
-export const whatsNewLambdaErrorAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WhatsNewLambdaErrorAlarm') : undefined;
-
-export const anthropicRateLimitAlarm = isMonitoredStage ? new sst.aws.SnsTopic('AnthropicRateLimitAlarm') : undefined;
-
-export const liveopsTriageFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('LiveOpsTriageFailureAlarm')
-  : undefined;
-
-export const liveopsHighErrorVolumeAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('LiveOpsHighErrorVolumeAlarm')
-  : undefined;
-
-export const liveopsP0IssuesAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LiveOpsP0IssuesAlarm') : undefined;
-
-export const liveopsP1IssuesAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LiveOpsP1IssuesAlarm') : undefined;
-
-export const liveopsConsecutiveFailuresAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('LiveOpsConsecutiveFailuresAlarm')
-  : undefined;
-
-export const webhookDeliveryFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('WebhookDeliveryFailureAlarm')
-  : undefined;
-
-export const webhookDeliveryLatencyAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('WebhookDeliveryLatencyAlarm')
-  : undefined;
-
-export const webhookDeliveryLambdaErrorAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('WebhookDeliveryLambdaErrorAlarm')
-  : undefined;
-
-export const rateLimitWarningAlarm = isMonitoredStage ? new sst.aws.SnsTopic('RateLimitWarningAlarm') : undefined;
-
-export const rateLimitHitAlarm = isMonitoredStage ? new sst.aws.SnsTopic('RateLimitHitAlarm') : undefined;
-
-export const integrationHealthSlackFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthSlackFailureAlarm')
-  : undefined;
-
-export const integrationHealthGithubFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthGithubFailureAlarm')
-  : undefined;
-
-export const integrationHealthJiraFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthJiraFailureAlarm')
-  : undefined;
-
-export const integrationHealthConfluenceFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthConfluenceFailureAlarm')
-  : undefined;
-
-export const integrationHealthLatencyAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthLatencyAlarm')
-  : undefined;
-
-export const integrationHealthAllDownAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('IntegrationHealthAllDownAlarm')
-  : undefined;
-
-export const circuitBreakerOpenAlarm = isMonitoredStage ? new sst.aws.SnsTopic('CircuitBreakerOpenAlarm') : undefined;
-
-export const agentInflightStepsPersistFailedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('AgentInflightStepsPersistFailedAlarm')
-  : undefined;
-
-export const agentCheckpointDepthWarningAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('AgentCheckpointDepthWarningAlarm')
-  : undefined;
-
-export const agentCheckpointDepthExceededAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('AgentCheckpointDepthExceededAlarm')
-  : undefined;
-
-export const websocketRouteOomAlarm = isMonitoredStage ? new sst.aws.SnsTopic('WebSocketRouteOomAlarm') : undefined;
-
-export const largeApiResponseAlarm = isMonitoredStage ? new sst.aws.SnsTopic('LargeApiResponseAlarm') : undefined;
-
-export const modelDiscoveryFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryFailureAlarm')
-  : undefined;
-
-export const modelDiscoveryRowsRejectedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryRowsRejectedAlarm')
-  : undefined;
-
-export const modelDiscoveryPriceFlaggedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryPriceFlaggedAlarm')
-  : undefined;
-
-export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
-  : undefined;
-
-export const deprecatedModelRequestAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
-  : undefined;
-
-export const questProcessingFailureAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('QuestProcessingFailureAlarm')
-  : undefined;
-
-// Retained with no alarm pointing at it: the topic is deployed and removing the declaration would
-// destroy it. Unsubscribed, so nothing routes here - see the dlqAlarmTopic note below.
+// Retained: this topic was already orphaned before this PR -- no alarm ever pointed at it.
+// Unlike the 36 deleted topics (which each had an alarm, just no subscriber), removing this
+// declaration would destroy the deployed AWS resource without any alarm migration needed.
+// Kept so Pulumi does not destroy a resource that may have out-of-band subscribers.
 export const dataLakeStuckBatchesAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DataLakeStuckBatchesAlarm')
-  : undefined;
-
-export const replSandboxUnavailableAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
-  : undefined;
-
-export const sessionReuseRevokedAlarm = isMonitoredStage ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm') : undefined;
-
-export const sessionRecoveredHighRateAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')
   : undefined;
 
 // --- MetricAlarm definitions (only created for monitored stages) ---
@@ -182,7 +64,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Any occurrence is noteworthy
     treatMissingData: 'notBreaching',
-    alarmActions: [agentCheckpointDepthWarningAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
       Severity: 'Warning',
@@ -212,7 +94,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Any occurrence means an execution was forcibly terminated
     treatMissingData: 'notBreaching',
-    alarmActions: [agentCheckpointDepthExceededAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
       Severity: 'High',
@@ -236,7 +118,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 2, // More than 2 failures
     treatMissingData: 'notBreaching',
-    alarmActions: [whatsNewFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'High',
@@ -260,7 +142,7 @@ if (isMonitoredStage) {
     statistic: 'Average',
     threshold: 120000, // 2 minutes in milliseconds
     treatMissingData: 'notBreaching',
-    alarmActions: [whatsNewDurationAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'Medium',
@@ -284,7 +166,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 0.05, // $0.05
     treatMissingData: 'notBreaching',
-    alarmActions: [whatsNewCostAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'Medium',
@@ -311,7 +193,7 @@ if (isMonitoredStage) {
     dimensions: {
       FunctionName: whatsNewGenerationQueueSubscription.nodes.function.name,
     },
-    alarmActions: [whatsNewLambdaErrorAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WhatsNewGeneration',
       Severity: 'High',
@@ -339,7 +221,7 @@ if (isMonitoredStage) {
     dimensions: {
       Stage: $app.stage,
     },
-    alarmActions: [anthropicRateLimitAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AnthropicAPI',
       Severity: 'High',
@@ -363,7 +245,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Alert on any failure
     treatMissingData: 'notBreaching',
-    alarmActions: [liveopsTriageFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'High',
@@ -387,7 +269,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 50, // More than 50 errors
     treatMissingData: 'notBreaching',
-    alarmActions: [liveopsHighErrorVolumeAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'Critical',
@@ -414,7 +296,7 @@ if (isMonitoredStage) {
     dimensions: {
       Priority: 'P0',
     },
-    alarmActions: [liveopsP0IssuesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'Critical',
@@ -441,7 +323,7 @@ if (isMonitoredStage) {
     dimensions: {
       Priority: 'P1',
     },
-    alarmActions: [liveopsP1IssuesAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'High',
@@ -466,7 +348,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 2, // 2 or more failures in 48 hours
     treatMissingData: 'notBreaching',
-    alarmActions: [liveopsConsecutiveFailuresAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'LiveOpsTriage',
       Severity: 'Critical',
@@ -490,7 +372,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 10, // More than 10 failures in 5 min
     treatMissingData: 'notBreaching',
-    alarmActions: [webhookDeliveryFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WebhookDelivery',
       Severity: 'High',
@@ -514,7 +396,7 @@ if (isMonitoredStage) {
     extendedStatistic: 'p95',
     threshold: 30000, // 30 seconds in milliseconds
     treatMissingData: 'notBreaching',
-    alarmActions: [webhookDeliveryLatencyAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WebhookDelivery',
       Severity: 'Medium',
@@ -541,7 +423,7 @@ if (isMonitoredStage) {
     dimensions: {
       FunctionName: webhookDeliveryQueueSubscription.nodes.function.name,
     },
-    alarmActions: [webhookDeliveryLambdaErrorAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'WebhookDelivery',
       Severity: 'High',
@@ -565,7 +447,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Alert on any near-limit event
     treatMissingData: 'notBreaching',
-    alarmActions: [rateLimitWarningAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationRateLimits',
       Severity: 'Medium',
@@ -589,7 +471,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Alert on any throttle event
     treatMissingData: 'notBreaching',
-    alarmActions: [rateLimitHitAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationRateLimits',
       Severity: 'High',
@@ -614,7 +496,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'slack' },
-    alarmActions: [integrationHealthSlackFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -633,7 +515,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'github' },
-    alarmActions: [integrationHealthGithubFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -652,7 +534,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'jira' },
-    alarmActions: [integrationHealthJiraFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -671,7 +553,7 @@ if (isMonitoredStage) {
     threshold: 3,
     treatMissingData: 'notBreaching',
     dimensions: { Integration: 'confluence' },
-    alarmActions: [integrationHealthConfluenceFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'High',
@@ -695,7 +577,7 @@ if (isMonitoredStage) {
     extendedStatistic: 'p95',
     threshold: 5000, // 5 seconds in milliseconds
     treatMissingData: 'notBreaching',
-    alarmActions: [integrationHealthLatencyAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'Medium',
@@ -720,7 +602,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 1, // Less than 1 success = zero successes
     treatMissingData: 'notBreaching',
-    alarmActions: [integrationHealthAllDownAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'IntegrationHealth',
       Severity: 'Critical',
@@ -745,7 +627,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 0, // Alert when any integration's breaker opens (value = 1)
     treatMissingData: 'notBreaching',
-    alarmActions: [circuitBreakerOpenAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'CircuitBreaker',
       Severity: 'High',
@@ -775,7 +657,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 10,
     treatMissingData: 'notBreaching',
-    alarmActions: [agentInflightStepsPersistFailedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'AgentExecutor',
       Severity: 'Medium',
@@ -835,7 +717,7 @@ if (isMonitoredStage) {
       statistic: 'Sum',
       threshold: 0, // Alert on any OOM/kill event
       treatMissingData: 'notBreaching',
-      alarmActions: [websocketRouteOomAlarm!.arn],
+      alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'WebSocketRoutes',
         Severity: 'High',
@@ -870,7 +752,7 @@ if (isMonitoredStage) {
     statistic: 'Maximum',
     threshold: 0, // Alert on any occurrence
     treatMissingData: 'notBreaching',
-    alarmActions: [largeApiResponseAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ApiResponse',
       Severity: 'Medium',
@@ -909,7 +791,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'High',
@@ -938,7 +820,7 @@ if (isMonitoredStage) {
     dimensions: {
       FunctionName: modelDiscoveryFunction.name,
     },
-    alarmActions: [modelDiscoveryFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'High',
@@ -963,7 +845,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryRowsRejectedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Medium',
@@ -989,7 +871,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryPriceFlaggedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Low',
@@ -1016,7 +898,7 @@ if (isMonitoredStage) {
     threshold: 0,
     treatMissingData: 'notBreaching',
     dimensions: modelDiscoveryDimensions,
-    alarmActions: [modelDiscoveryDocsParserShiftAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelDiscovery',
       Severity: 'Low',
@@ -1097,7 +979,7 @@ if (isMonitoredStage) {
     dimensions: {
       Stage: $app.stage,
     },
-    alarmActions: [deprecatedModelRequestAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ModelSunset',
       Severity: 'Medium',
@@ -1135,7 +1017,7 @@ if (isMonitoredStage) {
     dimensions: {
       Stage: $app.stage,
     },
-    alarmActions: [replSandboxUnavailableAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'ReplSandbox',
       Severity: 'High',
@@ -1151,7 +1033,7 @@ if (isMonitoredStage) {
    * problem, not a one-off.
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordStuckBatchGauge, wired from
-   * server/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
+   * apps/workers/src/cron/dataLakeBatchReconcile.ts's runStuckBatchSweep.
    * Namespace: Lumina5/DataLakeBatch / StuckBatches
    */
   new aws.cloudwatch.MetricAlarm('dataLakeStuckBatchesHigh', {
@@ -1353,7 +1235,7 @@ if (isMonitoredStage) {
    * counter - alarming on the counter's absence would page every quiet day.
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, wired from
-   * server/cron/dataLakeBatchReconcile.ts's rescue sweep.
+   * apps/workers/src/cron/dataLakeBatchReconcile.ts's rescue sweep.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueFailures, dimension Stage=<this stage>. The
    * emitter writes both a stage-less and a `{ Stage }`-scoped stream (a dimensioned metric is a
    * distinct stream in CloudWatch); this alarm reads the scoped one so a dev-stage sweep failure
@@ -1398,7 +1280,7 @@ if (isMonitoredStage) {
    * no AWS/Lambda Errors alarm either - the throw is caught, so the invocation succeeds.
    *
    * Metric emitted by: server/utils/cloudwatch.ts -> recordChunkRescueSweep, with the 'failed'
-   * outcome supplied by server/cron/dataLakeBatchReconcile.ts's catch.
+   * outcome supplied by apps/workers/src/cron/dataLakeBatchReconcile.ts's catch.
    * Namespace: Lumina5/DataLakeBatch / ChunkRescueRuns, dimensions outcome=failed + Stage=<this
    * stage>. Unlike the stage rollups elsewhere in this file, the scoped Runs stream keeps
    * `outcome` alongside `Stage` - a `{ Stage }`-only Runs stream counts every run, healthy ones
@@ -1530,7 +1412,7 @@ if (isMonitoredStage) {
     threshold: 5,
     treatMissingData: 'notBreaching',
     dimensions: { Stage: $app.stage },
-    alarmActions: [questProcessingFailureAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Quests',
       Severity: 'High',
@@ -1559,7 +1441,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 0, // Any occurrence is worth investigating
     treatMissingData: 'notBreaching',
-    alarmActions: [sessionReuseRevokedAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Auth',
       Severity: 'Critical',
@@ -1588,7 +1470,7 @@ if (isMonitoredStage) {
     statistic: 'Sum',
     threshold: 10,
     treatMissingData: 'notBreaching',
-    alarmActions: [sessionRecoveredHighRateAlarm!.arn],
+    alarmActions: [dlqAlarmTopic.arn],
     tags: {
       Application: 'Auth',
       Severity: 'Warning',

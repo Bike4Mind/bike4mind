@@ -15,6 +15,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 
 const ContinueRequestSchema = z.object({
   sessionId: z.string().refine(isValidObjectId, {
@@ -92,7 +93,8 @@ const handler = baseApi()
             // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
             resolveLakeAccess: async () =>
               (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
-          }
+          },
+          { origin: resolveSessionOrigin(req) }
         );
 
         // Skip if notebookId already changed by a concurrent request

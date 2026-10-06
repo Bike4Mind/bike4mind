@@ -508,6 +508,30 @@ describe('makeDagDispatcher artifact opt-out inheritance', () => {
     await createNodeWith(true);
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ enableArtifacts: true }));
   });
+
+  it('carries the parent scopeDeniedTools onto the node row, and omits the key when empty', async () => {
+    createMock.mockClear();
+    const make = (scopeDeniedTools?: string[]) =>
+      makeDagDispatcher({
+        connectionId: 'c1',
+        nodeDefaults: { ...nodeDefaultsBase, scopeDeniedTools },
+        logger: silentLogger,
+      });
+    const args = {
+      parentExecutionId: 'p1',
+      node,
+      thoroughness: 'quick' as const,
+      agentName: 'worker',
+      model: 'm1',
+      maxIterations: 3,
+    };
+    await make(['save_content_to_data_lake']).createNode(args);
+    expect(createMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scopeDeniedTools: ['save_content_to_data_lake'] })
+    );
+    await make([]).createNode(args);
+    expect(Object.keys(createMock.mock.calls[1][0] as Record<string, unknown>)).not.toContain('scopeDeniedTools');
+  });
 });
 
 /**

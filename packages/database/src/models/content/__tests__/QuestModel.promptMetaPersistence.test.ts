@@ -149,6 +149,8 @@ const FULL_PROMPT_META = {
     // #3055: exercises the new subdoc's default:undefined behavior and its Number/String cast on
     // the $set path, same reason as the fields above - the parity test only checks path names.
     excludedLakes: { count: 2, reason: 'access' },
+    // Sibling of excludedLakes, same subdoc shape and the same reason to round-trip it here.
+    notServingLakes: { count: 1, reason: 'draft' },
   },
   // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
   // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would
@@ -196,6 +198,7 @@ const FULL_PROMPT_META = {
   warnings: ['a warning'],
   generatedAt: '2026-07-30T00:00:00.000Z',
   finishReason: 'end_turn',
+  replyChoices: { offered: true, status: 'invalid', reason: 'too_few' },
   artifacts: [{ type: 'html', content: '<div />', metadata: { source: 'tool_result' }, timestamp: new Date() }],
   toolHealth: [
     {
@@ -321,6 +324,20 @@ describe('QuestModel promptMeta persistence', () => {
     const sources = (raw.promptMeta.context?.systemPromptSources ?? []) as Record<string, unknown>[];
     expect(sources.length).toBeGreaterThan(0);
     expect(sources.every(source => source.content === undefined)).toBe(true);
+  });
+
+  // default: undefined is what keeps "not measured" distinct from a recorded zero; a schema that
+  // auto-vivified the subdoc would store `{}`, which fails the Zod re-parse (count is required).
+  it('leaves the measured-lake subdocs absent on a retrieval write that carries neither', async () => {
+    const quest = await Quest.create({ sessionId: 'session-2', type: 'message', timestamp: new Date(), prompt: 'hi' });
+    await questRepository.update({
+      id: quest.id,
+      promptMeta: { retrieval: { attempted: false, surfaces: [], dataLakeTags: [] } },
+    });
+    const doc = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(quest.id) });
+    expect(doc?.promptMeta.retrieval).toBeDefined();
+    expect('excludedLakes' in doc!.promptMeta.retrieval).toBe(false);
+    expect('notServingLakes' in doc!.promptMeta.retrieval).toBe(false);
   });
 
   it('survives the ingress parse that runs on every subsequent turn', () => {
