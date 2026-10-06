@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import type { ValidatedVideoRequest } from '@bike4mind/common';
+import { describe, expect, it, vi } from 'vitest';
+import type { ValidatedVideoRequest, VideoModelId, VideoProviderId } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { describeVideoProviderConformance } from '../conformance';
 import { createVideoProviderRegistry } from '../registry';
-import { ProviderSubmitError, readBoundedResponse, VideoOutputTooLargeError } from '../types';
+import { ProviderSubmitError, readBoundedResponse, VideoOutputTooLargeError, type VideoProvider } from '../types';
 import { TestVideoProvider } from './TestVideoProvider';
 
 let clock = new Date('2026-10-06T00:00:00Z');
@@ -65,6 +65,14 @@ describe('TestVideoProvider specifics', () => {
   });
 });
 
+const stubProvider = (id: VideoProviderId, models: readonly VideoModelId[]): VideoProvider => ({
+  id,
+  models,
+  submit: vi.fn(),
+  poll: vi.fn(),
+  fetchOutput: vi.fn(),
+});
+
 describe('createVideoProviderRegistry', () => {
   it('looks providers up by id and lists ids', () => {
     const registry = createVideoProviderRegistry([new TestVideoProvider()]);
@@ -75,6 +83,22 @@ describe('createVideoProviderRegistry', () => {
   it('rejects duplicate provider ids', () => {
     expect(() => createVideoProviderRegistry([new TestVideoProvider(), new TestVideoProvider()])).toThrow(
       'duplicate video provider: test'
+    );
+  });
+
+  it('lists exactly the catalog models assigned to the test provider', () => {
+    expect(new TestVideoProvider().models).toEqual(['test-video']);
+  });
+
+  it('refuses a provider that lists a model the catalog assigns to another provider', () => {
+    expect(() => createVideoProviderRegistry([stubProvider('test', ['test-video', 'gemini-omni-1.1-flash'])])).toThrow(
+      /lists gemini-omni-1\.1-flash, which the catalog assigns to gemini-omni/
+    );
+  });
+
+  it('refuses a provider that omits a model the catalog assigns to it', () => {
+    expect(() => createVideoProviderRegistry([stubProvider('test', [])])).toThrow(
+      /does not list catalog models: test-video/
     );
   });
 });

@@ -98,6 +98,7 @@ const stubProvider = (overrides: Partial<VideoProvider>): VideoProvider => {
   const base = new TestVideoProvider();
   return {
     id: base.id,
+    models: base.models,
     submit: overrides.submit ?? base.submit.bind(base),
     poll: overrides.poll ?? base.poll.bind(base),
     fetchOutput: overrides.fetchOutput ?? base.fetchOutput.bind(base),

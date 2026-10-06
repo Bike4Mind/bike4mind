@@ -1,4 +1,10 @@
-import type { ProviderJobHandle, ProviderOutput, ValidatedVideoRequest, VideoProviderId } from '@bike4mind/common';
+import type {
+  ProviderJobHandle,
+  ProviderOutput,
+  ValidatedVideoRequest,
+  VideoModelId,
+  VideoProviderId,
+} from '@bike4mind/common';
 import { MAX_VIDEO_OUTPUT_BYTES } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
@@ -25,6 +31,8 @@ export type VideoProviderContext = {
 // Every method is one bounded call: no method sleeps, loops or polls. The job engine owns waiting.
 export interface VideoProvider {
   readonly id: VideoProviderId;
+  /** Must equal the catalog models whose `provider` is this id; the registry enforces it. */
+  readonly models: readonly VideoModelId[];
   submit(request: ValidatedVideoRequest, inputs: ResolvedInputs, ctx: VideoProviderContext): Promise<ProviderJobHandle>;
   poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult>;
   fetchOutput(output: ProviderOutput, ctx: VideoProviderContext): Promise<Buffer>;
