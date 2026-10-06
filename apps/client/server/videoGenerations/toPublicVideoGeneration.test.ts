@@ -83,7 +83,10 @@ describe('toPublicVideoGeneration', () => {
     const sign = vi.fn(async () => `https://signed.example/${++n}`);
     const first = await toPublicVideoGeneration(succeeded('files'), { sign, now });
     const second = await toPublicVideoGeneration(succeeded('files'), { sign, now });
-    expect(sign).toHaveBeenCalledWith('files', 'generated-video/j.mp4', OUTPUT_URL_TTL_SECONDS);
+    expect(sign).toHaveBeenCalledWith(
+      expect.objectContaining({ location: 'files', s3Key: 'generated-video/j.mp4', fileId: 'f1' }),
+      OUTPUT_URL_TTL_SECONDS
+    );
     expect(OUTPUT_URL_TTL_SECONDS).toBe(900);
     expect(first.output?.url).not.toBe(second.output?.url);
     expect(first.output).toMatchObject({
@@ -96,8 +99,15 @@ describe('toPublicVideoGeneration', () => {
   it('signs generated-bucket output with a null file_id', async () => {
     const sign = vi.fn(async () => 'https://signed.example/g');
     const resource = await toPublicVideoGeneration(succeeded('generated'), { sign, now });
-    expect(sign).toHaveBeenCalledWith('generated', 'generated-video/j.mp4', 900);
+    expect(sign).toHaveBeenCalledWith(expect.objectContaining({ location: 'generated' }), 900);
     expect(resource.output?.file_id).toBeNull();
+  });
+
+  it('reports a null url and expires_at while the output is not yet serveable', async () => {
+    const sign = vi.fn(async () => null);
+    const resource = await toPublicVideoGeneration(succeeded('files'), { sign, now });
+    expect(resource.output).toMatchObject({ url: null, expires_at: null, file_id: 'f1', content_type: 'video/mp4' });
+    expect(VideoGenerationSchema.parse(resource)).toEqual(resource);
   });
 
   it('never echoes the stored error message', async () => {

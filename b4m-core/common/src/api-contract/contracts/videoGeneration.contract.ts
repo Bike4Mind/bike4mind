@@ -68,7 +68,8 @@ export const createVideoGenerationContract = defineEndpoint({
   description:
     'Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until ' +
     '`state` is `succeeded`, `failed`, `blocked` or `cancelled`; on success `output.url` is a signed download ' +
-    'URL valid for 15 minutes (re-fetch the job for a fresh one). Credits for the requested duration are ' +
+    'URL valid for 15 minutes (re-fetch the job for a fresh one; it is `null` for the brief scan of the saved ' +
+    'file). Credits for the requested duration are ' +
     'reserved up front and settled on completion; a failed, blocked or cancelled job is not charged. ' +
     'Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with ' +
     'the same key and body returns the original job, and the same key with a different body is a 422 ' +

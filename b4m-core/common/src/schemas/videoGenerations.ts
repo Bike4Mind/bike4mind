@@ -91,8 +91,14 @@ export const VideoGenerationSchema = z.object({
   error: z.object({ code: z.enum(VIDEO_JOB_PUBLIC_ERROR_CODES), message: z.string() }).nullable(),
   output: z
     .object({
-      url: z.string().describe('Signed download URL, valid until expires_at. Re-fetch the job for a fresh one.'),
-      expires_at: z.string(),
+      url: z
+        .string()
+        .nullable()
+        .describe(
+          'Signed download URL, valid until expires_at. Re-fetch the job for a fresh one. Null while the saved ' +
+            'file is still being scanned (or if the scan blocked it); re-fetch until it is set.'
+        ),
+      expires_at: z.string().nullable().describe('ISO 8601. When url stops working; null whenever url is.'),
       content_type: z.string(),
       duration_seconds: z.number(),
       file_id: z.string().nullable().describe('The Files entry, or null when the clip was stored outside Files.'),

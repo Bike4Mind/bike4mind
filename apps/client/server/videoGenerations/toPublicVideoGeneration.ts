@@ -9,11 +9,11 @@ import {
 // Short enough that a leaked URL dies quickly; clients re-read the job (which re-signs) for a fresh one.
 export const OUTPUT_URL_TTL_SECONDS = 900;
 
+/** Resolves to null when the output must not be served yet (see signOutputUrl's moderation gate). */
 export type SignOutputUrl = (
-  location: VideoJobOutput['location'],
-  s3Key: string,
+  output: Pick<VideoJobOutput, 'location' | 's3Key' | 'fileId'>,
   expiresInSeconds: number
-) => Promise<string>;
+) => Promise<string | null>;
 
 // Fixed text per public code: a stored job.error.message can carry provider wording, which never leaves the server.
 const PUBLIC_ERROR_MESSAGES: Record<VideoJobPublicErrorCode, string> = {
@@ -43,6 +43,7 @@ export async function toPublicVideoGeneration(
   deps: { sign: SignOutputUrl; now: () => Date }
 ): Promise<VideoGeneration> {
   const { request, output } = job.payload;
+  const url = job.state === 'succeeded' && output ? await deps.sign(output, OUTPUT_URL_TTL_SECONDS) : null;
   return {
     id: job.id,
     object: 'video_generation',
@@ -59,8 +60,9 @@ export async function toPublicVideoGeneration(
     output:
       job.state === 'succeeded' && output
         ? {
-            url: await deps.sign(output.location, output.s3Key, OUTPUT_URL_TTL_SECONDS),
-            expires_at: new Date(deps.now().getTime() + OUTPUT_URL_TTL_SECONDS * 1000).toISOString(),
+            url,
+            expires_at:
+              url === null ? null : new Date(deps.now().getTime() + OUTPUT_URL_TTL_SECONDS * 1000).toISOString(),
             content_type: output.contentType,
             duration_seconds: output.durationSeconds,
             file_id: output.fileId ?? null,

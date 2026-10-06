@@ -185,5 +185,5 @@ export const resetHarness = () => {
   );
   h.providersGet.mockReturnValue({ id: 'gemini-omni' });
   h.hasUsableKey.mockResolvedValue(true);
-  h.sign.mockImplementation(async (_location: string, key: string) => `https://signed.example/${key}`);
+  h.sign.mockImplementation(async (output: { s3Key: string }) => `https://signed.example/${output.s3Key}`);
 };
