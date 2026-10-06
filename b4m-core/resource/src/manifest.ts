@@ -122,6 +122,9 @@ export const DEFAULT_MANIFEST = {
   // Optional like the image queues below: delivers completion callbacks for their jobs, so an
   // install without it just skips callback delivery instead of losing image/video generation.
   generationCallbackQueue: { kind: 'queue', optional: true },
+  // Read by every video job enqueue and by the job handler's own re-enqueues; required because a video
+  // job accepted with nothing consuming it would hold credits until the sweeper fails it.
+  generationJobQueue: { kind: 'queue' },
   // Optional so an install that upgraded without adding the new env vars still boots the
   // worker (it warns and skips the consumer) instead of taking every other queue down with it.
   imageEditQueue: { kind: 'queue', optional: true },

@@ -28,6 +28,8 @@ export enum KnowledgeType {
    * excluded from every LLM-attachment and vectorization path.
    */
   AUDIO = 'AUDIO',
+  /** Generated video. Media-only like AUDIO: storable and browsable, never ingested. */
+  VIDEO = 'VIDEO',
 }
 
 // Data Lake source types

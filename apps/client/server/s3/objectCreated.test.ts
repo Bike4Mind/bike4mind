@@ -38,7 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
 }));
 vi.mock('@bike4mind/services/llm', () => ({ moderateImageOrThrow: vi.fn() }));
-vi.mock('@bike4mind/common', () => ({ isAudioMimeType: () => false }));
+vi.mock('@bike4mind/common', () => ({ isMediaOnlyMimeType: () => false }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@server/utils/storage', () => ({ getFilesStorage: () => ({ download: vi.fn(), downloadRange: vi.fn() }) }));
