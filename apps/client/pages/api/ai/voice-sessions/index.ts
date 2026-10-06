@@ -374,7 +374,7 @@ When you get the tool result back, summarize it conversationally for voice.`;
     if (axios.isAxiosError(error)) {
       const responseData = error.response?.data;
       const status = error.response?.status;
-      console.error('[Voice Session] OpenAI Realtime API error:', status, JSON.stringify(responseData));
+      req.logger.warn('[Voice Session] OpenAI Realtime API error', { upstreamStatus: status, body: responseData });
       // Never relay OpenAI's status: a 401 from this route makes ApiContext tear down the login
       // session. A 502 never enters that path, so the user stays signed in.
       throw voiceUnavailableError({ upstreamStatus: status });
