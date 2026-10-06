@@ -159,13 +159,14 @@ const FOREIGN_ORG = '650000000000000000000def';
 function fire({
   apiKey = VALID_KEY as string | null,
   body,
-}: { apiKey?: string | null; body?: Record<string, unknown> } = {}) {
+  headers,
+}: { apiKey?: string | null; body?: Record<string, unknown>; headers?: Record<string, string> } = {}) {
   const { req, res } = createMocks(
     {
       method: 'POST',
       url: '/api/ai/llm',
       body: { sessionId: 'sess-1', message: 'Hello there', ...body },
-      headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
+      headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}), ...headers },
     },
     { eventEmitter: EventEmitter }
   );
@@ -321,6 +322,32 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(res._getStatusCode()).toBe(422);
       expect(res._getJSONData().code).toBe('AGENT_IDS_INVALID');
       expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('origin forwarded to getOrCreateSession', () => {
+    const forwardedOrigin = () => (mockGetOrCreateSession.mock.calls[0][0] as { origin?: unknown }).origin;
+
+    it('stamps web for a JWT/browser caller (the New Chat composer)', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(forwardedOrigin()).toEqual({ channel: 'web' });
+    });
+
+    it('stamps api with the authenticating key id for an API-key caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(forwardedOrigin()).toEqual({ channel: 'api', apiKeyId: 'k1' });
+    });
+
+    it('stamps cli for a JWT caller sending the CLI client header', async () => {
+      const { req, res } = fire({ apiKey: null, headers: { 'x-b4m-client': 'b4m-cli/1.0.0' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(forwardedOrigin()).toEqual({ channel: 'cli' });
     });
   });
 
