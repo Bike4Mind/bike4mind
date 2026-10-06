@@ -98,6 +98,31 @@ describe('cloneSession - redaction at the copy boundary', () => {
   });
 
   /**
+   * `citationStyle` is create-only, so a clone that drops it is stuck on the 'named' default for good
+   * and its `[N]` markers stop indexing `citables`. Outside the isOwner gate, so a share holder's copy
+   * keeps it too.
+   */
+  it.each([
+    ['owns the session', 'caller-1'],
+    ['only holds a share', 'owner-1'],
+  ])('carries the source session citationStyle onto the clone when the caller %s', async (_, ownerId) => {
+    const { db } = makeAdapters(ownerId);
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: ownerId,
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      citationStyle: 'indexed',
+      forceKnowledgeRetrieval: true,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ citationStyle: 'indexed' }));
+  });
+
+  /**
    * `taggedAt` is the companion timestamp of `tags`, same as `summaryAt` is of `summary`. A clone
    * that arrives without it looks untagged, so the spider re-tags it and overwrites the copied tags.
    */

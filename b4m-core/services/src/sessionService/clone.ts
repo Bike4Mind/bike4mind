@@ -69,6 +69,9 @@ export const cloneSession = async (
     clonedSourceId: session.id,
     // The session's home: without it a copy made inside a product surface lands in the main list.
     surface,
+    // Create-only (not in SessionUpdateRequestSchema), so a copy that drops it can never get it back.
+    // Outside the isOwner gate: it is a rendering contract for the transcript, not an access grant.
+    citationStyle: session.citationStyle,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
     // and re-deriving here would go through the OWNERSHIP arm alone (no resolveLakeAccess is threaded
     // to this path), which cannot see a teammate-authored organization-lake file. That derives an
