@@ -32,7 +32,7 @@ import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
-import { buildEarlyStopStamp } from '../earlyStopStamp';
+import { usageEventStatusForFinish } from '../earlyStopStamp';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -74,8 +74,8 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
-    // Same refund key the chat/CLI completion paths record: see buildEarlyStopStamp.
-    status: buildEarlyStopStamp(params.finishReason)?.usageEventStatus ?? 'ok',
+    // Same refund key the chat/CLI completion paths record: see usageEventStatusForFinish.
+    status: usageEventStatusForFinish(params.finishReason),
   };
 }
 

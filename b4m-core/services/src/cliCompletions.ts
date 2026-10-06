@@ -25,6 +25,7 @@ import {
   getSettingsValue,
   getSettingsByNames,
   DEFAULT_OUTPUT_MAX_TOKENS,
+  isSafetyRefusalError,
 } from '@bike4mind/utils';
 import {
   getLlmByModel,
@@ -40,7 +41,7 @@ import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
-import { buildEarlyStopStamp } from './llm/earlyStopStamp';
+import { usageEventStatusForFinish } from './llm/earlyStopStamp';
 
 export interface CompletionParams {
   userId: string;
@@ -488,8 +489,11 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // (res 'close' -> abort -> AbortError here) mid tool-loop. Record the partial spend
     // as an errored event so org metering stays complete. creditsCharged is 0: the
     // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
-    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion).
-    if (params.alwaysRecordUsage && modelInfo && (finalInputTokens > 0 || finalOutputTokens > 0)) {
+    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion). A safety-classifier
+    // refusal is always recorded, as 'refusal', so the Spend tab's Refusal Rate sees it:
+    // this path has no fallback loop, so the refused call is the whole request.
+    const isRefusal = error instanceof Error && isSafetyRefusalError(error);
+    if (modelInfo && (isRefusal || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))) {
       db.usageEvents
         ?.record({
           requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
@@ -511,7 +515,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             finalCacheCreationTokens
           ),
           creditsCharged: 0,
-          status: 'error',
+          status: isRefusal ? 'refusal' : 'error',
           latencyMs: Date.now() - completionStartTime,
         })
         .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
@@ -588,8 +592,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         creditsCharged,
         // Same refund key the web chat path records: a stream aborted as degenerate is
         // priced normally (the provider tokens were spent) but must not read as a clean,
-        // fully-valued success. See buildEarlyStopStamp.
-        status: buildEarlyStopStamp(finalStopReason)?.usageEventStatus ?? 'ok',
+        // fully-valued success. See usageEventStatusForFinish.
+        status: usageEventStatusForFinish(finalStopReason),
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));

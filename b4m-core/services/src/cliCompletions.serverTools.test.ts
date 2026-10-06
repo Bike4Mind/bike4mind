@@ -299,4 +299,18 @@ describe('executeCompletion - serverTools opt-in', () => {
 
     expect(usageEvents.record).not.toHaveBeenCalled();
   });
+
+  it('records a safety-classifier refusal as a refusal event even without alwaysRecordUsage or tokens', async () => {
+    const { db, usageEvents } = buildDb();
+    completeImpl = async () => {
+      throw new Error('Anthropic safety classifier refusal for test-model - falling back to an alternative model');
+    };
+
+    await expect(executeCompletion({ ...baseParams, db })).rejects.toThrow(/safety classifier refusal/);
+
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({ model: 'test-model', status: 'refusal', creditsCharged: 0 })
+    );
+  });
 });
