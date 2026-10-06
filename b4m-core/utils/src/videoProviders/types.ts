@@ -43,12 +43,15 @@ export interface VideoProvider {
  * `definitive: true` means the provider answered and created nothing (a 4xx/429 response), so the
  * engine may retry the submit. Anything else (timeout, reset) leaves the outcome unknown and the
  * engine must not resubmit - see the orphaned-submit section of the design spec.
+ * `retryable` only matters when definitive: false marks a deterministic rejection (invalid parameter,
+ * auth) that the same request would hit again, so the job fails now instead of resubmitting.
  */
 export class ProviderSubmitError extends Error {
   constructor(
     message: string,
     readonly definitive: boolean,
-    readonly raw?: unknown
+    readonly raw?: unknown,
+    readonly retryable: boolean = definitive
   ) {
     super(message);
     this.name = 'ProviderSubmitError';

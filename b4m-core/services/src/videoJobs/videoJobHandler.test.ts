@@ -336,6 +336,23 @@ describe('video job end to end with the test provider', () => {
     expect(settleCreditHold).not.toHaveBeenCalled();
   });
 
+  it('a definitive, non-retryable submit rejection fails at once and releases the whole hold', async () => {
+    const submit = vi.fn<VideoProvider['submit']>(async () => {
+      throw new ProviderSubmitError('gemini_omni_http_401', true, { error: { message: 'raw' } }, false);
+    });
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ submit })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({
+      state: 'failed',
+      attempts: 0,
+      error: { code: 'provider_error', message: 'gemini_omni_http_401' },
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
   it('a non-definitive submit error is an unknown outcome: orphaned_submit', async () => {
     const t = setup({
       providers: createVideoProviderRegistry([

@@ -25,6 +25,8 @@ const SAFETY_PHRASE = /\bblocked\b[^.]*\b(safety|policy|policies)\b/i;
 const UNKNOWN_INTERACTION = /Invalid interaction name/i;
 // Unrecognised statuses that still read as terminal failures (the documented enum is not fully observed).
 const FAILURE_LIKE_STATUS = /fail|error|cancel|expire|reject/i;
+// The submit 4xx statuses a resubmit can get past; any other 4xx is deterministic for this request and key.
+const RETRYABLE_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
 const SAFETY_REASON = 'gemini_omni_safety';
 const NO_VIDEO_REASON = 'gemini_omni_no_video';
 
@@ -87,7 +89,7 @@ const isBlockedHandle = (handle: ProviderJobHandle): boolean => handle.data.bloc
 const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs) => {
   let input: unknown = request.prompt;
   if (request.mode === 'image_to_video') {
-    if (!inputs.inputImage) throw new ProviderSubmitError('gemini_omni_missing_input_image', true);
+    if (!inputs.inputImage) throw new ProviderSubmitError('gemini_omni_missing_input_image', true, undefined, false);
     input = [
       { type: 'image', data: inputs.inputImage.bytes.toString('base64'), mime_type: inputs.inputImage.mimeType },
       { type: 'text', text: request.prompt },
@@ -208,8 +210,14 @@ export class GeminiOmniVideoProvider implements VideoProvider {
       if (response.status === 400 && isSafetyError(providerErrorOf(raw))) {
         return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
       }
-      // A 4xx (invalid parameter, undecodable image, auth, quota) created nothing; a 5xx may have.
-      throw new ProviderSubmitError(`gemini_omni_http_${response.status}`, response.status < 500, raw);
+      // A 4xx (invalid parameter, undecodable image, auth, quota) created nothing; a 5xx may have. Only a
+      // throttle is worth resubmitting: a 400/401/403 fails the job at once.
+      throw new ProviderSubmitError(
+        `gemini_omni_http_${response.status}`,
+        response.status < 500,
+        raw,
+        RETRYABLE_SUBMIT_STATUSES.has(response.status)
+      );
     }
     const parsed = InteractionSchema.safeParse(raw);
     if (!parsed.success) throw new ProviderSubmitError('gemini_omni_submit_unparseable', false, raw);

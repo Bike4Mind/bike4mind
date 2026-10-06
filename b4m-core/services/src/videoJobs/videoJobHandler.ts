@@ -183,8 +183,13 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         return { next: 'running', payload: { ...job.payload, providerHandle } };
       } catch (error) {
         // The engine treats any submit throw as an unknown outcome (orphaned_submit). Only a definitive provider
-        // rejection created nothing, so only that one comes back as a retry. See GenerationJobHandler.submit.
+        // rejection created nothing, so only that one comes back as a retry, or as a failure when resubmitting
+        // the same request cannot help (ProviderSubmitError.retryable). See GenerationJobHandler.submit.
         if (!(error instanceof ProviderSubmitError) || !error.definitive) throw error;
+        if (!error.retryable) {
+          deps.logger.warn('video provider rejected the submit for good', { jobId: job.id, message: error.message });
+          return fail('provider_error', error.message, error.raw);
+        }
         deps.logger.warn('video provider rejected the submit; retrying', { jobId: job.id, message: error.message });
         return { next: 'retry', reason: error.message };
       }

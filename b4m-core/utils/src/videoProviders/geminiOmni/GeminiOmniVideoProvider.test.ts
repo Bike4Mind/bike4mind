@@ -188,14 +188,14 @@ describe('GeminiOmniVideoProvider specifics', () => {
     const error = await new GeminiOmniVideoProvider()
       .submit(request({ mode: 'image_to_video', inputImageFileId: 'f1' }), {}, ctx())
       .catch((e: unknown) => e);
-    expect(error).toMatchObject({ definitive: true, message: 'gemini_omni_missing_input_image' });
+    expect(error).toMatchObject({ definitive: true, retryable: false, message: 'gemini_omni_missing_input_image' });
   });
 
   it('maps the recorded invalid-param 400 to a definitive code-only error with the raw body', async () => {
     active = FIXTURES.rejects;
     const error = await new GeminiOmniVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ProviderSubmitError);
-    expect(error).toMatchObject({ definitive: true, message: 'gemini_omni_http_400' });
+    expect(error).toMatchObject({ definitive: true, retryable: false, message: 'gemini_omni_http_400' });
     expect((error as ProviderSubmitError).raw).toEqual(exchange(FIXTURES.rejects, 'submit').response.body);
   });
 
@@ -232,7 +232,7 @@ describe('GeminiOmniVideoProvider specifics', () => {
     server.use(http.post(INTERACTIONS, () => HttpResponse.json(body, { status: 403 })));
     const error = await new GeminiOmniVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ProviderSubmitError);
-    expect(error).toMatchObject({ definitive: true, message: 'gemini_omni_http_403', raw: body });
+    expect(error).toMatchObject({ definitive: true, retryable: false, message: 'gemini_omni_http_403', raw: body });
   });
 
   it('keeps an invalid-param 400 that names safety_settings a definitive request error', async () => {
@@ -256,19 +256,25 @@ describe('GeminiOmniVideoProvider specifics', () => {
   });
 
   it.each([
-    [429, true],
-    [403, true],
-    [500, false],
-    [503, false],
-  ])('maps a %i submit to definitive=%s with a code-only message', async (status, definitive) => {
-    server.use(
-      http.post(INTERACTIONS, () => HttpResponse.json({ error: { message: 'raw provider text' } }, { status }))
-    );
-    const error = await new GeminiOmniVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ProviderSubmitError);
-    expect(error).toMatchObject({ definitive, message: `gemini_omni_http_${status}` });
-    expect((error as ProviderSubmitError).raw).toEqual({ error: { message: 'raw provider text' } });
-  });
+    [429, true, true],
+    [408, true, true],
+    [400, true, false],
+    [401, true, false],
+    [403, true, false],
+    [500, false, false],
+    [503, false, false],
+  ])(
+    'maps a %i submit to definitive=%s retryable=%s with a code-only message',
+    async (status, definitive, retryable) => {
+      server.use(
+        http.post(INTERACTIONS, () => HttpResponse.json({ error: { message: 'raw provider text' } }, { status }))
+      );
+      const error = await new GeminiOmniVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ProviderSubmitError);
+      expect(error).toMatchObject({ definitive, retryable, message: `gemini_omni_http_${status}` });
+      expect((error as ProviderSubmitError).raw).toEqual({ error: { message: 'raw provider text' } });
+    }
+  );
 
   it('treats a network failure on submit as not definitive', async () => {
     server.use(http.post(INTERACTIONS, () => HttpResponse.error()));
