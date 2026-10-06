@@ -1,16 +1,24 @@
 name: Dependency Audit Gate
 
-# Regression-only pnpm audit check. Fails a PR if it introduces a new
-# high/critical advisory GHSA that is not in scripts/audit-allowlist.json.
-# This is NOT a reporting workflow -- it is a hard block on new regressions.
+# pnpm audit checks (logic in scripts/audit-gate.mjs, fix steps in
+# CONTRIBUTING.md#fixing-a-dependency-advisory).
+# - PRs and merge queue (audit-gate): diff-based. Audits both the base commit and
+#   the head, and fails only on high/critical GHSAs the change introduces that are
+#   not in scripts/audit-allowlist.json. Advisories already on base are warnings,
+#   so a new advisory against an existing dependency doesn't turn every PR red.
+# - Schedule and manual runs on main (audit-main): full mode. Opens or updates
+#   one tracking issue on new findings and closes it once main is clean.
 # The existing packages-audit.yml sends a full report to the Security Dashboard
-# and remains workflow_dispatch-only; this workflow gates PRs independently.
+# and remains workflow_dispatch-only; this workflow is independent of it.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
     branches: [main]
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch: {}
 
 env:
   NODE_VERSION: '24'
@@ -22,6 +30,7 @@ concurrency:
 jobs:
   audit-gate:
     name: Dependency Audit Gate
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
@@ -47,16 +56,161 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run pnpm audit
+        timeout-minutes: 5
+        run: bash scripts/audit-report.sh . "$GITHUB_WORKSPACE/audit-report.json"
+
+      # Audit the base commit's manifest, lockfile and workspace file only (pnpm
+      # audit needs no install). Uses the event's base sha, not HEAD^1, which is
+      # wrong for merge-queue groups.
+      - name: Run pnpm audit on base
+        timeout-minutes: 5
         env:
-          AUDIT_REPORT_PATH: ${{ github.workspace }}/audit-report.json
-        # pnpm audit exits 1 when vulnerabilities are found; ignore exit code so
-        # the gate script always runs and can report clearly what is new vs known.
-        run: pnpm audit --json > "$AUDIT_REPORT_PATH" || true
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          for i in 1 2 3; do
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" && break
+            if [ "$i" = 3 ]; then
+              echo "::error::could not fetch base commit $BASE_SHA for the base audit report (infrastructure, re-run the job)"
+              exit 1
+            fi
+            sleep 10
+          done
+          mkdir -p "$RUNNER_TEMP/audit-base"
+          git archive "$BASE_SHA" package.json pnpm-lock.yaml pnpm-workspace.yaml | tar -x -C "$RUNNER_TEMP/audit-base"
+          bash scripts/audit-report.sh "$RUNNER_TEMP/audit-base" "$RUNNER_TEMP/audit-base.json"
 
       - name: Run audit regression gate
         env:
           PACKAGES_JSON_REPORT_PATH: ${{ github.workspace }}/audit-report.json
+          BASE_JSON_REPORT_PATH: ${{ runner.temp }}/audit-base.json
         run: node scripts/audit-gate.mjs
 
       - name: Run audit gate tests
         run: pnpm exec vitest run --dir scripts/__tests__ --reporter=verbose audit-gate
+
+  audit-main:
+    name: Dependency Audit (main)
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    # Standard runner: the repo is public, so it's free, and this job is small.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # No install: pnpm audit reads only the manifest and lockfile. If this
+      # fails, the run is red and the tracking issue is left untouched, so an
+      # infrastructure failure is never read as "advisories found" or "clean".
+      - name: Run pnpm audit
+        id: audit
+        timeout-minutes: 5
+        run: bash scripts/audit-report.sh . audit-report.json
+
+      - name: Run audit gate (full mode)
+        id: gate
+        continue-on-error: true
+        env:
+          PACKAGES_JSON_REPORT_PATH: audit-report.json
+        run: |
+          set -o pipefail
+          node scripts/audit-gate.mjs 2>&1 | tee gate-output.txt
+
+      - name: Open, update or close tracking issue
+        id: issue
+        if: always() && steps.audit.outcome == 'success'
+        uses: actions/github-script@v8
+        env:
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const playbookUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/blob/main/CONTRIBUTING.md#fixing-a-dependency-advisory`;
+            const marker = '<!-- dependency-audit-main -->';
+            const failed = process.env.GATE_OUTCOME === 'failure';
+            const output = fs.existsSync('gate-output.txt') ? fs.readFileSync('gate-output.txt', 'utf8').trim() : '';
+
+            const existing = await github.rest.issues.listForRepo({
+              owner,
+              repo,
+              state: 'open',
+              labels: 'security',
+              per_page: 100,
+            });
+            const found = existing.data.find(i => i.body && i.body.includes(marker));
+
+            if (failed) {
+              const findings = ['```', output, '```'].join('\n');
+              if (found) {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: found.number,
+                  body: [`Still failing as of ${runUrl}`, '', findings].join('\n'),
+                });
+              } else {
+                const created = await github.rest.issues.create({
+                  owner,
+                  repo,
+                  title: 'Dependency audit: high/critical advisories on main',
+                  labels: ['security', 'dependencies'],
+                  body: [
+                    marker,
+                    '',
+                    'The scheduled dependency audit found high/critical advisories on `main` that are not in `scripts/audit-allowlist.json`.',
+                    '',
+                    findings,
+                    '',
+                    `**Run:** ${runUrl}`,
+                    `**Fix steps:** ${playbookUrl}`,
+                    '',
+                    '_This issue is updated by `.github/workflows/audit-gate.yml` and closed automatically once main is clean._',
+                  ].join('\n'),
+                });
+                core.setOutput('created', 'true');
+                core.setOutput('url', created.data.html_url);
+              }
+            } else if (found) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: found.number,
+                body: `Clean as of ${runUrl}`,
+              });
+              await github.rest.issues.update({ owner, repo, issue_number: found.number, state: 'closed' });
+            }
+
+      - name: Notify Slack on new tracking issue
+        if: always() && steps.issue.outputs.created == 'true' && env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v2.1.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":rotating_light: New high/critical dependency advisories on main. <${{ steps.issue.outputs.url }}|Tracking issue> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }
+
+      - name: Fail the run when advisories were found
+        if: steps.gate.outcome == 'failure'
+        run: exit 1

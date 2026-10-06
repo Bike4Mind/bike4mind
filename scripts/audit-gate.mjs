@@ -1,11 +1,20 @@
 #!/usr/bin/env node
 
-// Regression-only pnpm audit gate.
-// Reads a pnpm audit JSON report and fails if any high/critical advisory GHSA
-// is not in the committed allowlist. Accepts advisories in both the classic
-// "advisories" shape (pnpm audit) and the newer "vulnerabilities" shape.
+// pnpm audit gate. Accepts advisories in both the classic "advisories" shape
+// (pnpm audit) and the newer "vulnerabilities" shape.
+//
+// Full mode (BASE_JSON_REPORT_PATH unset): fails if any high/critical advisory
+// GHSA in PACKAGES_JSON_REPORT_PATH is not in the committed allowlist. Used by
+// the scheduled audit of main and for local runs.
+//
+// Diff mode (BASE_JSON_REPORT_PATH set): fails only on high/critical GHSAs that
+// are in the head report but not in the base report (the ones a PR introduces).
+// Advisories already on base are printed as warnings, not failures, so a new
+// advisory against an existing dependency does not turn every open PR red.
+// Unreadable or unrecognized base reports fail closed.
 //
 // Usage: pnpm audit --json > report.json && PACKAGES_JSON_REPORT_PATH=report.json node scripts/audit-gate.mjs
+// Fix steps: CONTRIBUTING.md#fixing-a-dependency-advisory
 
 import fs from 'fs/promises';
 import path from 'path';
@@ -66,25 +75,39 @@ export function extractNewAdvisories(data, allowlist) {
   return newAdvisories;
 }
 
+// Splits head's new advisories into those the change introduces and those
+// already present on base. Returns null if either report has an unrecognized
+// shape. Filters head's result rather than widening the allowlist so the
+// shape-fallback logic in extractNewAdvisories reads head exactly as full mode does.
+export function classifyAgainstBase(head, base, allowlist) {
+  const headNew = extractNewAdvisories(head, allowlist);
+  const baseNew = extractNewAdvisories(base, allowlist);
+  if (headNew === null || baseNew === null) return null;
+  const baseIds = new Set(baseNew.map(a => a.ghsa));
+  return {
+    introduced: headNew.filter(a => !baseIds.has(a.ghsa)),
+    preExisting: headNew.filter(a => baseIds.has(a.ghsa)),
+  };
+}
+
+const PLAYBOOK = 'CONTRIBUTING.md#fixing-a-dependency-advisory';
+
+async function readReport(reportPath, label) {
+  try {
+    return JSON.parse(await fs.readFile(reportPath, 'utf8'));
+  } catch (err) {
+    console.error(`Failed to read/parse ${label} audit report at ${reportPath}:`, err.message);
+    process.exit(1);
+  }
+}
+
 async function main() {
   const reportPath = process.env.PACKAGES_JSON_REPORT_PATH || 'packages-audit-report.json';
+  const basePath = process.env.BASE_JSON_REPORT_PATH;
   const allowlistPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'audit-allowlist.json');
 
-  let raw;
-  try {
-    raw = await fs.readFile(reportPath, 'utf8');
-  } catch (err) {
-    console.error(`Failed to read audit report at ${reportPath}:`, err.message);
-    process.exit(1);
-  }
-
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch (err) {
-    console.error('Failed to parse audit report JSON:', err.message);
-    process.exit(1);
-  }
+  const data = await readReport(reportPath, 'head');
+  const base = basePath ? await readReport(basePath, 'base') : undefined;
 
   let allowlist;
   try {
@@ -95,24 +118,61 @@ async function main() {
     process.exit(1);
   }
 
-  const newAdvisories = extractNewAdvisories(data, allowlist);
-
-  if (newAdvisories === null) {
-    console.error('Unrecognized audit report shape -- refusing to pass the gate.');
-    console.error('Expected either "advisories" or "vulnerabilities" key in the JSON report.');
-    process.exit(1);
+  let newAdvisories;
+  if (base === undefined) {
+    newAdvisories = extractNewAdvisories(data, allowlist);
+    if (newAdvisories === null) {
+      console.error('Unrecognized audit report shape -- refusing to pass the gate.');
+      console.error('Expected either "advisories" or "vulnerabilities" key in the JSON report.');
+      process.exit(1);
+    }
+  } else {
+    const classified = classifyAgainstBase(data, base, allowlist);
+    if (classified === null) {
+      console.error('Unrecognized audit report shape (head or base) -- refusing to pass the gate.');
+      console.error('Expected either "advisories" or "vulnerabilities" key in both JSON reports.');
+      process.exit(1);
+    }
+    newAdvisories = classified.introduced;
+    for (const a of classified.preExisting) {
+      console.log(
+        `::warning::Pre-existing on base, not introduced by this PR: [${a.severity.toUpperCase()}] ${a.pkg} ${a.ghsa}`
+      );
+    }
+    if (classified.preExisting.length > 0 && process.env.GITHUB_STEP_SUMMARY) {
+      const rows = classified.preExisting.map(a => `| ${a.ghsa} | ${a.pkg} | ${a.severity} |`);
+      const summary = [
+        '### Already on main (tracked by the scheduled audit, not failing this PR)',
+        '',
+        '| GHSA | Package | Severity |',
+        '|---|---|---|',
+        ...rows,
+        '',
+      ].join('\n');
+      await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
+    }
   }
 
   if (newAdvisories.length > 0) {
-    console.error(`\nAudit gate FAILED: ${newAdvisories.length} new high/critical advisory(s) not in the allowlist:\n`);
+    const what = base === undefined ? 'not in the allowlist' : "introduced by this PR's dependency changes";
+    console.error(`\nAudit gate FAILED: ${newAdvisories.length} new high/critical advisory(s) ${what}:\n`);
     for (const a of newAdvisories) {
       console.error(`  [${a.severity.toUpperCase()}] ${a.pkg}: ${a.ghsa}`);
     }
-    console.error(`\nTo accept a new advisory, add its GHSA ID to scripts/audit-allowlist.json with a comment in the PR explaining why.\n`);
+    console.error(`\nSee ${PLAYBOOK} for the fix steps.`);
+    console.error(
+      `To accept a new advisory, add its GHSA ID to scripts/audit-allowlist.json with a comment in the PR explaining why.\n`
+    );
     process.exit(1);
   }
 
-  console.log(`Audit gate passed. All high/critical advisories are in the allowlist (${allowlist.size} accepted, 0 new).`);
+  if (base === undefined) {
+    console.log(
+      `Audit gate passed. All high/critical advisories are in the allowlist (${allowlist.size} accepted, 0 new).`
+    );
+  } else {
+    console.log('Audit gate passed. No new high/critical advisories introduced relative to base.');
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
