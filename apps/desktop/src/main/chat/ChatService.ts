@@ -1535,6 +1535,8 @@ export class ChatService {
             messages: cacheable ? withCacheBreakpoints(wire) : wire,
             tools,
             thinking: true,
+            // Dev log only; never sent on the wire. See CompletionRequest.sessionId.
+            sessionId,
             ...effortField,
             ...(maxTokens ? { maxTokens } : {}),
           },

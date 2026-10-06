@@ -35,6 +35,7 @@ import type {
   UpdateProjectRequest,
   UpdateProjectResult,
 } from './chat';
+import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { SkillsState } from './skills';
 import type { UpdateInstallResult, UpdateState } from './update';
 
@@ -183,6 +184,19 @@ export const IPC_CHANNELS = {
   browserCookiesClear: 'browser:cookies-clear',
   /** main -> renderer push; what the pane's standing indicator draws. */
   browserCookiesChanged: 'browser:cookies-changed',
+  /**
+   * The developer log. Every one of these belongs to the dev window alone, and none of them is
+   * reachable from a tool or from a reply: the window is opened by a chord the user presses.
+   *
+   * Source-agnostic by design - see @shared/devLog. Adding a source to the log adds nothing
+   * here.
+   */
+  devLogGetSnapshot: 'devlog:get-snapshot',
+  devLogClear: 'devlog:clear',
+  /** The dev window's copy button. Main owns the clipboard; the window sends what it is showing. */
+  devLogCopy: 'devlog:copy',
+  /** main -> renderer push; a batch of newly captured records, coalesced in the sink. */
+  devLogRecords: 'devlog:records',
   /** Renderer -> main only. Main decides what may be opened; see isExternallyOpenable. */
   shellOpenExternal: 'shell:open-external',
 } as const;
@@ -531,5 +545,18 @@ export interface DesktopApi {
      * the link was opened. Nothing about a link in a reply needs to know.
      */
     openExternal(url: string): Promise<void>;
+  };
+  /**
+   * The developer log window's own surface. Used by the `#/dev-logs` route and nothing else.
+   */
+  devLog: {
+    /** Everything retained so far. Pushes carry only what arrives after; ids say which. */
+    getSnapshot(): Promise<DevLogSnapshot>;
+    /** Empty the buffer in main as well as the window, so the memory actually goes. */
+    clear(): Promise<void>;
+    /** Put the lines the window is showing on the clipboard. */
+    copy(text: string): Promise<void>;
+    /** Subscribe to batches of newly captured records; returns the unsubscribe. */
+    onRecords(listener: (records: DevLogRecord[]) => void): () => void;
   };
 }
