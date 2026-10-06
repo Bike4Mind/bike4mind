@@ -12,19 +12,24 @@ import {
   type VideoProviderContext,
 } from '../types';
 
-// Wire facts W1-W12 (recorded against the live API) are in the Task 4 report; fixtures in __fixtures__.
+// Wire shapes are pinned by __fixtures__ (see record.ts; each synthetic fixture names its evidence).
 const API_HOST = 'generativelanguage.googleapis.com';
 const BASE_URL = `https://${API_HOST}`;
 const INTERACTIONS_URL = `${BASE_URL}/v1beta/interactions`;
-// Deliberately not /BLOCK/: auth failures carry codes like API_KEY_SERVICE_BLOCKED, which are not content blocks.
-const SAFETY_MARKERS = /SAFETY|PROHIBITED|BLOCKLIST|SPII/i;
-// Unrecognised statuses that still read as terminal failures (W6 enum is documented, not fully observed).
+// Whole-token match on enum-like fields (status, code, finish_reason). Not a substring match: auth failures
+// carry API_KEY_SERVICE_BLOCKED, and invalid-param messages can name fields such as safety_settings.
+const SAFETY_TOKEN = /^(IMAGE_)?(SAFETY|PROHIBITED_CONTENT|BLOCKLIST|SPII)$/i;
+// Free-text messages count only in the block phrasing ("... blocked for safety reasons").
+const SAFETY_PHRASE = /\bblocked\b[^.]*\b(safety|policy|policies)\b/i;
+// The only poll 400 that proves the interaction is gone; other 400s (an auth bug seen live) may be transient.
+const UNKNOWN_INTERACTION = /Invalid interaction name/i;
+// Unrecognised statuses that still read as terminal failures (the documented enum is not fully observed).
 const FAILURE_LIKE_STATUS = /fail|error|cancel|expire|reject/i;
 const SAFETY_REASON = 'gemini_omni_safety';
 const NO_VIDEO_REASON = 'gemini_omni_no_video';
 
 const ProviderErrorSchema = z.looseObject({
-  // W9: a string ("invalid_request") on Interactions endpoints, a number on Google front-end errors.
+  // A string ("invalid_request") on Interactions endpoints, a number on Google front-end errors.
   code: z.union([z.string(), z.number()]).optional(),
   message: z.string().optional(),
   status: z.string().optional(),
@@ -39,6 +44,11 @@ const InteractionSchema = z.looseObject({
   steps: z.array(z.looseObject({ type: z.string(), content: z.array(ContentSchema).optional() })).optional(),
   error: ProviderErrorSchema.optional(),
   finish_reason: z.string().optional(),
+  usage: z
+    .looseObject({
+      output_tokens_by_modality: z.array(z.looseObject({ modality: z.string(), tokens: z.number() })).optional(),
+    })
+    .optional(),
 });
 type Interaction = z.infer<typeof InteractionSchema>;
 
@@ -51,19 +61,25 @@ const readJson = async (response: Response): Promise<unknown> => {
   }
 };
 
-/** W9: `{ error }` from Interactions endpoints, `[{ error }]` from the Google front end. */
+/** `{ error }` from Interactions endpoints, `[{ error }]` from the Google front end. */
 const providerErrorOf = (raw: unknown): ProviderError | undefined => {
   const parsed = ErrorEnvelopeSchema.safeParse(Array.isArray(raw) ? raw[0] : raw);
   return parsed.success ? parsed.data.error : undefined;
 };
 
-const matchesSafety = (...values: Array<string | number | undefined>): boolean =>
-  values.some(value => typeof value === 'string' && SAFETY_MARKERS.test(value));
+const isSafetyError = (error: ProviderError | undefined, finishReason?: string): boolean =>
+  [error?.status, error?.code, finishReason].some(value => typeof value === 'string' && SAFETY_TOKEN.test(value)) ||
+  (error?.message !== undefined && SAFETY_PHRASE.test(error.message));
 
 const interactionIdOf = (handle: ProviderJobHandle): string => {
   const id = handle.data.interactionId;
   if (typeof id !== 'string' || id.length === 0) throw new Error('gemini_omni_handle_without_interaction_id');
   return id;
+};
+
+const isUnknownInteraction = (raw: unknown): boolean => {
+  const message = providerErrorOf(raw)?.message;
+  return message !== undefined && UNKNOWN_INTERACTION.test(message);
 };
 
 const isBlockedHandle = (handle: ProviderJobHandle): boolean => handle.data.blocked === true;
@@ -80,14 +96,14 @@ const buildSubmitBody = (request: ValidatedVideoRequest, inputs: ResolvedInputs)
   return {
     model: request.model,
     input,
-    // W2: without it the POST blocks for the whole generation.
+    // Without it the POST blocks for the whole generation.
     background: true,
     response_format: {
       type: 'video',
       delivery: 'uri',
       aspect_ratio: request.aspectRatio,
       resolution: request.resolution,
-      // W4: a protobuf Duration string; a bare number is a 400.
+      // A protobuf Duration string; a bare number is a 400.
       duration: `${request.durationSeconds}s`,
     },
   };
@@ -99,6 +115,12 @@ const findVideo = (interaction: Interaction) =>
     .flatMap(step => step.content ?? [])
     .find(content => content.type === 'video' && !!content.uri);
 
+// Usage reporting video tokens means a video was generated, whatever the steps look like.
+const reportsVideoTokens = (interaction: Interaction): boolean =>
+  interaction.usage?.output_tokens_by_modality?.some(
+    entry => entry.modality.toLowerCase() === 'video' && entry.tokens > 0
+  ) ?? false;
+
 const failed = (code: string, retryable: boolean, raw: unknown): ProviderPollResult => ({
   status: 'failed',
   retryable,
@@ -107,7 +129,7 @@ const failed = (code: string, retryable: boolean, raw: unknown): ProviderPollRes
 });
 
 const toFailure = (interaction: Interaction, code: string): ProviderPollResult =>
-  matchesSafety(interaction.error?.status, interaction.error?.message, interaction.finish_reason)
+  isSafetyError(interaction.error, interaction.finish_reason)
     ? { status: 'blocked', reason: SAFETY_REASON, raw: interaction }
     : failed(code, false, interaction);
 
@@ -124,7 +146,12 @@ const toPollResult = (interaction: Interaction, ctx: VideoProviderContext): Prov
           output: { kind: 'url', url: video.uri, requiresAuth: true, contentType: video.mime_type ?? 'video/mp4' },
         };
       }
-      // W8: a safety refusal is `completed` with a text-only model_output and no error or finish_reason.
+      if (reportsVideoTokens(interaction)) {
+        // Generated (and billed) but not where we read it: a shape change to fix, not a content block.
+        ctx.logger.error('gemini_omni_video_unparsed', { interactionId: interaction.id });
+        return failed('video_unparsed', false, interaction);
+      }
+      // A safety refusal is `completed` with a text-only model_output, no video tokens, no error.
       return { status: 'blocked', reason: NO_VIDEO_REASON, raw: interaction };
     }
     case 'failed':
@@ -132,9 +159,9 @@ const toPollResult = (interaction: Interaction, ctx: VideoProviderContext): Prov
     case 'budget_exceeded':
     case 'requires_action':
     case 'cancelled':
-      return failed(interaction.status, false, interaction);
+    // Terminal: retrying would only re-poll the same finished interaction.
     case 'incomplete':
-      return failed('incomplete', true, interaction);
+      return failed(interaction.status, false, interaction);
     default:
       if (FAILURE_LIKE_STATUS.test(interaction.status)) return toFailure(interaction, 'unrecognised_failure');
       // Unknown and not failure-like: keep polling; the engine's job deadline bounds a status that never ends.
@@ -143,7 +170,7 @@ const toPollResult = (interaction: Interaction, ctx: VideoProviderContext): Prov
   }
 };
 
-// W10: the uri carries ?alt=media, which the fixture scrubber strips; without it the endpoint is not the media.
+// The live uri carries ?alt=media, which the fixture scrubber strips; without it the endpoint is not the media.
 const downloadUrlOf = (raw: string): URL => {
   const url = new URL(raw);
   if (url.protocol !== 'https:' || url.host !== API_HOST) throw new Error('gemini_omni_untrusted_output_url');
@@ -178,11 +205,10 @@ export class GeminiOmniVideoProvider implements VideoProvider {
     if (!response.ok) {
       // A safety 400 is a content outcome, not a request error: a definitive ProviderSubmitError would let the
       // engine resubmit the same prompt. The handle carries the verdict and poll() returns it offline.
-      const providerError = providerErrorOf(raw);
-      if (response.status === 400 && matchesSafety(providerError?.status, providerError?.message)) {
+      if (response.status === 400 && isSafetyError(providerErrorOf(raw))) {
         return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
       }
-      // W12: a 4xx (invalid parameter, undecodable image, auth, quota) created nothing; a 5xx may have.
+      // A 4xx (invalid parameter, undecodable image, auth, quota) created nothing; a 5xx may have.
       throw new ProviderSubmitError(`gemini_omni_http_${response.status}`, response.status < 500, raw);
     }
     const parsed = InteractionSchema.safeParse(raw);
@@ -198,9 +224,13 @@ export class GeminiOmniVideoProvider implements VideoProvider {
       signal: ctx.signal,
     });
     const raw = await readJson(response);
-    // W9: an unknown interaction id is a 400 "Invalid interaction name", not a 404; neither recovers on retry.
-    if (response.status === 400 || response.status === 404) {
-      return failed(`poll_http_${response.status}`, false, raw);
+    // An unknown interaction id is a 400 "Invalid interaction name", not a 404; neither recovers on retry.
+    if (response.status === 404 || (response.status === 400 && isUnknownInteraction(raw))) {
+      return failed('interaction_not_found', false, raw);
+    }
+    if (response.status === 400) {
+      // Seen live as an auth-layer bug on a running, billed interaction: throw so the engine retries.
+      ctx.logger.error('gemini_omni_poll_rejected', { status: response.status, raw });
     }
     if (!response.ok) throw new Error(`gemini_omni_poll_http_${response.status}`);
     const parsed = InteractionSchema.safeParse(raw);
@@ -216,7 +246,7 @@ export class GeminiOmniVideoProvider implements VideoProvider {
       redirect: 'manual',
       signal: ctx.signal,
     });
-    // W10 observed a direct 200; a redirect to storage is still followed once, without the key.
+    // The live download is a direct 200; a redirect to storage is still followed once, without the key.
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
       if (!location) throw new Error('gemini_omni_redirect_without_location');

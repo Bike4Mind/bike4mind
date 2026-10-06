@@ -235,6 +235,16 @@ describe('GeminiOmniVideoProvider specifics', () => {
     expect(error).toMatchObject({ definitive: true, message: 'gemini_omni_http_403', raw: body });
   });
 
+  it('keeps an invalid-param 400 that names safety_settings a definitive request error', async () => {
+    const body = {
+      error: { message: "Unknown parameter 'safety_settings'.", code: 'invalid_request', status: 'INVALID_ARGUMENT' },
+    };
+    server.use(http.post(INTERACTIONS, () => HttpResponse.json(body, { status: 400 })));
+    const error = await new GeminiOmniVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ProviderSubmitError);
+    expect(error).toMatchObject({ definitive: true, message: 'gemini_omni_http_400', raw: body });
+  });
+
   it('reads a safety block from the front-end array error form too', async () => {
     server.use(
       http.post(INTERACTIONS, () =>
@@ -293,7 +303,7 @@ describe('GeminiOmniVideoProvider specifics', () => {
   it('reads a failed interaction carrying a safety marker as blocked', async () => {
     server.use(
       http.get(`${INTERACTIONS}/:id`, () =>
-        HttpResponse.json({ id: 'i1', status: 'failed', error: { code: 'safety', message: 'PROHIBITED_CONTENT' } })
+        HttpResponse.json({ id: 'i1', status: 'failed', error: { code: 'internal', status: 'PROHIBITED_CONTENT' } })
       )
     );
     expect(await new GeminiOmniVideoProvider().poll(handleFor('i1'), ctx())).toMatchObject({
@@ -314,8 +324,41 @@ describe('GeminiOmniVideoProvider specifics', () => {
     expect(await new GeminiOmniVideoProvider().poll(handleFor('gone'), ctx())).toMatchObject({
       status: 'failed',
       retryable: false,
-      message: `gemini_omni_poll_http_${status}`,
+      message: 'gemini_omni_interaction_not_found',
     });
+  });
+
+  it('throws on any other poll 400 (the live auth bug) and logs it at error level without headers', async () => {
+    const body = {
+      error: {
+        message: 'Multiple authentication credentials received. Please pass only one.',
+        code: 'invalid_request',
+      },
+    };
+    server.use(http.get(`${INTERACTIONS}/:id`, () => HttpResponse.json(body, { status: 400 })));
+    const c = ctx();
+    const error = vi.spyOn(c.logger, 'error').mockImplementation(() => undefined);
+    await expect(new GeminiOmniVideoProvider().poll(handleFor('i1'), c)).rejects.toThrow('gemini_omni_poll_http_400');
+    expect(error).toHaveBeenCalledWith('gemini_omni_poll_rejected', { status: 400, raw: body });
+    expect(JSON.stringify(error.mock.calls)).not.toContain(KEY);
+  });
+
+  it('fails a completed interaction whose usage reports video tokens but no video is found', async () => {
+    const interaction = {
+      id: 'i1',
+      status: 'completed',
+      steps: [{ type: 'model_output', content: [{ type: 'video_v2', url: 'https://example.invalid/x' }] }],
+      usage: { output_tokens_by_modality: [{ modality: 'video', tokens: 17376 }] },
+    };
+    server.use(http.get(`${INTERACTIONS}/:id`, () => HttpResponse.json(interaction)));
+    const c = ctx();
+    const error = vi.spyOn(c.logger, 'error').mockImplementation(() => undefined);
+    expect(await new GeminiOmniVideoProvider().poll(handleFor('i1'), c)).toMatchObject({
+      status: 'failed',
+      retryable: false,
+      message: 'gemini_omni_video_unparsed',
+    });
+    expect(error).toHaveBeenCalledWith('gemini_omni_video_unparsed', { interactionId: 'i1' });
   });
 
   it('a 5xx poll throws so the engine retries', async () => {
@@ -329,7 +372,7 @@ describe('GeminiOmniVideoProvider specifics', () => {
     ['budget_exceeded', false],
     ['requires_action', false],
     ['cancelled', false],
-    ['incomplete', true],
+    ['incomplete', false],
   ])('maps status %s to failed with retryable=%s', async (status, retryable) => {
     server.use(http.get(`${INTERACTIONS}/:id`, () => HttpResponse.json({ id: 'i1', status })));
     const result = await new GeminiOmniVideoProvider().poll(handleFor('i1'), ctx());
