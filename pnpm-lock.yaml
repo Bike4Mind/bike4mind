@@ -906,12 +906,18 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1080.0
         version: 3.1080.0
+      '@bike4mind/auth':
+        specifier: workspace:*
+        version: link:../../b4m-core/auth
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../../b4m-core/common
       '@bike4mind/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@bike4mind/db-core':
+        specifier: workspace:*
+        version: link:../../b4m-core/db-core
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../../b4m-core/fab-pipeline

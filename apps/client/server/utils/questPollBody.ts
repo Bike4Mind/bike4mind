@@ -27,7 +27,7 @@ export function questReplyText(quest: Pick<IChatHistoryItemDocument, 'reply' | '
 
 /**
  * The `GET /api/v1/quests/{id}` body. Also the body of a generation completion callback
- * (queueHandlers/generationCallback.ts), which is documented as "the same body the poll returns",
+ * (apps/workers/src/queueHandlers/generationCallback.ts), which is documented as "the same body the poll returns",
  * so a field added here reaches both.
  *
  * `isOwner` gates promptMeta redaction: a share grant authorizes reading the conversation, not

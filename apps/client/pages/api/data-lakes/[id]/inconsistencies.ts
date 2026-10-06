@@ -222,7 +222,7 @@ async function renderStoredReport(
  * here, a normal-sized lake exhausted the request with every call it had already made billed and
  * nothing persisted - a 504, no findings, and one of three hourly attempts spent. So this door does
  * what `POST /lake-memory` does: check the preconditions, take the cap, enqueue, return 202. The
- * handler (`queueHandlers/lakeInconsistencyModelDetection`) gets a 10-minute budget, a DLQ and a
+ * handler (`apps/workers/src/queueHandlers/lakeInconsistencyModelDetection`) gets a 10-minute budget, a DLQ and a
  * retry, and writes findings batch by batch as it goes.
  *
  * The response is deliberately NOT the run's result - there is no result yet. Findings arrive at

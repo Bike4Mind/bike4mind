@@ -42,7 +42,7 @@ import {
   completedBatchStatus,
   deferFailureIfRetryable,
 } from '@server/queueHandlers/dataLakeBatchProgress';
-import { notifySlackIndexingComplete } from '@server/queueHandlers/notifySlackIndexingComplete';
+import { notifySlackIndexingComplete } from '@workers/queueHandlers/notifySlackIndexingComplete';
 import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatchWithLogger, MARK_PAUSED_MAX_ATTEMPTS, MARK_PAUSED_RETRY_DELAY_MS } from '@server/queueHandlers/utils';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
