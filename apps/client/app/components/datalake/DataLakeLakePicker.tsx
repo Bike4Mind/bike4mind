@@ -14,20 +14,19 @@ import {
   MenuButton,
   MenuItem,
   Skeleton,
-  Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import LayersOutlinedIcon from '@mui/icons-material/LayersOutlined';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { isDraftLake, lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
 import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
@@ -428,17 +427,7 @@ export default function DataLakeLakePicker({
                         {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
                           so an unmarked row would read as their own. */}
                         {lake.isOwn === false && (
-                          <Tooltip
-                            size="sm"
-                            title={
-                              lake.ownerDisplayName ? `Owned by ${lake.ownerDisplayName}` : 'Owned by another user'
-                            }
-                          >
-                            <PersonOutlineIcon
-                              data-testid={`datalake-lake-picker-owner-icon-${lake.id}`}
-                              sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
-                            />
-                          </Tooltip>
+                          <LakeOwnerIcon lake={lake} testId={`datalake-lake-picker-owner-icon-${lake.id}`} />
                         )}
                         {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
                         {isUnsearchable(lake) && (

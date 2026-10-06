@@ -70,3 +70,7 @@ export const DRAFT_LAKE_TOOLTIP = 'Draft - not grounding answers until published
 export function isDraftLake(lake: LakeVisibilityScope & { status?: DataLakeStatus | null }): boolean {
   return lake.status === 'draft' || (!lake.status && !isBuiltInLake(lake));
 }
+
+export function lakeOwnerLabel(lake: { ownerDisplayName?: string }): string {
+  return lake.ownerDisplayName ? `Owned by ${lake.ownerDisplayName}` : 'Owned by another user';
+}
