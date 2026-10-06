@@ -952,3 +952,46 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     expect(toolFn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('wrapToolWithPermission file-change notification', () => {
+  const noopPrompt = vi.fn(async () => ({ action: 'allow-session' as const }));
+
+  function wrap(toolName: string, toolResult: string) {
+    const tool = createMockTool(toolName, vi.fn().mockResolvedValue(toolResult));
+    const permissionManager = {
+      needsPermission: vi.fn(() => false),
+      trustToolForSession: vi.fn(),
+    } as unknown as PermissionManager;
+    const onFileChanged = vi.fn();
+    const agentContext = { currentAgent: null, observationQueue: [], onFileChanged };
+    const wrapped = wrapToolWithPermission(tool, permissionManager, noopPrompt, agentContext, {}, {} as ApiClient);
+    return { wrapped, onFileChanged };
+  }
+
+  it.each([
+    ['create_file', 'File created successfully: src/a.ts\nSize: 10 bytes\nLines: 1'],
+    ['create_file', 'File overwritten successfully: src/a.ts\nSize: 10 bytes\nLines: 1'],
+  ])('notifies with the tool path after a successful %s', async (toolName, toolResult) => {
+    const { wrapped, onFileChanged } = wrap(toolName, toolResult);
+
+    await wrapped.toolFn({ path: 'src/a.ts', content: 'x' });
+
+    expect(onFileChanged).toHaveBeenCalledWith('src/a.ts');
+  });
+
+  it('does not notify when the write tool returns a non-success result', async () => {
+    const { wrapped, onFileChanged } = wrap('create_file', 'Error: File already exists');
+
+    await wrapped.toolFn({ path: 'src/a.ts', content: 'x' });
+
+    expect(onFileChanged).not.toHaveBeenCalled();
+  });
+
+  it('does not notify for tools that do not write files', async () => {
+    const { wrapped, onFileChanged } = wrap('file_read', 'File created successfully: looks like a write');
+
+    await wrapped.toolFn({ path: 'src/a.ts' });
+
+    expect(onFileChanged).not.toHaveBeenCalled();
+  });
+});

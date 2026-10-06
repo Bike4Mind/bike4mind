@@ -2,14 +2,15 @@ import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
-import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
 import { estimateTtsCreditCost } from '@bike4mind/common';
+import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 
-// Legacy OpenAI TTS adapter. Kept as a thin, contract-stable wrapper over the
-// unified aiVoiceService (#724): body { text, voice? } -> raw audio/mpeg bytes.
-// New integrations should use POST /api/ai/tts.
+// Legacy OpenAI TTS adapter, scheduled for deprecation (CONVENTIONS.md section 7).
+// Thin wrapper over the unified aiVoiceService: body { text, voice? } -> raw
+// audio/mpeg bytes. Shares response delivery (size ceiling, oversized -> 303 to a
+// signed URL) with POST /api/ai/tts. New integrations should use /api/ai/tts.
 const MODEL = 'tts-1'; // standard model for faster response
 const handler = baseApi().post(async (req, res) => {
   const { text, voice } = z
@@ -61,14 +62,15 @@ const handler = baseApi().post(async (req, res) => {
       await deductTtsCredits({ userId, vendor: 'openai', model, characters, logger: req.logger });
     }
 
-    if (exceedsTtsResponseLimit(audio.length)) {
-      return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });
-    }
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', audio.length);
+    // Delivery overrides this with no-store for oversized audio (a short-lived URL or a 413).
     res.setHeader('Cache-Control', 'public, max-age=3600'); // 1 hour
-    return res.send(audio);
+    return await deliverGeneratedAudio(res, {
+      audio,
+      contentType: 'audio/mpeg',
+      encoding: 'binary',
+      save: undefined,
+      logger: req.logger,
+    });
   } catch (error: unknown) {
     req.logger.error('OpenAI TTS error:', { error });
     const status = (error as { status?: number })?.status;

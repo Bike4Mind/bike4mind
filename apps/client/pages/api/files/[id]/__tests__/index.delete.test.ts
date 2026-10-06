@@ -338,3 +338,33 @@ describe('DELETE /api/files/[id] - denied normalization', () => {
     expect(json.mock.calls[0][0]).toMatchObject({ action: 'not_found' });
   });
 });
+
+describe('DELETE /api/files/[id] - scope gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.userFindById.mockResolvedValue({ id: OWNER });
+    h.update.mockResolvedValue(undefined);
+    h.deleteManyByFabFileId.mockResolvedValue(undefined);
+    h.findAllWithKnowledgeId.mockResolvedValue([]);
+  });
+
+  it('rejects a files:read-only key before any DB/service mock is touched', async () => {
+    const { res } = makeRes();
+
+    await expect(run(res, undefined, { apiKeyInfo: { keyId: 'k', scopes: ['files:read'] } })).rejects.toThrow(
+      /files:write is required/
+    );
+
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.findByIdAndUserId).not.toHaveBeenCalled();
+  });
+
+  it('passes the gate for a files:write key on the happy path', async () => {
+    givenOwnedFile([{ name: 'invoices', strength: 0 }]);
+    const { res, json } = makeRes();
+
+    await run(res, undefined, { apiKeyInfo: { keyId: 'k', scopes: ['files:write'] } });
+
+    expect(json.mock.calls[0][0]).toMatchObject({ action: 'deleted' });
+  });
+});

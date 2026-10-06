@@ -1,9 +1,15 @@
 import { Box, Typography } from '@mui/joy';
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import ApiIcon from '@mui/icons-material/Api';
 import { ISessionDocument, ISessionFavoriteItem } from '@bike4mind/common';
 import { getDateLabel } from '@client/app/utils/dateUtils';
 import { compareDateGroupKeys, groupItemsByDate } from './dateGrouping';
 import NotebookRow from './NotebookRow';
+import { collapseApiItems } from './apiGrouping';
+import { useApiGroupExpansion } from './useApiGroupExpansion';
 import type { CombinedItem } from './types';
 
 interface NotebookGroupListProps {
@@ -14,6 +20,11 @@ interface NotebookGroupListProps {
   selectedItems: Set<string>;
   favoriteSessions?: ISessionFavoriteItem[];
   showMessageCount: boolean;
+  /**
+   * Fold each date bucket's API-created notebooks into one expandable "API - N notebooks" row
+   * (apiGrouping.ts). Off in bulk-edit mode regardless, so every row stays checkable.
+   */
+  groupApiNotebooks?: boolean;
   /** Force all session rows unselected (e.g. while a dedicated project screen is open). */
   suppressActive?: boolean;
   /** Id of the agent whose dedicated screen is open, so its row highlights. */
@@ -35,12 +46,17 @@ export default function NotebookGroupList({
   selectedItems,
   favoriteSessions,
   showMessageCount,
+  groupApiNotebooks = true,
   suppressActive,
   activeAgentId,
   onNavigate,
   onNotebookClick,
   onToggle,
 }: NotebookGroupListProps) {
+  const { t } = useTranslation();
+  const expandedBuckets = useApiGroupExpansion(s => s.expanded);
+  const toggleBucket = useApiGroupExpansion(s => s.toggle);
+  const shouldGroup = groupApiNotebooks && !isEditMode;
   const grouped = useMemo(() => {
     if (!items.length) return null;
 
@@ -64,6 +80,30 @@ export default function NotebookGroupList({
 
   if (!grouped) return null;
 
+  const renderRow = (d: CombinedItem) => (
+    <Box
+      key={d.id}
+      data-testid="notebook-list-item"
+      sx={{ display: 'flex', alignItems: 'center', position: 'relative' }}
+    >
+      <Box sx={{ flex: 1 }}>
+        <NotebookRow
+          item={d}
+          isEditMode={isEditMode}
+          isChecked={selectedItems.has(d.id)}
+          isShared={'isShared' in d ? d.isShared : false}
+          favoriteSessions={favoriteSessions}
+          showMessageCount={showMessageCount}
+          suppressActive={suppressActive}
+          activeAgentId={activeAgentId}
+          onNavigate={onNavigate}
+          onNotebookClick={onNotebookClick}
+          onToggle={onToggle}
+        />
+      </Box>
+    </Box>
+  );
+
   return (
     <>
       {grouped.sortedGroupKeys.map(key => (
@@ -75,29 +115,55 @@ export default function NotebookGroupList({
           >
             {key}
           </Typography>
-          {grouped.groupSessions[key].map(d => (
-            <Box
-              key={d.id}
-              data-testid="notebook-list-item"
-              sx={{ display: 'flex', alignItems: 'center', position: 'relative' }}
-            >
-              <Box sx={{ flex: 1 }}>
-                <NotebookRow
-                  item={d}
-                  isEditMode={isEditMode}
-                  isChecked={selectedItems.has(d.id)}
-                  isShared={'isShared' in d ? d.isShared : false}
-                  favoriteSessions={favoriteSessions}
-                  showMessageCount={showMessageCount}
-                  suppressActive={suppressActive}
-                  activeAgentId={activeAgentId}
-                  onNavigate={onNavigate}
-                  onNotebookClick={onNotebookClick}
-                  onToggle={onToggle}
-                />
+          {(shouldGroup
+            ? collapseApiItems(grouped.groupSessions[key], key)
+            : grouped.groupSessions[key].map(item => ({ kind: 'item' as const, item }))
+          ).map(row => {
+            if (row.kind === 'item') return renderRow(row.item);
+            const expanded = !!expandedBuckets[row.key];
+            return (
+              <Box key={`api-group-${row.key}`} data-testid="sidenav-api-group">
+                <Box
+                  component="button"
+                  type="button"
+                  aria-expanded={expanded}
+                  data-testid="sidenav-api-group-toggle"
+                  onClick={() => toggleBucket(row.key)}
+                  sx={theme => ({
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    px: 1,
+                    width: '100%',
+                    height: '32px',
+                    border: 'none',
+                    background: 'none',
+                    font: 'inherit',
+                    textAlign: 'left',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    color: 'text.secondary',
+                    '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
+                  })}
+                >
+                  {expanded ? (
+                    <KeyboardArrowDownIcon sx={{ fontSize: '16px' }} />
+                  ) : (
+                    <KeyboardArrowRightIcon sx={{ fontSize: '16px' }} />
+                  )}
+                  <ApiIcon sx={{ fontSize: '14px', color: 'text.tertiary' }} />
+                  <Typography level="body-xs" sx={{ color: 'inherit' }}>
+                    {t('sidenav.apiGroup', 'API - {{count}} notebooks', { count: row.items.length })}
+                  </Typography>
+                </Box>
+                {expanded && (
+                  <Box data-testid="sidenav-api-group-items" sx={{ pl: '12px' }}>
+                    {row.items.map(renderRow)}
+                  </Box>
+                )}
               </Box>
-            </Box>
-          ))}
+            );
+          })}
         </div>
       ))}
     </>

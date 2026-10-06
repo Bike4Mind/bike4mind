@@ -40,6 +40,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         dataLakes: dataLakeRepository,
         batches: dataLakeBatchRepository,
         fabFiles: fabFileRepository,
+        dataLakeAccessGrants: dataLakeAccessGrantRepository,
         ...lakeConfigAuditDb,
       },
       logger: console,
@@ -85,8 +86,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // check (not just read access) so a read-only member can't inject files into a lake they
     // don't own. Not-found-style denial when the lake isn't even readable; manage-denied when
     // readable but not owned.
-    const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, await toAccessContext(req), {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    const accessContext = await toAccessContext(req);
+    const grantDb = { dataLakeAccessGrants: dataLakeAccessGrantRepository };
+    const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, accessContext, {
+      db: { dataLakes: dataLakeRepository, ...grantDb },
     });
 
     if (!isLakeIngestable(dataLake.status)) {
@@ -101,6 +104,16 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
       logger: req.logger,
     });
+
+    // Resolved here because this is the only point that holds the uploader's full access context;
+    // the upload History row is written later from a queue handler that has only their user id, so
+    // an org or platform admin's upload would otherwise record as `system`.
+    const uploaderManageRung =
+      dataLakeService.resolveLakeManageRung(
+        dataLake,
+        accessContext,
+        await dataLakeService.loadActiveLakeGrants(dataLake, { db: grantDb })
+      ) ?? undefined;
 
     const batch = await dataLakeBatchRepository.create({
       dataLakeId: dataLake.id,
@@ -122,6 +135,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       startedAt: new Date(),
       wantsTaxonomy: data.wantsTaxonomy ?? false,
       taxonomyStatus: 'none',
+      uploaderManageRung,
     });
 
     // No status write here. Activation is `recomputeLakeStats`'s, keyed on the lake actually

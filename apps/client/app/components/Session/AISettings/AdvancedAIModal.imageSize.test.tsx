@@ -73,6 +73,8 @@ vi.mock('@client/app/components/help', () => ({
 const modelInfoRows = [
   { id: ImageModels.GPT_IMAGE_2, name: 'GPT Image 2', contextWindow: 0, max_tokens: 0 },
   { id: ImageModels.FLUX_PRO_1_1, name: 'Flux Pro 1.1', contextWindow: 0, max_tokens: 0 },
+  { id: ImageModels.FLUX_PRO_ULTRA, name: 'Flux Pro 1.1 Ultra', contextWindow: 0, max_tokens: 0 },
+  { id: ImageModels.GEMINI_3_PRO_IMAGE, name: 'Nano Banana Pro', contextWindow: 0, max_tokens: 0 },
 ];
 
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
@@ -145,4 +147,18 @@ describe('AdvancedAIModal - Image Size row in the model details dialog', () => {
 
     expect(getByTestId('model-details-size-select')).toHaveTextContent('1440x810');
   });
+
+  it.each([ImageModels.FLUX_PRO_ULTRA, ImageModels.GEMINI_3_PRO_IMAGE])(
+    'hides the row for %s, which is sized by aspect ratio',
+    model => {
+      llmState.model = model;
+      llmState.size = '1280x960';
+
+      const { queryByTestId, getByText } = renderDetailsDialog();
+
+      expect(queryByTestId('model-details-size-select')).toBeNull();
+      // The rest of the image settings still render, so the row is gone rather than the panel.
+      expect(getByText('Aspect Ratio')).toBeInTheDocument();
+    }
+  );
 });

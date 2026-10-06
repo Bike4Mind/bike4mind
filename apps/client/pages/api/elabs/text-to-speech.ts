@@ -3,14 +3,16 @@ import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
-import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
 import { estimateTtsCreditCost, TTS_DEFAULT_MODEL } from '@bike4mind/common';
+import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 import { deductTtsCredits } from '@server/utils/deductTtsCredits';
 import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 
-// Legacy ElevenLabs TTS adapter. Kept as a thin, contract-stable wrapper over
-// the unified aiVoiceService (#724): body { message } -> { audio: base64 }.
-// New integrations should use POST /api/ai/tts with provider 'elevenlabs'.
+// Legacy ElevenLabs TTS adapter, scheduled for deprecation (CONVENTIONS.md section 7).
+// Thin wrapper over the unified aiVoiceService: body { message } -> { audio: base64 }
+// (inline responses are a superset of that). Shares response delivery with
+// POST /api/ai/tts: oversized audio returns a `delivery: 'url'` body, not a 413.
+// New integrations should use /api/ai/tts with provider 'elevenlabs'.
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
     const { message } = z.object({ message: z.string() }).parse(req.body);
@@ -53,10 +55,13 @@ const handler = baseApi().post(
       if (userId) {
         await deductTtsCredits({ userId, vendor: 'elevenlabs', model, characters, logger: req.logger });
       }
-      if (exceedsTtsResponseLimit(audio.length)) {
-        return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });
-      }
-      return res.send({ audio: audio.toString('base64') });
+      return await deliverGeneratedAudio(res, {
+        audio,
+        contentType: 'audio/mpeg',
+        encoding: 'base64',
+        save: undefined,
+        logger: req.logger,
+      });
     } catch (error) {
       // This route now bills credits; log the failure so a synthesis error is
       // observable rather than a silent 500 (mirrors the sibling TTS routes).

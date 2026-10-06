@@ -14,9 +14,11 @@ import type { Request } from 'express';
  * the gates already grant them access to every org.
  *
  * Returns the validated org id when the caller supplied one they belong to, or `undefined` when
- * none was supplied (personal scope - the default). Throws `ForbiddenError` when a caller
- * supplies an org they have no access to, or `NotFoundError` when the org doesn't exist. Both
- * paths fail closed on a non-existent org, so a typo can never stamp a garbage `organizationId`.
+ * none was supplied (personal scope - the default). For a non-admin, an org they can't access and
+ * an org that doesn't exist both throw `ForbiddenError` (`findAccessibleById` returns null for
+ * either), which also means the caller can't probe whether an org id exists. Only the admin branch
+ * throws `NotFoundError`, for a missing org. Both branches fail closed on a non-existent org, so a
+ * typo can never stamp a garbage `organizationId`.
  *
  * This is the ONE place a route turns a client-supplied active org into a trusted scope, so the
  * callers (data-lake create/visibility, chat billing target) can't drift in how they validate it.

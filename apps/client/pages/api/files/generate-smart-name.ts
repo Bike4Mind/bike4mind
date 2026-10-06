@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { secureParameters } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { OperationsModelService } from '@client/services/operationsModelService';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
 const generateSmartNameSchema = z.object({
   prompt: z.string(),
@@ -10,7 +11,7 @@ const generateSmartNameSchema = z.object({
 
 type GenerateSmartNameInput = z.infer<typeof generateSmartNameSchema>;
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req, res) => {
   try {
     const { prompt, fileType } = secureParameters(req.body, generateSmartNameSchema) as GenerateSmartNameInput;
     const fallbackName = fileType === 'image' ? `pasted-image-${Date.now()}` : `pasted-text-${Date.now()}`;

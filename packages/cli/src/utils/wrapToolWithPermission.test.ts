@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest';
 import path from 'path';
 import { promises as fs, existsSync } from 'fs';
 import { tmpdir } from 'os';
+import { createHash } from 'crypto';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 // executeTool routes through ToolRouter (server/WebSocket executors, output
@@ -239,6 +240,61 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
 
     expect(prompt).not.toHaveBeenCalled();
     expect(await fs.readFile(file, 'utf-8')).toBe('hello world\n'); // untouched
+  });
+
+  // A model-supplied confirmedFuzzyHash must never pre-confirm a fuzzy edit: only
+  // the gate and the fuzzy-confirmation retry may bind one.
+  const sha256 = (content: string) => createHash('sha256').update(content, 'utf-8').digest('hex');
+
+  it('ignores an externally supplied confirmedFuzzyHash when the gate itself finds no match', async () => {
+    const { dir, file } = await fuzzyFile();
+    await fs.writeFile(file, 'goodbye\n'); // gate resolve throws: no match
+    const pm = new PermissionManager([], undefined, []);
+    pm.trustToolForSession('edit_local_file');
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const wrapped = wrapEdit(prompt, pm, [dir]);
+
+    vi.mocked(executeTool).mockImplementationOnce(async (_name, callArgs, _api, fn) => {
+      await fs.writeFile(file, 'hello world\n');
+      return (fn as (args: unknown) => Promise<string>)(callArgs);
+    });
+
+    await wrapped
+      .toolFn({
+        path: file,
+        old_string: 'hello world   ',
+        new_string: 'hi world',
+        confirmedFuzzyHash: sha256('hello world\n'),
+      })
+      .catch(() => undefined);
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(file, 'utf-8')).toBe('hello world\n'); // untouched
+  });
+
+  it('ignores an externally supplied confirmedFuzzyHash when the gate saw an exact match', async () => {
+    const { dir, file } = await fuzzyFile();
+    const pm = new PermissionManager([], undefined, []);
+    pm.trustToolForSession('edit_local_file');
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const wrapped = wrapEdit(prompt, pm, [dir]);
+
+    vi.mocked(executeTool).mockImplementationOnce(async (_name, callArgs, _api, fn) => {
+      await fs.writeFile(file, 'hello   world\n');
+      return (fn as (args: unknown) => Promise<string>)(callArgs);
+    });
+
+    await wrapped
+      .toolFn({
+        path: file,
+        old_string: 'hello world',
+        new_string: 'hi world',
+        confirmedFuzzyHash: sha256('hello   world\n'),
+      })
+      .catch(() => undefined);
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(file, 'utf-8')).toBe('hello   world\n'); // untouched
   });
 
   it('never force-prompts (or writes) a fuzzy edit whose path is outside the allowed directories', async () => {

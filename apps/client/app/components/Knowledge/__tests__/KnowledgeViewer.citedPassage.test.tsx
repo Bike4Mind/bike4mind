@@ -22,8 +22,12 @@ vi.mock('@client/app/hooks/useSessionLayout', () => ({
 // Both viewers are stubbed: this file is about WHICH branch FileContent takes and what it hands
 // over, not about how either one renders. The real MarkdownViewer is covered separately.
 vi.mock('../MarkdownViewer', () => ({
-  default: ({ citedPassage }: { citedPassage?: string }) => (
-    <div data-testid="markdown-viewer" data-cited-passage={citedPassage ?? ''} />
+  default: ({ citedPassage, stripFrontmatter }: { citedPassage?: string; stripFrontmatter?: boolean }) => (
+    <div
+      data-testid="markdown-viewer"
+      data-cited-passage={citedPassage ?? ''}
+      data-strip-frontmatter={String(Boolean(stripFrontmatter))}
+    />
   ),
   UnmarkedCitedPassage: ({ passage, title }: { passage: string; title: string }) => (
     <div data-testid="markdown-cited-passage-fallback" data-title={title}>
@@ -134,6 +138,7 @@ describe('FileContent cited-passage handoff', () => {
     await renderFile();
 
     expect(screen.getByTestId('markdown-viewer').getAttribute('data-cited-passage')).toBe(PASSAGE);
+    expect(screen.getByTestId('markdown-viewer').getAttribute('data-strip-frontmatter')).toBe('true');
     expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
   });
 

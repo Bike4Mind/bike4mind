@@ -146,7 +146,10 @@ export interface DataLakeAccessContext {
  * keys and then measures must carry both halves; producers hand them over together (see
  * `ChatCompletionProcess.resolveEntitlementKeys`).
  */
-export type MeasurableDataLakeAccessContext = DataLakeAccessContext & { entitlementKeysResolved: boolean };
+export type MeasurableDataLakeAccessContext = DataLakeAccessContext & {
+  entitlementKeysResolved: boolean;
+  db: { organizations: Pick<IOrganizationRepository, 'findIdsWithAdminRights'> };
+};
 
 /**
  * The caller's entitlement keys together with whether they are the real ones (`resolved: false`
@@ -747,8 +750,9 @@ export async function getDynamicDataLakeAccess(
 /**
  * #3055 (scope-accounting follow-up): how many of the SPECIFIC lakes a session names by
  * IDENTITY tag (`datalake:x`, e.g. from `datalakeTagsFrom(session.retrievalTags)`) are
- * gate-excluded for this caller - the per-turn-scoped sibling of `excludedByAccessCount`
- * above, for exactly the case that function's own account-wide count cannot answer.
+ * unreachable for this caller (a gate they lack, or a private/other-org lake an admin can see) - the
+ * per-turn-scoped sibling of `excludedByAccessCount` above, for exactly the case that function's
+ * own account-wide count cannot answer.
  *
  * Why a separate function rather than teaching `narrowLakeAccessToSession` this: that
  * function is a pure, synchronous filter reused by callers with no DB access, and it must
@@ -779,10 +783,22 @@ export async function getDynamicDataLakeAccess(
  */
 export async function measureIdentityNamedExclusion(
   context: MeasurableDataLakeAccessContext,
-  identityTags: string[]
+  identityTags: string[],
+  opts?: {
+    /**
+     * True only for a caller who may already see every lake exist (an admin). Per-call rather than
+     * on the context because the retrieval context has no admin bypass and must not grow one;
+     * absent means the count is bounded to what the caller could already see.
+     */
+    callerMaySeeAllLakes?: boolean;
+  }
 ): Promise<number | undefined> {
   if (identityTags.length === 0) return 0;
-  if (!context.db.dataLakes || typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
+  if (
+    !context.db.dataLakes ||
+    typeof context.db.organizations?.findMembershipOrgIds !== 'function' ||
+    typeof context.db.organizations?.findIdsWithAdminRights !== 'function'
+  ) {
     return undefined;
   }
   // #3155: the entitlement lookup that produced `context.entitlementKeys` may itself have failed
@@ -835,10 +851,18 @@ export async function measureIdentityNamedExclusion(
         )
       );
     }
+    // Skipped for a caller who already sees every lake: the administered arm adds nothing there. A
+    // throw here lands in the catch below, so a failed lookup is unknown, never a false 0.
+    const administeredOrgIds =
+      userId && opts?.callerMaySeeAllLakes !== true
+        ? await context.db.organizations.findIdsWithAdminRights(userId)
+        : [];
     return await context.db.dataLakes.countGateExcludedLakes(userTags, entitlementKeys, organizationIds, userId, {
       ...reach,
       supersededOwnLakeIds: [...supersededOwnLakeIds],
       restrictToTags: identityTags,
+      callerMaySeeAllLakes: opts?.callerMaySeeAllLakes === true,
+      administeredOrgIds,
     });
   } catch (err) {
     context.logger?.warn('[dataLakes] scoped gate-excluded-lake count failed; reporting as unknown', err);

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-01T06:01:25.201Z",
+  "generatedAt": "2026-10-01T13:25:52.203Z",
   "notice": "Fallback defaults last maintained on 2026-10-01. Models and pricing live-update at runtime; this seed only bootstraps empty databases and covers feed outages.",
   "entries": [
     {
@@ -2589,6 +2589,58 @@
         "description": "OpenAI GPT-Image-2 - State-of-the-art image generation with flexible resolutions up to 4K, improved quality, and fast generation. Supports editing and multi-image reference inputs.",
         "rank": 8,
         "releaseDate": "2026-04-21"
+      }
+    },
+    {
+      "modelId": "gpt-image-2.5-flare",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-image-2.5-flare",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "image",
+        "name": "GPT-Image-2.5 Flare",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI GPT-Image-2.5 Flare - Fast, high-quality everyday image generation and editing.",
+        "rank": 7,
+        "releaseDate": "2026-09-08"
+      }
+    },
+    {
+      "modelId": "gpt-image-2.5-sunburst",
+      "ownedGroups": [
+        "identity",
+        "limits",
+        "modalities",
+        "lifecycle",
+        "presentation"
+      ],
+      "patch": {
+        "id": "gpt-image-2.5-sunburst",
+        "vendor": "openai",
+        "backend": "openai",
+        "type": "image",
+        "name": "GPT-Image-2.5 Sunburst",
+        "contextWindow": 10000,
+        "maxOutputTokens": 10000,
+        "supportsImageVariation": true,
+        "lifecycle": {
+          "status": "active"
+        },
+        "description": "OpenAI GPT-Image-2.5 Sunburst - OpenAI's most capable image generation and editing model, best where editing precision matters most.",
+        "rank": 6,
+        "releaseDate": "2026-09-08"
       }
     },
     {

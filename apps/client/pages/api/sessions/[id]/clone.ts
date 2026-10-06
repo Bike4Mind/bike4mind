@@ -14,8 +14,10 @@ import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
 import { SessionEvents, redactSessionForClient } from '@bike4mind/common';
 import { Request } from 'express';
+import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
+import { parseTargetSurface } from '@server/utils/parseTargetSurface';
 
-const handler = baseApi().post(async (req: Request<{}, {}, {}, { id?: string }>, res) => {
+const handler = baseApi().post(async (req: Request<{}, {}, { targetSurface?: unknown }, { id?: string }>, res) => {
   const { id } = req.user;
   const { id: sessionId } = req.query;
 
@@ -27,11 +29,14 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id?: string }>,
     throw new Error('User does not have permission to clone sessions');
   }
 
+  const targetSurface = parseTargetSurface(req.body);
+
   const newSession = await withTransaction(async () =>
     sessionService.cloneSession(
       id,
       {
         id: sessionId,
+        targetSurface,
       },
       {
         db: {
@@ -54,6 +59,7 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id?: string }>,
         // alternative is persisting an unreachable scope, which is permanent once non-empty.
         resolveLakeAccess: async () =>
           (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+        resolveSurfaceAccess: surfaceAccessForRequest(req),
       }
     )
   );

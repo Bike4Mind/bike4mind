@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { DATA_LAKES } from '@bike4mind/common';
-import { isBuiltInLake, isDraftLake, lakeVisibilityLabel, lakeVisibilityLabelShort } from './lakeVisibility';
+import {
+  canConnectLakeDrive,
+  isBuiltInLake,
+  isDraftLake,
+  lakeVisibilityLabel,
+  lakeVisibilityLabelShort,
+} from './lakeVisibility';
 
 /** A real registry id, so the test cannot drift from the registry it is asserting about. */
 const builtInId = DATA_LAKES[0]?.id;
@@ -37,6 +43,25 @@ describe('lakeVisibilityLabel', () => {
   it('treats a missing id as not built-in rather than throwing', () => {
     expect(isBuiltInLake({})).toBe(false);
     expect(lakeVisibilityLabel({})).toBe('Private');
+  });
+});
+
+describe('canConnectLakeDrive', () => {
+  it('gates a personal lake on isCreator, not effective ownership', () => {
+    // Ownership can transfer (isOwn flips), but personal-lake membership and the Drive ingest's
+    // admin-actor writes stay anchored to createdByUserId - so the creator keeps the control
+    // whether or not they still read as the effective owner.
+    expect(canConnectLakeDrive({ isCreator: false })).toBe(false);
+    expect(canConnectLakeDrive({ isCreator: true })).toBe(true);
+  });
+
+  it('gates an org lake on canManage regardless of isCreator', () => {
+    expect(canConnectLakeDrive({ organizationId: 'org-1', canManage: true, isCreator: false })).toBe(true);
+    expect(canConnectLakeDrive({ organizationId: 'org-1', canManage: false, isCreator: true })).toBe(false);
+  });
+
+  it('fails closed on absent fields', () => {
+    expect(canConnectLakeDrive({})).toBe(false);
   });
 });
 

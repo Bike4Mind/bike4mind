@@ -9,6 +9,7 @@ import {
   organizationRepository,
   questRepository,
   Session,
+  sessionRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
@@ -18,6 +19,7 @@ import { RekognitionImageModerationService } from '@bike4mind/utils/imageModerat
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import imageLogger from '@client/app/utils/imageLogger';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
@@ -31,7 +33,11 @@ export const getImageGeneration = (): ImageGenerationService => {
   if (!_imageGeneration) {
     _imageGeneration = new ImageGenerationService({
       db: {
-        sessions: Session,
+        // findById stays on the model (unchanged reads); the counter lives on the repository.
+        sessions: {
+          findById: Session.findById.bind(Session),
+          incrementImageCount: sessionRepository.incrementImageCount.bind(sessionRepository),
+        },
         quests: questRepository,
         connections: Connection,
         adminSettings: adminSettingsRepository,
@@ -96,8 +102,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     requestId: context.awsRequestId,
   });
 
-  await getImageGeneration().process({
-    body: JSON.parse(event.Records[0].body),
-    logger,
-  });
+  const body = JSON.parse(event.Records[0].body);
+  try {
+    await getImageGeneration().process({ body, logger });
+  } finally {
+    // Also on a throw: process() may have written the terminal status before failing.
+    await dispatchQuestCallback(body.questId, logger);
+  }
 });

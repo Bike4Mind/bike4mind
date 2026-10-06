@@ -1,4 +1,5 @@
-import type { IModelDiscoveryStateRepository, ModelBackend } from '@bike4mind/common';
+import { ModelBackend, bedrockFoundationIdOf } from '@bike4mind/common';
+import type { IModelDiscoveryStateRepository } from '@bike4mind/common';
 import type { ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 
 export interface AbsencePlan {
@@ -29,6 +30,13 @@ export interface AbsenceInput {
  * one. No catalog lifecycle transition is derived from absence here - graduation
  * to deprecated after K misses spanning 48h is Phase 4, and it reads these
  * counters rather than recomputing them.
+ *
+ * The Bedrock listing (`ListFoundationModels`) is authoritative for foundation
+ * ids only: a region-prefixed inference profile is never in it, so a profile id
+ * is sighted through its foundation id when that was listed, and otherwise left
+ * frozen rather than counted as missed. Absence therefore never retires a profile
+ * id; its sunset must arrive through a typed lifecycle that names the profile id
+ * directly - the seed catalog or an aggregator feed - not this bare-id listing.
  */
 export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceInput): AbsencePlan {
   const sighted: string[] = [];
@@ -40,6 +48,11 @@ export function planAbsence({ coveredBackends, sightedModelIds, base }: AbsenceI
     if (backend) seenBackends.add(backend);
     if (sightedModelIds.has(modelId)) {
       sighted.push(modelId);
+      continue;
+    }
+    const foundationId = backend === ModelBackend.Bedrock ? bedrockFoundationIdOf(modelId) : null;
+    if (foundationId !== null) {
+      if (sightedModelIds.has(foundationId)) sighted.push(modelId);
       continue;
     }
     // Absence is only evidence when someone successfully listed that backend.

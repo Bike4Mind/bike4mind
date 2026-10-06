@@ -1,10 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 
+const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
+
 // baseApi wraps the handler; mock it as a thin pass-through so importing the module
 // (for the exported `filterServeableFilePaths` helper) doesn't pull in real auth/DB
-// middleware. Mirrors the style used in `download.test.ts`.
+// middleware. Mirrors the style used in `download.test.ts`. Also captures the options
+// `baseApi` was called with, for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: (h: unknown) => h }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { get: (fn: unknown) => fn };
+  },
 }));
 
 // SST Resource is not available in test environments - mock the bucket name.
@@ -27,6 +33,12 @@ import { filterServeableFilePaths } from '../presigned-url';
 
 // The ownership axis is exercised separately below; these moderation cases grant access to all.
 const allowAll = async () => true;
+
+describe('GET /api/files/presigned-url - scope gate', () => {
+  it('requires files:read at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
+  });
+});
 
 describe('filterServeableFilePaths', () => {
   // isImageServeable gates on moderationStatus alone now (no mimeType special-case), so an

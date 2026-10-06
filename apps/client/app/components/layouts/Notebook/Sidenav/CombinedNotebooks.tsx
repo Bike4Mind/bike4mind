@@ -5,6 +5,7 @@ import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import FiltersPanel from './FiltersPanel';
+import { narrowsToNotebooks, toSessionListFilters } from './sidenavFilters';
 import BulkActionsPanel from './BulkActionsPanel';
 import NotebookRow from './NotebookRow';
 import NotebookGroupList from './NotebookGroupList';
@@ -59,6 +60,13 @@ const CombinedNotebooks = () => {
     return match ? match[1] : null;
   }, [location.pathname]);
 
+  const [contentFilter, setContentFilter, originFilter, setOriginFilter] = useNotebookLayout(
+    useShallow(s => [s.contentFilter, s.setContentFilter, s.originFilter, s.setOriginFilter])
+  );
+  // Applied by the server on both lists so infinite-scroll pages stay correct.
+  const listFilters = useMemo(() => toSessionListFilters(contentFilter, originFilter), [contentFilter, originFilter]);
+  const onlyNotebooks = narrowsToNotebooks(contentFilter, originFilter);
+
   // The shared sidebar serves the default surface (surface:null). Product surfaces like /opti
   // own a dedicated, fully scoped nav (e.g. OptiSidenav) and no longer render this component, so
   // it carries no surface-specific branching.
@@ -67,13 +75,13 @@ const CombinedNotebooks = () => {
     fetchNextPage: fetchNextOwn,
     hasNextPage: hasNextOwn,
     isFetching: isFetchingOwn,
-  } = useGetOwnSessions(search);
+  } = useGetOwnSessions(search, undefined, listFilters);
   const {
     data: sharedData,
     fetchNextPage: fetchNextShared,
     hasNextPage: hasNextShared,
     isFetching: isFetchingShared,
-  } = useGetSharedSessions(search);
+  } = useGetSharedSessions(search, listFilters);
   // Use the same hook as the projects page to ensure we get all projects
   const { data: projectsResponse, isLoading: isLoadingProjects } = useSearchProjects(
     '', // No search filter, we'll filter locally
@@ -300,7 +308,10 @@ const CombinedNotebooks = () => {
    * renderGroupSessions (rendering). Avoids filtering 4000+ notebooks twice per render.
    */
   const filteredItems = useMemo(() => {
-    let allItems: CombinedItem[] = [...combinedSessions, ...processedProjects, ...processedAgents];
+    // Projects and agents carry no origin or images, so a filter that narrows to such notebooks hides them.
+    let allItems: CombinedItem[] = onlyNotebooks
+      ? [...combinedSessions]
+      : [...combinedSessions, ...processedProjects, ...processedAgents];
 
     // Apply type filter
     if (typeFilter !== 'all') {
@@ -321,7 +332,7 @@ const CombinedNotebooks = () => {
     }
 
     return allItems;
-  }, [combinedSessions, processedProjects, processedAgents, typeFilter]);
+  }, [combinedSessions, processedProjects, processedAgents, typeFilter, onlyNotebooks]);
 
   // Items for the date-grouped list: exclude project rows (rendered in the Projects section
   // above) and sessions that already appear nested under a project (avoids duplication).
@@ -329,11 +340,11 @@ const CombinedNotebooks = () => {
   // when typeFilter='notebooks' the Projects section is hidden, so those sessions must remain
   // in the loose list or they become unreachable in both panels.
   const looseFilteredItems = useMemo(() => {
-    const projectsVisible = typeFilter === 'all' || typeFilter === 'projects';
+    const projectsVisible = !onlyNotebooks && (typeFilter === 'all' || typeFilter === 'projects');
     return filteredItems.filter(
       item => !('isProject' in item && item.isProject) && (!projectsVisible || !projectSessionIds.has(item.id))
     );
-  }, [filteredItems, projectSessionIds, typeFilter]);
+  }, [filteredItems, projectSessionIds, typeFilter, onlyNotebooks]);
 
   // Bulk actions target only the sessions that are actually rendered with checkboxes -
   // i.e. the loose date-grouped list (looseFilteredItems), excluding agents. Project-member
@@ -552,7 +563,12 @@ const CombinedNotebooks = () => {
                     borderRadius: '8px',
                     // Active (dropdown open, bulk-actions/edit mode, or a filter applied): keep the default
                     // neutral border, add the faint brand fill (#D1E4F4 @ 5% dark / brand tint light) via the shared token.
-                    ...((filtersOpen || isEditMode || typeFilter !== 'all' || showMessageCounts) && {
+                    ...((filtersOpen ||
+                      isEditMode ||
+                      typeFilter !== 'all' ||
+                      contentFilter !== 'all' ||
+                      originFilter !== 'all' ||
+                      showMessageCounts) && {
                       backgroundColor: theme.palette.sidenav?.filterActiveBg,
                     }),
                   })}
@@ -565,6 +581,10 @@ const CombinedNotebooks = () => {
                   typeOptions={typeOptions}
                   typeFilter={typeFilter}
                   setTypeFilter={setTypeFilter}
+                  contentFilter={contentFilter}
+                  setContentFilter={setContentFilter}
+                  originFilter={originFilter}
+                  setOriginFilter={setOriginFilter}
                   showMessageCounts={showMessageCounts}
                   setShowMessageCounts={setShowMessageCounts}
                   onOpenBulkActions={openBulkActions}
@@ -678,7 +698,7 @@ const CombinedNotebooks = () => {
           )}
 
           {/* Projects section — collapsible nodes with lazy-loaded nested notebooks */}
-          {displayProjects.length > 0 && (typeFilter === 'all' || typeFilter === 'projects') && (
+          {displayProjects.length > 0 && !onlyNotebooks && (typeFilter === 'all' || typeFilter === 'projects') && (
             <div>
               <Typography
                 className="notebook-sidenav-section-title"
@@ -717,6 +737,8 @@ const CombinedNotebooks = () => {
             selectedItems={selectedItems}
             favoriteSessions={favoriteSessions}
             showMessageCount={showMessageCounts}
+            // Grouping API notebooks would only add a click when the list shows nothing else.
+            groupApiNotebooks={originFilter !== 'onlyApi'}
             suppressActive={suppressNotebookHighlight}
             activeAgentId={activeAgentId}
             onNavigate={handleItemNavigate}

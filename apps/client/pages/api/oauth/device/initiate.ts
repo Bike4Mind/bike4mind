@@ -1,12 +1,17 @@
 import { deviceAuthorizationRepository, digestDeviceCode } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { generateDeviceCode, generateUserCode } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  generateDeviceCode,
+  generateUserCode,
+  MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
+} from '@server/utils/oauth/deviceAuthHelpers';
 import { z } from 'zod';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const InitiateRequestSchema = z.object({
-  client_id: z.literal('b4m-cli'),
+  client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
 const handler = baseApi({ auth: false })
@@ -17,7 +22,20 @@ const handler = baseApi({ auth: false })
     })
   )
   .post(async (req, res) => {
-    InitiateRequestSchema.parse(req.body);
+    const { client_id: clientId } = InitiateRequestSchema.parse(req.body);
+
+    // Global, not per-IP: IP headers are spoofable when the origin is reached directly.
+    // count-then-create is not atomic; concurrent initiates can overshoot by the in-flight count. Atomic counter if that matters.
+    if ((await deviceAuthorizationRepository.countPendingAndUnexpired()) >= MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS) {
+      req.logger.warn(
+        `[OAUTH_DEVICE_INITIATE] pending device authorization cap reached (${MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS}); returning 503`
+      );
+      res.setHeader('Retry-After', 60);
+      return res.status(503).json({
+        error: 'temporarily_unavailable',
+        error_description: 'Too many pending device authorizations, try again later',
+      });
+    }
 
     const deviceCode = generateDeviceCode();
     const userCode = generateUserCode();
@@ -25,6 +43,7 @@ const handler = baseApi({ auth: false })
     await deviceAuthorizationRepository.create({
       deviceCode: digestDeviceCode(deviceCode),
       userCode,
+      clientId,
       status: 'pending',
       userId: null,
       expiresAt: new Date(Date.now() + 600000), // 10 minutes

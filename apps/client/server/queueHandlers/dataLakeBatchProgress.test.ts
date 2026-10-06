@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   touchIfActive: vi.fn(async () => undefined),
   findById: vi.fn(),
   recomputeLakeStats: vi.fn(),
+  recordLakeUploadBatch: vi.fn(),
   recordBatchCompletion: vi.fn(),
   recordTaxonomyDailyCapExceeded: vi.fn(),
   sendToQueue: vi.fn(),
@@ -26,12 +27,16 @@ vi.mock('@bike4mind/database', () => ({
     markTerminalIfActive: h.markTerminalIfActive,
     setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive,
     touchIfActive: h.touchIfActive,
+    claimUploadHistory: vi.fn().mockResolvedValue(true),
   },
   dataLakeRepository: { findById: h.findById },
+  dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]) },
   fabFileRepository: {},
   cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { recomputeLakeStats: h.recomputeLakeStats } }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: { recomputeLakeStats: h.recomputeLakeStats, recordLakeUploadBatch: h.recordLakeUploadBatch },
+}));
 vi.mock('@server/utils/cloudwatch', () => ({
   recordBatchCompletion: (...a: unknown[]) => h.recordBatchCompletion(...a),
   recordTaxonomyDailyCapExceeded: (...a: unknown[]) => h.recordTaxonomyDailyCapExceeded(...a),
@@ -81,6 +86,43 @@ describe('finalizeBatchIfComplete - batch-completion metric parity', () => {
     h.findById.mockResolvedValue({ id: 'lake1', datalakeTag: 'datalake:x' });
     h.recordBatchCompletion.mockResolvedValue(undefined); // real emitter returns a Promise
     h.recomputeLakeStats.mockResolvedValue(undefined);
+  });
+
+  it('records one upload History row from the finalized batch, with the grants repo for the rung', async () => {
+    const finalized = batch({ vectorizedFiles: 2, failedFiles: 1, totalFiles: 3 });
+    h.markTerminalIfActive.mockResolvedValue(finalized);
+    await finalizeBatchIfComplete(batch(), logger as never);
+
+    expect(h.recordLakeUploadBatch).toHaveBeenCalledTimes(1);
+    expect(h.recordLakeUploadBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1' }),
+      finalized,
+      expect.objectContaining({
+        db: expect.objectContaining({
+          lakeConfigChangeEvents: expect.anything(),
+          dataLakeAccessGrants: expect.anything(),
+          // The one-shot claim that keeps a reopened batch to a single row.
+          batches: expect.objectContaining({ claimUploadHistory: expect.any(Function) }),
+        }),
+        logger,
+      })
+    );
+  });
+
+  it('still records the upload row when the stats recompute throws', async () => {
+    h.recomputeLakeStats.mockRejectedValue(new Error('aggregation failed'));
+    await finalizeBatchIfComplete(batch(), logger as never);
+    expect(h.recordLakeUploadBatch).toHaveBeenCalledTimes(1);
+    expect(h.recordLakeUploadBatch.mock.invocationCallOrder[0]).toBeLessThan(
+      h.recomputeLakeStats.mock.invocationCallOrder[0]
+    );
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('records no upload row when another handler won the finalize', async () => {
+    h.markTerminalIfActive.mockResolvedValue(null);
+    await finalizeBatchIfComplete(batch(), logger as never);
+    expect(h.recordLakeUploadBatch).not.toHaveBeenCalled();
   });
 
   it('records a clean completion when no files failed', async () => {

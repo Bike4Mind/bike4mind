@@ -24,7 +24,11 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 }));
 
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
-  default: ({ content }: { content?: string }) => <div data-testid="mock-markdown">{content}</div>,
+  default: ({ content, stripFrontmatter }: { content?: string; stripFrontmatter?: boolean }) => (
+    <div data-testid="mock-markdown" data-strip-frontmatter={String(Boolean(stripFrontmatter))}>
+      {content}
+    </div>
+  ),
   UnmarkedCitedPassage: ({ passage }: { passage: string }) => (
     <div data-testid="markdown-cited-passage-fallback">{passage}</div>
   ),
@@ -82,5 +86,18 @@ describe('DataLakeViewer pipeline notice', () => {
     expect(screen.getByText('Ask legal before sharing')).toBeTruthy();
     expect(screen.queryByText(CHUNK_STALL_NOTICES.vectorizePaused, { exact: false })).toBeNull();
     expect(screen.queryByText(NO_EXTRACTABLE_TEXT_NOTICE, { exact: false })).toBeNull();
+  });
+});
+
+describe('DataLakeViewer file content', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useGetFabFileContent.mockReturnValue({ data: 'body', isLoading: false });
+  });
+
+  it('asks MarkdownViewer to strip frontmatter from the stored file', async () => {
+    await openFile(fabFile());
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-strip-frontmatter', 'true');
   });
 });
