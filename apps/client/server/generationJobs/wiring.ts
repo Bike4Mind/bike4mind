@@ -28,7 +28,12 @@ import { fabFilesService, modelDiscoveryService } from '@bike4mind/services';
 import { GenerationJobEngine } from '@bike4mind/services/generationJobs';
 import { createVideoJobHandler, type CreateVideoJobDeps, type VideoJobDeps } from '@bike4mind/services/videoJobs';
 import { ClientMessageSender, getSettingsByNames, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
-import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
+import {
+  createVideoProviderRegistry,
+  GeminiOmniVideoProvider,
+  TestVideoProvider,
+  type VideoProvider,
+} from '@bike4mind/utils/videoProviders';
 import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
@@ -94,8 +99,10 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
   };
 };
 
-const buildProviders = (): VideoProvider[] => {
-  const providers: VideoProvider[] = [];
+// Gemini is registered everywhere; whether a caller can use it depends on a resolvable key (hasUsableKey in
+// server/videoGenerations/listUsableVideoModels.ts).
+export const buildProviders = (): VideoProvider[] => {
+  const providers: VideoProvider[] = [new GeminiOmniVideoProvider()];
   // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_VIDEO_PROVIDER === 'true') providers.push(new TestVideoProvider());
   return providers;

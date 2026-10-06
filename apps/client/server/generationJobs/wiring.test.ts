@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IGenerationJobDocument, VideoProviderId } from '@bike4mind/common';
 
 const { queueLink, getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
@@ -32,7 +32,15 @@ vi.mock('@bike4mind/auth', async importOriginal => {
 });
 vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
 
-import { enqueueGenerationJob, getVideoJobDeps, selectProviderKey, toJobUpdate, usableApiKey } from './wiring';
+import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
+import {
+  buildProviders,
+  enqueueGenerationJob,
+  getVideoJobDeps,
+  selectProviderKey,
+  toJobUpdate,
+  usableApiKey,
+} from './wiring';
 
 const baseJob = {
   id: 'job1',
@@ -142,5 +150,25 @@ describe('enqueueGenerationJob queue URL resolution', () => {
     });
     await expect(enqueueGenerationJob('job3', 5)).rejects.toThrow('Missing source queue URL');
     expect(sendToQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildProviders', () => {
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_VIDEO_PROVIDER;
+  });
+
+  it('registers Gemini Omni unconditionally', () => {
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni']);
+  });
+
+  it('adds the test provider only when enabled', () => {
+    process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'test']);
+  });
+
+  it('builds a registry the catalog-owner check accepts', () => {
+    process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
+    expect(() => createVideoProviderRegistry(buildProviders())).not.toThrow();
   });
 });
