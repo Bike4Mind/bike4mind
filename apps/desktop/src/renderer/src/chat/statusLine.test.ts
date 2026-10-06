@@ -280,9 +280,6 @@ describe('withStall', () => {
   it('names the silence and times it once nothing has arrived', () => {
     const stalled = withStall(thinking, turn, turn.lastEventAt + 125_000);
     expect(stalled.label).toBe('Waiting for the model... 2m 5s');
-    expect(activityDetail(stalled)?.note).toBe(
-      'Nothing has arrived from the model for 2m 5s. A thinking model sends nothing while it thinks, so it may still be working, or the stream may have stopped.'
-    );
   });
 
   it('measures from the start of the turn until the first event lands', () => {
@@ -297,23 +294,19 @@ describe('withStall', () => {
     expect(withStall(thinking, turn, turn.lastEventAt + 30_000)).toBe(thinking);
   });
 
-  it('explains the silence rather than repeating the sentence it fell in the middle of', () => {
-    const stalled = withStall(describeActivity([], true), turn, turn.lastEventAt + 60_000);
-    expect(activityDetail(stalled)).toEqual({
-      note: 'Nothing has arrived from the model for 1m 0s. A thinking model sends nothing while it thinks, so it may still be working, or the stream may have stopped.',
-    });
+  // Waiting is a dead end, not a disclosure: there is no live stream behind it, and the line
+  // does not explain itself to the user instead.
+  it('opens nothing at all, whatever the turn was doing when it went quiet', () => {
+    const writing = describeActivity([], true, code('export function Dashboard() {'));
+    const quietMidCode = withStall(writing, turn, turn.lastEventAt + 60_000);
+    expect(hasActivityDetail(quietMidCode)).toBe(false);
+    expect(activityDetail(quietMidCode)).toBeNull();
   });
 
   it('does not call a model that is sending reasoning stalled - those are its sign of life', () => {
     const thinking = describeActivity([], true, null, 'still working through it');
     const live = { startedAt: 1_000_000, tokens: null, lastEventAt: 1_600_000, reasoning: 'still working through it' };
     expect(withStall(thinking, live, live.lastEventAt + 5_000)).toBe(thinking);
-  });
-
-  it('keeps the hidden body when the silence fell in the middle of writing code', () => {
-    const writing = describeActivity([], true, code('export function Dashboard() {'));
-    const stalled = withStall(writing, turn, turn.lastEventAt + 60_000);
-    expect(activityDetail(stalled)?.body).toBe('export function Dashboard() {');
   });
 
   it('never calls a running tool or a waiting approval stalled - the silence is theirs', () => {

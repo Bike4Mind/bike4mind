@@ -51,6 +51,8 @@ export interface TurnProgress {
  * from the request to their first event, and a resumed turn on a large conversation was reported
  * at over a minute. A threshold under that would call every thinking turn stalled, which is how
  * a warning stops being read. The case this exists for sat at "Responding..." for 27 minutes.
+ *
+ * The waiting line says only that it is waiting, and how long: see activityDetail.
  */
 export const STALL_AFTER_MS = 45_000;
 
@@ -149,7 +151,7 @@ export type TurnActivity =
   | { kind: 'code'; label: string; pending: PendingCode }
   | { kind: 'text'; label: string }
   | { kind: 'thinking'; label: string; reasoning?: string }
-  | { kind: 'stalled'; label: string; silentMs: number; last: TurnActivity };
+  | { kind: 'stalled'; label: string; silentMs: number };
 
 /** As much of a label as fits a line that must not wrap at any window width. */
 const MAX_LABEL_CHARS = 90;
@@ -223,12 +225,11 @@ export function withStall(activity: TurnActivity, turn: TurnProgress, now: numbe
 
   const silentMs = now - (turn.lastEventAt ?? turn.startedAt);
   if (silentMs < STALL_AFTER_MS) return activity;
-  return { kind: 'stalled', label: `Waiting for the model... ${formatElapsed(silentMs)}`, silentMs, last: activity };
+  return { kind: 'stalled', label: `Waiting for the model... ${formatElapsed(silentMs)}`, silentMs };
 }
 
 /** What the line discloses, built only for an OPEN disclosure. */
 export interface ActivityDetail {
-  note?: string;
   /** A block of text, already bounded to a tail this view can hold. */
   body?: string;
 }
@@ -243,7 +244,7 @@ export interface ActivityDetail {
 export function hasActivityDetail(activity: TurnActivity): boolean {
   if (activity.kind === 'code') return activity.pending.body.trim().length > 0;
   if (activity.kind === 'thinking') return (activity.reasoning ?? '').trim().length > 0;
-  return activity.kind === 'stalled';
+  return false;
 }
 
 const DETAIL_CHARS = 1200;
@@ -259,26 +260,18 @@ function tailBlock(text: string): string {
 /**
  * The live detail behind the label - the only expensive thing in this file.
  *
- * Called ONLY from an expanded disclosure, once per render of it, and bounded: a capped tail of
- * the hidden body, or one line naming the silence. Nothing here grows with the length of a turn,
- * and nothing here repeats something the thread is already drawing.
+ * Called ONLY from an expanded disclosure, once per render of it, and bounded to a capped tail of
+ * the hidden stream. Nothing here grows with the length of a turn, and nothing here repeats
+ * something the thread is already drawing.
+ *
+ * A waiting turn has nothing behind it and opens nothing. There is a live stream to show or
+ * there is not; an explanation of why a stream is empty is a thing the user should not have to
+ * read, let alone click for.
  */
 export function activityDetail(activity: TurnActivity): ActivityDetail | null {
   if (activity.kind === 'code') return { body: tailBlock(activity.pending.body) };
   if (activity.kind === 'thinking') return activity.reasoning ? { body: tailBlock(activity.reasoning) } : null;
-  if (activity.kind !== 'stalled') return null;
-
-  // The body only where the thread does not have it either: a turn that went quiet mid-artifact
-  // still has that source hidden, and a turn that went quiet mid-sentence does not.
-  const under = activityDetail(activity.last);
-  // Says what the silence IS, because the label cannot: nothing arriving is not proof of a dead
-  // turn - a model can reason for a minute before its first token - and this client cannot tell
-  // the two apart. Naming both is the honest reading, and it is what the user needs in order to
-  // decide whether to wait or to stop the turn.
-  return {
-    note: `Nothing has arrived from the model for ${formatElapsed(activity.silentMs)}. A thinking model sends nothing while it thinks, so it may still be working, or the stream may have stopped.`,
-    ...(under?.body ? { body: under.body } : {}),
-  };
+  return null;
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */

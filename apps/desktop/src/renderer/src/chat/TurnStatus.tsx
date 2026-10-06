@@ -22,12 +22,13 @@ const pulse = keyframes({
 });
 
 /**
- * What the line discloses when it is opened: the live thing the thread is NOT showing.
+ * What the line discloses when it is opened: the live stream the thread is NOT showing.
  *
- * Only ever the hidden body of code being written, or one line about a stream that has gone
- * quiet - see TurnActivity for why there is nothing else to put here. The body arrives already
- * bounded, so this cannot grow with the turn; `maxHeight` is the second bound and a different
- * one, keeping a twelve-line tail from pushing the composer down the window.
+ * Only ever a stream - the body of code being written, or the model's thinking - never a
+ * sentence about the state of the turn. See TurnActivity for why there is nothing else to put
+ * here. The body arrives already bounded, so this cannot grow with the turn; `maxHeight` is the
+ * second bound and a different one, keeping a twelve-line tail from pushing the composer down
+ * the window.
  */
 function ActivityDetailView({
   detail,
@@ -45,12 +46,6 @@ function ActivityDetailView({
       sx={{ minWidth: 0, pl: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}
       data-testid="chat-turn-status-detail"
     >
-      {detail.note && (
-        <Typography level="body-xs" textColor="text.tertiary" data-testid="chat-turn-status-detail-note">
-          {detail.note}
-        </Typography>
-      )}
-
       {detail.body && (
         <Typography
           level="body-xs"

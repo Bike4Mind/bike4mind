@@ -7,7 +7,7 @@ import { MessageThread } from './MessageThread';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { roundsOf } from './replyRounds';
-import { describeActivity, writingProse } from './statusLine';
+import { STALL_AFTER_MS, describeActivity, writingProse } from './statusLine';
 import { useConversation } from './useChat';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -166,6 +166,26 @@ describe('the live thread, driven by stream events', () => {
     expect(container.querySelector('[data-testid="chat-turn-status-detail-body"]')?.textContent).toBe(
       'checking the index'
     );
+  });
+
+  // Rendered straight, not driven by events: the state under test is a turn with nothing
+  // arriving, which no sequence of stream events can produce.
+  it('offers nothing to open once the model has gone quiet', async () => {
+    const quiet = Date.now() - (STALL_AFTER_MS + 60_000);
+    await act(async () =>
+      root.render(
+        <TurnStatus
+          turn={{ startedAt: quiet, tokens: null, lastEventAt: quiet }}
+          activity={describeActivity([], true)}
+        />
+      )
+    );
+
+    expect(statusText()).toContain('Waiting for the model...');
+    // A dead end, not a disclosure: there is no live stream behind it, and the user is not asked
+    // to click for a sentence about why a stream is empty.
+    expect(container.querySelector('[data-testid="chat-turn-status-toggle"]')).toBeNull();
+    expect(container.querySelector('[data-testid="chat-turn-status-detail"]')).toBeNull();
   });
 
   it('moves the reasoning from the line into the transcript when the turn ends', async () => {
