@@ -45,11 +45,17 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // The stub is callable (zustand-style) with a getState property: useDuplicatePrefixLake calls
 // it as a selector hook, activeOrgId reads getState.
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+// `account.selected` defaults to none (personal scope); a test that needs an active org sets it
+// and the top-level afterEach clears it.
+const account = vi.hoisted(() => ({ selected: undefined as { id: string; personal: boolean } | undefined }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => {
-  const useSelectedAccount = (selector: (s: { selectedAccount: undefined }) => unknown) =>
-    selector({ selectedAccount: undefined });
-  useSelectedAccount.getState = () => ({ selectedAccount: undefined });
+  type State = { selectedAccount: typeof account.selected };
+  const useSelectedAccount = (selector: (s: State) => unknown) => selector({ selectedAccount: account.selected });
+  useSelectedAccount.getState = (): State => ({ selectedAccount: account.selected });
   return { useSelectedAccount };
+});
+afterEach(() => {
+  account.selected = undefined;
 });
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
@@ -99,6 +105,7 @@ import {
   useLakeFileTags,
   useUnderChunkedCount,
   useGetDataLakesWithRetrievability,
+  useDataLakeSlugPreview,
 } from './dataLakes';
 import { dataLakeKeys } from './dataLakeKeys';
 
@@ -918,6 +925,52 @@ describe('useDataLakeSpend isForbidden', () => {
     const { result } = mountSpend();
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.isForbidden).toBe(false);
+  });
+});
+
+describe('useDataLakeSlugPreview', () => {
+  const mount = (name: string, enabled?: boolean) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { queryClient, ...renderHook(() => useDataLakeSlugPreview(name, enabled), { wrapper }) };
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset().mockResolvedValue({ data: { slug: 'slug-1' } });
+  });
+
+  it('sends the active org and caches under the org-keyed slug-preview key', async () => {
+    account.selected = { id: 'org-1', personal: false };
+    const { queryClient, result } = mount('Vendor Contracts');
+
+    await waitFor(() => expect(result.current.data).toBe('slug-1'));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/slug-preview', {
+      params: { name: 'Vendor Contracts', organizationId: 'org-1' },
+    });
+    expect(
+      queryClient.getQueryCache().find({ queryKey: dataLakeKeys.slugPreview('Vendor Contracts', 'org-1') })
+    ).toBeDefined();
+  });
+
+  it('omits organizationId entirely in personal scope', async () => {
+    const { queryClient, result } = mount('Vendor Contracts');
+
+    await waitFor(() => expect(result.current.data).toBe('slug-1'));
+    const params = apiGet.mock.calls[0][1].params as Record<string, unknown>;
+    expect(params).toEqual({ name: 'Vendor Contracts' });
+    expect('organizationId' in params).toBe(false);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: dataLakeKeys.slugPreview('Vendor Contracts', undefined) })
+    ).toBeDefined();
+  });
+
+  it('makes no request while disabled', async () => {
+    const { result } = mount('Vendor Contracts', false);
+
+    await act(async () => {});
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(apiGet).not.toHaveBeenCalled();
   });
 });
 
