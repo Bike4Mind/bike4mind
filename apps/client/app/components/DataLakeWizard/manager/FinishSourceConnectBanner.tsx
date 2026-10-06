@@ -90,7 +90,7 @@ export default function FinishSourceConnectBanner({
 // One component per source so a lake only mounts the connect hooks of the source it targets.
 function FinishGitHubButton({ lakeId, source }: { lakeId: string; source: LakeSource }) {
   const { begin, isPending } = useBeginLakeGitHubConnect(lakeId);
-  return <FinishButton lakeId={lakeId} source={source} loading={isPending} onClick={begin} />;
+  return <FinishButton lakeId={lakeId} source={source} loading={isPending} onClick={() => begin()} />;
 }
 
 function FinishDriveButton({ lakeId, source }: { lakeId: string; source: LakeSource }) {

@@ -239,6 +239,21 @@ describe('DataLakeLakePicker', () => {
     expect(screen.getByTestId('datalake-lake-picker-owner-icon-b')).toBeInTheDocument();
   });
 
+  it('gives the owner marker an accessible name without an svg title', () => {
+    renderPicker({
+      lakes: [
+        lake({ id: 'b', name: 'Theirs', isOwn: false, ownerDisplayName: 'Dana' }),
+        lake({ id: 'c', name: 'Unknown', isOwn: false }),
+      ],
+    });
+    openMenu();
+
+    const named = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(named.querySelector('title')).toBeNull();
+    const fallback = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(fallback.querySelector('title')).toBeNull();
+  });
+
   it('names the unit on file counts, so they never read as the footer lake count', () => {
     renderPicker({
       lakes: [lake({ id: 'a', name: 'Mine' }), lake({ id: 'b', name: 'Also mine' })],

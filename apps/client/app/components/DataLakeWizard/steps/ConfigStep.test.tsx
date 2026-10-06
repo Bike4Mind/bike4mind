@@ -16,8 +16,11 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 // so this is the only lake-hook it still needs.
 const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
 
+const slugPreview = vi.hoisted(() => ({ current: undefined as string | undefined }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: () => ({ data: slugPreview.current }),
 }));
 
 // The embedding-cost estimate reads admin settings via react-query; stub the values instead of
@@ -84,6 +87,7 @@ const renderStep = () =>
 
 afterEach(() => {
   useDataLakeWizardStore.getState().resetWizard();
+  slugPreview.current = undefined;
   settingsValues.current = {
     dataLakeEmbeddingSpendEnabled: 'true',
     dataLakeEmbeddingBudgetPerRunUsd: '5',
@@ -201,6 +205,38 @@ describe('ConfigStep - identity summary', () => {
 
     expect(screen.getByTestId('config-summary-name')).toHaveTextContent('Legal Contracts');
     expect(screen.getByText('legal-contracts')).toBeInTheDocument();
+  });
+
+  it('shows the server slug preview in create mode, which wins over what the name slugifies to', () => {
+    // A lake (possibly deleted) already holds "legal-contracts", so create would mint "-1".
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts' });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts-1')).toBeInTheDocument();
+  });
+
+  it('keeps the slug of the lake a same-prefix retry will restore, not the preview that counts it as taken', () => {
+    // A failed attempt archived "legal-contracts"; the server preview counts it and says "-1".
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts', tagPrefix: 'legal:' });
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts')).toBeInTheDocument();
+    expect(screen.queryByText('legal-contracts-1')).not.toBeInTheDocument();
+  });
+
+  it('shows the server preview once the prefix changes, since that retry creates a fresh lake', () => {
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts', tagPrefix: 'other:' });
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts-1')).toBeInTheDocument();
   });
 
   it('shows the target lake real slug in append mode, not what the name slugifies to', () => {

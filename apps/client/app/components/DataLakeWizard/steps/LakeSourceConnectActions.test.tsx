@@ -29,7 +29,11 @@ vi.mock('@client/app/hooks/data/githubLake', () => ({
   },
 }));
 vi.mock('./DriveConnectAction', () => ({ default: () => <div data-testid="drive-connect-action" /> }));
-vi.mock('./GitHubConnectAction', () => ({ default: () => <div data-testid="github-connect-action" /> }));
+vi.mock('./GitHubConnectAction', () => ({
+  default: ({ lake }: { lake: { origin?: string } }) => (
+    <div data-testid="github-connect-action" data-origin={lake.origin ?? ''} />
+  ),
+}));
 
 import LakeSourceConnectActions from './LakeSourceConnectActions';
 
@@ -45,6 +49,11 @@ beforeEach(() => {
 });
 
 describe('LakeSourceConnectActions', () => {
+  it("hands the lake's origin to the GitHub panel, which decides whether to ask for the switch", () => {
+    wrap(<LakeSourceConnectActions lake={{ ...orgLake, origin: 'curated' }} />);
+    expect(screen.getByTestId('github-connect-action')).toHaveAttribute('data-origin', 'curated');
+  });
+
   it('offers both sources on an unconnected lake', () => {
     wrap(<LakeSourceConnectActions lake={orgLake} />);
     expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();

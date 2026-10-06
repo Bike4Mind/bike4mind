@@ -578,6 +578,28 @@ export async function downloadLakeAccessCsv(dataLakeId: string): Promise<void> {
 }
 
 /**
+ * The slug the server would mint for a new lake named `name` in the active org, `-N` suffix
+ * included. The client cannot compute it: disambiguation counts lakes it cannot see, deleted ones
+ * included. Advisory (create stays authoritative), and never cached, since any create or delete
+ * can change the answer.
+ */
+export function useDataLakeSlugPreview(name: string, enabled = true) {
+  const orgId = activeOrgId();
+  return useQuery({
+    queryKey: dataLakeKeys.slugPreview(name, orgId),
+    enabled,
+    retry: false,
+    staleTime: 0,
+    queryFn: async () => {
+      const response = await api.get<{ slug: string }>('/api/data-lakes/slug-preview', {
+        params: { name, ...(orgId ? { organizationId: orgId } : {}) },
+      });
+      return response.data.slug;
+    },
+  });
+}
+
+/**
  * The data lake in the current create scope whose `fileTagPrefix` would overlap `prefix`, if any.
  *
  * Two lakes sharing a prefix share their prefix-tagged files, so permanently deleting one would
@@ -636,9 +658,10 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 }
 
 /**
- * Updates an existing data lake configuration.
+ * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
+ * write the user did not ask for directly (e.g. GitHubConnectAction undoing its own origin switch).
  */
-export function useUpdateDataLake() {
+export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -658,7 +681,7 @@ export function useUpdateDataLake() {
       // so without this they keep rendering the pre-change verdict against the new policy.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
-      toast.success('Data lake updated');
+      if (notifySuccess) toast.success('Data lake updated');
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake');

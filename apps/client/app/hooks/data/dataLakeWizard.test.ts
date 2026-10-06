@@ -104,7 +104,7 @@ const seedWizard = ({ names = ['a.txt'], targetLake = null }: SeedOpts = {}) =>
 // one descriptor per requested file (fileId = "id-<name>"), everything else -> ok.
 const installApiPostRouter = () =>
   apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
-    if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+    if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', slug: 'my-lake' } });
     if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
     if (url === '/api/files/generate-presigned-urls-batch') {
       const files = (body?.files ?? []).map(f => ({
@@ -879,6 +879,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -935,6 +936,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -969,6 +971,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
   });
@@ -1030,6 +1033,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
       restored: true,
     });
@@ -1056,6 +1060,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -1107,6 +1112,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -1132,6 +1138,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
   });

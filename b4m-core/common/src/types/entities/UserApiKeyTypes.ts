@@ -226,6 +226,13 @@ export interface IUserApiKey {
   userId: string;
   name: string; // Human-friendly name
   keyHash: string; // Hashed secret (never store plain text)
+  /**
+   * Hex SHA-256 of the raw key: the fast validation path. Keys are 128-bit random
+   * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
+   * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
+   * and writes it back on first successful use. Never serialized (see toJSON).
+   */
+  keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
   scopes: ApiKeyScope[]; // Permissions array
   status: ApiKeyStatus;
@@ -334,6 +341,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
+  /**
+   * Stores the fast-path digest for a key validated via the legacy bcrypt hash. A no-op unless
+   * `expectedKeyHash` is still the stored hash and no digest is set: a backfill that lands after a
+   * rotation must not write the old key's digest over the new one.
+   */
+  setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
+  /**
+   * Upgrades a legacy short prefix to the current length, under the same `expectedKeyHash` guard as
+   * setKeyDigest, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   */
+  healKeyPrefix: (id: string, keyPrefix: string, expectedKeyHash: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**

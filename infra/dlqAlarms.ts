@@ -42,6 +42,7 @@ import {
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   videoGenerationDLQ,
+  generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -368,6 +369,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'VideoGeneration',
     sourceQueue: 'videoGenerationQueue',
     queue: videoGenerationDLQ,
+  },
+  {
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+    queue: generationJobDLQ,
   },
   {
     label: 'liveops-triage',

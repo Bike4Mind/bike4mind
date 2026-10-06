@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { deriveTagPrefixFromLakeName, isReservedTagPrefix } from '@bike4mind/common';
-import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
+import type { DataLakeOrigin, DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import {
   parseFilesToTree,
@@ -187,6 +187,8 @@ export interface WizardTargetLake {
    * is: a built-in fallback lake has no document and always serves.
    */
   status?: DataLakeStatus;
+  /** Lets the GitHub connect control offer the switch to connector-fed before it starts. */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -208,6 +210,7 @@ export const toWizardTargetLake = (lake: {
   canManage?: boolean;
   isCreator: boolean;
   status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -219,6 +222,7 @@ export const toWizardTargetLake = (lake: {
   canManage: lake.canManage ?? false,
   isCreator: lake.isCreator,
   status: lake.status,
+  origin: lake.origin,
 });
 
 /**
@@ -231,6 +235,11 @@ export const toWizardTargetLake = (lake: {
 export interface RecoverableLake {
   id: string;
   tagPrefix: string;
+  /**
+   * The slug the lake was created with. A reuse keeps it, so ConfigStep shows it instead of the
+   * server preview, which counts this archived lake as taken and would say "-1".
+   */
+  slug: string;
   /**
    * The account scope the lake was created under (undefined = personal), since the account
    * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner

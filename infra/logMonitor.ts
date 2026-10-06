@@ -24,6 +24,7 @@ import {
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   videoGenerationQueueSubscription,
+  generationJobQueueSubscription,
   overwatchAnalyticsQueueSubscription,
   sreJobQueue,
 } from './queues';
@@ -194,6 +195,7 @@ const individualLogGroups = $util.all([
   dataLakeTaxonomyQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   dataLakeResearchQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   videoGenerationQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
+  generationJobQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   overwatchAnalyticsQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   emailParserQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),
   emailAnalyzerQueueSubscription.nodes.function.nodes.logGroup.apply(lg => lg?.name),

@@ -778,6 +778,28 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
   });
 
+  it('names the owner in the sidebar icon label with no native title', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: 'Dana' }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('falls back to a generic sidebar icon label when the owner name is missing', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: undefined }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
   it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {
     // The case the feature exists for: a global admin on another tenant's lake, where canManage
     // is true (Add files / Settings / Archive are live) AND isOwn is false. The marker must

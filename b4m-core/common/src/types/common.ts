@@ -153,6 +153,20 @@ export function isAudioMimeType(mimeType: string | null | undefined): boolean {
   return mimeType.split(';')[0].trim().toLowerCase().startsWith('audio/');
 }
 
+/** Is this a video MIME type? Matches any `video/*`, mirroring isAudioMimeType's fail-safe breadth. */
+export function isVideoMimeType(mimeType: string | null | undefined): boolean {
+  if (!mimeType) return false;
+  return mimeType.split(';')[0].trim().toLowerCase().startsWith('video/');
+}
+
+/**
+ * Storable and browsable, but never chunked, vectorized or attached to an LLM call.
+ * Every "skip ingestion" guard uses this, so a new media kind is excluded everywhere at once.
+ */
+export function isMediaOnlyMimeType(mimeType: string | null | undefined): boolean {
+  return isAudioMimeType(mimeType) || isVideoMimeType(mimeType);
+}
+
 /**
  * Is this MIME type allowed to be STORED as a FabFile? Storable is a superset
  * of ingestable: a file may be kept and browsed (audio) without being
@@ -161,7 +175,7 @@ export function isAudioMimeType(mimeType: string | null | undefined): boolean {
  * `isSupportedFabFileMimeType`.
  */
 export function isStorableFabFileMimeType(mimeType: string | null | undefined): boolean {
-  return isSupportedFabFileMimeType(mimeType) || isAudioMimeType(mimeType);
+  return isSupportedFabFileMimeType(mimeType) || isMediaOnlyMimeType(mimeType);
 }
 
 /**
