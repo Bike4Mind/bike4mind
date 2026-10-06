@@ -1,5 +1,15 @@
 # @bike4mind/resource
 
+## 0.10.0
+
+### Minor Changes
+
+- [#3899](https://github.com/Bike4Mind/bike4mind/pull/3899) [`254ae9f`](https://github.com/Bike4Mind/bike4mind/commit/254ae9ff0702b92b3a41d620d5a020c9c026afb6) Thanks [@onoya](https://github.com/onoya)! - add the generation job engine and video job foundation
+
+### Patch Changes
+
+- [#3925](https://github.com/Bike4Mind/bike4mind/pull/3925) [`494fe07`](https://github.com/Bike4Mind/bike4mind/commit/494fe079285c89f834f5089edd42a7c7766ff3f5) Thanks [@onoya](https://github.com/onoya)! - consume driveLakeIngestQueue and single-batch the Drive purge
+
 ## 0.9.1
 
 ### Patch Changes

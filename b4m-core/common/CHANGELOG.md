@@ -1,5 +1,19 @@
 # @bike4mind/common
 
+## 13.1.0
+
+### Minor Changes
+
+- [#3899](https://github.com/Bike4Mind/bike4mind/pull/3899) [`254ae9f`](https://github.com/Bike4Mind/bike4mind/commit/254ae9ff0702b92b3a41d620d5a020c9c026afb6) Thanks [@onoya](https://github.com/onoya)! - add the generation job engine and video job foundation
+
+- [#3903](https://github.com/Bike4Mind/bike4mind/pull/3903) [`45d7c5e`](https://github.com/Bike4Mind/bike4mind/commit/45d7c5e86ce91cbffcbf1efe3bf606593af5deac) Thanks [@onoya](https://github.com/onoya)! - publish an API contract for GET /api/v1/models
+
+### Patch Changes
+
+- [#3876](https://github.com/Bike4Mind/bike4mind/pull/3876) [`9bbfd8c`](https://github.com/Bike4Mind/bike4mind/commit/9bbfd8c1d6f66da7e433bcf233d4e2a6c37637c7) Thanks [@julsanchez](https://github.com/julsanchez)! - stop resolving deleted lakes by slug and preview the real slug
+
+- [#3894](https://github.com/Bike4Mind/bike4mind/pull/3894) [`ea66cbb`](https://github.com/Bike4Mind/bike4mind/commit/ea66cbb0257bb8264c5c6e60a8a9209e9f24da9a) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - validate API keys with a SHA-256 digest instead of bcrypt
+
 ## 13.0.0
 
 ### Major Changes
