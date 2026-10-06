@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatToolCall, ChatUsage } from '@shared/chat';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
-import { activePhrase } from './toolRows';
+import { activePhrase, summarizeInput } from './toolRows';
 
 /**
  * What the status line under the transcript knows about the turn in flight.
@@ -17,7 +17,34 @@ export interface TurnProgress {
   tokens: number | null;
   /** The same report the count came from, for the split and the cost. */
   usage?: ChatUsage | null;
+  /**
+   * Epoch ms the last stream event arrived, which is the only thing separating a working turn
+   * from a dead one. Elapsed-since-start cannot: a turn that stopped receiving anything twenty
+   * minutes ago renders exactly like one streaming tokens right now.
+   *
+   * Stamped once per batched flush of live events and no finer - see EVENT_STAMP_RESOLUTION_MS.
+   * Absent until the first event, which is what `startedAt` stands in for.
+   */
+  lastEventAt?: number;
 }
+
+/**
+ * How long a turn may go quiet before the line stops claiming it is working.
+ *
+ * A second or two between tokens is ordinary model latency; ten is not. The case this exists
+ * for sat at "Responding..." for 27 minutes with nothing arriving behind it.
+ */
+export const STALL_AFTER_MS = 10_000;
+
+/**
+ * The finest `lastEventAt` is recorded to.
+ *
+ * A stamp per delta would hand back exactly what the renderer's frame batching buys - see the
+ * live-event path in useChat. Nothing reads this at a finer grain than whole seconds against a
+ * ten-second threshold, so a coarse stamp costs the display nothing and saves a state update on
+ * every frame of a fast stream.
+ */
+export const EVENT_STAMP_RESOLUTION_MS = 1000;
 
 /**
  * New input, cache writes and output. Cache reads are left out: a long tool loop re-reads the
@@ -72,29 +99,221 @@ export function formatTokens(count: number): string {
 }
 
 /**
- * The third field: a short description of what the turn is doing right now.
+ * The third field: WHAT the turn is doing, as something that can be opened.
  *
- * Read off the state the turn already publishes - tool statuses and the progress lines the slow
- * tools report - rather than asked for. Approval outranks everything, because a turn parked at
- * the gate is not working on anything at all. Code being written is named rather than shown; see
- * presentReply.
+ * Read off the state the turn already publishes - tool statuses, the progress lines the slow
+ * tools report, the text arriving - rather than asked for. Approval outranks everything,
+ * because a turn parked at the gate is not working on anything at all.
+ *
+ * `label` is the one line the status row reads at rest. Everything beside it is a HANDLE on the
+ * live thing - the call, the calls, the streamed body - and never a rendered string: this is
+ * recomputed on every frame of a stream, and the detail behind the label is built only once
+ * somebody expands it. See activityDetail.
+ *
+ * Code being written is still named rather than shown in the transcript; `pending` carries its
+ * body for the disclosure, which the user opens on purpose. See presentReply.
  */
+export type TurnActivity =
+  | { kind: 'approval'; label: string; call: ChatToolCall }
+  | { kind: 'tool'; label: string; call: ChatToolCall }
+  | { kind: 'tools'; label: string; calls: readonly ChatToolCall[] }
+  | { kind: 'code'; label: string; pending: PendingCode }
+  | { kind: 'text'; label: string; text: string }
+  | { kind: 'thinking'; label: string }
+  | { kind: 'stalled'; label: string; silentMs: number; last: TurnActivity };
+
+/** As much of a label as fits a line that must not wrap at any window width. */
+const MAX_LABEL_CHARS = 90;
+
+/** Whitespace flattened and the whole thing capped: a label is one line or it is not a label. */
+function oneLine(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length <= MAX_LABEL_CHARS ? flat : `${flat.slice(0, MAX_LABEL_CHARS - 3)}...`;
+}
+
+/**
+ * As much of the last line with anything on it as a label could ever use.
+ *
+ * Scanned backwards rather than `split('\n').at(-1)`, and only the first LABEL_SCAN_CHARS of the
+ * line are taken: both halves of that are the per-frame cost. A reply with no newline in it at
+ * all is one line of half a megabyte, and trimming and flattening the whole of it to print
+ * ninety characters measured 2.2ms per frame - on a path that runs on every frame of a stream.
+ */
+const LABEL_SCAN_CHARS = 400;
+
+function lastLine(text: string): string {
+  let end = text.length;
+  while (end > 0) {
+    const start = text.lastIndexOf('\n', end - 1) + 1;
+    const line = text.slice(start, Math.min(end, start + LABEL_SCAN_CHARS)).trim();
+    if (line) return line;
+    end = start - 1;
+  }
+  return '';
+}
+
 export function describeActivity(
   calls: readonly ChatToolCall[],
   hasText: boolean,
-  pending: PendingCode | null = null
-): string {
-  if (calls.some(call => call.status === 'awaiting-approval')) return 'Waiting for your answer...';
+  pending: PendingCode | null = null,
+  text = ''
+): TurnActivity {
+  const waiting = calls.find(call => call.status === 'awaiting-approval');
+  if (waiting) return { kind: 'approval', label: 'Waiting for your answer...', call: waiting };
 
   const running = calls.filter(call => call.status === 'running');
   if (running.length === 1) {
     const only = running[0];
-    return only.progress?.trim() || activePhrase(only.name);
+    return { kind: 'tool', label: oneLine(only.progress ?? '') || activePhrase(only.name), call: only };
   }
-  if (running.length > 1) return 'Running tools...';
-  if (pending) return pendingCodePhrase(pending);
+  if (running.length > 1) return { kind: 'tools', label: `Running ${running.length} tools...`, calls: running };
+  if (pending) return { kind: 'code', label: pendingCodePhrase(pending), pending };
 
-  return hasText ? 'Responding...' : 'Thinking...';
+  if (!hasText) return { kind: 'thinking', label: 'Thinking...' };
+  // The text itself, not a word for it: "Responding..." is true of every turn that ever ran and
+  // tells the reader nothing about this one. Only when there is no line yet to show.
+  return { kind: 'text', label: oneLine(lastLine(text)) || 'Responding...', text };
+}
+
+/**
+ * The same activity, or a stalled one wrapping it when nothing has arrived for a while.
+ *
+ * Applied where `now` already ticks rather than inside describeActivity, which is computed from
+ * the thread and knows nothing about the clock. See TurnStatus.
+ *
+ * A running tool and a waiting approval are never called stalled: the silence is theirs - a
+ * command can take minutes without printing a line, and an approval is waiting on the user by
+ * definition - and "Waiting for the model" would name the wrong thing entirely.
+ */
+export function withStall(activity: TurnActivity, turn: TurnProgress, now: number): TurnActivity {
+  if (activity.kind === 'approval' || activity.kind === 'tool' || activity.kind === 'tools') return activity;
+
+  const silentMs = now - (turn.lastEventAt ?? turn.startedAt);
+  if (silentMs < STALL_AFTER_MS) return activity;
+  return { kind: 'stalled', label: `Waiting for the model... ${formatElapsed(silentMs)}`, silentMs, last: activity };
+}
+
+/** One running tool inside the disclosure, as its own row. */
+export interface ActivityDetailRow {
+  id: string;
+  /** Present tense: these rows are things still happening. */
+  label: string;
+  /** What it was called with, already flattened to a line. */
+  input?: string;
+  /** The tool's latest progress line, when it reports one. */
+  progress?: string;
+}
+
+/** What the line discloses, built only for an OPEN disclosure. */
+export interface ActivityDetail {
+  note?: string;
+  rows?: ActivityDetailRow[];
+  /** A block of text, already bounded to a tail this view can hold. */
+  body?: string;
+}
+
+/**
+ * Whether the label has anything behind it, cheaply enough to ask on every frame.
+ *
+ * Deliberately not "is the detail non-empty", which would mean building the detail to find out -
+ * the one thing a collapsed line must never do.
+ */
+export function hasActivityDetail(activity: TurnActivity): boolean {
+  switch (activity.kind) {
+    case 'approval':
+    case 'tool':
+    case 'tools':
+    case 'stalled':
+      return true;
+    case 'code':
+      return activity.pending.body.trim().length > 0;
+    case 'text':
+      return activity.text.trim().length > 0;
+    default:
+      return false;
+  }
+}
+
+const DETAIL_CHARS = 1200;
+const DETAIL_LINES = 12;
+
+/**
+ * How many tools one disclosure lists.
+ *
+ * A turn can fan out further than this, and a panel that grows a row per call is the unbounded
+ * block this view exists to avoid. The rest are counted rather than drawn.
+ */
+const MAX_DETAIL_ROWS = 6;
+
+/** The end of a stream, which is where the news is. Bounded twice: characters, then lines. */
+function tailBlock(text: string): string {
+  const tail = text.length > DETAIL_CHARS ? text.slice(text.length - DETAIL_CHARS) : text;
+  const lines = tail.split('\n');
+  return (lines.length > DETAIL_LINES ? lines.slice(lines.length - DETAIL_LINES) : lines).join('\n').trim();
+}
+
+/** The start of a fixed argument, which is where ITS meaning is - a command, a path, a prompt. */
+function headBlock(text: string): string {
+  const lines = text.slice(0, DETAIL_CHARS).split('\n');
+  const kept = lines.length > DETAIL_LINES ? lines.slice(0, DETAIL_LINES) : lines;
+  const block = kept.join('\n').trim();
+  return block.length < text.trim().length ? `${block}\n...` : block;
+}
+
+function runningRow(call: ChatToolCall): ActivityDetailRow {
+  const input = oneLine(summarizeInput(call));
+  const progress = oneLine(call.progress ?? '');
+  return {
+    id: call.id,
+    // activePhrase, never the transcript's row label: that one is past tense, and a call that is
+    // still running has not done anything yet.
+    label: activePhrase(call.name),
+    ...(input ? { input } : {}),
+    ...(progress ? { progress } : {}),
+  };
+}
+
+function runningRows(calls: readonly ChatToolCall[]): ActivityDetailRow[] {
+  const shown = calls.slice(0, MAX_DETAIL_ROWS).map(runningRow);
+  const hidden = calls.length - shown.length;
+  return hidden > 0 ? [...shown, { id: 'more', label: `and ${hidden} more...` }] : shown;
+}
+
+/**
+ * The live detail behind the label - the only expensive thing in this file.
+ *
+ * Called ONLY from an expanded disclosure, once per render of it, and every branch returns
+ * something bounded: a capped head or tail of a block, or at most MAX_DETAIL_ROWS rows carrying
+ * one progress line each. Nothing here grows with the length of a turn.
+ */
+export function activityDetail(activity: TurnActivity): ActivityDetail | null {
+  switch (activity.kind) {
+    case 'approval': {
+      const asked = activity.call.approvalDetail ?? summarizeInput(activity.call);
+      return {
+        note: 'Waiting for you to answer this in the transcript:',
+        ...(asked ? { body: headBlock(asked) } : {}),
+      };
+    }
+    case 'tool':
+      return { rows: runningRows([activity.call]) };
+    case 'tools':
+      return { rows: runningRows(activity.calls) };
+    case 'code':
+      return { body: tailBlock(activity.pending.body) };
+    case 'text':
+      return { body: tailBlock(activity.text) };
+    case 'stalled': {
+      const under = activityDetail(activity.last);
+      return {
+        note: `Nothing has arrived for ${formatElapsed(activity.silentMs)}. Last: ${activity.last.label}`,
+        ...(under?.rows ? { rows: under.rows } : {}),
+        ...(under?.body ? { body: under.body } : {}),
+      };
+    }
+    default:
+      return null;
+  }
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */

@@ -25,7 +25,11 @@ function Harness() {
       streaming={conversation.streaming}
       onRespond={() => undefined}
       onContinue={() => undefined}
-      status={conversation.turn && <TurnStatus turn={conversation.turn} activity="Thinking..." />}
+      status={
+        conversation.turn && (
+          <TurnStatus turn={conversation.turn} activity={{ kind: 'thinking', label: 'Thinking...' }} />
+        )
+      }
     />
   );
 }

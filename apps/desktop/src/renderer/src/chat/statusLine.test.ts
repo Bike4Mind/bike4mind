@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatMessage, ChatReplyRound, ChatToolCall, ChatToolStatus } from '@shared/chat';
+import type { PendingCode } from './codeStream';
 import {
+  activityDetail,
   contextPercent,
   contextTokens,
   describeActivity,
+  hasActivityDetail,
   describeSplit,
   describeUsage,
   formatCost,
@@ -14,13 +17,19 @@ import {
   occupancyArc,
   occupancyColor,
   statusFields,
+  STALL_AFTER_MS,
   totalTokens,
   usageLabel,
+  withStall,
   type ComposerUsage,
 } from './statusLine';
 
 function call(name: string, status: ChatToolStatus, progress?: string): ChatToolCall {
   return { id: name, name, input: {}, status, ...(progress ? { progress } : {}) };
+}
+
+function code(body: string, language = 'tsx'): PendingCode {
+  return { kind: 'code', language, body };
 }
 
 describe('formatElapsed', () => {
@@ -119,42 +128,164 @@ describe('statusFields with usage', () => {
 
 describe('describeActivity', () => {
   it('names code being written instead of calling it responding', () => {
-    expect(describeActivity([], true, { kind: 'artifact', title: 'Dashboard' })).toBe(
+    expect(describeActivity([], true, { kind: 'artifact', title: 'Dashboard', body: '<artifact' }).label).toBe(
       'Creating an artifact: Dashboard...'
     );
-    expect(describeActivity([], true, { kind: 'code' })).toBe('Writing code...');
+    expect(describeActivity([], true, code('const a = 1;')).label).toBe('Writing code...');
+  });
+
+  it('carries the streamed body so the line can disclose what it is naming', () => {
+    const activity = describeActivity([], true, code('```tsx\nconst a = 1;'));
+    expect(activity.kind).toBe('code');
+    expect(activityDetail(activity)?.body).toBe('```tsx\nconst a = 1;');
   });
 
   it('still lets a running tool or an approval outrank code being written', () => {
-    expect(describeActivity([call('file_read', 'running')], true, { kind: 'code' })).not.toBe('Writing code...');
-    expect(describeActivity([call('file_write', 'awaiting-approval')], true, { kind: 'code' })).toBe(
+    expect(describeActivity([call('file_read', 'running')], true, code('x')).kind).toBe('tool');
+    expect(describeActivity([call('file_write', 'awaiting-approval')], true, code('x')).label).toBe(
       'Waiting for your answer...'
     );
   });
 
-  it('puts a blocked approval ahead of everything else', () => {
-    expect(describeActivity([call('bash_execute', 'awaiting-approval'), call('file_read', 'running')], false)).toBe(
-      'Waiting for your answer...'
+  it('puts a blocked approval ahead of everything else, and hands over the call that is blocked', () => {
+    const waiting: ChatToolCall = {
+      id: 'c1',
+      name: 'bash_execute',
+      input: { command: 'rm -rf build' },
+      status: 'awaiting-approval',
+      approvalDetail: 'rm -rf build',
+    };
+    const activity = describeActivity([waiting, call('file_read', 'running')], false);
+    expect(activity).toMatchObject({ kind: 'approval', label: 'Waiting for your answer...', call: waiting });
+    expect(activityDetail(activity)?.body).toBe('rm -rf build');
+  });
+
+  it('names the one tool being waited on, and discloses its input and progress', () => {
+    const reading: ChatToolCall = {
+      id: 'c2',
+      name: 'file_read',
+      input: { path: 'src/app.ts' },
+      status: 'running',
+      progress: 'line 400 of 900',
+    };
+    const activity = describeActivity([reading], false);
+    expect(activity.label).toBe('line 400 of 900');
+    expect(activityDetail(activity)?.rows).toEqual([
+      { id: 'c2', label: 'Reading files...', input: 'src/app.ts', progress: 'line 400 of 900' },
+    ]);
+  });
+
+  it('falls back to the tool phrase when it reports no progress', () => {
+    expect(describeActivity([call('file_read', 'running')], false).label).toBe('Reading files...');
+  });
+
+  it('counts the tools running at once and lists them behind the line', () => {
+    const activity = describeActivity(
+      [call('file_read', 'running'), call('grep_search', 'running', 'scanning')],
+      false
     );
+    expect(activity.label).toBe('Running 2 tools...');
+    expect(activityDetail(activity)?.rows).toEqual([
+      { id: 'file_read', label: 'Reading files...' },
+      { id: 'grep_search', label: 'Searching...', progress: 'scanning' },
+    ]);
   });
 
-  it('names the one tool being waited on', () => {
-    expect(describeActivity([call('file_read', 'running')], false)).toBe('Reading files...');
+  it('counts the tools it does not list rather than growing a row per call', () => {
+    const many = Array.from({ length: 9 }, (_, index) => call(`tool_${index}`, 'running'));
+    const rows = activityDetail(describeActivity(many, false))?.rows ?? [];
+    expect(rows).toHaveLength(7);
+    expect(rows[6]).toEqual({ id: 'more', label: 'and 3 more...' });
   });
 
-  it('prefers the progress line a running tool reports to the generic phrase', () => {
-    expect(describeActivity([call('generate_image', 'running', 'rendering, 40%')], false)).toBe('rendering, 40%');
+  it('reads the live tail of the text back instead of saying "Responding"', () => {
+    const activity = describeActivity([], true, null, 'First paragraph.\n\nStill working on the second');
+    expect(activity.label).toBe('Still working on the second');
+    expect(activityDetail(activity)?.body).toBe('First paragraph.\n\nStill working on the second');
   });
 
-  it('does not try to name several at once', () => {
-    expect(describeActivity([call('file_read', 'running'), call('grep_search', 'running')], false)).toBe(
-      'Running tools...'
-    );
+  it('reads a reply with no newline in it at all without flattening the whole of it', () => {
+    const unbroken = `Opening words ${'and more text '.repeat(4000)}`;
+    const label = describeActivity([], true, null, unbroken).label;
+    expect(label.startsWith('Opening words and more')).toBe(true);
+    expect(label).toHaveLength(90);
+  });
+
+  it('keeps the tail to one line, however long it has run', () => {
+    const long = `A ${'very '.repeat(60)}long sentence`;
+    const label = describeActivity([], true, null, long).label;
+    expect(label).toHaveLength(90);
+    expect(label.endsWith('...')).toBe(true);
+    expect(label).not.toContain('\n');
   });
 
   it('distinguishes a reply being written from one not started', () => {
-    expect(describeActivity([call('file_read', 'done')], true)).toBe('Responding...');
-    expect(describeActivity([], false)).toBe('Thinking...');
+    expect(describeActivity([call('file_read', 'done')], true).label).toBe('Responding...');
+    expect(describeActivity([], false)).toEqual({ kind: 'thinking', label: 'Thinking...' });
+  });
+
+  it('offers no disclosure for a turn with nothing behind it', () => {
+    expect(hasActivityDetail(describeActivity([], false))).toBe(false);
+    expect(hasActivityDetail(describeActivity([], true, null, '   '))).toBe(false);
+    expect(hasActivityDetail(describeActivity([], true, code('')))).toBe(false);
+    expect(hasActivityDetail(describeActivity([], true, null, 'a word'))).toBe(true);
+  });
+});
+
+describe('withStall', () => {
+  const turn = { startedAt: 1_000_000, tokens: null, lastEventAt: 1_002_000 };
+  const thinking = describeActivity([], false);
+
+  it('leaves an activity alone while events are still arriving', () => {
+    expect(withStall(thinking, turn, turn.lastEventAt + STALL_AFTER_MS - 1)).toBe(thinking);
+  });
+
+  it('names the silence and times it once nothing has arrived', () => {
+    const stalled = withStall(thinking, turn, turn.lastEventAt + 125_000);
+    expect(stalled.label).toBe('Waiting for the model... 2m 5s');
+    expect(activityDetail(stalled)?.note).toBe('Nothing has arrived for 2m 5s. Last: Thinking...');
+  });
+
+  it('measures from the start of the turn until the first event lands', () => {
+    const fresh = { startedAt: 1_000_000, tokens: null };
+    expect(withStall(thinking, fresh, fresh.startedAt + 30_000).label).toBe('Waiting for the model... 30s');
+  });
+
+  it('discloses what the turn was last doing', () => {
+    const writing = describeActivity([], true, code('export function Dashboard() {'));
+    const stalled = withStall(writing, turn, turn.lastEventAt + 60_000);
+    expect(activityDetail(stalled)?.body).toBe('export function Dashboard() {');
+  });
+
+  it('never calls a running tool or a waiting approval stalled - the silence is theirs', () => {
+    const running = describeActivity([call('bash_execute', 'running')], false);
+    const waiting = describeActivity([call('bash_execute', 'awaiting-approval')], false);
+    expect(withStall(running, turn, turn.lastEventAt + 600_000)).toBe(running);
+    expect(withStall(waiting, turn, turn.lastEventAt + 600_000)).toBe(waiting);
+  });
+});
+
+describe('activityDetail bounds', () => {
+  it('tails a streamed body rather than mounting all of it', () => {
+    const body = Array.from({ length: 200 }, (_, index) => `line ${index}`).join('\n');
+    const shown = activityDetail(describeActivity([], true, code(body)))?.body ?? '';
+    expect(shown.split('\n')).toHaveLength(12);
+    expect(shown.endsWith('line 199')).toBe(true);
+  });
+
+  it('heads an approval rather than tailing it - a command is identified by its start', () => {
+    const asked = Array.from({ length: 40 }, (_, index) => `step ${index}`).join('\n');
+    const waiting: ChatToolCall = {
+      id: 'c3',
+      name: 'bash_execute',
+      input: {},
+      status: 'awaiting-approval',
+      approvalDetail: asked,
+    };
+    const shown = activityDetail(describeActivity([waiting], false))?.body ?? '';
+    expect(shown.startsWith('step 0')).toBe(true);
+    expect(shown.endsWith('...')).toBe(true);
+    expect(shown.split('\n')).toHaveLength(13);
   });
 });
 

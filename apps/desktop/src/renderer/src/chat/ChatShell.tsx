@@ -250,10 +250,14 @@ export function ChatShell({ account }: { account?: AccountStrip }) {
   // the last message can be that reply, so nothing earlier is consulted.
   const inFlight = conversation.messages[conversation.messages.length - 1];
   const liveText = inFlight ? (roundsOf(inFlight).at(-1)?.text ?? '') : '';
+  // The same parse the thread draws from, so the line names what the transcript is showing and
+  // the hidden code it is not.
+  const presented = presentReply(liveText, true);
   const activity = describeActivity(
     inFlight?.toolCalls ?? [],
     (inFlight?.content.length ?? 0) > 0,
-    presentReply(liveText, true).pending
+    presented.pending,
+    presented.text
   );
 
   /**
