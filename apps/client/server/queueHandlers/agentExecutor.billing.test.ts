@@ -573,6 +573,7 @@ describe('billIteration (negative cost delta)', () => {
     expect(spies.logNegativeDelta).toHaveBeenCalledTimes(1);
     expect(spies.logNegativeDelta).toHaveBeenCalledWith({
       costDelta: -1000,
+      toolCostUsd: 0,
       cumulativeCost: 1000,
       previousCumulativeCost: 2000,
     });
@@ -581,6 +582,31 @@ describe('billIteration (negative cost delta)', () => {
     expect(spies.recordUsageEvent).not.toHaveBeenCalled();
     expect(spies.sendProgress).not.toHaveBeenCalled();
     expect(counters).toEqual(makeCounters({ cumulativeCost: 2000, inputTokens: 1000 }));
+  });
+
+  it('negative agent delta is warned even when tool spend nets the iteration positive', async () => {
+    const counters = makeCounters({ cumulativeCost: 2000, inputTokens: 1000 });
+    const { effects, spies } = makeEffects();
+
+    await billIteration({
+      iterationIndex: 3,
+      checkpoint: checkpoint(1000),
+      counters,
+      modelInfo: makeModelInfo(10_000),
+      model: 'test-model',
+      startTime: 0,
+      toolUsage: { costUsd: 1500, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      effects,
+    });
+
+    expect(spies.logNegativeDelta).toHaveBeenCalledWith({
+      costDelta: -1000,
+      toolCostUsd: 1500,
+      cumulativeCost: 1000,
+      previousCumulativeCost: 2000,
+    });
+    // Settlement is unchanged: the positive net (1500 - 1000) is still charged.
+    expect(spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 500 }));
   });
 
   it('zero delta: stays a silent no-op', async () => {

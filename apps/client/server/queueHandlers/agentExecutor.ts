@@ -2167,7 +2167,7 @@ async function processExecution(
               }
             ),
           logNegativeDelta: details =>
-            logger.warn('[agentExecutor] negative iteration cost delta; skipping charge', {
+            logger.warn('[agentExecutor] negative agent iteration cost delta', {
               executionId,
               sessionId: execution.sessionId,
               model: execution.model,
