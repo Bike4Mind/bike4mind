@@ -96,7 +96,7 @@ async function detachInBatch(nodes: NodeRow[]): Promise<{ nodesUpdated: number; 
 }
 
 const migration: MigrationFile = {
-  id: 20260921235962,
+  id: 20260921235996,
   name: 'detach-foreign-quest-node-artifacts',
 
   up: async () => {

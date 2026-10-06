@@ -5,7 +5,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260921235962_detach-foreign-quest-node-artifacts';
+import migration from './20260921235996_detach-foreign-quest-node-artifacts';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

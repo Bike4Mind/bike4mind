@@ -159,7 +159,7 @@ import EnsureGenerationJobIndexes from './20260921235991_ensure-generation-job-i
 import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikeyusagelog-source-owner-index';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod (20260922000001); see above.
-import DetachForeignQuestNodeArtifacts from './20260921235962_detach-foreign-quest-node-artifacts';
+import DetachForeignQuestNodeArtifacts from './20260921235996_detach-foreign-quest-node-artifacts';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
