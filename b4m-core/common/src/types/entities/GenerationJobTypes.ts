@@ -129,6 +129,16 @@ export type GenerationJobCreateInput = Omit<IGenerationJob, 'createdAt' | 'updat
 
 export type StalledJobLimits = { inFlight: number; terminal: number };
 
+export type ListByRequesterQuery = {
+  requestedBy: string;
+  kind: GenerationJobKind;
+  state?: GenerationJobState;
+  source?: GenerationJobSource;
+  /** Exclusive: only jobs whose id sorts before this one (the previous page's last id). */
+  beforeId?: string;
+  limit: number;
+};
+
 export interface IGenerationJobRepository extends IBaseRepository<IGenerationJobDocument> {
   createJob(input: GenerationJobCreateInput): Promise<IGenerationJobDocument>;
   findByIdempotencyKey(
@@ -156,4 +166,6 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
   markTerminalHandled(id: string, at: Date): Promise<void>;
   /** Separate limits so an in-flight backlog can never starve terminal handling (credit release). */
   findStalled(overdueBefore: Date, limits: StalledJobLimits): Promise<IGenerationJobDocument[]>;
+  /** Newest first, by id. Visibility is the requester, not the credit owner: org members never see each other's jobs. */
+  listByRequester(query: ListByRequesterQuery): Promise<IGenerationJobDocument[]>;
 }

@@ -14,6 +14,7 @@ import {
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
+  type ListByRequesterQuery,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
@@ -59,6 +60,8 @@ const GenerationJobSchema = new Schema<IGenerationJobDocument>(
 GenerationJobSchema.index({ ownerType: 1, ownerId: 1, createdAt: -1 });
 GenerationJobSchema.index({ state: 1, nextPollAt: 1 });
 GenerationJobSchema.index({ state: 1, terminalHandledAt: 1, updatedAt: 1 });
+// Serves the public list endpoint (newest first per requester); kind/state/source are residual filters.
+GenerationJobSchema.index({ requestedBy: 1, _id: -1 });
 GenerationJobSchema.index(
   { ownerType: 1, ownerId: 1, idempotencyKey: 1 },
   { unique: true, partialFilterExpression: { idempotencyKey: { $type: 'string' } } }
@@ -159,6 +162,20 @@ class GenerationJobRepository extends BaseRepository<IGenerationJobDocument> imp
    * never crowd out real recovery; each sweep's lease bumps its updatedAt, which also rotates it behind older ones.
    * Served by the { state, nextPollAt } and { state, terminalHandledAt, updatedAt } indexes.
    */
+  async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+    const docs = await this.jobModel
+      .find({
+        requestedBy,
+        kind,
+        ...(state && { state }),
+        ...(source && { source }),
+        ...(beforeId && { _id: { $lt: new mongoose.Types.ObjectId(beforeId) } }),
+      })
+      .sort({ _id: -1 })
+      .limit(limit);
+    return docs.map(doc => doc.toJSON() as IGenerationJobDocument);
+  }
+
   async findStalled(overdueBefore: Date, limits: StalledJobLimits) {
     const inFlight =
       limits.inFlight > 0

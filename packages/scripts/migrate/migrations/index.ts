@@ -155,6 +155,8 @@ import EnsureSessionOriginChannelIndex from './20260921235980_ensure-session-ori
 import EnsureQuestCallbackDispatchedIndex from './20260921235990_ensure-quest-callback-dispatched-index';
 // Id backdated for the same reason as EnsureOAuthGrantUserRevokedUpdatedAtIndex above.
 import EnsureGenerationJobIndexes from './20260921235991_ensure-generation-job-indexes';
+// Id backdated for the same reason as EnsureGenerationJobIndexes above.
+import EnsureGenerationJobRequesterIndex from './20260921235992_ensure-generation-job-requester-index';
 // Id backdated below BackfillOAuthClientTokenEndpointAuthMethod, as EnsureSessionOriginChannelIndex.
 import EnsureApiKeyUsageLogSourceOwnerIndex from './20260921235995_ensure-apikeyusagelog-source-owner-index';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
@@ -286,6 +288,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureSessionOriginChannelIndex,
   EnsureQuestCallbackDispatchedIndex,
   EnsureGenerationJobIndexes,
+  EnsureGenerationJobRequesterIndex,
   EnsureApiKeyUsageLogSourceOwnerIndex,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.

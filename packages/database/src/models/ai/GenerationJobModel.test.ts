@@ -285,6 +285,60 @@ describe('GenerationJobRepository', () => {
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
+  it('listByRequester pages newest first and filters by state and source', async () => {
+    const ids: string[] = [];
+    for (const [state, source] of [
+      ['succeeded', 'api'],
+      ['failed', 'studio'],
+      ['succeeded', 'studio'],
+      ['running', 'api'],
+    ] as const) {
+      ids.push((await generationJobRepository.createJob(newJob({ state, source }))).id);
+    }
+    await generationJobRepository.createJob(newJob({ requestedBy: 'u2' }));
+
+    const firstPage = await generationJobRepository.listByRequester({ requestedBy: 'u1', kind: 'video', limit: 2 });
+    expect(firstPage.map(j => j.id)).toEqual([ids[3], ids[2]]);
+    const secondPage = await generationJobRepository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      beforeId: ids[2],
+      limit: 2,
+    });
+    expect(secondPage.map(j => j.id)).toEqual([ids[1], ids[0]]);
+
+    const succeeded = await generationJobRepository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      state: 'succeeded',
+      limit: 10,
+    });
+    expect(succeeded.map(j => j.id)).toEqual([ids[2], ids[0]]);
+    const api = await generationJobRepository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      source: 'api',
+      limit: 10,
+    });
+    expect(api.map(j => j.id)).toEqual([ids[3], ids[0]]);
+  });
+
+  it('listByRequester never returns another member of the same org', async () => {
+    const mine = await generationJobRepository.createJob(
+      newJob({ ownerType: CreditHolderType.Organization, ownerId: 'org1', requestedBy: 'u1' })
+    );
+    await generationJobRepository.createJob(
+      newJob({ ownerType: CreditHolderType.Organization, ownerId: 'org1', requestedBy: 'u2' })
+    );
+    const listed = await generationJobRepository.listByRequester({ requestedBy: 'u1', kind: 'video', limit: 10 });
+    expect(listed.map(j => j.id)).toEqual([mine.id]);
+  });
+
+  it('declares the requester index', async () => {
+    const indexes = await GenerationJobModel.collection.indexes();
+    expect(indexes.map(index => index.key)).toContainEqual({ requestedBy: 1, _id: -1 });
+  });
+
   it('findByIdempotencyKey round-trips', async () => {
     const job = await generationJobRepository.createJob(newJob({ idempotencyKey: 'k9' }));
     const found = await generationJobRepository.findByIdempotencyKey(CreditHolderType.User, 'u1', 'k9');

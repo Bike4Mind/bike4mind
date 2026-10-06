@@ -7,6 +7,7 @@ import {
   type IGenerationJob,
   type IGenerationJobDocument,
   type IGenerationJobRepository,
+  type ListByRequesterQuery,
   type StalledJobLimits,
 } from '@bike4mind/common';
 
@@ -123,6 +124,24 @@ export const createInMemoryGenerationJobRepository = (options: { now?: () => Dat
       if (!job) return;
       job.settledCredits = settledCredits;
       touch(job);
+    },
+
+    async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
+      // The Map keeps insertion (= creation) order. Ids here are `job<N>`, so a string sort would put job10 before job2.
+      const newestFirst = [...jobs.values()].reverse();
+      const start = beforeId === undefined ? 0 : newestFirst.findIndex(job => job.id === beforeId) + 1;
+      if (beforeId !== undefined && start === 0) return [];
+      return newestFirst
+        .slice(start)
+        .filter(
+          job =>
+            job.requestedBy === requestedBy &&
+            job.kind === kind &&
+            (!state || job.state === state) &&
+            (!source || job.source === source)
+        )
+        .slice(0, limit)
+        .map(job => structuredClone(job));
     },
 
     async findStalled(overdueBefore: Date, limits: StalledJobLimits) {
