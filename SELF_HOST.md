@@ -1060,7 +1060,7 @@ VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/
 
 The notebook curation endpoint requires the configured local event queue to accept each start event. A missing queue URL or rejected enqueue reaches the API's existing error response instead of returning 202. The requirement is per call: the background session groomer publishes the same event with the default best-effort delivery, as do all other background enrichment events. The hosted publisher contract is unchanged.
 
-A 202 response establishes broker acceptance only. The current local worker still lacks the notebook start-event route and curation consumer, so this change does not establish export completion. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
+A 202 response establishes broker acceptance only; export completion is recorded later by the curation consumer. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
 
 Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.
 
@@ -1119,3 +1119,30 @@ VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/lakeInconsis
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/lakeInconsistencySweep.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/lakeInconsistencySweep.e2e.test.ts
 ```
+
+## Local notebook curation
+
+The worker routes notebook start events to the notebook queue and consumes one curation job at a time. The default transcript export uses the existing curation service without a model. Executive summaries still require a configured operations model; transcript verification does not establish summary-provider availability.
+
+Notebook worker startup requires `NOTEBOOK_CURATION_QUEUE_DLQ` and verifies that the source queue redrives after three deliveries to that configured queue's actual ARN. Missing, malformed or mismatched redrive, or an attribute lookup failure, logs an error and disables only notebook consumption for that worker process; unrelated queues and scheduled jobs still start. Correct the configuration or broker availability and restart the worker to retry admission. Persisted queue attributes require explicit verification and repair; updating the configuration file does not migrate them. If a later delivery exceeds three attempts, it is retained without running curation again; repair broker redrive and replay the unchanged job body. The worker never substitutes local deletion for dead-letter retention.
+
+Curation uses a cooperative ten-minute budget and renews the fifteen-minute message visibility while the handler is active. The budget prevents starting subsequent persistence stages after expiry; it does not cancel an in-flight database, model or storage request. Run a single worker. Shutdown retains the existing bounded drain period, not an unlimited completion guarantee.
+
+Prepared object keys include the job identity and the digest of the actual artifact bytes. A Mongo transaction commits the file row, session cache/link, credit deduction and completion receipt together. Duplicate deliveries within the receipt retention window reuse the committed result without another debit. Completion-notification failure does not reverse the persisted result. The existing completion-receipt retention is fourteen days; this does not promise indefinite deduplication.
+
+Object storage is outside the Mongo transaction. A failed attempt without a receipt retains its content-hashed object, because deleting it could race another attempt using the same key. Identical transcript bytes reuse the key; generated summaries can differ between attempts and leave multiple unreferenced objects. A differing loser object is removed best-effort after a winning receipt is visible. A process crash can leave an unreferenced object; this change does not provide an orphan-object sweeper.
+
+The notebook queue uses broker redrive after three failed deliveries; the shared local event queue preserves five attempts before redrive. The latter retains failed messages for all enabled local application-event handlers; intentionally ignored notification/telemetry event types remain ignored. Replay only after resolving the cause, retaining the original job identity. Queue acceptance is not export completion. The endpoint retains its per-call required-acceptance policy described above.
+
+Verification includes the actual API body, both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
+
+The live test invokes the API handler directly, not through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/eventDispatch.test.ts src/selfhost/notebookCurationQueue.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/notebookCurationCommit.e2e.test.ts
+# Also set AWS_ENDPOINT_URL_SQS, AWS_ENDPOINT_URL_S3, AWS_REGION and fixture AWS credentials.
+B4M_SELF_HOST=true NOTEBOOK_LIVE_PROOF=true SELF_HOST_EVENT_QUEUE=http://127.0.0.1:29324/000000000000/notebookEvents NOTEBOOK_QUEUE_URL=http://127.0.0.1:29324/000000000000/notebookCurationQueue VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/notebookCurationLive.e2e.test.ts
+```
+
+For operational replay, use the configured broker endpoint to receive the failed message from `notebookCurationQueueDLQ` or `selfHostEventQueueDLQ`, resolve the failure, send its unchanged body to the corresponding source queue, then delete the dead-letter message only after that send succeeds. Preserve `curationJobId`; submitting the API again creates a different job and is not the same replay guarantee.

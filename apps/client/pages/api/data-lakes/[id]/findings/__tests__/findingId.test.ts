@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   assertDataLakeWriteScope: vi.fn(),
   findById: vi.fn(),
@@ -44,7 +47,15 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess: h.assertLakeWriteAccess },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: {
     findById: h.findById,
@@ -83,6 +94,7 @@ const invoke = (body: Record<string, unknown>, findingId = 'f1') => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.findById.mockResolvedValue(existing);
   h.resolveFinding.mockImplementation(async (_lakeId, _id, input) => ({ ...existing, ...input }));
@@ -171,6 +183,7 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     expect(json.mock.calls[0][0].data.assigneeUserId).toBe('curator-2');
 
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.assertLakeWriteAccess.mockResolvedValue(lake);
     h.findById.mockResolvedValue(existing);
     h.assignFinding.mockResolvedValue({ ...existing, assigneeUserId: null });
@@ -330,5 +343,62 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
       expect(json.mock.calls[0][0].beliefRecorded).toBe(false);
       expect(logger.warn).toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    ['resolve', { action: 'resolve', resolution: 'fixed' }, 'resolveFinding'],
+    ['dismiss', { action: 'dismiss' }, 'resolveFinding'],
+    ['assign', { action: 'assign', assigneeUserId: 'u9' }, 'assignFinding'],
+  ] as const)(
+    '%s: gates and writes inside one transaction, then touches the resolved lake last',
+    async (_label, body, writeFn) => {
+      h.assertLakeWriteAccess.mockImplementation(async () => {
+        h.tx.push('gate');
+        return lake;
+      });
+      h[writeFn].mockImplementation(async (_lakeId: string, _id: string, input: unknown) => {
+        h.tx.push('write');
+        return { ...existing, ...(typeof input === 'object' ? input : {}) };
+      });
+      h.touchIfStable.mockImplementation(async () => {
+        h.tx.push('touch');
+        return true;
+      });
+
+      await invoke(body).done;
+
+      expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+      expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+    }
+  );
+
+  it('records the belief AFTER the transaction has committed', async () => {
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    h.recordFindingResolutionBelief.mockImplementation(async () => {
+      h.tx.push('belief');
+      return { recorded: true };
+    });
+
+    await invoke({ action: 'resolve', resolution: 'fixed' }).done;
+
+    expect(h.tx).toEqual(['enter', 'touch', 'exit', 'belief']);
+  });
+
+  it('neither writes nor touches when the gate throws', async () => {
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('Data lake not found'));
+
+    await expect(invoke({ action: 'resolve' }).done).rejects.toThrow(/not found/i);
+    expect(h.resolveFinding).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+
+  it('does not touch the lake when the ruling did not commit', async () => {
+    h.resolveFinding.mockResolvedValue(null);
+
+    await expect(invoke({ action: 'resolve' }).done).rejects.toThrow(/already been ruled on/i);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

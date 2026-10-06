@@ -81,13 +81,7 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import {
-  getTextModelCost,
-  CreditHolderType,
-  type AttachmentLakeAccess,
-  type IAgent,
-  type IUserDocument,
-} from '@bike4mind/common';
+import { CreditHolderType, type AttachmentLakeAccess, type IAgent, type IUserDocument } from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -166,6 +160,7 @@ import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // fold can be unit-tested with injected effect doubles; see `agentExecutor.billing.ts`.
 import {
   billIteration,
+  reseedCounters,
   addToolUsage,
   takeToolUsage,
   foldGeneratedMediaUsd,
@@ -2110,30 +2105,7 @@ async function processExecution(
     // (you pass `counters`, the helper mutates its fields). Five loose
     // `let` variables would have the same semantics but the contract
     // would be invisible to a reader.
-    const counters = {
-      cumulativeCost: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: 0,
-      cacheWriteTokens: 0,
-    };
-    if (!isNewExecution && execution.iterationBilling.length > 0) {
-      for (const billing of execution.iterationBilling) {
-        counters.inputTokens += billing.inputTokens;
-        counters.outputTokens += billing.outputTokens;
-        counters.cacheReadTokens += billing.cacheReadTokens;
-        counters.cacheWriteTokens += billing.cacheWriteTokens;
-      }
-      if (modelInfo) {
-        counters.cumulativeCost = getTextModelCost(
-          modelInfo,
-          counters.inputTokens,
-          counters.outputTokens,
-          counters.cacheReadTokens,
-          counters.cacheWriteTokens
-        );
-      }
-    }
+    const counters = reseedCounters(isNewExecution ? [] : execution.iterationBilling, modelInfo);
 
     // Bill the iteration that just ran. Centralised so all code paths
     // downstream of `runIteration` see a consistent "iteration N has been
@@ -2194,6 +2166,14 @@ async function processExecution(
                 contextWindow,
               }
             ),
+          logNegativeDelta: details =>
+            logger.warn('[agentExecutor] negative agent iteration cost delta', {
+              executionId,
+              sessionId: execution.sessionId,
+              model: execution.model,
+              iterationIndex,
+              ...details,
+            }),
           deductCredits: async ({ credits, inputTokens, outputTokens }) => {
             await creditService.deductCreditsWithOrgSupport(
               {

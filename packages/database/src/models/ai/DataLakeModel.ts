@@ -31,6 +31,7 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  DATA_LAKE_STABLE_STATUSES,
   DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
@@ -1232,6 +1233,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   /** Admin remedy for a poisoned meter (see resetEmbeddingSpend on the repository interface). */
   async resetEmbeddingSpend(id: string): Promise<boolean> {
     const res = await this.dataLakeModel.updateOne({ _id: id }, { $set: { embeddingSpendMicroUsd: 0 } });
+    return res.matchedCount === 1;
+  }
+
+  async touchIfStable(id: string): Promise<boolean> {
+    // `null` matches a lake written before `status` existed, which is at rest (see activateIfDraft).
+    // The explicit `updatedAt` makes this a real write whatever the timestamps plugin does with it.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: [...DATA_LAKE_STABLE_STATUSES, null] } },
+      { $set: { updatedAt: new Date() } }
+    );
     return res.matchedCount === 1;
   }
 

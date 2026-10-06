@@ -21,14 +21,10 @@ import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dat
 // The name, its slug rule, and the duplicate-name hint moved to the source step (#824), so
 // their imports live there now. tagPrefixIssue covers both prefix problems this step reports:
 // the reserved namespace and an overlap with another lake's prefix.
-import {
-  deriveTagPrefixFromLakeName,
-  slugifyDataLakeName,
-  submittedTagPrefix,
-  tagPrefixIssue,
-} from '@bike4mind/common';
+import { deriveTagPrefixFromLakeName, submittedTagPrefix, tagPrefixIssue } from '@bike4mind/common';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
 import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
+import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { EmbeddingBudgetEstimate } from '@client/app/components/DataLakeWizard/EmbeddingBudgetEstimate';
 
 export default function ConfigStep() {
@@ -50,18 +46,11 @@ export default function ConfigStep() {
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
 
-  // Append mode reuses the target lake's real slug (which may be disambiguated, e.g.
-  // "niche-2"), so show that rather than what its name slugifies to. Name and slug are set
-  // on the source step; they appear here read-only in the summary. Create mode asks the server,
-  // because a lake (even a deleted one) already holding the slug pushes the new one to "-1";
-  // slugify is only the fallback while that loads or if it fails. A retry that will restore the
-  // lake a failed attempt archived (same rule as resolveCreateModeLake) keeps that lake's slug.
-  // The same round trip reports the first free tag prefix: an auto-derived one held by a lake this
-  // form cannot see (archived, deleted, gated) is swapped for it; a typed one is only flagged.
-  const { reusedLake, slugPreview, isAutoPrefix, suggestedTagPrefix, heldTypedPrefix } = useWizardIdentityPreview(true);
-  const slug = targetLake
-    ? targetLake.slug
-    : (reusedLake?.slug ?? slugPreview.data?.slug ?? slugifyDataLakeName(config.name));
+  // Name and slug are set on the source step; they appear here read-only in the summary.
+  const slug = useWizardLakeSlug();
+  // The slug-preview round trip also reports the first free tag prefix: an auto-derived one held by
+  // a lake this form cannot see (archived, deleted, gated) is swapped for it; a typed one is only flagged.
+  const { reusedLake, isAutoPrefix, suggestedTagPrefix, heldTypedPrefix } = useWizardIdentityPreview(true);
 
   useEffect(() => {
     if (isAutoPrefix && suggestedTagPrefix && suggestedTagPrefix !== config.tagPrefix) {

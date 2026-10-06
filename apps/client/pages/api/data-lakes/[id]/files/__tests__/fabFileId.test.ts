@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * activation is recorded as `system`, or a key-driven one as the human it acted for.
  */
 const h = vi.hoisted(() => ({
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeWritable: vi.fn(),
   removeFileFromDataLake: vi.fn(),
@@ -34,7 +35,8 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 // The whole module is replaced, so every repo the route (or lakeConfigAuditDb) names must be
 // present - a missing export is an import-time failure, not a silent undefined.
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => fn(),
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },

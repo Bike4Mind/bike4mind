@@ -197,6 +197,11 @@ vi.mock('./DataLakeRailViewer', () => ({
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({ isAdminFeatureEnabled: () => true, isFeatureEnabled: () => true, isLoading: false }),
 }));
+// The lake-empty state polls a GitHub lake's sync, which needs a QueryClient this suite never mounts.
+vi.mock('@client/app/hooks/data/githubLake', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/data/githubLake')>()),
+  useLakeGitHubConnection: () => ({ data: undefined }),
+}));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (selector?: (s: { isAdmin: boolean; currentUser: { id: string } }) => unknown) =>
     selector ? selector({ isAdmin: true, currentUser: { id: 'owner-1' } }) : { isAdmin: true },
