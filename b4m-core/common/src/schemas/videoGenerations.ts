@@ -3,9 +3,9 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 import { ASPECT_RATIOS, RESOLUTION_TIERS, VIDEO_MODES } from '../video/types';
 import { VIDEO_VALIDATION_ERROR_CODES } from '../video/validate';
 import {
-  GENERATION_JOB_ERROR_CODES,
   GENERATION_JOB_SOURCES,
   GENERATION_JOB_STATES,
+  type GenerationJobErrorCode,
 } from '../types/entities/GenerationJobTypes';
 import { ApiErrorSchema } from './chat';
 import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
@@ -23,6 +23,38 @@ export const VIDEO_GENERATION_API_ERROR_CODES = [
   'idempotency_key_reused',
   'invalid_idempotency_key',
 ] as const satisfies readonly ApiErrorCode[];
+
+// The classifiers a polled job can carry. Internal-only codes are folded into these by toPublicVideoJobErrorCode.
+export const VIDEO_JOB_PUBLIC_ERROR_CODES = [
+  'content_blocked',
+  'provider_timeout',
+  'provider_error',
+  'region_unavailable',
+  'output_too_large',
+  'input_image_not_found',
+  'cancelled',
+] as const satisfies readonly ApiErrorCode[];
+export type VideoJobPublicErrorCode = (typeof VIDEO_JOB_PUBLIC_ERROR_CODES)[number];
+
+export function toPublicVideoJobErrorCode(code: GenerationJobErrorCode): VideoJobPublicErrorCode {
+  switch (code) {
+    case 'orphaned_submit':
+    case 'enqueue_failed':
+      return 'provider_error';
+    case 'content_blocked':
+    case 'provider_timeout':
+    case 'provider_error':
+    case 'region_unavailable':
+    case 'output_too_large':
+    case 'input_image_not_found':
+    case 'cancelled':
+      return code;
+    default: {
+      const unreachable: never = code;
+      throw new Error(`Unmapped generation job error code: ${String(unreachable)}`);
+    }
+  }
+}
 
 export const VideoGenerationErrorResponseSchema = ApiErrorSchema.extend({
   errorCode: z.enum(VIDEO_GENERATION_API_ERROR_CODES).optional(),
@@ -56,7 +88,7 @@ export const VideoGenerationSchema = z.object({
   resolution: z.enum(RESOLUTION_TIERS),
   source: z.enum(GENERATION_JOB_SOURCES),
   progress: z.number().min(0).max(1).nullable(),
-  error: z.object({ code: z.enum(GENERATION_JOB_ERROR_CODES), message: z.string() }).nullable(),
+  error: z.object({ code: z.enum(VIDEO_JOB_PUBLIC_ERROR_CODES), message: z.string() }).nullable(),
   output: z
     .object({
       url: z.string().describe('Signed download URL, valid until expires_at. Re-fetch the job for a fresh one.'),

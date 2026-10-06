@@ -13,6 +13,9 @@ import {
   CreateVideoGenerationBodySchema,
   ListVideoGenerationsQuerySchema,
   VIDEO_GENERATION_API_ERROR_CODES,
+  VIDEO_JOB_PUBLIC_ERROR_CODES,
+  VideoGenerationSchema,
+  toPublicVideoJobErrorCode,
 } from './videoGenerations';
 
 describe('video generation wire schemas', () => {
@@ -55,5 +58,50 @@ describe('video generation wire schemas', () => {
         cancelVideoGenerationContract,
       ])
     ).not.toThrow();
+  });
+
+  it('puts every public job error code in the shared vocabulary', () => {
+    for (const code of VIDEO_JOB_PUBLIC_ERROR_CODES) {
+      expect(API_ERROR_CODES).toContain(code);
+    }
+  });
+
+  describe('toPublicVideoJobErrorCode', () => {
+    it('maps orphaned_submit to provider_error', () => {
+      expect(toPublicVideoJobErrorCode('orphaned_submit')).toBe('provider_error');
+    });
+
+    it('maps enqueue_failed to provider_error', () => {
+      expect(toPublicVideoJobErrorCode('enqueue_failed')).toBe('provider_error');
+    });
+
+    it('passes a public code through unchanged', () => {
+      expect(toPublicVideoJobErrorCode('content_blocked')).toBe('content_blocked');
+    });
+  });
+
+  it('rejects an internal-only error code on the job resource', () => {
+    const job = {
+      id: 'x',
+      object: 'video_generation',
+      state: 'failed',
+      model: 'm',
+      mode: 'text_to_video',
+      prompt: 'p',
+      duration_seconds: 5,
+      aspect_ratio: '16:9',
+      resolution: '720p',
+      source: 'api',
+      progress: null,
+      error: { code: 'orphaned_submit', message: 'm' },
+      output: null,
+      credits: { reserved: null, settled: null },
+      created_at: 'a',
+      updated_at: 'b',
+    };
+    expect(VideoGenerationSchema.safeParse(job).success).toBe(false);
+    expect(VideoGenerationSchema.safeParse({ ...job, error: { code: 'provider_error', message: 'm' } }).success).toBe(
+      true
+    );
   });
 });

@@ -39,6 +39,13 @@ export const API_ERROR_CODES = [
   'model_disabled',
   'model_unavailable',
   'input_image_not_found',
+  // Video job failure classifiers on the polled job resource; see VIDEO_JOB_PUBLIC_ERROR_CODES.
+  'content_blocked',
+  'provider_timeout',
+  'provider_error',
+  'region_unavailable',
+  'output_too_large',
+  'cancelled',
   'idempotency_key_reused',
   'invalid_idempotency_key',
 ] as const;
