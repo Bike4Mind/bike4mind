@@ -20,6 +20,10 @@ export type LakeGitHubConnection = {
   lastError: string | null;
   defaultBranch: string | null;
   lastSyncedAt: string | null;
+  lastSyncedCommitSha: string | null;
+  /** The latest tree read's split under the sync rules (GitHubLakeTreeCounts); null until a sync read it. */
+  candidateCount: number | null;
+  skippedCount: number | null;
   /** 'syncing' whose claim went stale (a crashed run): re-syncable, and not worth fast-polling. */
   syncStale: boolean;
   /** Files this connection has ingested into the lake - disconnecting deletes all of them. */

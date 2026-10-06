@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GitHubLakeConnectionStatus } from '@bike4mind/common';
-import { describeGitHubConnection } from './githubConnectionDisplay';
+import { describeGitHubConnection, describeGitHubSyncProgress } from './githubConnectionDisplay';
 
 const conn = (over: Partial<Parameters<typeof describeGitHubConnection>[0]> = {}) => ({
   status: 'connected' as const,
@@ -82,5 +82,47 @@ describe('describeGitHubConnection', () => {
       title: 'GitHub repository acme/docs: unrecognized status suspended',
       color: 'warning',
     });
+  });
+});
+
+describe('describeGitHubSyncProgress', () => {
+  const progressing = (over: Partial<Parameters<typeof describeGitHubSyncProgress>[0]> = {}) => ({
+    status: 'syncing' as const,
+    syncStale: false,
+    fileCount: 4,
+    candidateCount: 10 as number | null,
+    ...over,
+  });
+
+  it('reports indexed, total and percent for a running sync', () => {
+    expect(describeGitHubSyncProgress(progressing())).toEqual({ indexed: 4, total: 10, percent: 40 });
+  });
+
+  it('reports nothing when no sync is running', () => {
+    expect(describeGitHubSyncProgress(progressing({ status: 'connected' }))).toBeNull();
+  });
+
+  it('reports nothing for a stalled sync, which is not making progress', () => {
+    expect(describeGitHubSyncProgress(progressing({ syncStale: true }))).toBeNull();
+  });
+
+  it.each([
+    ['not yet known', null],
+    ['zero', 0],
+  ])('has no total or percent while the candidate count is %s', (_name, candidateCount) => {
+    expect(describeGitHubSyncProgress(progressing({ candidateCount }))).toEqual({
+      indexed: 4,
+      total: null,
+      percent: null,
+    });
+  });
+
+  it('rounds the percent to a whole number', () => {
+    expect(describeGitHubSyncProgress(progressing({ fileCount: 1, candidateCount: 3 }))?.percent).toBe(33);
+    expect(describeGitHubSyncProgress(progressing({ fileCount: 2, candidateCount: 3 }))?.percent).toBe(67);
+  });
+
+  it('caps the percent at 100 when more files are indexed than the tree admitted', () => {
+    expect(describeGitHubSyncProgress(progressing({ fileCount: 12, candidateCount: 10 }))?.percent).toBe(100);
   });
 });

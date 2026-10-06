@@ -72,3 +72,22 @@ export function describeGitHubConnection(connection: DescribableGitHubConnection
     color: 'warning',
   };
 }
+
+type ProgressableGitHubConnection = Pick<DescribableGitHubConnection, 'status' | 'syncStale'> & {
+  fileCount: number;
+  candidateCount: number | null;
+};
+
+/**
+ * A live sync's progress: files indexed so far against the files the sync rules admitted from the
+ * tree. Null when no sync is running. `percent` is null until the sync has read the tree, and is
+ * capped at 100 because a changed file's old copy is retired only after its new one lands.
+ */
+export function describeGitHubSyncProgress(
+  connection: ProgressableGitHubConnection
+): { indexed: number; total: number | null; percent: number | null } | null {
+  if (connection.status !== 'syncing' || connection.syncStale) return null;
+  const total = connection.candidateCount || null;
+  const percent = total === null ? null : Math.min(100, Math.round((connection.fileCount / total) * 100));
+  return { indexed: connection.fileCount, total, percent };
+}
