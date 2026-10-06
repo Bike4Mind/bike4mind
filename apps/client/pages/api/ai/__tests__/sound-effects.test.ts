@@ -108,6 +108,12 @@ vi.mock('@server/utils/persistGeneratedAudio', () => ({
   persistGeneratedAudio: (...a: unknown[]) => persistGeneratedAudio(...a),
 }));
 
+const { upload, getSignedUrl } = vi.hoisted(() => ({ upload: vi.fn(), getSignedUrl: vi.fn() }));
+// Only the oversized-audio offload touches storage; the delivery module itself is real.
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: () => ({ upload, getSignedUrl }),
+}));
+
 import handler from '../sound-effects';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
@@ -140,6 +146,8 @@ beforeEach(() => {
   // Default: persistence is a no-op that reports "not saved", so tests not
   // exercising the save path see no persisted-file headers.
   persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'error' });
+  upload.mockReset().mockResolvedValue(undefined);
+  getSignedUrl.mockReset().mockResolvedValue('https://s3/offload');
   getEffectiveApiKey.mockResolvedValue('eleven-key');
   generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
   findById.mockResolvedValue({ id: 'u1', currentCredits: 100 });
@@ -403,7 +411,7 @@ describe('POST /api/ai/sound-effects', () => {
       id: 'org1',
       currentCredits: 10000,
       maxCreditsPerMember: 40,
-      userDetails: [{ id: 'u1', usedCredits: 20 }],
+      userDetails: [{ id: 'u1', usedCredits: 20, periodStart: new Date() }],
       users: [{ userId: 'u1' }],
     });
 
@@ -482,5 +490,73 @@ describe('POST /api/ai/sound-effects', () => {
     expect(recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: 'u1', ownerType: CreditHolderType.User })
     );
+  });
+
+  describe('generated-audio delivery', () => {
+    const savedCopy = {
+      saved: true,
+      fabFileId: 'fab1',
+      fileName: 'audio-1.mp3',
+      fileUrl: 'https://signed.example/audio.mp3',
+    };
+    const oversized = () => Buffer.alloc(4 * 1024 * 1024 + 1);
+
+    beforeEach(() => {
+      getSettingsValue.mockReturnValue(false);
+      estimateSoundCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 3 });
+    });
+
+    it('returns base64 JSON with the audio and save fields for encoding: base64', async () => {
+      persistGeneratedAudio.mockResolvedValue(savedCopy);
+      const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({
+        delivery: 'inline',
+        audio: Buffer.from('boom').toString('base64'),
+        contentType: 'audio/mpeg',
+        ...savedCopy,
+      });
+    });
+
+    it('skips persistence for a throwaway preview', async () => {
+      const { res, promise } = run({ text: 'thunder', preview: true });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(persistGeneratedAudio).not.toHaveBeenCalled();
+      expect(res.getHeader('X-B4M-Audio-Saved')).toBeUndefined();
+    });
+
+    it('reports saveSkippedReason in the base64 body when the save was skipped', async () => {
+      persistGeneratedAudio.mockResolvedValue({ saved: false, reason: 'storage_limit' });
+      const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
+      await promise;
+      expect(res._getJSONData()).toMatchObject({ saved: false, saveSkippedReason: 'storage_limit' });
+    });
+
+    it('serves an oversized base64 result by the saved copy URL without offloading', async () => {
+      const audio = oversized();
+      generate.mockResolvedValue({ audio, contentType: 'audio/mpeg' });
+      persistGeneratedAudio.mockResolvedValue(savedCopy);
+      const { res, promise } = run({ text: 'thunder', encoding: 'base64' });
+      await promise;
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        delivery: 'url',
+        url: savedCopy.fileUrl,
+        bytes: audio.length,
+        saved: true,
+      });
+      expect(upload).not.toHaveBeenCalled();
+    });
+
+    it('redirects an unsaved oversized binary result with a 303 to an offloaded URL', async () => {
+      generate.mockResolvedValue({ audio: oversized(), contentType: 'audio/mpeg' });
+      const { res, promise } = run({ text: 'thunder', preview: true });
+      await promise;
+      expect(res._getStatusCode()).toBe(303);
+      expect(res._getRedirectUrl()).toBe('https://s3/offload');
+      expect(upload).toHaveBeenCalledTimes(1);
+    });
   });
 });

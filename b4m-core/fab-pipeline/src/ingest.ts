@@ -1,9 +1,10 @@
+import { APP_NAME, WEBSITE_URL } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
-import { readPageTitle } from './pageTitle';
+import { lastPathSegment, readPageTitle } from './pageTitle';
 
 // Centralized URL regex - handles ports, query params, fragments
 export const URL_REGEX =
@@ -30,6 +31,8 @@ interface ParsedContent {
   textContent: Buffer | string;
   mimeType: string;
   ext: string | null;
+  /** The url actually fetched after redirects; fallback titles and site-name cleanup use it. */
+  finalUrl: string;
 }
 
 // Default timeout for URL fetching (10 seconds)
@@ -115,14 +118,8 @@ function redactUrlCredentials(raw: string): string {
   }
 }
 
-/** Last path segment, used only as a display-name fallback when a page has no `<title>`. */
-function lastPathSegment(url: string): string {
-  try {
-    return new URL(url).pathname.split('/').filter(Boolean).pop() ?? url;
-  } catch {
-    return url.split('/')?.pop() ?? url;
-  }
-}
+// Sites like Wikipedia reject library default UAs; their policy wants a product name plus a contact URL.
+const INGEST_USER_AGENT = `Mozilla/5.0 (compatible; ${APP_NAME || 'App'}/1.0${WEBSITE_URL ? `; +${WEBSITE_URL}` : ''})`;
 
 /**
  * Fetch one URL without following redirects, so the caller can SSRF-validate each hop itself.
@@ -144,6 +141,7 @@ function lastPathSegment(url: string): string {
  */
 async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   return axios.get(url, {
+    headers: { 'User-Agent': INGEST_USER_AGENT },
     // BOTH agents, because the scheme is not fixed across a chain: an https URL can 302 to http, and
     // axios picks the agent per request from the scheme it is currently on.
     httpAgent: ssrfSafeHttpAgent,
@@ -729,7 +727,13 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     } else {
       logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
     }
-    return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
+    return {
+      title,
+      textContent: urlContent,
+      mimeType: urlMimeType,
+      ext: mime.extension(urlMimeType) || null,
+      finalUrl: currentUrl,
+    };
   } catch (error) {
     // Redacted for the same reason as the success log: this metadata is attached to the log record, and
     // a failure is exactly when a malformed credentialed URL is most likely to be the input.

@@ -16,8 +16,9 @@ import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler<{}, unknown, unknown>(async (req, res) => {
     if (!req.user.id) {
       throw new ForbiddenError('Unauthorized');

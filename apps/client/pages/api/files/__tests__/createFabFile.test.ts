@@ -16,12 +16,17 @@ const h = vi.hoisted(() => ({
   // The acting principal's org-admin set, as a test input rather than a Mongo read. The gates that
   // consume it are the real ones.
   administeredOrgIds: [] as string[],
+  baseApiOptions: undefined as unknown,
 }));
 
 // Single-method chain: the route only calls `.use(...).post(...)`, and the ability check in
-// `.use` is not the subject here, so the middleware itself is dropped rather than run.
+// `.use` is not the subject here, so the middleware itself is dropped rather than run. Captures
+// the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ use: () => ({ post: (h: unknown) => h }) }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { use: () => ({ post: (h: unknown) => h }) };
+  },
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
@@ -362,5 +367,11 @@ describe('POST /api/files/createFabFile - lake write authorization beyond the cr
       /permission to change this data lake's files/
     );
     expect(h.fabFileCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/files/createFabFile - scope gate', () => {
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

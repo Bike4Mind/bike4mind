@@ -6,6 +6,7 @@ import { confirm } from '@inquirer/prompts';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
+import { isDirectInvocation } from './utils/isDirectInvocation.js';
 
 interface CleanupOptions {
   dryRun: boolean;
@@ -309,6 +310,6 @@ async function main(): Promise<void> {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectInvocation(import.meta.url)) {
   main().catch(console.error);
 }

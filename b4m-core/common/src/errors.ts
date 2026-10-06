@@ -10,6 +10,7 @@ export enum HttpStatus {
   Unauthorized = 401,
   Forbidden = 403,
   NotFound = 404,
+  MethodNotAllowed = 405,
   Conflict = 409,
   UnprocessableEntity = 422,
   TooManyRequests = 429,
@@ -92,6 +93,17 @@ export class ForbiddenError extends HTTPError {
   ) {
     super(HttpStatus.Forbidden, message, additionalInfo);
     this.name = 'ForbiddenError';
+  }
+}
+
+/** 405: the route exists but does not serve this HTTP method. Set an `Allow` header before throwing. */
+export class MethodNotAllowedError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.MethodNotAllowed, message, additionalInfo);
+    this.name = 'MethodNotAllowedError';
   }
 }
 

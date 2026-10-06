@@ -87,7 +87,7 @@ export { customAgentToPersona } from './custom-agent-adapter';
 
 // ─── Installer / OAuth ───────────────────────────────────────────────────────
 export { createInstallProvider, getDefaultInstallUrlOptions, getInstallUrlOptionsForWorkspace } from './installer';
-export type { InstallationMetadata } from './installer';
+export type { InstallationMetadata, StateBinding } from './installer';
 
 // ─── Org Slack Helpers ───────────────────────────────────────────────────────
 export {

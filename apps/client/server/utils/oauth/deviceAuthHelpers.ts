@@ -1,5 +1,8 @@
 import crypto from 'crypto';
 
+// Shared by device/initiate (hard cap) and device/token (global poll ceiling = cap * 12, one poll per 5s each).
+export const MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS = 500;
+
 /**
  * Generate 8-character user code (base32, no confusing characters)
  * Format: XXXX-XXXX (e.g., "WXYZ-1234")

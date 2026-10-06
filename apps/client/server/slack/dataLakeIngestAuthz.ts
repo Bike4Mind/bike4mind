@@ -1,5 +1,6 @@
 import {
   type AccessContext,
+  buildDataLakeAccessContext,
   type IAdminSettingsRepository,
   type IDataLakeAccessGrantRepository,
   type IDataLakeDocument,
@@ -90,40 +91,23 @@ export interface LakeAuthzDeps {
  * `server/dataLakes/toAccessContext.ts`. Identity and permissions come from the B4M user record,
  * never from the Slack payload, which is attacker-controlled for anyone who can post in a channel.
  */
-export async function buildSlackAccessContext(
+export function buildSlackAccessContext(
   actor: SlackIngestActor,
   deps: Pick<LakeAuthzDeps, 'resolveEntitlementKeys' | 'resolveMembershipOrgIds' | 'resolveAdministeredOrgIds'>,
   opts?: { resolveEntitlementsForAdmin?: boolean }
 ): Promise<AccessContext> {
-  const isAdmin = !!actor.isAdmin;
-
-  // All three reads are independent, so they go in parallel rather than in an object literal's
-  // sequential await order. Unlike toAccessContext, whose two heavy reads are memoized per request,
-  // nothing memoizes here and the prologue runs TWICE on a message carrying both a file and a link.
-  //
-  // Each skip below is a resolution the actor's role makes pointless, not an optimization:
-  //  - keys: the write gates grant an admin outright and never read them. `resolveEntitlementsForAdmin`
-  //    exists for the one caller that deliberately evaluates an admin through the NON-admin arms (the
-  //    `list` reply in handleDataLakeCommand), where the keys decide whether an entitlement-gated
-  //    lake is reachable.
-  //  - org-admin ids: canManageLake grants an admin on its platform rung and never reaches the org
-  //    rungs these ids feed. No opt-in twin to the flag above is needed - `handleList` does evaluate
-  //    an admin with isAdmin suppressed, but these ids only affect a per-row manage LABEL, which its
-  //    own `isWritable` restores from the unsuppressed context.
-  const [organizationIds, entitlementKeys, administeredOrgIds] = await Promise.all([
-    deps.resolveMembershipOrgIds(actor.id),
-    isAdmin && !opts?.resolveEntitlementsForAdmin ? [] : deps.resolveEntitlementKeys(actor),
-    isAdmin ? [] : deps.resolveAdministeredOrgIds(actor.id),
-  ]);
-
-  return {
-    userId: actor.id,
-    isAdmin,
-    userTags: actor.tags ?? [],
-    organizationIds,
-    entitlementKeys,
-    administeredOrgIds,
-  };
+  // `resolveEntitlementsForAdmin` is for the `list` reply in handleDataLakeCommand, which evaluates
+  // an admin through the non-admin arms. It needs no org-admin twin: those ids only feed a per-row
+  // manage LABEL, which `isWritable` restores from the unsuppressed context.
+  return buildDataLakeAccessContext(
+    actor,
+    {
+      membershipOrgIds: () => deps.resolveMembershipOrgIds(actor.id),
+      entitlementKeys: () => deps.resolveEntitlementKeys(actor),
+      administeredOrgIds: () => deps.resolveAdministeredOrgIds(actor.id),
+    },
+    opts
+  );
 }
 
 /**

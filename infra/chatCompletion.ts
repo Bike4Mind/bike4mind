@@ -4,6 +4,7 @@ import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
+import { searxngUrl } from './searxng';
 import { allSecrets, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
@@ -132,9 +133,15 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // — the URL is a secret, sidestepping any creation-order coupling.
     OPTIHASHI_INSTANCE_SERVICE_URL: secrets.OPTIHASHI_INSTANCE_SERVICE_URL.value,
     OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value,
+    // Internal SearXNG (infra/searxng.ts), only where it is deployed. Set only on the VPC Lambdas
+    // that run web search (also infra/agentExecutor.ts, infra/queues.ts); the URL resolves only
+    // inside the VPC.
+    ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
   },
   logging: {
-    retention: '3 days',
+    // Long enough to investigate a model-fallback or billing report after the fact; these
+    // are usually raised days later, well past a short retention window.
+    retention: '1 month',
   },
   // Give in-flight quests the full ECS-allowed grace period to drain on SIGTERM before
   // SIGKILL. SST's Service args don't expose the container `stopTimeout`, so inject it

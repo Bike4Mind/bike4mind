@@ -1,4 +1,4 @@
-import { FC } from 'react';
+import { FC, ReactNode } from 'react';
 import { Box, Button, Stack, Tooltip, Typography } from '@mui/joy';
 import { useNavigationExecutor } from '@client/app/hooks/useNavigationExecutor';
 import { compactButtonSx } from '@client/app/utils/buttonStyles';
@@ -6,6 +6,9 @@ import type { NavigationIntent } from '@bike4mind/common';
 
 interface NavigationButtonsProps {
   navigationIntents: NavigationIntent[];
+  /** Buttons placed ahead of the navigation ones in the same row (the reply's numbered choices). */
+  leading?: ReactNode;
+  label?: string;
 }
 
 /**
@@ -13,10 +16,14 @@ interface NavigationButtonsProps {
  * Follows the PendingActionButtons pattern from PromptReplies.
  * User clicks to navigate - the AI never auto-navigates.
  */
-const NavigationButtons: FC<NavigationButtonsProps> = ({ navigationIntents }) => {
+const NavigationButtons: FC<NavigationButtonsProps> = ({
+  navigationIntents,
+  leading,
+  label = 'Suggested Navigation',
+}) => {
   const execute = useNavigationExecutor();
 
-  if (!navigationIntents || navigationIntents.length === 0) return null;
+  if (!leading && (!navigationIntents || navigationIntents.length === 0)) return null;
 
   return (
     <Box
@@ -33,9 +40,10 @@ const NavigationButtons: FC<NavigationButtonsProps> = ({ navigationIntents }) =>
       {/* display: block because Joy renders body-xs as a span, and a margin on an
           inline element is ignored - the gap below was coming from the line box. */}
       <Typography level="body-xs" sx={{ display: 'block', mb: '8px', color: 'text.primary', fontWeight: 600 }}>
-        Suggested Navigation
+        {label}
       </Typography>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap role="group" aria-label="Suggested next steps">
+        {leading}
         {navigationIntents.map(intent => (
           // The app's secondary action, at the same metrics as the ones in a brief
           // card: a suggestion is not the reply's own call to action.

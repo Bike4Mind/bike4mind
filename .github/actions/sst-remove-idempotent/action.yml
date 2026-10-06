@@ -144,6 +144,15 @@ runs:
           if echo "$OUTPUT" | grep -qE "DependencyViolation|has a dependent object"; then
             echo "  [heal ${heal}] DependencyViolation -> stage-scoped orphaned-ALB reconcile"
             bash "${GITHUB_ACTION_PATH}/reconcile-orphaned-alb.sh" "${STAGE}" || true
+          elif echo "$OUTPUT" | grep -qiE "timeout while waiting for resource to be gone|context deadline exceeded"; then
+            # Provider wait timeout, not a desync: the delete call itself was
+            # accepted and is very likely still completing in AWS - the
+            # provider's client-side poll (5m for most resource types) just
+            # gave up first. No state surgery needed. Sleep to let AWS finish,
+            # then retry the same remove; it will see the resource gone
+            # (falls into the NotFound branch below) or fully deleted.
+            echo "  [heal ${heal}] provider wait timed out (AWS API slowness) - sleeping 60s and retrying"
+            sleep 60
           elif echo "$OUTPUT" | grep -qiE "NotFound|does not exist|was not ACTIVE|ResourceNotFoundException|NoSuchEntity|no longer exists|could not be found"; then
             # "Already gone / inactive parent" desync: the resource (or a parent
             # it needs) was deleted out-of-band, so its delete errors. AWS phrases

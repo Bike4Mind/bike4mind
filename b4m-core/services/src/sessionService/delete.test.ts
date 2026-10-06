@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { deleteSession } from './delete';
 import {
   createMockSessionRepository,
@@ -55,6 +55,28 @@ describe('sessionService - delete', () => {
         sessionAgentConfigs: mockSessionAgentConfigRepo,
       },
     };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('tombstones the session with only { id, deletedAt }', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const session = { id: sessionId, userId: ownerId, name: 'kept off the write', deletedAt: null };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockSessionRepo.update).toHaveBeenCalledTimes(1);
+    expect((mockSessionRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: sessionId,
+      deletedAt: new Date('2026-01-01T00:00:00Z'),
+    });
   });
 
   it('throws NotFoundError when the session does not exist for this user', async () => {

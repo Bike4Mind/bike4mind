@@ -150,6 +150,8 @@ async function runFullPipeline(
     enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
+    // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
+    skipReplyChoices: true,
     // Inject the voice agent's system prompt (ElevenLabs-rendered, incl. per-user
     // override) at the top of the context so it drives the response persona.
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),

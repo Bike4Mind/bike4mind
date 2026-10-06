@@ -1,10 +1,16 @@
-import { ApiKeyType, generateMusicContract, MusicGenerationVendor } from '@bike4mind/common';
+import {
+  ApiKeyType,
+  shouldPersistGeneratedAudio,
+  generateMusicContract,
+  MusicGenerationVendor,
+} from '@bike4mind/common';
 import { adminSettingsRepository, apiKeyRepository, usageEventRepository } from '@bike4mind/database';
 import { apiKeyService, estimateMusicCredits } from '@bike4mind/services';
 import { aiMusicService, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
+import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
 // The stored key type each vendor needs. Resolved per-user first, then falling
 // back to the admin-configured key (getEffectiveApiKey), so the feature works
@@ -28,7 +34,7 @@ const PROVIDER_API_KEY_TYPE: Record<MusicGenerationVendor, ApiKeyType> = {
 // generateMusicContract (the same source of truth that drives the OpenAPI spec);
 // `req.validated` is the parsed, typed body.
 const handler = nextRouteForContract(generateMusicContract).post(async (req, res) => {
-  const { provider, prompt, lengthMs, forceInstrumental, modelId, format } = req.validated;
+  const { provider, prompt, lengthMs, forceInstrumental, modelId, format, encoding, preview } = req.validated;
   const userId = req.user?.id;
 
   const apiKey = await apiKeyService.getEffectiveApiKey(
@@ -119,35 +125,24 @@ const handler = nextRouteForContract(generateMusicContract).post(async (req, res
 
   recordUsage('ok', creditsCharged, usdCost);
 
-  // Persist a browsable copy of the generated audio (on by default; opt out via
-  // the saveGeneratedAudio preference). Best-effort: a save failure (e.g. over
-  // quota) never blocks returning the audio the caller was already charged for.
-  if (userId && (req.user?.preferences?.saveGeneratedAudio ?? true)) {
-    const save = await persistGeneratedAudio({
-      userId,
-      audio,
-      contentType,
-      format,
-      source: 'music',
-      text: prompt,
-      logger: req.logger,
-    });
-    res.setHeader('X-B4M-Audio-Saved', String(save.saved));
-    if (save.saved) {
-      res.setHeader('X-B4M-Audio-Fab-File-Id', save.fabFileId);
-      res.setHeader('X-B4M-Audio-File-Name', save.fileName);
-      // Forward the signed URL minted at creation. Non-image audio gets a working URL
-      // immediately (createFabFile), whereas re-resolving it via GET /api/files/:id
-      // fails closed until the async moderation scan flips moderationStatus to 'clean'
-      // (isImageServeable gates every mime type) - so callers must use this URL, not
-      // re-fetch one. Absent only in the rare case createFabFile minted no URL.
-      if (save.fileUrl) res.setHeader('X-B4M-Audio-File-Url', save.fileUrl);
-    }
-  }
+  // Best-effort browsable copy (on by default; opt out via the saveGeneratedAudio
+  // preference or `preview`): a save failure never blocks returning audio the
+  // caller was already charged for.
+  const save =
+    userId &&
+    shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
+      ? await persistGeneratedAudio({
+          userId,
+          audio,
+          contentType,
+          format,
+          source: 'music',
+          text: prompt,
+          logger: req.logger,
+        })
+      : undefined;
 
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Length', audio.length);
-  return res.send(audio);
+  return deliverGeneratedAudio(res, { audio, contentType, encoding: encoding ?? 'binary', save, logger: req.logger });
 });
 
 export const config = {

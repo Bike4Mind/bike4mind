@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IDataLakeDocument } from '@bike4mind/common';
 import { MAX_DATA_LAKE_SLUG_LENGTH, MIN_DATA_LAKE_SLUG_LENGTH, DATA_LAKE_SLUG_REGEX } from '@bike4mind/common';
-import { buildDatalakeTag, createDataLake, isDatalakeTagWellFormed } from './createDataLake';
+import { buildDatalakeTag, createDataLake, isDatalakeTagWellFormed, previewDataLakeSlug } from './createDataLake';
 
 describe('isDatalakeTagWellFormed (trap 4: org-qualified vs plain datalake tag)', () => {
   it('accepts the org-qualified form for an org lake', () => {
@@ -209,5 +209,82 @@ describe('createDataLake slug disambiguation stays inside MAX_DATA_LAKE_SLUG_LEN
     await createDataLake('creator', paramsFor(base), { db } as never);
 
     expect(create.mock.calls[0][0].slug).toBe(base);
+  });
+});
+
+describe('createDataLake records a create row in the config history', () => {
+  const makeDb = () => {
+    const create = vi.fn(async (doc: Record<string, unknown>) => ({ id: 'newLakeId', ...doc }) as IDataLakeDocument);
+    const record = vi.fn(async () => ({}) as never);
+    return {
+      record,
+      db: {
+        dataLakes: { find: vi.fn(async () => []), create },
+        dataLakeAccessGrants: { upsertGrant: vi.fn(async () => ({}) as never) },
+        lakeConfigChangeEvents: { record },
+      },
+    };
+  };
+
+  it('records the initial configuration under the creator rung, minus internal ids', async () => {
+    const { db, record } = makeDb();
+    await createDataLake('creator', { name: 'Sales', slug: 'sales', fileTagPrefix: 'sl:' }, { db } as never, 'org-1');
+
+    expect(record).toHaveBeenCalledTimes(1);
+    const event = (record.mock.calls[0] as unknown[])[0] as {
+      action: string;
+      manageRung: string;
+      principalId: string;
+      changes: { field: string; after?: unknown; before?: unknown }[];
+    };
+    expect(event).toMatchObject({ action: 'create', manageRung: 'creator', principalId: 'creator' });
+    const fields = event.changes.map(c => c.field);
+    expect(fields).toEqual(expect.arrayContaining(['name', 'slug', 'fileTagPrefix', 'status']));
+    expect(fields).not.toContain('createdByUserId');
+    expect(fields).not.toContain('organizationId');
+    expect(fields).not.toContain('datalakeTag');
+    expect(event.changes.every(c => c.before === undefined)).toBe(true);
+    expect(event.changes.find(c => c.field === 'status')?.after).toBe('draft');
+  });
+
+  it('attributes a key-driven create to the key', async () => {
+    const { db, record } = makeDb();
+    await createDataLake(
+      'creator',
+      { name: 'Sales', slug: 'sales', fileTagPrefix: 'sl:' },
+      { db } as never,
+      undefined,
+      {
+        principalKind: 'apiKey',
+        principalId: 'key-1',
+        onBehalfOfUserId: 'creator',
+      }
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ principalKind: 'apiKey', principalId: 'key-1', onBehalfOfUserId: 'creator' })
+    );
+  });
+});
+
+describe('previewDataLakeSlug', () => {
+  // `find` is status-blind, like the real one: a deleted lake holding a slug counts as taken.
+  const dbWith = (taken: string[]) => ({
+    dataLakes: {
+      find: vi.fn(async (filter: { slug?: string }) => (taken.includes(filter.slug ?? '') ? [{ id: 'x' }] : [])),
+    },
+  });
+
+  it('returns the slugified name when nothing in scope holds it', async () => {
+    await expect(previewDataLakeSlug(dbWith([]) as never, 'Vendor Contracts')).resolves.toBe('vendor-contracts');
+  });
+
+  it('suffixes past a slug a (possibly deleted) lake still reserves, in the given org scope', async () => {
+    const db = dbWith(['vendor-contracts']);
+    await expect(previewDataLakeSlug(db as never, 'Vendor Contracts', 'org-1')).resolves.toBe('vendor-contracts-1');
+    expect(db.dataLakes.find).toHaveBeenCalledWith({ organizationId: 'org-1', slug: 'vendor-contracts' });
+  });
+
+  it('lowercases a mixed-case name, as create does', async () => {
+    await expect(previewDataLakeSlug(dbWith([]) as never, 'MiXeD Case')).resolves.toBe('mixed-case');
   });
 });

@@ -11,7 +11,9 @@ import {
   isGeminiImageModel,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
+  isGPTImage25Model,
+  isExtendedGptImageQuality,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
@@ -35,6 +37,7 @@ import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFil
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
+import { recordGeneratedImages } from '../../../recordGeneratedImages';
 
 /**
  * Validate that an image-generation provider's API key is present. Without
@@ -139,6 +142,7 @@ async function updateQuestAndReturnMarkdown(storedImageUrls: string[], context: 
 
   // Update the quest's images array AND return markdown for compatibility
   await context.statusUpdate({ images: storedImageUrls });
+  await recordGeneratedImages(context.db.sessions, context.sessionId, storedImageUrls.length, context.logger);
   const instructions = 'Successfully generated images';
   return instructions;
 }
@@ -202,7 +206,8 @@ export const imageGenerationTool: ToolDefinition = {
       // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
       // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
       const wantsTransparent = background === 'transparent';
-      const model = wantsTransparent && isGPTImage2Model(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
+      const model =
+        wantsTransparent && rejectsTransparentBackground(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
@@ -421,7 +426,10 @@ export const imageGenerationTool: ToolDefinition = {
             type: 'string',
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
-            enum: [...TOOL_SELECTABLE_IMAGE_QUALITIES],
+            // xhigh/max only for a 2.5 model, so the model is never offered a tier that renders as 'high'.
+            enum: isGPTImage25Model(config?.model)
+              ? [...TOOL_SELECTABLE_IMAGE_QUALITIES]
+              : TOOL_SELECTABLE_IMAGE_QUALITIES.filter(quality => !isExtendedGptImageQuality(quality)),
           },
           n: {
             type: 'number',
@@ -436,7 +444,7 @@ export const imageGenerationTool: ToolDefinition = {
           background: {
             type: 'string',
             description:
-              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+              'Background handling. "transparent" gives a real alpha channel on gpt-image-1.x and gpt-image-2.5 (gpt-image-2 steps down to 1.5; other providers ignore it). Use for a cutout, sprite, icon, sticker or logo; needs output_format png or webp.',
             enum: ['transparent', 'opaque', 'auto'],
           },
           output_format: {

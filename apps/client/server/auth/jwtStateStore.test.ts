@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import jwt from 'jsonwebtoken';
 import { createHash } from 'crypto';
+import { Logger } from '@bike4mind/observability';
 
 let mockJwtSecret: string | undefined = 'test-jwt-secret-for-state-store';
 
@@ -275,6 +276,16 @@ describe('jwtStateStore', () => {
       const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
       const result = verifyStateToken(token, { audience: TEST_AUDIENCE });
       expect(result.valid).toBe(true);
+    });
+
+    it('logs whether the request carried a nonce cookie so a missing cookie is distinguishable from a mismatch', () => {
+      const token = createStateToken({ audience: TEST_AUDIENCE }, undefined, nonceHash);
+
+      verifyStateToken(token, { audience: TEST_AUDIENCE }, null);
+      verifyStateToken(token, { audience: TEST_AUDIENCE }, 'other-hash');
+
+      expect(Logger.warn).toHaveBeenNthCalledWith(1, 'JWT state nonce mismatch', { hasNonce: true, hasCookie: false });
+      expect(Logger.warn).toHaveBeenNthCalledWith(2, 'JWT state nonce mismatch', { hasNonce: true, hasCookie: true });
     });
   });
 });

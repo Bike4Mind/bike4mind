@@ -28,7 +28,7 @@ export const emailBatchQueue = new sst.aws.Queue('emailBatchQueue', {
 // Subscribe Lambda to process email batches
 export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/emailBatch.dispatch',
+    handler: 'apps/workers/src/queueHandlers/emailBatch.dispatch',
     timeout: '2 minutes',
     memory: '512 MB',
     vpc: lambdaVpc,
@@ -63,7 +63,7 @@ export const emailJobQueue = new sst.aws.Queue('emailJobQueue', {
 
 export const emailJobQueueSubscription = emailJobQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/emailJobOrchestrator.dispatch',
+    handler: 'apps/workers/src/queueHandlers/emailJobOrchestrator.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],

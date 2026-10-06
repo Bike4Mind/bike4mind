@@ -9,6 +9,7 @@ import {
 import { connectDB, mongoose } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
+import { createMethodGuard } from '@server/utils/allowedMethods';
 import { resolveContractAuth, type ContractAuthResult } from './resolveContractAuth';
 
 export type LambdaRouteContext<C extends EndpointContract> = {
@@ -42,7 +43,7 @@ export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
  * CloudFront had socket hang-ups; see cli/tools.ts).
  *
  * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
- * body parsing (400), DB connect, contract-driven auth (401, via resolveContractAuth
+ * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401, via resolveContractAuth
  * so every JWT/API-key gate matches the rest of the app), optional rate limiting
  * (429, via `options.rateLimit`), contract validation (422 - the pattern's uniform
  * validation gate), JSON response shaping, and turning a thrown handler error into a
@@ -60,6 +61,8 @@ export function defineLambdaRoute<C extends EndpointContract>(
   handle: (ctx: LambdaRouteContext<C>) => Promise<LambdaRouteResult>,
   options: LambdaRouteOptions = {}
 ): (event: APIGatewayProxyEventV2, resolvedRequestId?: string) => Promise<APIGatewayProxyResultV2> {
+  const checkMethod = createMethodGuard([contract.method]);
+
   return async (event: APIGatewayProxyEventV2, resolvedRequestId?: string): Promise<APIGatewayProxyResultV2> => {
     // Reuse the wrapper's id when threaded (so both layers report the same value
     // even when the caller sent no header), else resolve from headers / generate.
@@ -70,11 +73,24 @@ export function defineLambdaRoute<C extends EndpointContract>(
         event.headers?.[LEGACY_REQUEST_ID_HEADER.toLowerCase()]
       );
 
-    const json = (statusCode: number, payload: unknown): APIGatewayProxyResultV2 => ({
+    const json = (
+      statusCode: number,
+      payload: unknown,
+      headers: Record<string, string> = {}
+    ): APIGatewayProxyResultV2 => ({
       statusCode,
-      headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId },
+      headers: { 'Content-Type': 'application/json', [REQUEST_ID_HEADER]: requestId, ...headers },
       body: JSON.stringify(payload),
     });
+
+    // A Function URL accepts every method, so the contract's verb is enforced here, ahead of the
+    // DB connect and auth (the same 405 baseApi's `allowedMethods` gives the Next transport).
+    // The runtime always sets requestContext; a hand-built event without it passes through.
+    const method = event.requestContext?.http?.method;
+    const methodCheck = method ? checkMethod(method) : undefined;
+    if (methodCheck && !methodCheck.allowed) {
+      return json(405, { error: methodCheck.message, request_id: requestId }, { Allow: methodCheck.allowHeader });
+    }
 
     let body: unknown;
     try {
