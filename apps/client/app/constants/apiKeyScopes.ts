@@ -33,7 +33,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.WRITE_NOTEBOOKS,
     label: 'Write Notebooks',
     description: 'Create and modify notebooks',
-    endpoints: ['POST /api/v1/sessions', 'PUT /api/sessions/:id', 'DELETE /api/sessions/:id'],
+    endpoints: ['POST /api/v1/sessions', 'GET /api/sessions/:id', 'PUT /api/sessions/:id', 'DELETE /api/sessions/:id'],
   },
   {
     value: ApiKeyScope.READ_FILES,

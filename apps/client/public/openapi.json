@@ -16375,17 +16375,17 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{}\nB4M_REQUEST_BODY"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={},\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/voice/sessions/<id>/end\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }
