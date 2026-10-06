@@ -27,6 +27,20 @@ export const API_ERROR_CODES = [
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
+  // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
+  'unsupported_duration',
+  'unsupported_aspect_ratio',
+  'unsupported_resolution',
+  'unsupported_mode',
+  'missing_input_image',
+  'unexpected_input_image',
+  'unsupported_audio_option',
+  'invalid_request',
+  'model_disabled',
+  'model_unavailable',
+  'input_image_not_found',
+  'idempotency_key_reused',
+  'invalid_idempotency_key',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
