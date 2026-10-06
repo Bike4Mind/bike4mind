@@ -64,6 +64,13 @@ describe('usableApiKey', () => {
   it('maps the expired sentinel to null so it never reaches a provider call', () => {
     expect(usableApiKey('expired')).toBeNull();
   });
+
+  it.each(['your-api-key', 'REPLACE_ME', 'not-configured', '   '])(
+    'maps a placeholder (%j) to null, as model discovery does',
+    raw => {
+      expect(usableApiKey(raw)).toBeNull();
+    }
+  );
 });
 
 describe('provider key selection', () => {

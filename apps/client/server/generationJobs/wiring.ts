@@ -2,6 +2,7 @@ import { Resource } from 'sst';
 import { apiKeyService } from '@bike4mind/auth';
 import {
   isImageServeable,
+  isPlaceholderApiKey,
   KnowledgeType,
   videoFileExtension,
   type IGenerationJobDocument,
@@ -54,10 +55,12 @@ const SAVE_FAILURE_PATTERNS = {
 /**
  * Maps the raw value of a provider key to one a provider call may use. getEffectiveLLMApiKeys answers an
  * expired per-user key with the expired-key sentinel (a truthy string, so it would otherwise reach the
- * provider as a bearer token); a missing or empty key is null or ''.
+ * provider as a bearer token); a missing or empty key is null or ''. A placeholder (your-api-key,
+ * REPLACE_ME, ...) is no key either, as in modelDiscoveryService/credentials.ts: otherwise a
+ * half-configured stage lists the model, holds credits and only fails after the submit retries.
  */
 export const usableApiKey = (raw: string | null | undefined): string | null => {
-  if (!raw || raw === modelDiscoveryService.EXPIRED_KEY_SENTINEL) return null;
+  if (!raw || raw === modelDiscoveryService.EXPIRED_KEY_SENTINEL || isPlaceholderApiKey(raw)) return null;
   return raw;
 };
 
