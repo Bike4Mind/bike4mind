@@ -1,0 +1,49 @@
+{
+  "scenario": "blocked-output.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from the docs digest: done with video.respect_moderation false; whether the url is withheld is undocumented, so none is given. Prompt redacted. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "<redacted:blocked-prompt>",
+          "duration": 2,
+          "aspect_ratio": "16:9",
+          "resolution": "480p"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "request_id": "synthetic-blocked-output" }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-blocked-output" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "status": "pending", "progress": 10 }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-blocked-output" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": {
+          "status": "done",
+          "progress": 100,
+          "model": "grok-imagine-video-1.5",
+          "video": { "duration": 2, "respect_moderation": false }
+        }
+      }
+    }
+  ]
+}

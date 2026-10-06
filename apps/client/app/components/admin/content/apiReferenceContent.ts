@@ -734,6 +734,9 @@ POST /api/v1/video-generations/{id}/cancel
 
 **Required API-key scope:** \`ai:generate\`.
 
+Models: \`gemini-omni-1.1-flash\` (Google) and \`grok-imagine-video-1.5\` (xAI). \`GET /api/v1/video-models\`
+lists the ones enabled and usable on this deployment, with their durations, aspect ratios and resolutions.
+
 > Generated from their contracts: see \`listVideoModels\`, \`createVideoGeneration\`,
 > \`getVideoGeneration\`, \`listVideoGenerations\` and \`cancelVideoGeneration\` in the
 > [generated API docs](/api/v1/docs). Create returns \`202\` with a job; poll the job until \`state\` is
