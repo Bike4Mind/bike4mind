@@ -227,7 +227,7 @@ describe('TelemetryBuilder slow-first-token (TTFVT)', () => {
     expect(overThreshold.slowFirstToken).toBe(true);
   });
 
-  // The frozen-turn case #2260 is about: the model streamed (firstChunkTime proves it) but
+  // The frozen-turn case: the model streamed (firstChunkTime proves it) but
   // nothing visible ever rendered, so firstTokenTime is absent. The old `?? 0` scored this
   // as 0ms - healthy - which is exactly how the signal stayed dead.
   it('fires for a never-rendered turn', () => {
@@ -235,6 +235,13 @@ describe('TelemetryBuilder slow-first-token (TTFVT)', () => {
 
     expect(anomalies.slowFirstToken).toBe(true);
     expect(anomalies.primaryAnomaly).toBe('slow_response');
+  });
+
+  it('stays quiet for a short never-rendered turn, e.g. a Stop during thinking', () => {
+    const anomalies = anomaliesFor(b => b.setPerformance({ totalResponseTimeMs: 1_200, firstChunkTimeMs: 400 }));
+
+    expect(anomalies.slowFirstToken).toBe(false);
+    expect(anomalies.primaryAnomaly).toBe('none');
   });
 
   // Neither stamp recorded is no evidence - a media generation or an early failure - and must

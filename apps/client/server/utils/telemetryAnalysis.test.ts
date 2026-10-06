@@ -103,6 +103,7 @@ describe('generateRuleBasedAnalysis TTFVT findings', () => {
 
     expect(findings).toContain('Slow time to first token: 12.0s');
     expect(findings).toContain('SLO target: 5.0s');
+    expect(findings).not.toContain('never rendered');
   });
 });
 
@@ -215,6 +216,7 @@ describe('TTFVT rendering in buildAnalysisPrompt and formatIssueBody', () => {
 
     expect(prompt).toContain('Time to First Token: never rendered (streamed, nothing visible)');
     expect(prompt).not.toContain('Time to First Token: N/A');
+    expect(prompt).toMatch(/First Token Time Target: [^\n]*\| This entry: never rendered/);
   });
 
   it('buildAnalysisPrompt prints N/A only when neither stamp was recorded', () => {

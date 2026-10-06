@@ -1538,7 +1538,7 @@ describe('ChatCompletionProcess', () => {
         expect(telemetry.anomalies.slowFirstToken).toBe(false);
       });
 
-      it('classifies a thinking-only turn as never-rendered and fires slowFirstToken', async () => {
+      it('classifies a thinking-only turn as never-rendered', async () => {
         const body = wireMinimalTurn();
         // Reasoning streams (so firstChunkTime stamps) but nothing visible ever renders - the
         // frozen turn the anomaly exists to catch. Without the forwarded pair both stamps read
@@ -1559,7 +1559,8 @@ describe('ChatCompletionProcess', () => {
         const telemetry = mockQuest.promptMeta.contextTelemetry;
         expect(telemetry.performance.firstTokenTimeMs).toBeUndefined();
         expect(typeof telemetry.performance.firstChunkTimeMs).toBe('number');
-        expect(telemetry.anomalies.slowFirstToken).toBe(true);
+        // A short turn sits under the elapsed bound; the builder tests pin the firing case.
+        expect(telemetry.anomalies.slowFirstToken).toBe(false);
       });
     });
 

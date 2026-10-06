@@ -348,8 +348,9 @@ export class TelemetryBuilder {
   private computeAnomalies(): AnomaliesTelemetry {
     // Branch on TTFVT state, not on a numeric value: a turn that streamed but never rendered
     // a visible token (frozen) leaves firstTokenTimeMs unset, so defaulting it to 0 would
-    // score it as healthy. measured past the threshold fires, never-rendered fires outright,
-    // and unknown (neither stamp recorded) is no evidence and stays quiet. See ttfvt.ts.
+    // score it as healthy. measured past the threshold fires, never-rendered fires once the
+    // turn ran past the same threshold with nothing visible, and unknown (neither stamp
+    // recorded) is no evidence and stays quiet. See ttfvt.ts.
     const ttfvt = ttfvtState(this.performance.firstTokenTimeMs, this.performance.firstChunkTimeMs);
     const flags = {
       contextOverflow: this.contextWindow.overflowDetected ?? false,
@@ -361,7 +362,8 @@ export class TelemetryBuilder {
       toolTimeout: this.tools.some(t => t.maxDurationMs > ANOMALY_THRESHOLDS.toolTimeout),
       subagentTimeout: this.subagents.some(s => s.totalDurationMs > ANOMALY_THRESHOLDS.subagentTimeout),
       slowFirstToken:
-        ttfvt === 'never-rendered' ||
+        (ttfvt === 'never-rendered' &&
+          (this.performance.totalResponseTimeMs ?? 0) > ANOMALY_THRESHOLDS.slowFirstToken) ||
         (ttfvt === 'measured' && (this.performance.firstTokenTimeMs ?? 0) > ANOMALY_THRESHOLDS.slowFirstToken),
       slowTotalResponse: (this.performance.totalResponseTimeMs ?? 0) > ANOMALY_THRESHOLDS.slowTotalResponse,
     };

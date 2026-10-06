@@ -71,6 +71,7 @@ describe('AnomalyAlertService TTFVT rendering', () => {
   it('renders the measured number', () => {
     const field = firstTokenField({ totalResponseTimeMs: 20_000, firstTokenTimeMs: 12_000 });
     expect(field).toContain(`${(12_000).toLocaleString()}ms`);
+    expect(field).not.toContain('never rendered');
   });
 
   it('renders "never rendered", not N/A, for a streamed-but-invisible turn', () => {
