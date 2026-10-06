@@ -87,8 +87,8 @@ vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
-vi.mock('react-hot-toast', () => ({
-  default: { error: vi.fn(), success: vi.fn() },
+vi.mock('sonner', () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
 }));
 
 vi.mock('./useVoiceKeepAlive', () => ({
@@ -97,7 +97,7 @@ vi.mock('./useVoiceKeepAlive', () => ({
 
 import { useVoiceSessionEngine } from './useVoiceSessionEngine';
 import { useVoiceSessionStore } from './voiceSessionStore';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
 
 const VOICE_SESSION_RESPONSE = {
   data: { session: { id: 's1' }, model: 'gpt-realtime', voice: 'alloy', ephemeralKey: 'ek-1' },
