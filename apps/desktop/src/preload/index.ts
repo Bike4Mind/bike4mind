@@ -14,6 +14,7 @@ import type {
   UpdateProjectRequest,
 } from '@shared/chat';
 import type { CookieImportRequest, CookieImportState } from '@shared/browserCookies';
+import type { DevLogRecord } from '@shared/devLog';
 import type { McpServerInput, McpServersState } from '@shared/mcp';
 import {
   IPC_CHANNELS,
@@ -197,6 +198,16 @@ const api: DesktopApi = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),
+  },
+  devLog: {
+    getSnapshot: () => ipcRenderer.invoke(IPC_CHANNELS.devLogGetSnapshot),
+    clear: () => ipcRenderer.invoke(IPC_CHANNELS.devLogClear),
+    copy: (text: string) => ipcRenderer.invoke(IPC_CHANNELS.devLogCopy, text),
+    onRecords: listener => {
+      const handler = (_event: unknown, records: DevLogRecord[]) => listener(records);
+      ipcRenderer.on(IPC_CHANNELS.devLogRecords, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.devLogRecords, handler);
+    },
   },
 };
 

@@ -4,6 +4,8 @@ import { createParser } from 'eventsource-parser';
 import { isAxiosError, type AxiosInstance, type AxiosResponse } from 'axios';
 import type { ReasoningEffort } from '@bike4mind/common';
 import type { ChatModelOption, ChatRole } from '@shared/chat';
+import { devLog } from '../devlog/DevLogSink';
+import { CHAT_STREAM_TAG } from './devLogTag';
 import { parseStreamEvent, type CompletionStreamEvent } from './streamEvents';
 
 /** Same-origin default; a self-host stack overrides it with `sseCompletionsUrl` from serverConfig. */
@@ -77,6 +79,12 @@ export interface CompletionRequest {
   thinking?: boolean;
   /** Lowers or raises how long a reasoning model thinks before its first token. Absent sends nothing. */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Which conversation this request belongs to, for the developer log only. NOT sent on the
+   * wire - the body below is built field by field - and absent for the requests that are not a
+   * conversation's turn, such as naming a session.
+   */
+  sessionId?: string;
 }
 
 /**
@@ -122,13 +130,52 @@ export async function streamCompletion(
     throw toRequestError(err, await readErrorBody(err));
   }
 
-  await readSseStream(response, onEvent, signal);
+  await readSseStream(response, onEvent, signal, { model: request.model, sessionId: request.sessionId });
+}
+
+/** What the dev log tags this request's frames with. See logUpstream. */
+interface StreamContext {
+  model: string;
+  sessionId?: string;
+}
+
+/**
+ * Publish one decoded SSE frame to the developer log.
+ *
+ * Every field is named explicitly rather than spread off the event: that allowlist, not the
+ * sink's scrubbing, is what keeps a credential out of the buffer. The frame's text is reported
+ * as a LENGTH - the sink would truncate it, and a reply's prose is not what anyone opens this
+ * window for.
+ */
+function logUpstream(event: CompletionStreamEvent, context: StreamContext): void {
+  devLog.publish(() => {
+    const textChars = 'text' in event ? (event.text?.length ?? 0) : 0;
+    const detail =
+      event.type === 'tool_use'
+        ? (event.tools ?? []).map(tool => tool.name).join(', ') || '(no tools)'
+        : event.type === 'error'
+          ? (event.message ?? 'no message')
+          : `${textChars} chars`;
+    return {
+      tags: [CHAT_STREAM_TAG],
+      message: `upstream ${event.type} ${detail}`,
+      fields: {
+        model: context.model,
+        ...(context.sessionId ? { session: context.sessionId } : {}),
+        ...('stopReason' in event && event.stopReason ? { stopReason: event.stopReason } : {}),
+        ...('usage' in event && event.usage?.outputTokens !== undefined
+          ? { outputTokens: event.usage.outputTokens }
+          : {}),
+      },
+    };
+  });
 }
 
 function readSseStream(
   response: AxiosResponse,
   onEvent: (event: CompletionStreamEvent) => void,
-  signal?: AbortSignal
+  signal: AbortSignal | undefined,
+  context: StreamContext
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const stream = response.data as NodeJS.ReadableStream & { destroy(): void };
@@ -170,6 +217,7 @@ function readSseStream(
         }
         const event = parseStreamEvent(decoded);
         if (!event) return;
+        logUpstream(event, context);
         if (event.type === 'error') {
           fail(new Error(event.message || 'The server reported an error mid-reply.'));
           return;

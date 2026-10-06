@@ -5,6 +5,7 @@ import appIcon from '../../build/icon.png?asset';
 import { registerAccount } from './account';
 import { registerAuth } from './auth';
 import { registerChat } from './chat';
+import { attachDevLogShortcut, closeDevLogWindow, registerDevLog } from './devlog';
 import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
@@ -48,10 +49,16 @@ function createWindow(): void {
 
   // Showing only once the renderer has painted avoids a flash of empty chrome.
   window.once('ready-to-show', () => window.show());
-  // Hidden agent browsers would otherwise keep the app alive and `window-all-closed` from firing.
+  // Hidden agent browsers would otherwise keep the app alive and `window-all-closed` from
+  // firing. The developer log window is excluded from `appWindows` for the same reason, so it
+  // is closed here too rather than being left as the one window holding the app open.
   window.on('closed', () => {
-    if (appWindows().length === 0) closeAgentBrowsers();
+    if (appWindows().length > 0) return;
+    closeAgentBrowsers();
+    closeDevLogWindow();
   });
+
+  attachDevLogShortcut(window.webContents);
 
   // A window opened in-app would inherit this app's session and privileges, so hand
   // every outbound link to the user's real browser instead.
@@ -79,6 +86,8 @@ function createWindow(): void {
 }
 
 ipcMain.handle(IPC_CHANNELS.getAppInfo, buildAppInfo);
+
+registerDevLog();
 
 // Resolves either way: the renderer passes a url straight out of a reply, and a refusal is not
 // something a link in a reply has any business being told about.

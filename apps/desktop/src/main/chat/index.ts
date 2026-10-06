@@ -37,6 +37,7 @@ import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
+import { CHAT_STREAM_TAG } from './devLogTag';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore, type StoreFile } from './mcp/McpServerStore';
 import { MediaStore } from './media/MediaStore';
@@ -55,6 +56,7 @@ import { DependencyInstaller } from './project/dependencyInstall';
 import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
+import { devLog } from '../devlog/DevLogSink';
 import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
@@ -163,6 +165,35 @@ function paneBounds(value: unknown): BrowserPaneBounds | null {
   return { x: Math.round(x!), y: Math.round(y!), width: Math.round(width!), height: Math.round(height!) };
 }
 
+/**
+ * Publish one renderer-bound push to the developer log.
+ *
+ * The downstream half of the chat stream, and a different thing from the upstream SSE frames
+ * logged in completions.ts: these are what the UI is actually told, after the agent loop has
+ * folded tool calls, reasoning and queue changes into it. Same source, so the same single tag -
+ * the direction is a field.
+ *
+ * Fields are named one at a time, never spread: a payload carries whatever a session put in it,
+ * and an allowlist is the only reason this cannot start carrying something it should not.
+ */
+function logDownstream(channel: string, payload: unknown): void {
+  devLog.publish(() => {
+    const event = (payload ?? {}) as { type?: unknown; sessionId?: unknown; text?: unknown; status?: unknown };
+    // The event's own kind, or the channel's name without its namespace.
+    const kind = typeof event.type === 'string' ? event.type : (channel.split(':')[1] ?? channel);
+    const textChars = typeof event.text === 'string' ? event.text.length : 0;
+    return {
+      tags: [CHAT_STREAM_TAG],
+      message: `downstream ${kind}${textChars ? ` ${textChars} chars` : ''}`,
+      fields: {
+        channel,
+        ...(typeof event.sessionId === 'string' ? { session: event.sessionId } : {}),
+        ...(typeof event.status === 'string' ? { status: event.status } : {}),
+      },
+    };
+  });
+}
+
 /** The OS folder picker, parented to the window that asked when there is one. */
 async function pickDirectory(sender: WebContents): Promise<string | null> {
   const window = BrowserWindow.fromWebContents(sender);
@@ -212,6 +243,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
   });
 
   const send = (channel: string, payload: unknown) => {
+    logDownstream(channel, payload);
     for (const window of appWindows()) {
       window.webContents.send(channel, payload);
     }
