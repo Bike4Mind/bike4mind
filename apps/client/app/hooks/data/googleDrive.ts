@@ -84,31 +84,49 @@ export function driveConnectionPollInterval(connection: LakeDriveConnection | nu
 /**
  * The current Drive connection feeding a lake (null when none, including a personal lake - the
  * route resolves 200 with a null connection for those rather than 404). `isError` is therefore a
- * genuine failure: the lake doesn't exist, or the caller lacks org owner/manager access.
+ * genuine failure: the lake doesn't exist, or the caller has no standing on its org.
  */
 export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
+  const options = useLakeDriveConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.connection });
+}
+
+/**
+ * Whether the caller may connect, re-sync or disconnect the lake's Drive folder. The status read also
+ * admits an appointed org admin, who can see the connection but not operate it, so the controls key
+ * off this. Shares useLakeDriveConnection's query; a payload without the flag reads as `true`.
+ */
+export function useLakeDriveCanManage(dataLakeId?: string, enabled = true) {
+  const options = useLakeDriveConnectionOptions(dataLakeId, enabled);
+  return useQuery({ ...options, select: response => response.canManage !== false });
+}
+
+type LakeDriveConnectionResponse = { connection: LakeDriveConnection | null; canManage?: boolean };
+
+function useLakeDriveConnectionOptions(dataLakeId: string | undefined, enabled: boolean) {
   const queryClient = useQueryClient();
-  return useQuery({
+  return {
     queryKey: dataLakeKeys.driveConnection(dataLakeId),
     // `enabled` lets a caller skip a request it already knows the answer to: a lake with no
     // `organizationId` always resolves `connection: null`, so a caller that already has that field
     // can skip the round trip entirely rather than firing it for a known answer.
     enabled: !!dataLakeId && enabled,
-    queryFn: async () => {
-      const response = await api.get<{ connection: LakeDriveConnection | null }>(
-        `/api/data-lakes/${dataLakeId}/drive-connection`
-      );
+    queryFn: async (): Promise<LakeDriveConnectionResponse> => {
+      const response = await api.get<LakeDriveConnectionResponse>(`/api/data-lakes/${dataLakeId}/drive-connection`);
       const next = response.data.connection;
       // The purge runs in the background after a disconnect, so the lake's file lists only go
       // stale as it progresses; refresh them whenever a disconnecting read shows files removed.
-      const previous = queryClient.getQueryData<LakeDriveConnection | null>(dataLakeKeys.driveConnection(dataLakeId));
+      const previous = queryClient.getQueryData<LakeDriveConnectionResponse>(
+        dataLakeKeys.driveConnection(dataLakeId)
+      )?.connection;
       if (dataLakeId && previous?.disconnecting && (!next || next.fileCount !== previous.fileCount)) {
         void invalidateLakeFileQueries(queryClient, dataLakeId);
       }
-      return next;
+      return response.data;
     },
-    refetchInterval: query => (enabled ? driveConnectionPollInterval(query.state.data) : false),
-  });
+    refetchInterval: (query: { state: { data?: LakeDriveConnectionResponse } }) =>
+      enabled ? driveConnectionPollInterval(query.state.data?.connection) : false,
+  };
 }
 
 /** Connect a Drive folder to a lake and enqueue ingest (POST /api/data-lakes/drive-sync). */
