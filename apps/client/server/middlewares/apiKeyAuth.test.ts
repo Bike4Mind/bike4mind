@@ -284,6 +284,7 @@ describe('apiKeyAuth blocked owner log', () => {
       { id: 'user-1', moderation: { status: 'suspended' } },
       /suspended for repeated content-policy violations/,
     ],
+    ['disputePending', { id: 'user-1', disputePending: true }, /pending dispute resolution/],
     ['ownerNotFound', null, 'User not found or banned'],
   ])('logs and rejects a %s owner', async (reason, owner, message) => {
     findByIdMock.mockResolvedValue(owner);
@@ -299,5 +300,12 @@ describe('apiKeyAuth blocked owner log', () => {
       blockReasons: [reason],
     });
     expect(JSON.stringify(call)).not.toContain(KEY);
+  });
+
+  it('does not log for an active owner', async () => {
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.logger.warn).not.toHaveBeenCalledWith('API key rejected: owner account blocked', expect.anything());
   });
 });
