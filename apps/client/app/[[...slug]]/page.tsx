@@ -1,5 +1,3 @@
-// The ban targets client routing hooks (useRouter/usePathname); notFound() is the App Router's
-// server-only 404 signal, which has no TanStack equivalent.
 // eslint-disable-next-line no-restricted-imports -- notFound() is a server-only App Router API, not a client routing hook
 import { notFound } from 'next/navigation';
 import { TanStackRouterProvider } from '@client/app/components/TanStackRouterProvider';

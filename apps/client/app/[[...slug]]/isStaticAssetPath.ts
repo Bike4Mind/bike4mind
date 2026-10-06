@@ -3,9 +3,6 @@
  * request for a static asset, not a client route: a missing one must 404 instead of receiving
  * the SPA HTML shell. Only the last segment is tested, so a dot in an earlier segment
  * (`/v1.2/foo`) stays a client route.
- *
- * Kept as a tiny pure predicate (not inlined in the page) so it is unit-testable without
- * pulling in `next/navigation`.
  */
 const STATIC_ASSET_EXTENSION_RE =
   /\.(?:js|mjs|cjs|wasm|json|css|map|jpe?g|png|gif|svg|webp|avif|ico|woff2?|ttf|otf|eot)$/i;

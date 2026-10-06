@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactElement } from 'react';
 
-// Hoisted so the mock factory below can reference it without importing next/navigation (which
-// is lint-restricted to the server-only notFound() import the page itself carries).
+// `vi.mock` factories are hoisted above this file's own declarations, so the mock must be
+// created by `vi.hoisted` to be in scope when the factory runs.
 const mocks = vi.hoisted(() => ({
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
@@ -28,7 +28,8 @@ describe('SPA catch-all page', () => {
   // Regression: before the fix the page had no asset branch, so a missing asset rendered the
   // HTML shell (200) instead of calling notFound() (404).
   it('calls notFound() for a static-asset path', async () => {
-    await expect(render(['nope.mjs'])).rejects.toThrow('NEXT_NOT_FOUND');
+    // Nested so the page cannot pass by testing only the first segment.
+    await expect(render(['assets', 'nope.mjs'])).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mocks.notFound).toHaveBeenCalledTimes(1);
   });
 
