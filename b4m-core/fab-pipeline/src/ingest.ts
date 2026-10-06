@@ -239,9 +239,16 @@ const NON_CONTENT_SELECTOR = [
 
 /**
  * Elements that are running content themselves; a promo-named one is a content slug, not chrome.
+ * Includes rows and captions, which a promo class names a table row or figure caption, not a card.
  */
 const PROMO_CONTENT_ELEMENT_SELECTOR =
-  'h1, h2, h3, h4, h5, h6, p, li, td, th, dt, dd, pre, ul, ol, dl, table, blockquote, figure';
+  'h1, h2, h3, h4, h5, h6, p, li, td, th, tr, dt, dd, pre, ul, ol, dl, table, blockquote, figure, figcaption, caption';
+
+/** Structured content a promo card must not wrap: dropping the card would drop it too. */
+const PROMO_STRUCTURED_CONTENT_SELECTOR = 'ul, ol, dl, table, blockquote, figure, pre, code';
+
+/** Containers whose controls are inline in a sentence or cell, not a card's standalone call to action. */
+const PROMO_INLINE_CONTROL_CONTAINER_SELECTOR = 'p, li, td, th, dt, dd, figcaption, caption';
 
 /**
  * Class words a page uses for promotional chrome - the offer card, the newsletter box, the
@@ -273,7 +280,8 @@ const MAX_PROMO_TEXT_CHARS = 300;
 const CONTROL_SELECTOR =
   'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"]';
 
-const PROMO_CONTROL_SELECTOR = 'a[href], button, input, form';
+/** `CONTROL_SELECTOR` plus `form`: a newsletter box is a form even when its inputs are hidden. */
+const PROMO_CONTROL_SELECTOR = `${CONTROL_SELECTOR}, form`;
 
 /**
  * Containers a control strip can be. Headings and `<p>` are excluded: `<h2><a>Title</a></h2>` is
@@ -501,10 +509,12 @@ function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
  * True when `element` is labelled as promotional chrome by its own class (`PROMO_TOKENS`); ids are
  * ignored because they are usually content-derived slugs (`#subscribe-to-a-topic`). Declined for
  * inline elements and anything in or beside running prose, for content elements themselves
- * (`PROMO_CONTENT_ELEMENT_SELECTOR`), and for anything holding an h1-h3, a `<pre>`, an
- * `<article>`/`<main>`, or more than `MAX_PROMO_TEXT_CHARS` of text: a promo word on a wrapper that
- * big names a page section, not chrome. Also requires a control inside (`PROMO_CONTROL_SELECTOR`):
- * an offer card without a link or button is indistinguishable from a short fact about the offer.
+ * (`PROMO_CONTENT_ELEMENT_SELECTOR`), inside a table or figure, and for anything holding an h1-h3,
+ * structured content (`PROMO_STRUCTURED_CONTENT_SELECTOR`), an `<article>`/`<main>`, or more than
+ * `MAX_PROMO_TEXT_CHARS` of text: a promo word on a wrapper that big names a page section, not
+ * chrome. Also requires a standalone control inside (`PROMO_CONTROL_SELECTOR` outside any
+ * `PROMO_INLINE_CONTROL_CONTAINER_SELECTOR`): a card without a button, or whose only link sits in a
+ * sentence, is indistinguishable from a short fact about the offer.
  */
 function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | undefined): boolean {
   const classAttr = (element as { attribs?: Record<string, string> }).attribs?.class ?? '';
@@ -515,8 +525,12 @@ function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | u
   if (hasAdjacentProseText(element) || hasAdjacentInlineElement($, element)) return false;
   return (
     !$element.is(`html, body, main, article, ${INLINE_SELECTOR}, ${PROMO_CONTENT_ELEMENT_SELECTOR}`) &&
-    $element.find(PROMO_CONTROL_SELECTOR).length > 0 &&
-    $element.find('h1, h2, h3, pre, main, article').length === 0 &&
+    $element.closest('table, figure').length === 0 &&
+    $element
+      .find(PROMO_CONTROL_SELECTOR)
+      .toArray()
+      .some(control => $(control).parentsUntil(element).filter(PROMO_INLINE_CONTROL_CONTAINER_SELECTOR).length === 0) &&
+    $element.find(`h1, h2, h3, main, article, ${PROMO_STRUCTURED_CONTENT_SELECTOR}`).length === 0 &&
     squash($element.text()).length <= MAX_PROMO_TEXT_CHARS
   );
 }

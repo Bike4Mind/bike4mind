@@ -1242,6 +1242,38 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     }
   });
 
+  it('keeps promo-named content that holds only inline links or structured content', async () => {
+    const page =
+      '<html><body><main><h1>Plans</h1><p>Everything you need to know about our plans.</p>' +
+      '<div class="subscribe-info"><p>Webhooks deliver events to your <a href="/docs/endpoint">endpoint</a>.</p></div>' +
+      '<div class="signup-steps"><ol><li><a href="/register">Register steps</a></li><li>Verify your email</li></ol></div>' +
+      '<div class="offer-wrap"><table><tr><td>Student plan</td><td><a href="/student">Apply</a></td></tr></table></div>' +
+      '<div class="promo-code"><code>SPRING25</code><button>Copy</button></div>' +
+      '<table><tr class="promo-row"><td>Team plan</td><td>$2</td><td><a href="/team">Join</a></td></tr></table>' +
+      '<figure><img src="x"><figcaption class="promo">Photo courtesy of <a href="/x">Acme</a></figcaption></figure>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of ['endpoint', 'Register steps', 'Student plan', 'SPRING25', 'Team plan', 'Photo courtesy']) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('drops a promo card whose only control is a button or form', async () => {
+    const page =
+      '<html><body><main><h1>Plans</h1><p>Everything you need to know about our plans.</p>' +
+      '<div class="offer-card"><h4>Spring sale</h4><p>Two months free.</p><button>Claim it</button></div>' +
+      '<div class="newsletter-box"><p>Get updates in your inbox.</p><form><input type="email"></form></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Spring sale');
+    expect(text).not.toContain('Get updates in your inbox.');
+    expect(text).toContain('Everything you need to know about our plans.');
+  });
+
   it('restores a promo card and its nested button when pruning would leave too little text', async () => {
     const page =
       '<html><body><main><div class="offer-card"><h4>Spring sale</h4>' +
