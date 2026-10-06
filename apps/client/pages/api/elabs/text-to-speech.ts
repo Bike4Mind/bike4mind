@@ -4,11 +4,9 @@ import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
-import {
-  assertTtsCreditsAvailable,
-  deductTtsCredits,
-  InsufficientTtsCreditsError,
-} from '@server/utils/deductTtsCredits';
+import { estimateTtsCreditCost, TTS_DEFAULT_MODEL } from '@bike4mind/common';
+import { deductTtsCredits } from '@server/utils/deductTtsCredits';
+import { assertPreflightCredits, InsufficientCreditsPreflightError } from '@server/utils/creditPreflight';
 
 // Legacy ElevenLabs TTS adapter. Kept as a thin, contract-stable wrapper over
 // the unified aiVoiceService (#724): body { message } -> { audio: base64 }.
@@ -30,9 +28,13 @@ const handler = baseApi().post(
     const userId = req.user?.id;
     if (userId) {
       try {
-        await assertTtsCreditsAvailable(userId);
+        await assertPreflightCredits({
+          userId,
+          estimatedCredits: estimateTtsCreditCost('elevenlabs', TTS_DEFAULT_MODEL.elevenlabs, message.length),
+          featureLabel: 'text-to-speech',
+        });
       } catch (error) {
-        if (error instanceof InsufficientTtsCreditsError) {
+        if (error instanceof InsufficientCreditsPreflightError) {
           return res.status(402).json({ error: error.message });
         }
         throw error;

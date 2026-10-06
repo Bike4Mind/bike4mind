@@ -45,6 +45,16 @@ const VENDOR_FALLBACK_USD_PER_1K: Record<VoiceGenerationVendor, number> = {
   elevenlabs: 0.1,
 };
 
+/**
+ * The model each vendor's service synthesizes and bills with when the caller
+ * names none. Read by OpenAIVoiceService / ElevenLabsVoiceService in
+ * @bike4mind/utils, so a pre-flight estimate prices the same model the charge will.
+ */
+export const TTS_DEFAULT_MODEL: Record<VoiceGenerationVendor, string> = {
+  openai: 'tts-1',
+  elevenlabs: 'eleven_multilingual_v2',
+};
+
 /** Provider USD per 1,000 input characters for the given vendor + model. */
 export function ttsUsdPer1kChars(vendor: VoiceGenerationVendor, model?: string): number {
   const table = VENDOR_RATES[vendor];
