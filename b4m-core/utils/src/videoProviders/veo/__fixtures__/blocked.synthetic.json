@@ -1,0 +1,75 @@
+{
+  "scenario": "blocked.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: the raiMediaFilteredCount / raiMediaFilteredReasons names are the Veo response fields as documented outside the Gemini API pages and are unverified against this endpoint. The reason text is a placeholder. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "<redacted:blocked-prompt>"
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "16:9",
+            "resolution": "720p"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/syntheticblocked"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/syntheticblocked",
+          "done": true,
+          "response": {
+            "@type": "type.googleapis.com/google.ai.generativelanguage.v1beta.PredictLongRunningResponse",
+            "generateVideoResponse": {
+              "raiMediaFilteredCount": 1,
+              "raiMediaFilteredReasons": ["<redacted:filter-reason>"]
+            }
+          }
+        }
+      }
+    }
+  ]
+}

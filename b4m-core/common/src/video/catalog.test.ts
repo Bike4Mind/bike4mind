@@ -147,3 +147,53 @@ describe('grok-imagine-video-1.5', () => {
     });
   });
 });
+
+describe('veo-3.1-fast-generate-preview', () => {
+  const caps = VIDEO_MODEL_CATALOG['veo-3.1-fast-generate-preview'];
+  const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
+    model: 'veo-3.1-fast-generate-preview',
+    mode: 'text_to_video',
+    prompt: 'a lighthouse at dusk',
+    durationSeconds: 4,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    ...overrides,
+  });
+
+  it('declares the Veo 3.1 Fast capabilities', () => {
+    expect(caps).toEqual({
+      provider: 'veo',
+      displayName: 'Veo 3.1 Fast',
+      modes: ['text_to_video', 'image_to_video'],
+      duration: { kind: 'discrete', values: [4, 6, 8] },
+      aspectRatios: ['16:9', '9:16'],
+      resolutions: ['720p'],
+      defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+      audio: 'always',
+      pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
+      defaultEnabled: false,
+    });
+  });
+
+  it('prices an 8s clip at the per-second rate', () => {
+    expect(estimateVideoCostUsd(caps, request({ durationSeconds: 8 }))).toBeCloseTo(0.8, 6);
+  });
+
+  it.each([3, 5, 7, 10])('rejects %ss', seconds => {
+    expect(validateAgainstCapabilities(request({ durationSeconds: seconds }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_duration',
+    });
+  });
+
+  it('rejects 1080p and 1:1', () => {
+    expect(validateAgainstCapabilities(request({ resolution: '1080p' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_resolution',
+    });
+    expect(validateAgainstCapabilities(request({ aspectRatio: '1:1' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_aspect_ratio',
+    });
+  });
+});

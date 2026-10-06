@@ -2,7 +2,12 @@ import { z } from 'zod';
 import type { VideoModelCapabilities } from './types';
 
 // Adding a model: append its id here, then TypeScript forces a declaration in VIDEO_MODEL_CATALOG.
-export const VIDEO_MODEL_IDS = ['test-video', 'gemini-omni-1.1-flash', 'grok-imagine-video-1.5'] as const;
+export const VIDEO_MODEL_IDS = [
+  'test-video',
+  'gemini-omni-1.1-flash',
+  'grok-imagine-video-1.5',
+  'veo-3.1-fast-generate-preview',
+] as const;
 export type VideoModelId = (typeof VIDEO_MODEL_IDS)[number];
 export const VideoModelIdSchema = z.enum(VIDEO_MODEL_IDS);
 
@@ -47,6 +52,21 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     // Provisional flat rate for both tiers; the live check compares it with usage.cost_in_usd_ticks (1e10 ticks = $1).
     pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.08 } },
     // Off until the live provider check passes, like Omni; the check gates the flip to true.
+    defaultEnabled: false,
+  },
+  // Audio is generated and included in the per-second price; a blocked clip is documented as not charged.
+  'veo-3.1-fast-generate-preview': {
+    provider: 'veo',
+    displayName: 'Veo 3.1 Fast',
+    modes: ['text_to_video', 'image_to_video'],
+    duration: { kind: 'discrete', values: [4, 6, 8] },
+    aspectRatios: ['16:9', '9:16'],
+    // 1080p ($0.12/s) and 4k are documented only for 8s clips, which a per-model duration list cannot express.
+    resolutions: ['720p'],
+    defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+    audio: 'always',
+    pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
+    // Off until the live provider check passes, like Omni and xAI.
     defaultEnabled: false,
   },
 };

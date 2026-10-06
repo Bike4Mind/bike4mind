@@ -33,6 +33,7 @@ import {
   createVideoProviderRegistry,
   GeminiOmniVideoProvider,
   TestVideoProvider,
+  VeoVideoProvider,
   XaiVideoProvider,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
@@ -74,6 +75,7 @@ export const selectProviderKey = (
     case 'test':
       return 'test-key';
     case 'gemini-omni':
+    case 'veo':
       return keys.gemini;
     // The same key as xAI chat (user key, admin setting, then XAI_API_KEY).
     case 'xai':
@@ -106,10 +108,10 @@ export const toJobUpdate = (job: IGenerationJobDocument): IGenerationJobUpdatedA
   };
 };
 
-// Gemini and xAI are registered everywhere; whether a caller can use one depends on a resolvable key
+// Gemini, xAI and Veo are registered everywhere; whether a caller can use one depends on a resolvable key
 // (hasUsableKey in server/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
-  const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider()];
+  const providers: VideoProvider[] = [new GeminiOmniVideoProvider(), new XaiVideoProvider(), new VeoVideoProvider()];
   // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
   if (process.env.ENABLE_TEST_VIDEO_PROVIDER === 'true') providers.push(new TestVideoProvider());
   return providers;

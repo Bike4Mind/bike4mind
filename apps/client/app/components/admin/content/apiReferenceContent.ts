@@ -734,7 +734,7 @@ POST /api/v1/video-generations/{id}/cancel
 
 **Required API-key scope:** \`ai:generate\`.
 
-Models: \`gemini-omni-1.1-flash\` (Google) and \`grok-imagine-video-1.5\` (xAI). \`GET /api/v1/video-models\`
+Models: \`gemini-omni-1.1-flash\` (Google), \`grok-imagine-video-1.5\` (xAI) and \`veo-3.1-fast-generate-preview\` (Google Veo). \`GET /api/v1/video-models\`
 lists the ones enabled and usable on this deployment, with their durations, aspect ratios and resolutions.
 
 > Generated from their contracts: see \`listVideoModels\`, \`createVideoGeneration\`,

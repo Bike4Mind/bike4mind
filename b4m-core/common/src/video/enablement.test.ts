@@ -21,6 +21,13 @@ describe('isVideoModelEnabled', () => {
     );
   });
 
+  it('ships Veo disabled until the live check passes', () => {
+    expect(isVideoModelEnabled('veo-3.1-fast-generate-preview', undefined)).toBe(false);
+    expect(
+      isVideoModelEnabled('veo-3.1-fast-generate-preview', { enabledModels: { 'veo-3.1-fast-generate-preview': true } })
+    ).toBe(true);
+  });
+
   it('an override wins over the catalog default', () => {
     expect(isVideoModelEnabled('test-video', { enabledModels: { 'test-video': false } })).toBe(false);
   });
