@@ -93,6 +93,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query;
     const ctx = await toAccessContext(req);
+    // Read outside the transaction: a read on the txn session is not retried on a step-down.
+    const platformEnabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
     // The manage gate and the cheap refusals run inside the transaction so a grant revoke committing
     // mid-request collides on the lake doc and the retry re-reads live grants, and a refused request
     // never reaches the touch (no updatedAt bump). Everything after (cap, enqueue, audit) is
@@ -100,7 +102,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const lake = await withTransaction(async () => {
       const gated = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
 
-      const platformEnabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
       if (!platformEnabled) {
         throw new ConflictError('Lake memory is disabled platform-wide.');
       }

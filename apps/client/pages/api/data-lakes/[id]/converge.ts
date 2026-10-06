@@ -201,10 +201,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // detection, and this one is what serializes the reset against a concurrent grant revoke (see
       // WRITE-TIME RESIDUAL on `canManageLake`). The sends below are external and run after commit.
       const resetIds = await withTransaction(async () => {
-        await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+        await dataLakeService.assertLakeRebuildAccess(lake.id, ctx, gateDeps);
         // Sequential: the ambient transaction session rejects concurrent operations.
         const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()], { concurrency: 1 });
-        await dataLakeRepository.touchIfStable(lake.id);
+        // A fallback lake has no Mongo doc and no grants to revoke, and its slug id is not a valid _id.
+        if (!dataLakeService.isFallbackLake(lake)) await dataLakeRepository.touchIfStable(lake.id);
         return reset;
       });
       const results = await Promise.allSettled(

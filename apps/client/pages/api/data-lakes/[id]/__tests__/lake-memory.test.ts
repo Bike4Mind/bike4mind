@@ -277,12 +277,11 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
     expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 
-  it('gates on rebuild access - a rejected assert never checks preconditions or enqueues', async () => {
+  it('gates on rebuild access - a rejected assert never enqueues', async () => {
     h.assertLakeRebuildAccess.mockRejectedValue(
       new Error("You do not have permission to rebuild this data lake's passages")
     );
     await expect(invoke('POST')).rejects.toThrow(/permission to rebuild/);
-    expect(h.getSettingsValue).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });

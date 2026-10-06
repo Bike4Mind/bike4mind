@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
   tx: [] as string[],
   touchIfStable: vi.fn(),
+  isFallbackLake: vi.fn(() => false),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   planLakeConvergenceRun: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     assertLakeRebuildAccess: h.assertLakeRebuildAccess,
+    isFallbackLake: h.isFallbackLake,
     planLakeConvergenceRun: h.planLakeConvergenceRun,
     redactCrossLakeIdentities: h.redactCrossLakeIdentities,
     DEFAULT_CONVERGENCE_WAVE: 25,
@@ -104,6 +106,7 @@ const invoke = async (method: 'GET' | 'POST', body: unknown = {}) => {
 beforeEach(() => {
   vi.clearAllMocks();
   h.tx.length = 0;
+  h.isFallbackLake.mockReturnValue(false);
   h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
   h.resetChunkStateByIds.mockImplementation(async () => (h.tx.push('reset'), ['f1', 'f2']));
   h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
@@ -150,6 +153,16 @@ describe('POST /api/data-lakes/:id/converge', () => {
     // Early gate (outside), then the in-txn re-gate, the reset, the touch, and only then the sends.
     expect(h.tx).toEqual(['gate', 'enter', 'gate', 'reset', 'touch', 'exit', 'send', 'send']);
     expect(h.touchIfStable).toHaveBeenCalledWith('lake1');
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2'], { concurrency: 1 });
+  });
+
+  it('still resets but does not touch when the lake is a fallback lake with no Mongo doc', async () => {
+    h.isFallbackLake.mockReturnValue(true);
+
+    await invoke('POST');
+
+    expect(h.resetChunkStateByIds).toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 
   it('touches nothing and sends nothing when the in-transaction re-gate refuses', async () => {

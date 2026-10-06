@@ -5,6 +5,7 @@ import {
   type LakeFindingDetector,
   type LakeFindingSource,
 } from '@bike4mind/common';
+import { isTransientTransactionError } from '@bike4mind/db-core';
 import { Logger } from '@bike4mind/observability';
 
 export interface RecordLakeFindingsAdapters {
@@ -21,6 +22,11 @@ export interface RecordLakeFindingsOptions {
    * identically - "everything this pass still saw" has to be a single instant to compare against.
    */
   seenAt: Date;
+  /**
+   * Rethrow the first failure instead of counting it. Set by a caller running inside a transaction,
+   * where a server-side abort poisons every later write.
+   */
+  failFast?: boolean;
 }
 
 export interface RecordLakeFindingsResult {
@@ -28,13 +34,6 @@ export interface RecordLakeFindingsResult {
   /** Findings whose upsert threw. Reported rather than swallowed; see the catch below. */
   failed: number;
 }
-
-const isTransientTransactionError = (error: unknown): boolean =>
-  typeof error === 'object' &&
-  error !== null &&
-  'errorLabels' in error &&
-  Array.isArray(error.errorLabels) &&
-  error.errorLabels.includes('TransientTransactionError');
 
 /**
  * Persist one detection pass's findings as rows (#3039), creating each on first sight and updating
@@ -52,7 +51,7 @@ const isTransientTransactionError = (error: unknown): boolean =>
 export async function recordLakeFindings(
   lakeId: string,
   findings: InconsistencyFinding[],
-  { detector, seenAt }: RecordLakeFindingsOptions,
+  { detector, seenAt, failFast }: RecordLakeFindingsOptions,
   { db, logger }: RecordLakeFindingsAdapters
 ): Promise<RecordLakeFindingsResult> {
   let recorded = 0;
@@ -78,8 +77,9 @@ export async function recordLakeFindings(
       // malformed subject must not cost a curator the other 199 problems this pass found. Counted
       // and returned rather than swallowed, so a caller reports a partial write as partial. Inside a
       // transaction any server-side failure aborts the whole transaction, so per-finding isolation
-      // only holds outside one; a transient abort is rethrown so withTransaction can retry it.
-      if (isTransientTransactionError(error)) throw error;
+      // only holds outside one: the transactional caller passes failFast so a server-side abort is
+      // not swallowed, and a transient abort is always rethrown so withTransaction can retry it.
+      if (failFast || isTransientTransactionError(error)) throw error;
       failed += 1;
       logger?.error('Failed to record lake finding', {
         lakeId,

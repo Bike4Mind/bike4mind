@@ -182,8 +182,10 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  *   - any of the above on a lake in a transitional status, which `touchIfStable` skips.
  *
  * Research run start, converge, rechunk, lake memory, inconsistency detection and finding belief are
- * serialized up to their decision (gate + short DB writes + touch in the transaction); the external
- * step runs after commit, and a revoke landing after that commit does not stop it.
+ * serialized up to their decision: the gate and that route's DB writes run in the transaction
+ * alongside a lake-doc write (`touchIfStable`, or the route's own lake update); any external step
+ * runs after commit, and a revoke landing after that commit does not stop it. The transitional-lake
+ * exception above applies to these routes too.
  *
  * A departure lapse collides too when the lapsed grant could manage (`lapseDepartedMemberLakeAccess`
  * phase 1 touches the lake for an owner/curator grant, and like the writers skips a transitional

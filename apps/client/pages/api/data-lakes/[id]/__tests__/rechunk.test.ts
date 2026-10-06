@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
   tx: [] as string[],
   touchIfStable: vi.fn(),
+  isFallbackLake: vi.fn(() => false),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   detectUnderChunkedFiles: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     assertLakeRebuildAccess: h.assertLakeRebuildAccess,
+    isFallbackLake: h.isFallbackLake,
     detectUnderChunkedFiles: h.detectUnderChunkedFiles,
     detectStaleEmbeddingSpaceFiles: h.detectStaleEmbeddingSpaceFiles,
     countFailedLakeFiles: h.countFailedLakeFiles,
@@ -92,6 +94,7 @@ const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme', createdByUserId: 'u
 beforeEach(() => {
   vi.clearAllMocks();
   h.tx.length = 0;
+  h.isFallbackLake.mockReturnValue(false);
   h.assertLakeAccess.mockResolvedValue(lake);
   h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
   h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
@@ -183,6 +186,16 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     // Early gate (outside), then the in-txn re-gate, the reset, the touch, and only then the sends.
     expect(h.tx).toEqual(['gate', 'enter', 'gate', 'reset', 'touch', 'exit', 'send', 'send']);
     expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+  });
+
+  it('still resets but does not touch when the lake is a fallback lake with no Mongo doc', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    h.isFallbackLake.mockReturnValue(true);
+
+    await invoke('POST');
+
+    expect(h.resetChunkStateByIds).toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 
   it('touches nothing and sends nothing when the in-transaction re-gate refuses', async () => {
