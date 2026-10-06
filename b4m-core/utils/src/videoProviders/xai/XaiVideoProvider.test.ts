@@ -70,7 +70,7 @@ const server = setupServer(
     return reply(exchange(active, settled ? 'poll_terminal' : 'poll_first'));
   }),
   // The test serves small bytes instead of a real clip.
-  http.get('https://vidgen.x.ai/synthetic/:file', ({ request }) => {
+  http.get('https://vidgen.x.ai/*', ({ request }) => {
     seenAuth.push(request.headers.get('authorization'));
     return new HttpResponse(VIDEO_BYTES, { headers: { 'content-type': 'video/mp4' } });
   })
@@ -307,7 +307,9 @@ describe('XaiVideoProvider specifics', () => {
 
   it('polls with the bearer key and passes progress through as a 0..1 fraction', async () => {
     const result = await new XaiVideoProvider().poll(handleFor('r1'), ctx());
-    expect(result).toEqual({ status: 'running', progress: 0.2 });
+    const reported = (exchange(FIXTURES.succeeds, 'poll_first').response.body as { progress: number }).progress;
+    expect(result).toEqual({ status: 'running', progress: reported / 100 });
+    expect(await pollWith({ status: 'pending', progress: 40 })).toEqual({ status: 'running', progress: 0.4 });
     expect(seenAuth).toEqual([`Bearer ${KEY}`]);
   });
 
@@ -328,8 +330,35 @@ describe('XaiVideoProvider specifics', () => {
     expect(
       await pollWith({ status: 'done', video: { url: VIDEO_URL, duration: 2, respect_moderation: false } })
     ).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
+  });
+
+  it('maps a moderated output seen live (a poll 400, still billed) to blocked instead of throwing', async () => {
+    const { status, body } = exchange(FIXTURES.blockedOutput, 'poll_terminal').response;
+    expect(status).toBe(400);
+    expect(await pollWith(body, status)).toEqual({ status: 'blocked', reason: 'xai_moderation', raw: body });
+  });
+
+  it('carries the blocked-output fixture through submit, pending poll and a blocked poll', async () => {
     active = FIXTURES.blockedOutput;
-    expect(await pollWith(pollBodyOf(FIXTURES.blockedOutput))).toMatchObject({ status: 'blocked' });
+    const provider = new XaiVideoProvider();
+    const handle = await provider.submit(request(), {}, ctx());
+    expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'running' });
+    settled = true;
+    expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'blocked' });
+  });
+
+  it.each([
+    ['imagine:content-moderated', 400],
+    ['IMAGINE:CONTENT-MODERATED', 400],
+    ['content-moderated', 422],
+  ])('reads the namespaced or hyphenated code %s on a poll %i as blocked', async (code, status) => {
+    expect(await pollWith({ code, error: 'Rejected' }, status)).toMatchObject({ status: 'blocked' });
+  });
+
+  it('keeps a namespaced non-moderation poll 400 a thrown error', async () => {
+    await expect(pollWith({ code: 'imagine:rate-limited', error: 'Slow down' }, 400)).rejects.toThrow(
+      'xai_poll_http_400'
+    );
   });
 
   it('maps done with no url to a non-retryable video_unparsed failure and logs it', async () => {

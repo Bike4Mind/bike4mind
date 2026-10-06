@@ -65,7 +65,9 @@ const readJson = async (response: Response): Promise<unknown> => {
   }
 };
 
-const normaliseCode = (code: string | undefined): string | undefined => code?.toLowerCase().replaceAll('-', '_');
+// Live codes are hyphenated and may carry a namespace ("imagine:content-moderated"): drop the namespace, read `-` as `_`.
+const normaliseCode = (code: string | undefined): string | undefined =>
+  code?.toLowerCase().split(':').at(-1)?.replaceAll('-', '_');
 
 const errorInfoOf = (raw: unknown): ErrorInfo => {
   const parsed = ErrorEnvelopeSchema.safeParse(raw);
@@ -204,6 +206,11 @@ export class XaiVideoProvider implements VideoProvider {
       signal: ctx.signal,
     });
     const raw = await readJson(response);
+    // Seen live: a moderated output is a poll 400 (code "imagine:content-moderated"), not a done or failed status,
+    // and xAI still bills it. Throwing would retry it to exhaustion, so it is a blocked verdict.
+    if (!response.ok && isModeration(errorInfoOf(raw))) {
+      return { status: 'blocked', reason: MODERATION_REASON, raw };
+    }
     // A malformed or unknown request id never recovers on retry.
     if (
       response.status === 404 ||

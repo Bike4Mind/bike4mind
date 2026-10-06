@@ -70,9 +70,15 @@ const pollToTerminal = async (id: string): Promise<{ exchanges: Exchange[]; term
     const { exchange, parsed } = await call('GET', `/v1/videos/${id}`);
     const status = statusOf(parsed);
     process.stdout.write(`  poll ${exchange.response.status} status=${status}\n`);
-    // A failed poll is a recorder problem (auth, wrong path), not a provider outcome worth replaying.
-    if (exchange.response.status >= 400) {
-      throw new Error(`poll of ${id} failed: ${exchange.response.status} ${JSON.stringify(exchange.response.body)}`);
+    // Auth, throttle and server errors are recorder problems. Any other non-2xx with a body is a provider outcome:
+    // a moderated output was seen live as a poll 400 (code "imagine:content-moderated"), so it ends the poll and is saved.
+    const httpStatus = exchange.response.status;
+    if (httpStatus >= 400 && ([401, 403, 429].includes(httpStatus) || httpStatus >= 500)) {
+      throw new Error(`poll of ${id} failed: ${httpStatus} ${JSON.stringify(exchange.response.body)}`);
+    }
+    if (httpStatus >= 400) {
+      exchanges.push({ name: 'poll_terminal', ...exchange });
+      return { exchanges, terminal: parsed };
     }
     if (first) exchanges.push({ name: 'poll_first', ...exchange });
     first = false;

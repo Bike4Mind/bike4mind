@@ -1,7 +1,7 @@
 {
   "scenario": "blocked-output.synthetic",
   "synthetic": true,
-  "basis": "Hand-built from the docs digest: done with video.respect_moderation false; whether the url is withheld is undocumented, so none is given. Prompt redacted. Replace with a recording.",
+  "description": "Transcribed from a live response on 2026-10-06: a blocked scenario was accepted at submit, then GET /v1/videos/{id} answered HTTP 400 with this body (usage still billed). The exchange wrapper, request id and redacted prompt are hand-built. Replace with a recording once the recorder saves it.",
   "exchanges": [
     {
       "name": "submit",
@@ -26,22 +26,21 @@
       "name": "poll_first",
       "request": { "method": "GET", "path": "/v1/videos/synthetic-blocked-output" },
       "response": {
-        "status": 200,
+        "status": 202,
         "headers": { "content-type": "application/json" },
-        "body": { "status": "pending", "progress": 10 }
+        "body": { "status": "pending", "progress": 1 }
       }
     },
     {
       "name": "poll_terminal",
       "request": { "method": "GET", "path": "/v1/videos/synthetic-blocked-output" },
       "response": {
-        "status": 200,
+        "status": 400,
         "headers": { "content-type": "application/json" },
         "body": {
-          "status": "done",
-          "progress": 100,
-          "model": "grok-imagine-video-1.5",
-          "video": { "duration": 2, "respect_moderation": false }
+          "code": "imagine:content-moderated",
+          "error": "Generated video rejected by content moderation.",
+          "usage": { "cost_in_usd_ticks": 1600000000 }
         }
       }
     }
