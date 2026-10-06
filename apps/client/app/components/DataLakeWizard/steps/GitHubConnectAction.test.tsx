@@ -354,8 +354,22 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
     fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
     act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
     const [, startOptions] = h.startMutate.mock.calls[0];
-    act(() => startOptions.onError({ isAxiosError: true, response: { data: { error: 'already connected' } } }));
+    act(() =>
+      startOptions.onError({ isAxiosError: true, response: { status: 400, data: { error: 'archived status' } } })
+    );
     expect(h.revertOriginMutate).toHaveBeenCalledWith({ id: 'lake1', origin: 'curated' });
+  });
+
+  it('keeps connector-fed when the connect is refused because another connector holds the lake', () => {
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
+    const [, startOptions] = h.startMutate.mock.calls[0];
+    act(() =>
+      startOptions.onError({ isAxiosError: true, response: { status: 409, data: { error: 'already connected' } } })
+    );
+    expect(h.toastError).toHaveBeenCalledWith('already connected');
+    expect(h.revertOriginMutate).not.toHaveBeenCalled();
   });
 
   it('keeps the switch once the connect leaves for GitHub', () => {

@@ -12,8 +12,11 @@ import { saveGitHubLakeConnectHandoff } from '@client/app/utils/githubLakeConnec
 export function useBeginLakeGitHubConnect(dataLakeId: string) {
   const start = useStartLakeGitHubConnect();
 
-  /** `onFailed` runs when the browser will not leave for GitHub: the start was refused or the handoff could not be saved. */
-  const begin = ({ onFailed }: { onFailed?: () => void } = {}) =>
+  /**
+   * `onFailed` runs when the browser will not leave for GitHub: with the start's error when it was refused,
+   * or with nothing when the handoff could not be saved.
+   */
+  const begin = ({ onFailed }: { onFailed?: (error?: unknown) => void } = {}) =>
     start.mutate(dataLakeId, {
       onSuccess: ({ authorizeUrl }) => {
         try {
@@ -30,7 +33,7 @@ export function useBeginLakeGitHubConnect(dataLakeId: string) {
       // switch first, but the picker's Reconnect does not check origin and it can change mid-flow.
       onError: (e: unknown) => {
         toast.error(getServerErrorField(e) || 'Could not start the GitHub connection. Please try again.');
-        onFailed?.();
+        onFailed?.(e);
       },
     });
 

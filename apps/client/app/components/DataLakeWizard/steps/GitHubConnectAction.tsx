@@ -3,6 +3,7 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import { useState } from 'react';
+import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { acceptsConnectorContent, type DataLakeOrigin } from '@bike4mind/common';
 import {
@@ -115,8 +116,14 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
                         setSwitchPromptLakeId(null);
                         // Undo the switch if the start is refused, so a failed connect does not leave the
                         // lake connector-fed with nothing connected. Abandoning GitHub's page keeps it: the
-                        // user confirmed the switch, and the lake's origin chip shows it.
-                        beginConnect({ onFailed: () => revertOrigin.mutate({ id: lakeId, origin: 'curated' }) });
+                        // user confirmed the switch, and the lake's origin chip shows it. A 409 means another
+                        // connector (or someone else's connect) holds the lake, which needs connector-fed.
+                        beginConnect({
+                          onFailed: error => {
+                            if (isAxiosError(error) && error.response?.status === 409) return;
+                            revertOrigin.mutate({ id: lakeId, origin: 'curated' });
+                          },
+                        });
                       },
                     }
                   );
