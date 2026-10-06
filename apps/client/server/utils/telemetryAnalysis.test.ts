@@ -1,7 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import type { ContextTelemetry, AnomaliesTelemetry } from '@bike4mind/common';
-import { buildAnalysisPrompt, extractAnalysisJson, formatIssueBody, type LLMAnalysis } from './telemetryAnalysis';
+import {
+  buildAnalysisPrompt,
+  extractAnalysisJson,
+  formatIssueBody,
+  generateRuleBasedAnalysis,
+  type LLMAnalysis,
+} from './telemetryAnalysis';
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,
@@ -72,6 +78,33 @@ function createTestTelemetry(overrides: { anomalies?: Partial<AnomaliesTelemetry
     subagents: [],
   };
 }
+
+describe('generateRuleBasedAnalysis TTFVT findings', () => {
+  // A frozen turn sets slowFirstToken with no firstTokenTime; the old code read that as 0ms
+  // and emitted "Slow time to first token: 0.0s", inverting the finding's meaning.
+  it('reports a never-rendered turn, not 0.0s', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = { totalResponseTimeMs: 20_000, firstChunkTimeMs: 500 };
+    telemetry.anomalies = { ...telemetry.anomalies, slowFirstToken: true };
+
+    const findings = generateRuleBasedAnalysis(telemetry).findings.join('\n');
+
+    expect(findings).toContain('no visible token ever rendered');
+    expect(findings).not.toContain('0.0s');
+    expect(findings).not.toContain('Slow time to first token');
+  });
+
+  it('reports a slow measured turn in seconds with the SLO target', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = { totalResponseTimeMs: 20_000, firstTokenTimeMs: 12_000 };
+    telemetry.anomalies = { ...telemetry.anomalies, slowFirstToken: true };
+
+    const findings = generateRuleBasedAnalysis(telemetry).findings.join('\n');
+
+    expect(findings).toContain('Slow time to first token: 12.0s');
+    expect(findings).toContain('SLO target: 5.0s');
+  });
+});
 
 describe('formatIssueBody', () => {
   it('escapes LLM analysis text written into the issue body', () => {

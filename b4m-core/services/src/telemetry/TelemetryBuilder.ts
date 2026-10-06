@@ -20,6 +20,7 @@ import {
   ANOMALY_WEIGHTS,
   ANOMALY_THRESHOLDS,
   ModelBackend,
+  ttfvtState,
 } from '@bike4mind/common';
 
 import type { ToolErrorCategory } from '@bike4mind/common';
@@ -345,6 +346,11 @@ export class TelemetryBuilder {
    * Computes anomaly flags and score based on collected data
    */
   private computeAnomalies(): AnomaliesTelemetry {
+    // Branch on TTFVT state, not on a numeric value: a turn that streamed but never rendered
+    // a visible token (frozen) leaves firstTokenTimeMs unset, so defaulting it to 0 would
+    // score it as healthy. measured past the threshold fires, never-rendered fires outright,
+    // and unknown (neither stamp recorded) is no evidence and stays quiet. See ttfvt.ts.
+    const ttfvt = ttfvtState(this.performance.firstTokenTimeMs, this.performance.firstChunkTimeMs);
     const flags = {
       contextOverflow: this.contextWindow.overflowDetected ?? false,
       highUtilization: (this.contextWindow.utilizationPercentage ?? 0) >= ANOMALY_THRESHOLDS.highUtilization,
@@ -354,7 +360,9 @@ export class TelemetryBuilder {
       toolFailureSpike: this.tools.reduce((sum, t) => sum + t.failureCount, 0) >= ANOMALY_THRESHOLDS.toolFailureSpike,
       toolTimeout: this.tools.some(t => t.maxDurationMs > ANOMALY_THRESHOLDS.toolTimeout),
       subagentTimeout: this.subagents.some(s => s.totalDurationMs > ANOMALY_THRESHOLDS.subagentTimeout),
-      slowFirstToken: (this.performance.firstTokenTimeMs ?? 0) > ANOMALY_THRESHOLDS.slowFirstToken,
+      slowFirstToken:
+        ttfvt === 'never-rendered' ||
+        (ttfvt === 'measured' && (this.performance.firstTokenTimeMs ?? 0) > ANOMALY_THRESHOLDS.slowFirstToken),
       slowTotalResponse: (this.performance.totalResponseTimeMs ?? 0) > ANOMALY_THRESHOLDS.slowTotalResponse,
     };
 
@@ -473,6 +481,7 @@ export class TelemetryBuilder {
     const performance: PerformanceTelemetry = {
       totalResponseTimeMs: this.performance.totalResponseTimeMs ?? 0,
       firstTokenTimeMs: this.performance.firstTokenTimeMs,
+      firstChunkTimeMs: this.performance.firstChunkTimeMs,
       contextRetrievalMs: this.performance.contextRetrievalMs,
       modelInferenceMs: this.performance.modelInferenceMs,
       toolExecutionMs: this.performance.toolExecutionMs,

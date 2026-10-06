@@ -178,6 +178,12 @@ describe('TelemetryBuilder anomaly classification', () => {
       ['tool timeout', b => b.addTool(tool({ maxDurationMs: 45_000 }))],
       ['subagent timeout', b => b.addSubagent(subagent({ totalDurationMs: 400_000 }))],
       ['slow first token', b => b.setPerformance({ totalResponseTimeMs: 20_000, firstTokenTimeMs: 12_000 })],
+      ['never rendered first token', b => b.setPerformance({ totalResponseTimeMs: 20_000, firstChunkTimeMs: 500 })],
+      ['unknown first token', b => b.setPerformance({ totalResponseTimeMs: 20_000 })],
+      [
+        'measured fast first token',
+        b => b.setPerformance({ totalResponseTimeMs: 20_000, firstTokenTimeMs: 3_000, firstChunkTimeMs: 2_500 }),
+      ],
       ['slow total response', b => b.setPerformance({ totalResponseTimeMs: 70_000 })],
       [
         'several causes',
@@ -194,6 +200,59 @@ describe('TelemetryBuilder anomaly classification', () => {
 
       expect(anomalies.anomalyScore > 0).toBe(anomalies.primaryAnomaly !== 'none');
     });
+  });
+});
+
+describe('TelemetryBuilder slow-first-token (TTFVT)', () => {
+  it('fires for a measured turn past the threshold', () => {
+    const anomalies = anomaliesFor(b =>
+      b.setPerformance({ totalResponseTimeMs: 20_000, firstTokenTimeMs: ANOMALY_THRESHOLDS.slowFirstToken + 1 })
+    );
+
+    expect(anomalies.slowFirstToken).toBe(true);
+    expect(anomalies.primaryAnomaly).toBe('slow_response');
+    expect(anomalies.anomalyScore).toBeGreaterThan(0);
+  });
+
+  it('pins the strict threshold boundary', () => {
+    const atThreshold = anomaliesFor(b =>
+      b.setPerformance({ totalResponseTimeMs: 20_000, firstTokenTimeMs: ANOMALY_THRESHOLDS.slowFirstToken })
+    );
+    const overThreshold = anomaliesFor(b =>
+      b.setPerformance({ totalResponseTimeMs: 20_000, firstTokenTimeMs: ANOMALY_THRESHOLDS.slowFirstToken + 1 })
+    );
+
+    expect(atThreshold.slowFirstToken).toBe(false);
+    expect(overThreshold.slowFirstToken).toBe(true);
+  });
+
+  // The frozen-turn case #2260 is about: the model streamed (firstChunkTime proves it) but
+  // nothing visible ever rendered, so firstTokenTime is absent. The old `?? 0` scored this
+  // as 0ms - healthy - which is exactly how the signal stayed dead.
+  it('fires for a never-rendered turn', () => {
+    const anomalies = anomaliesFor(b => b.setPerformance({ totalResponseTimeMs: 20_000, firstChunkTimeMs: 500 }));
+
+    expect(anomalies.slowFirstToken).toBe(true);
+    expect(anomalies.primaryAnomaly).toBe('slow_response');
+  });
+
+  // Neither stamp recorded is no evidence - a media generation or an early failure - and must
+  // not be collapsed into never-rendered (see ttfvt.ts), or every non-streaming turn pages.
+  it('stays quiet when neither timing was recorded', () => {
+    const anomalies = anomaliesFor(b => b.setPerformance({ totalResponseTimeMs: 20_000 }));
+
+    expect(anomalies.slowFirstToken).toBe(false);
+    expect(anomalies.primaryAnomaly).toBe('none');
+  });
+
+  it('carries both timings through build()', () => {
+    const builder = new TelemetryBuilder(sessionId);
+    builder.setPerformance({ totalResponseTimeMs: 1_000, firstTokenTimeMs: 1_200, firstChunkTimeMs: 800 });
+
+    const performance = builder.build().performance;
+
+    expect(performance.firstTokenTimeMs).toBe(1_200);
+    expect(performance.firstChunkTimeMs).toBe(800);
   });
 });
 
