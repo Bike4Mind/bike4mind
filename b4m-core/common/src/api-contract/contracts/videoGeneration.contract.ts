@@ -27,7 +27,7 @@ const exampleJob = {
   progress: null,
   error: null,
   output: null,
-  credits: { reserved: 4801, settled: null },
+  credits: { reserved: 960, settled: null },
   created_at: '2026-10-06T00:00:00.000Z',
   updated_at: '2026-10-06T00:00:00.000Z',
 } as const;

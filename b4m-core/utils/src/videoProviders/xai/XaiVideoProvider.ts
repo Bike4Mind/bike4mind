@@ -18,8 +18,10 @@ const VIDEOS_URL = 'https://api.x.ai/v1/videos';
 // Whole-token match on the normalised error code (`-` read as `_`), never a substring: a capacity or auth failure
 // must not read as a content block. The wording of a real block is unconfirmed until the live recording.
 const MODERATION_CODE = /^(content_|safety_)?(blocked|moderat\w*)$|^(safety|content_policy|content_filter)$/;
-// Free text counts only in the block phrasing ("blocked by moderation", "rejected by safety filters").
-const MODERATION_PHRASE = /\b(blocked|rejected|flagged|violat\w*)\b[^.:]*\b(moderation|safety|polic(y|ies))\b/i;
+// Free text counts only in content-tied phrasing: a block/reject by moderation, safety or content policy, or a
+// violation of a usage/content/safety policy. A bare "policy" is not enough ("rate limit policy", "key policy").
+const MODERATION_PHRASE =
+  /\b(blocked|rejected|flagged)\b[^.:]*\b(moderation|safety|content polic(y|ies))\b|\bviolat\w*\b[^.:]*\b(usage|content|safety) polic(y|ies)\b/i;
 // The live "bad request id" 400 reads "Malformed request ID"; an id that is well formed but gone reads as unknown.
 // Anchored on "request id" so a transient "Unknown error" 400 never ends a running, billed job.
 const UNKNOWN_REQUEST_PATTERN =

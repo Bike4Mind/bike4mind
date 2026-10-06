@@ -368,6 +368,9 @@ describe('XaiVideoProvider specifics', () => {
     [{ code: 'service_unavailable', message: 'Request blocked: rate limit exceeded' }],
     [{ code: 'internal_error', message: 'Upstream blocked waiting on GPU' }],
     [{ code: 'permission_denied', message: 'Account blocked' }],
+    [{ code: 'permission_denied', message: 'Request rejected by rate limit policy' }],
+    [{ code: 'resource_exhausted', message: 'Quota exceeded: request blocked by usage policy' }],
+    [{ code: 'permission_denied', message: 'API key rejected, check your key policy' }],
     [{ code: 'unblocked_retry', message: 'Try again' }],
   ])('keeps a failed job that merely says "blocked" (%o) a plain failure', async error => {
     expect(await pollWith({ status: 'failed', error })).toMatchObject({ status: 'failed', message: 'xai_failed' });
