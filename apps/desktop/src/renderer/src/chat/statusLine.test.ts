@@ -25,8 +25,13 @@ import {
   type ComposerUsage,
 } from './statusLine';
 
-function call(name: string, status: ChatToolStatus, progress?: string): ChatToolCall {
-  return { id: name, name, input: {}, status, ...(progress ? { progress } : {}) };
+function call(
+  name: string,
+  status: ChatToolStatus,
+  progress?: string,
+  input: Record<string, string> = {}
+): ChatToolCall {
+  return { id: name, name, input, status, ...(progress ? { progress } : {}) };
 }
 
 function code(body: string, language = 'tsx'): PendingCode {
@@ -170,10 +175,31 @@ describe('describeActivity', () => {
     expect(label).not.toContain('\n');
   });
 
-  it('counts the tools running at once rather than saying tools', () => {
-    expect(describeActivity([call('file_read', 'running'), call('grep_search', 'running')], false).label).toBe(
-      'Running 2 tools...'
+  // The whole point of the line while a tool runs: "Running a command" is true of every command
+  // this app has ever run, and says nothing about the seven minutes you are watching.
+  it('names the tool and what it was called on', () => {
+    expect(describeActivity([call('bash_execute', 'running', undefined, { command: 'pnpm test' })], false).label).toBe(
+      'Running pnpm test...'
     );
+    expect(
+      describeActivity([call('file_edit', 'running', undefined, { path: 'src/chat/statusLine.ts' })], false).label
+    ).toBe('Editing src/chat/statusLine.ts...');
+    expect(describeActivity([call('grep_search', 'running', undefined, { pattern: 'handleClick' })], false).label).toBe(
+      'Searching for handleClick...'
+    );
+  });
+
+  it('names the newest of several and counts the rest, which have rows of their own', () => {
+    const calls = [
+      call('file_read', 'running', undefined, { path: 'src/app.ts' }),
+      call('bash_execute', 'running', undefined, { command: 'pnpm lint' }),
+      call('file_edit', 'running', undefined, { path: 'src/chat/TurnStatus.tsx' }),
+    ];
+    expect(describeActivity(calls, false).label).toBe('Editing src/chat/TurnStatus.tsx and 2 more...');
+  });
+
+  it('falls back to the bare phrase for a tool whose call names nothing', () => {
+    expect(describeActivity([call('todo_write', 'running')], false).label).toBe('Updating the plan...');
   });
 
   it('names a model that is thinking rather than reporting it as still responding', () => {

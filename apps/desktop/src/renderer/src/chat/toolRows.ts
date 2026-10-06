@@ -23,7 +23,13 @@ interface ToolPhrases {
   toAlone: string;
   /** Consecutive calls to this tool, collapsed. */
   many: (count: number) => string;
-  /** Present tense, for the status line while the call is still running. */
+  /**
+   * Present tense prefixing the call's own argument: "Editing" + "statusLine.ts". The present
+   * counterpart of `did`, and left out in the same places - a call whose argument is prose reads
+   * better as `active` alone.
+   */
+  doing?: string;
+  /** Present tense with nothing to name: "Editing files...". */
   active: string;
 }
 
@@ -34,6 +40,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'read',
     toAlone: 'read a file',
     many: n => `Read ${n} files`,
+    doing: 'Reading',
     active: 'Reading files...',
   },
   glob_files: {
@@ -42,6 +49,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'search for',
     toAlone: 'search for files',
     many: n => `Ran ${n} file searches`,
+    doing: 'Searching for',
     active: 'Searching for files...',
   },
   grep_search: {
@@ -50,6 +58,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'search for',
     toAlone: 'search the project',
     many: n => `Ran ${n} searches`,
+    doing: 'Searching for',
     active: 'Searching...',
   },
   todo_write: {
@@ -64,6 +73,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'ask',
     toAlone: 'ask a question',
     many: n => `Asked ${n} questions`,
+    doing: 'Asking:',
     active: 'Asking a question...',
   },
   explore: {
@@ -72,6 +82,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'explore',
     toAlone: 'explore the project',
     many: n => `Ran ${n} explorations`,
+    doing: 'Exploring',
     active: 'Exploring...',
   },
   bash_execute: {
@@ -80,6 +91,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'run',
     toAlone: 'run a command',
     many: n => `Ran ${n} commands`,
+    doing: 'Running',
     active: 'Running a command...',
   },
   bash_background: {
@@ -88,6 +100,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'start',
     toAlone: 'start a background process',
     many: n => `Started ${n} background processes`,
+    doing: 'Starting',
     active: 'Starting a background process...',
   },
   bash_output: {
@@ -114,6 +127,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'write',
     toAlone: 'write a file',
     many: n => `Wrote ${n} files`,
+    doing: 'Writing',
     active: 'Writing files...',
   },
   file_edit: {
@@ -122,6 +136,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'edit',
     toAlone: 'edit a file',
     many: n => `Edited ${n} files`,
+    doing: 'Editing',
     active: 'Editing files...',
   },
   apply_patch: {
@@ -130,6 +145,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'patch',
     toAlone: 'apply a patch',
     many: n => `Applied ${n} patches`,
+    doing: 'Patching',
     active: 'Patching files...',
   },
   generate_image: {
@@ -166,6 +182,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     didAlone: 'Started a session',
     toAlone: 'start a session',
     many: n => `Started ${n} sessions`,
+    doing: 'Starting',
     active: 'Starting a session...',
   },
   session_send: {
@@ -192,6 +209,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'read',
     toAlone: 'read a memory',
     many: n => `Recalled ${n} memories`,
+    doing: 'Recalling',
     active: 'Recalling...',
   },
   memory_write: {
@@ -200,6 +218,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'save',
     toAlone: 'save a memory',
     many: n => `Saved ${n} memories`,
+    doing: 'Saving',
     active: 'Saving a memory...',
   },
   memory_delete: {
@@ -208,6 +227,7 @@ const PHRASES: Record<string, ToolPhrases> = {
     to: 'forget',
     toAlone: 'forget a memory',
     many: n => `Forgot ${n} memories`,
+    doing: 'Forgetting',
     active: 'Forgetting a memory...',
   },
   generate_music: {
@@ -229,6 +249,7 @@ function unknownPhrases(name: string): ToolPhrases {
     to: `run ${name}`,
     toAlone: `run ${name}`,
     many: n => `Ran ${name} ${n} times`,
+    doing: `Running ${name}`,
     active: `Running ${name}...`,
   };
 }
@@ -535,6 +556,24 @@ export function groupToolCalls(calls: readonly ChatToolCall[]): ToolCallGroup[] 
   flush();
 
   return groups;
+}
+
+/**
+ * What one running call is doing, named: "Editing statusLine.ts...", "Running pnpm test...".
+ *
+ * The same two pieces every other row in the transcript is built from - this table's word for
+ * the tool, and the call's own argument - so the line in flight and the row it settles into are
+ * the same sentence in two tenses.
+ *
+ * Empty when there is nothing worth naming: a plan update acts on no file, and an image is
+ * generated from a paragraph of prose that would fill the line and name it less well than
+ * "Generating an image" does. The caller falls back - see describeActivity, which prefers what
+ * such a tool reports about itself.
+ */
+export function namedAction(call: ChatToolCall): string {
+  const phrases = phrasesFor(call.name);
+  const argument = shortenArgument(summarizeInput(call));
+  return phrases.doing && argument ? `${phrases.doing} ${argument}...` : '';
 }
 
 /** Present tense for the status line, when one tool is the thing being waited on. */
