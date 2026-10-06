@@ -1,4 +1,5 @@
 import type {
+  DataLakePendingConnector,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
   IDataLakeRepository,
@@ -171,7 +172,9 @@ export const createDataLake = async (
   // it as an already-checked value and never re-derives it from the raw request body.
   organizationId?: string,
   /** Set by a route that accepts API-key auth, so a key-driven create is attributed to the key. */
-  auditPrincipal?: LakeAuditPrincipal
+  auditPrincipal?: LakeAuditPrincipal,
+  // Server-decided, never read from the request body: only a connector-first create route sets it.
+  options?: { pendingConnector?: DataLakePendingConnector }
 ): Promise<IDataLakeDocument> => {
   const params = secureParameters(parameters, CreateDataLakeRequestInput);
 
@@ -206,6 +209,7 @@ export const createDataLake = async (
       createdByUserId: userId,
       organizationId,
       status: 'draft',
+      ...(options?.pendingConnector ? { pendingConnector: options.pendingConnector } : {}),
       fileCount: 0,
       totalSizeBytes: 0,
       totalChunkedChars: 0,
