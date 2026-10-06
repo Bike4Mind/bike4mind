@@ -136,7 +136,8 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
   // Check for auto-compact before processing
   let activeSession = storeSession;
   if (config?.preferences.autoCompact !== false && activeSession.messages.length >= 6) {
-    const tokenCounter = getTokenCounter();
+    // Calibrate to the session's model so the 80% trigger matches its real tokenizer.
+    const tokenCounter = getTokenCounter().forModel(activeSession.model);
     const contextWindow = tokenCounter.getContextWindow(activeSession.model, availableModels);
 
     const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
