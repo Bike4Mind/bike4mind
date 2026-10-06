@@ -226,7 +226,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     ]);
     const { json } = await invoke('POST', {});
     expect(h.assertLakeRebuildAccess).toHaveBeenCalled();
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2'], { concurrency: 1 });
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
       fabFileId: 'f1',
@@ -250,7 +250,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'c', userId: 'u' },
     ]);
     const { json } = await invoke('POST', { limit: 2 });
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b'], { concurrency: 1 });
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
   });
@@ -263,7 +263,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     // first send lands, second rejects (SQS hiccup)
     h.sendToQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('sqs unavailable'));
     const { json } = await invoke('POST', {});
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['ok', 'bad']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['ok', 'bad'], { concurrency: 1 });
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 1, remaining: 1 });
   });
 
@@ -276,7 +276,7 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     // One bulk reset for the wave - no per-file claim, because mutual exclusion is the chunk
     // worker's compare-and-set, not a producer-side reservation.
     expect(h.resetChunkStateByIds).toHaveBeenCalledTimes(1);
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b'], { concurrency: 1 });
     expect(h.sendToQueue).toHaveBeenCalledTimes(2);
     expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
   });
@@ -368,7 +368,7 @@ describe('POST /api/data-lakes/[id]/rechunk  select: stale-embedding-space', () 
 
     expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();
     expect(h.detectStaleEmbeddingSpaceFiles).toHaveBeenCalledWith(lake, expect.anything(), 'text-embedding-3-small');
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2'], { concurrency: 1 });
     // Each message carries the FILE's owner, not the caller: the chunk worker loads the file under
     // that identity, so the admin's id would fail the accessibility read.
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
@@ -408,7 +408,7 @@ describe('POST /api/data-lakes/[id]/rechunk  select: stale-embedding-space', () 
       { fabFileId: 'c', userId: 'u' },
     ]);
     const { json } = await invoke('POST', { ...body, limit: 2 });
-    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b'], { concurrency: 1 });
     expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
   });
 

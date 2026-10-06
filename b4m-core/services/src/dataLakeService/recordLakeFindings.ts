@@ -29,6 +29,13 @@ export interface RecordLakeFindingsResult {
   failed: number;
 }
 
+const isTransientTransactionError = (error: unknown): boolean =>
+  typeof error === 'object' &&
+  error !== null &&
+  'errorLabels' in error &&
+  Array.isArray(error.errorLabels) &&
+  error.errorLabels.includes('TransientTransactionError');
+
 /**
  * Persist one detection pass's findings as rows (#3039), creating each on first sight and updating
  * it on every sighting after that.
@@ -69,7 +76,10 @@ export async function recordLakeFindings(
     } catch (error) {
       // Isolated per finding, the same way the detector isolates a per-member read failure: one
       // malformed subject must not cost a curator the other 199 problems this pass found. Counted
-      // and returned rather than swallowed, so a caller reports a partial write as partial.
+      // and returned rather than swallowed, so a caller reports a partial write as partial. Inside a
+      // transaction any server-side failure aborts the whole transaction, so per-finding isolation
+      // only holds outside one; a transient abort is rethrown so withTransaction can retry it.
+      if (isTransientTransactionError(error)) throw error;
       failed += 1;
       logger?.error('Failed to record lake finding', {
         lakeId,

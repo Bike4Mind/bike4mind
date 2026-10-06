@@ -156,6 +156,24 @@ describe('recordLakeFindings', () => {
     );
   });
 
+  it('rethrows a TransientTransactionError so the surrounding transaction can retry', async () => {
+    const transient = Object.assign(new Error('write conflict'), { errorLabels: ['TransientTransactionError'] });
+    const recordDetected = vi.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(transient);
+    const deps = adapters(recordDetected);
+
+    await expect(
+      recordLakeFindings(
+        'lake-1',
+        [finding({ subject: 'a' }), finding({ subject: 'b' }), finding({ subject: 'c' })],
+        { detector: 'lexical', seenAt: SEEN_AT },
+        deps
+      )
+    ).rejects.toBe(transient);
+
+    expect(recordDetected).toHaveBeenCalledTimes(2);
+    expect(deps.logger.error).not.toHaveBeenCalled();
+  });
+
   it('writes nothing and reports a clean run when a pass found nothing', async () => {
     const recordDetected = vi.fn().mockResolvedValue({});
 

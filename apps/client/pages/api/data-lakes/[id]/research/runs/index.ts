@@ -14,6 +14,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { queueResearchRun } from '@server/dataLakes/queueResearchRun';
 
 const StartInput = z.object({ configId: z.string() });
@@ -39,7 +40,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // may not manage this lake should not be able to probe the request schema by reading which
     // field it complains about. Nothing leaks through this particular 400, but a rule the two verbs
     // in one file disagree about is a rule that erodes.
-    const { lake } = await assertLakeResearchManage(req, id);
+    const { lake } = await assertLakeResearchManage(req, id, await toAccessContext(req));
     const { limit } = ListQuery.parse(req.query);
 
     const runs = await dataLakeResearchRunRepository.listByLake(lake.id, { limit: limit ?? DEFAULT_LIMIT });
@@ -48,22 +49,26 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
-    // Checked BEFORE the row is written. Without the queue there is no executor, so a run started
-    // here would sit `queued` forever and then block every later run behind the one-at-a-time
-    // guard - a self-host install that never wired the queue would look permanently busy.
-    const queueUrl = Resource.dataLakeResearchQueue?.url;
-    if (!queueUrl) {
-      throw new InternalServerError('Research runs are not available on this deployment');
-    }
+    // Computed outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
     // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
     // on the lake doc and the retry re-reads live grants. Only the run row is written in it: the
     // enqueue below is an external side effect, and the callback re-runs on retry.
-    const { run, lake } = await withTransaction(async () => {
+    const { run, lake, queueUrl } = await withTransaction(async () => {
       // Gated before the body is parsed, matching the config routes: a caller who may not manage this
       // lake should not be able to probe the request schema by reading which field it complains about.
-      const { lake, actor, grants } = await assertLakeResearchManage(req, id);
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
       const { configId } = StartInput.parse(req.body);
+
+      // Checked BEFORE the row is written, and after the gate and the parse so a refused or malformed
+      // request never learns about deployment config. Without the queue there is no executor, so a
+      // run started here would sit `queued` forever and block every later run behind the
+      // one-at-a-time guard. A pure config read, so safe to re-run on retry.
+      const queueUrl = Resource.dataLakeResearchQueue?.url;
+      if (!queueUrl) {
+        throw new InternalServerError('Research runs are not available on this deployment');
+      }
 
       const started = await dataLakeResearchService.startResearchRun(
         configId,
@@ -80,7 +85,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       );
       // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
       await dataLakeRepository.touchIfStable(lake.id);
-      return { run: started, lake };
+      return { run: started, lake, queueUrl };
     });
 
     await queueResearchRun(run, lake, queueUrl, req.logger);

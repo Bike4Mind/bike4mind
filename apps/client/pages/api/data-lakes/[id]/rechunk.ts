@@ -188,7 +188,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // WRITE-TIME RESIDUAL on `canManageLake`). The sends below are external and run after commit.
       const resetIds = await withTransaction(async () => {
         await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
-        const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
+        // Sequential: the ambient transaction session rejects concurrent operations.
+        const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()], { concurrency: 1 });
         await dataLakeRepository.touchIfStable(lake.id);
         return reset;
       });

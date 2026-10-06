@@ -93,26 +93,28 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query;
     const ctx = await toAccessContext(req);
-    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
-    // on the lake doc and the retry re-reads live grants. Everything below (cap, enqueue, audit) is
+    // The manage gate and the cheap refusals run inside the transaction so a grant revoke committing
+    // mid-request collides on the lake doc and the retry re-reads live grants, and a refused request
+    // never reaches the touch (no updatedAt bump). Everything after (cap, enqueue, audit) is
     // external and runs after commit, because the callback re-runs on retry.
     const lake = await withTransaction(async () => {
       const gated = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+
+      const platformEnabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
+      if (!platformEnabled) {
+        throw new ConflictError('Lake memory is disabled platform-wide.');
+      }
+      if (gated.lakeMemoryEnabled !== true) {
+        throw new UnprocessableEntityError('Lake memory is not enabled for this lake.');
+      }
+      if (isLeaseHeld(gated.lakeMemoryExtractionAt, new Date())) {
+        throw new ConflictError('A lake memory build is already running for this lake.');
+      }
+
       // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
       await dataLakeRepository.touchIfStable(gated.id);
       return gated;
     });
-
-    const platformEnabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
-    if (!platformEnabled) {
-      throw new ConflictError('Lake memory is disabled platform-wide.');
-    }
-    if (lake.lakeMemoryEnabled !== true) {
-      throw new UnprocessableEntityError('Lake memory is not enabled for this lake.');
-    }
-    if (isLeaseHeld(lake.lakeMemoryExtractionAt, new Date())) {
-      throw new ConflictError('A lake memory build is already running for this lake.');
-    }
 
     // Resolved BEFORE the cap is consumed: a missing queue URL is a deployment misconfiguration, so it
     // throws on every attempt - and consuming a cap slot first would burn the lake's whole daily

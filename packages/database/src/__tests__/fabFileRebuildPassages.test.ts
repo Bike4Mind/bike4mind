@@ -260,6 +260,18 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
     await FabFile.deleteMany({});
   });
 
+  it('resets every file when run sequentially with concurrency 1', async () => {
+    const files = await FabFile.create([
+      makeFile({ chunked: true, chunkCount: 1, isChunking: false }),
+      makeFile({ chunked: true, chunkCount: 1, isChunking: false }),
+      makeFile({ chunked: true, chunkCount: 1, isChunking: false }),
+    ]);
+    const ids = files.map(f => f._id.toString());
+
+    expect(await fabFileRepository.resetChunkStateByIds(ids, { concurrency: 1 })).toEqual(ids);
+    expect(await FabFile.countDocuments({ _id: { $in: ids }, chunked: false })).toBe(3);
+  });
+
   it('resets the chunk/vector flags INCLUDING error, so a re-enqueued job re-chunks', async () => {
     const [f] = await FabFile.create([
       makeFile({

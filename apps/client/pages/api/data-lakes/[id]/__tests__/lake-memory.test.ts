@@ -190,6 +190,7 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
   it('refuses with 409 when the platform flag is off, and never mutates the lake', async () => {
     h.getSettingsValue.mockResolvedValue(false);
     await expect(invoke('POST')).rejects.toThrow(/disabled platform-wide/);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
     expect(h.setLakeMemoryCursor).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     // The per-lake cap is not spent on a refusal. The per-caller brake IS - it is middleware and runs
@@ -200,12 +201,14 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
   it('refuses with 422 when the lake itself has not opted in', async () => {
     h.assertLakeRebuildAccess.mockResolvedValue({ ...lake, lakeMemoryEnabled: false });
     await expect(invoke('POST')).rejects.toThrow(/not enabled for this lake/);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 
   it('refuses with 409 when a build is already running (lease held)', async () => {
     h.assertLakeRebuildAccess.mockResolvedValue({ ...lake, lakeMemoryExtractionAt: new Date() });
     await expect(invoke('POST')).rejects.toThrow(/already running/);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
     expect(capCalls(LAKE_CAP_KEY)).toHaveLength(0);
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });

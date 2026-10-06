@@ -115,6 +115,14 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
   });
 
+  it('resolves the access context before the transaction opens', async () => {
+    h.toAccessContext.mockImplementationOnce(async () => (h.tx.push('ctx'), { userId: 'curator-1', isAdmin: false }));
+
+    await invoke().done;
+
+    expect(h.tx.slice(0, 2)).toEqual(['ctx', 'enter']);
+  });
+
   it('does not touch the lake or write a belief when the in-transaction gate refuses', async () => {
     h.assertLakeWriteAccess.mockRejectedValue(new Error('forbidden'));
 
@@ -146,6 +154,7 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     h.findById.mockResolvedValue({ ...resolvedFinding, status: 'open', resolution: null });
 
     await expect(invoke().done).rejects.toThrow(/not been ruled on/i);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
     expect(h.recordFindingResolutionBelief).not.toHaveBeenCalled();
   });
 
