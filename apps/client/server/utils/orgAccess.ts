@@ -4,10 +4,11 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
- * Three tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * Four tiers, widest last. State which one you mean at every call site; picking the wrong one
  * either leaks across a tenant boundary or breaks a members' screen:
  * - `verifyOrgOwner`      - owner only
  * - `verifyOrgAccess`     - owner or manager
+ * - `verifyOrgAdminRead`  - owner, manager or appointed admin (reads only)
  * - `verifyOrgMembership` - any member (shareable ACL)
  *
  * Security:
@@ -62,6 +63,34 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
   }
 
   return org;
+}
+
+/**
+ * Read-tier sibling of `verifyOrgAccess` for status surfaces an appointed org admin may see but not
+ * operate: admits the owner, the manager, an appointed admin (`adminUserIds`) and a platform admin.
+ * That is the same set `findIdsWithAdminRights` resolves from the user's side, read here off the org
+ * document because the org is already in hand. Never use it to guard a write - `canManage` is the
+ * `verifyOrgAccess` answer, so a caller can render the write controls only for who may use them.
+ *
+ * Non-oracular like its siblings: a missing org and an unrelated caller both answer NotFoundError.
+ */
+export async function verifyOrgAdminRead(user: { id: string; isAdmin: boolean }, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  const canManage = user.isAdmin || org.userId === user.id || org.managerId === user.id;
+  const isAppointedAdmin = (org.adminUserIds ?? []).some(adminId => String(adminId) === user.id);
+  if (!canManage && !isAppointedAdmin) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  return { org, canManage };
 }
 
 /**
