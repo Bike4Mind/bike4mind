@@ -14,7 +14,7 @@
 
 Each item is a place where the code contradicted a decision's factual premise; the plan follows the code.
 
-1. **D6a, self-host runner.** `apps/workers/src/selfhost/main.ts` does not call the queue handler without a context: it passes a context whose `getRemainingTimeInMillis()` returns 24 hours. The `min(leaseMs, remainingMs)` budget therefore already resolves to the lease there; the handler still guards a missing `getRemainingTimeInMillis` (the `BYPASS_QUEUE` inline path calls `engine.step` directly with no Lambda context).
+1. **D6a, self-host runner.** The self-host runner (`SelfHostWorker` in `apps/workers/src/selfhost/selfHostWorker.ts`, registered in `main.ts`) does not call the queue handler without a context: its `fakeContext` returns a context whose `getRemainingTimeInMillis()` reports `NO_DEADLINE_REMAINING_MS` (24 hours) unless the registration sets `runBudgetMs`. The `min(leaseMs, remainingMs)` budget therefore already resolves to the lease there; the handler still guards a missing `getRemainingTimeInMillis` (the `BYPASS_QUEUE` inline path calls `engine.step` directly with no Lambda context).
 2. **D3, catalog test.** `b4m-core/common/src/video/catalog.test.ts` already runs `describe.each(VIDEO_MODEL_IDS)` with "accepts its own defaults" and "prices every declared duration at every declared resolution" (line 26), so the new entry is covered automatically. Task 1 adds only an Omni-specific test that pins the declared values.
 3. **D4, "two providers claim one model".** Unreachable as stated: provider ids are unique (the registry already throws on a duplicate) and the catalog maps each model to exactly one provider, so two providers cannot both pass the "listed model's catalog provider equals the provider id" check. The registry instead enforces the check that is reachable: a provider must list exactly the catalog models assigned to it (a listed model owned by another provider throws, a missing assigned model throws).
 4. **D7, idempotency scope.** `createVideoJob` scopes `idempotencyKey` per credit owner `(ownerType, ownerId)`, which is the organization for org members, so two members of one org sending the same `Idempotency-Key` would replay each other's job (and the replay would then 404 on read because visibility is `requestedBy`). The API handler namespaces the key per requesting user (`api:<userId>:<key>`) before passing it down. The domain function is unchanged.
@@ -24,6 +24,17 @@ Each item is a place where the code contradicted a decision's factual premise; t
 8. **D8, 410 status.** `410` is not in the contract status allow-list (`assertContractConventions.ts` `ALLOWED_STATUSES`). The legacy alias is no longer a contract route, so it is a plain Next API handler that is not registered in `CONTRACTS` and never reaches the convention gate.
 9. **D7, list repository input.** The list endpoint must not show non-video jobs, so `listByRequester` also filters `kind: 'video'` (the only kind today); its index is still `{ requestedBy: 1, _id: -1 }` as decided, which serves the query because `kind` is a residual filter.
 10. **D7, list filters vs the contract pagination gate.** `PaginationQuerySchema` is extended (not replaced) so the `pagination` convention gate (`limit` and `cursor` shape) still passes.
+
+## Execution order
+
+While the spend gate (Task 4) is open, tasks run in this order. Task numbers are not renumbered.
+
+1, 2, 3, 6, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 16, 19, 20, 21, then, after a human approves the key and the spend, 4, 5, 7, 22, 23.
+
+- Tasks 17 and 18 run before Task 16 so every commit typechecks: they remove the apps-side Sora importers that Task 16's deletions would otherwise break.
+- Task 6 owns `ProviderOutputUnavailableError` (the first task that needs it); Task 5's adapter only consumes it.
+- Tasks 12-14 never import `GeminiOmniVideoProvider` or a recorded fixture (their tests stub a Gemini-shaped provider); Task 7 registers the real adapter afterwards and re-runs them.
+- Task 20 runs before the gated tasks, so re-run its Steps 1-3 after Tasks 4, 5 and 7 land.
 
 ## Global Constraints
 
@@ -58,9 +69,9 @@ Five real-world failures the happy-path tests would not catch, each pinned by a 
 
 1. **A signed output URL expires between list and playback, or is cached and replayed.** URLs are minted per read with a 900s TTL and `expires_at` is returned so clients know to re-fetch; nothing persists a URL. Pinned in Task 12 test "mints a fresh 900s URL on every read and reports expires_at" and Task 14 test "GET re-signs on each read".
 2. **A job owned by an organization is read by a different member of that org.** Credits are org-owned but visibility is `requestedBy`; another member (even an org admin) gets `404`, never the prompt or the video. Pinned in Task 14 tests "404s another member's job in the same org" (GET), "404s cancel of another user's job" and "list never returns another member's jobs".
-3. **Two members of one org send the same `Idempotency-Key`.** Without per-user namespacing the second member would replay the first member's job. Pinned in Task 13 test "the same Idempotency-Key from two org members creates two jobs".
+3. **Two members of one org send the same `Idempotency-Key`.** Without per-user namespacing the second member would replay the first member's job. Pinned in Task 13 test "the same Idempotency-Key from two org members reaches the domain under different keys".
 4. **The provider's output URI 404s because the job sat in `storing` past Google's retention (or the file was purged).** Retrying cannot help; the job must fail fast with `provider_error`, release the hold, and not burn five attempts. Pinned in Task 5 test "fetchOutput throws ProviderOutputUnavailableError on 404" and Task 6 test "fails once with provider_error and releases the hold when the output is gone".
-5. **Cancel races the `storing` step.** `requestCancel` returns `null` once the job is storing or terminal; the endpoint must answer `200` with the job unchanged (no refund promise, no 409), and the job must still succeed and settle. Pinned in Task 14 test "cancel during storing returns 200 with the job as-is and does not mark cancelRequested".
+5. **Cancel races the `storing` step.** `requestCancel` returns `null` once the job is storing or terminal; the endpoint must answer `200` with the job unchanged (no refund promise, no 409), and the job must still succeed and settle. Pinned in Task 14 test "cancel during storing returns 200 with the job as-is and does not mark cancelRequested", which asserts `cancelRequested` stays `false`.
 
 ---
 
@@ -68,14 +79,14 @@ Five real-world failures the happy-path tests would not catch, each pinned by a 
 
 One PR (D10): **`feat(api)!: replace the Sora video endpoint with multi-provider video generations`**, stacked on #3899, opened as a **draft** until #3899 merges. The body says Sora shut down upstream on 2026-09-24, so `POST /api/v1/video-generations` changes shape (breaking) and `/api/ai/generate-video` now answers `410`. Body links `Part of #3890` (not `Closes`).
 
-Tasks 4 (recording) and 22 (live check) are human-gated. Tasks 5-6 depend on Task 4's fixtures; Task 7 needs Task 5's adapter, and Tasks 8-21 do not and may proceed while Task 4 waits on the human.
+Tasks 4 (recording) and 22 (live check) are human-gated. Task 5 depends on Task 4's fixtures and Task 7 on Task 5's adapter; Tasks 6 and 8-21 do not and may proceed while Task 4 waits on the human (see Execution order). Task 23 follows Task 22.
 
 ## File Structure
 
 | File | Responsibility |
 |---|---|
 | `b4m-core/common/src/video/types.ts`, `catalog.ts`, `catalog.test.ts` | `'gemini-omni'` provider id, `gemini-omni-1.1-flash` capability entry |
-| `b4m-core/utils/src/videoProviders/types.ts` | `VideoProvider.models`, `ProviderOutputUnavailableError` |
+| `b4m-core/utils/src/videoProviders/types.ts` | `VideoProvider.models` (Task 2), `ProviderOutputUnavailableError` (Task 6) |
 | `b4m-core/utils/src/videoProviders/registry.ts` | catalog-owner validation |
 | `b4m-core/utils/src/videoProviders/conformance.ts` | per-test hooks, `rejects` scenario, four new cases |
 | `b4m-core/utils/src/videoProviders/geminiOmni/GeminiOmniVideoProvider.ts` | the adapter |
@@ -92,9 +103,11 @@ Tasks 4 (recording) and 22 (live check) are human-gated. Tasks 5-6 depend on Tas
 | `b4m-core/common/src/schemas/videoGenerations.ts` | public wire schemas (snake_case) |
 | `b4m-core/common/src/api-contract/contracts/videoGeneration.contract.ts` | five contracts (replaces `generateVideoContract`) |
 | `b4m-core/common/src/apiErrorCodes.ts` | new `errorCode` values |
-| `apps/client/server/generationJobs/wiring.ts` | Gemini key + provider, `getCreateVideoJobDeps`, `isVideoModelUsable`, signal-aware saves |
+| `apps/client/server/generationJobs/wiring.ts` | Gemini key + provider (`buildProviders`, exported), `getCreateVideoJobDeps`, signal-aware saves |
 | `apps/client/server/videoGenerations/toPublicVideoGeneration.ts` (+ test) | the one job-resource mapper and URL signer |
-| `apps/client/server/videoGenerations/listUsableVideoModels.ts` (+ test) | model listing |
+| `apps/client/server/videoGenerations/listUsableVideoModels.ts` (+ test) | model listing, `hasUsableKey` |
+| `apps/client/server/videoGenerations/routeDeps.ts` | `mapperDeps` and `perUserRateLimit`, shared by every video route |
+| `apps/client/server/videoGenerations/__test__/routeHarness.ts` | test-only harness shared by the three route integration test files |
 | `apps/client/pages/api/v1/video-models.ts` | `GET /api/v1/video-models` |
 | `apps/client/pages/api/v1/video-generations/index.ts` | `POST` create + `GET` list via `dispatchByMethod` |
 | `apps/client/pages/api/v1/video-generations/[id]/index.ts` | `GET` one |
@@ -481,6 +494,8 @@ describeVideoProviderConformance('TestVideoProvider', {
 });
 ```
 
+Also delete the two `TestVideoProvider specifics` tests that the new conformance cases now cover: "stays running until its ready time so the engine re-poll path is exercised" and "rejects submit with a definitive error for a \"[reject]\" prompt" (keep "honours an aborted signal on every call..."). The deleted reject test was the only user of `ProviderSubmitError` in this file, so change the `../types` import to `import { readBoundedResponse, VideoOutputTooLargeError } from '../types';`.
+
 Run: `pnpm --filter @bike4mind/utils exec vitest run src/videoProviders`
 Expected: PASS (8 conformance cases for TestVideoProvider). The `beforeEach` reset makes each conformance case independent of test order (previously the module-level clock only moved forward).
 
@@ -762,7 +777,7 @@ Post exactly this and wait:
 
 > Task 4 needs a live Gemini API key (`GEMINI_API_KEY`) and approval to spend about $3 (four 3-second generations at $0.1014/s plus one cancelled run). The recorder writes scrubbed JSON fixtures with no key, no signed URL query strings and a redacted blocked prompt. May I run it, and how will you provide the key (exported in the shell, never pasted into chat)?
 
-Do not proceed until the human approves. If the human declines, mark Tasks 5-6 and 22 blocked and continue with Task 7 onward (Task 7 must then wait too, since it registers the provider).
+Do not proceed until the human approves. If the human declines, mark Tasks 5, 7, 22 and 23 blocked (Task 5 needs these fixtures, Task 7 registers Task 5's adapter, and Tasks 22-23 need the registered provider); every other task may proceed.
 
 - [ ] **Step 5: Run the recorder**
 
@@ -787,20 +802,17 @@ git commit -m "test(video): record scrubbed Gemini Omni interaction fixtures"
 
 ### Task 5: Gemini Omni adapter (utils)
 
-Depends on Task 4's fixtures.
+Depends on Task 4's fixtures (human-gated), so it runs after the gate opens (see Execution order). It consumes `ProviderOutputUnavailableError`, which Task 6 added to `videoProviders/types.ts`.
 
 **Files:**
 - Create: `b4m-core/utils/src/videoProviders/geminiOmni/GeminiOmniVideoProvider.ts`, `GeminiOmniVideoProvider.test.ts`, `__fixtures__/failed.synthetic.json`
-- Modify: `b4m-core/utils/src/videoProviders/types.ts` (add `ProviderOutputUnavailableError`), `b4m-core/utils/src/videoProviders/index.ts` (export the adapter), `b4m-core/utils/package.json` (devDependency `msw`)
+- Modify: `b4m-core/utils/src/videoProviders/index.ts` (export the adapter), `b4m-core/utils/package.json` (devDependency `msw`)
 
 **Interfaces:**
-- Consumes: `VideoProvider`, `ProviderSubmitError`, `readBoundedResponse` (plan 1); fixtures (Task 4).
+- Consumes: `VideoProvider`, `ProviderSubmitError`, `readBoundedResponse` (plan 1); `ProviderOutputUnavailableError` (Task 6); fixtures (Task 4).
 - Produces:
 
 ```ts
-export class ProviderOutputUnavailableError extends Error {
-  constructor(readonly status: number);
-}
 export class GeminiOmniVideoProvider implements VideoProvider {
   readonly id: 'gemini-omni';
   readonly models: readonly ['gemini-omni-1.1-flash'];
@@ -820,7 +832,7 @@ export class GeminiOmniVideoProvider implements VideoProvider {
 | W5 | Image input | `[{ type:'image', data, mime_type }, { type:'text', text }]` | | `buildSubmitBody` |
 | W6 | In-flight statuses | `queued`, `in_progress` | | `toPollResult` switch |
 | W7 | Video location | `steps[].type === 'model_output'` -> `content[].type === 'video'` with `uri`, `mime_type` | | `findVideo` |
-| W8 | Blocked shape | `completed` with no video, or `error`/`finish_reason` matching `/SAFETY\|BLOCK\|PROHIBITED/i` | | `BLOCK_MARKERS`, `isBlocked` |
+| W8 | Blocked shape | `completed` with no video, or `error`/`finish_reason` matching `/SAFETY\|BLOCK\|PROHIBITED/i`; a 4xx at submit whose `error.status`/`error.message` matches is also a block | | `BLOCK_MARKERS`, `isBlocked`, `isBlockedSubmitBody`, `submit` |
 | W9 | Error body | `{ error: { code, message, status } }` | | `InteractionSchema.error` |
 | W10 | Download | `GET <uri>` with `x-goog-api-key`, 200 or one 3xx to another host | | `fetchOutput` |
 | W11 | Cancel | `POST /v1beta/interactions/{id}/cancel`, then status `cancelled` | | `cancel` |
@@ -839,7 +851,7 @@ Copy `text-to-video.json`, set `"scenario": "failed.synthetic"`, delete the `dow
 
 ```ts
 import { readFileSync } from 'node:fs';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
@@ -901,6 +913,8 @@ const server = setupServer(
   })
 );
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+// Per-test server.use() overrides must not leak into the next test (the order-dependent failure mode).
+afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 const request = (overrides: Partial<ValidatedVideoRequest> = {}) =>
@@ -980,6 +994,27 @@ describe('GeminiOmniVideoProvider specifics', () => {
       .submit(request({ mode: 'image_to_video', inputImageFileId: 'f1' }), {}, ctx())
       .catch((e: unknown) => e);
     expect(error).toMatchObject({ definitive: true, message: 'gemini_omni_missing_input_image' });
+  });
+
+  it('maps a submit-time safety rejection to a blocked poll without another network call', async () => {
+    let polls = 0;
+    server.use(
+      http.post(`${BASE}/v1beta/interactions`, () =>
+        HttpResponse.json(
+          { error: { code: 400, message: 'Prompt blocked for safety reasons', status: 'PROHIBITED_CONTENT' } },
+          { status: 400 }
+        )
+      ),
+      http.get(`${BASE}/v1beta/interactions/:id`, () => {
+        polls += 1;
+        return HttpResponse.json({});
+      })
+    );
+    const provider = new GeminiOmniVideoProvider();
+    const handle = await provider.submit(request(), {}, ctx());
+    expect(handle.data).toEqual({ blocked: true, reason: 'gemini_omni_safety' });
+    expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'blocked', reason: 'gemini_omni_safety' });
+    expect(polls).toBe(0);
   });
 
   it.each([
@@ -1068,11 +1103,21 @@ describe('GeminiOmniVideoProvider specifics', () => {
     expect(keys).toEqual([KEY, null]);
   });
 
-  it('fetchOutput refuses a non-https or foreign-host url without sending the key', async () => {
-    const provider = new GeminiOmniVideoProvider();
+  it.each([
+    ['a non-https url', 'http://generativelanguage.googleapis.com/x'],
+    ['a foreign host', 'https://storage.example.com/clip.mp4'],
+  ])('fetchOutput refuses %s without sending the key', async (_label, url) => {
+    let reached = false;
+    server.use(
+      http.get('https://storage.example.com/clip.mp4', () => {
+        reached = true;
+        return new HttpResponse(VIDEO_BYTES);
+      })
+    );
     await expect(
-      provider.fetchOutput({ kind: 'url', url: 'http://generativelanguage.googleapis.com/x', requiresAuth: true }, ctx())
+      new GeminiOmniVideoProvider().fetchOutput({ kind: 'url', url, requiresAuth: true }, ctx())
     ).rejects.toThrow('gemini_omni_untrusted_output_url');
+    expect(reached).toBe(false);
   });
 
   it.each([404, 410])('fetchOutput throws ProviderOutputUnavailableError on %i', async status => {
@@ -1091,19 +1136,7 @@ If W10's recorded download path is not under `/v1beta/files/`, change the regex 
 Run: `pnpm --filter @bike4mind/utils exec vitest run src/videoProviders/geminiOmni`
 Expected: FAIL (module `./GeminiOmniVideoProvider` not found).
 
-- [ ] **Step 4: Add `ProviderOutputUnavailableError`** (`types.ts`, after `VideoOutputTooLargeError`)
-
-```ts
-/** The provider no longer has the output (expired or purged); retrying the download cannot succeed. */
-export class ProviderOutputUnavailableError extends Error {
-  constructor(readonly status: number) {
-    super(`provider output is no longer available (HTTP ${status})`);
-    this.name = 'ProviderOutputUnavailableError';
-  }
-}
-```
-
-- [ ] **Step 5: Write the adapter** (`GeminiOmniVideoProvider.ts`)
+- [ ] **Step 4: Write the adapter** (`GeminiOmniVideoProvider.ts`)
 
 ```ts
 import { z } from 'zod';
@@ -1126,19 +1159,20 @@ const BASE_URL = `https://${API_HOST}`;
 const BLOCK_MARKERS = /SAFETY|BLOCK|PROHIBITED/i;
 
 const VideoContentSchema = z.looseObject({ type: z.string(), uri: z.string().optional(), mime_type: z.string().optional() });
+const ProviderErrorSchema = z.looseObject({
+  code: z.union([z.string(), z.number()]).optional(),
+  message: z.string().optional(),
+  status: z.string().optional(),
+});
+const ErrorBodySchema = z.looseObject({ error: ProviderErrorSchema });
+const SAFETY_REASON = 'gemini_omni_safety';
 const InteractionSchema = z.looseObject({
   id: z.string().min(1),
   status: z.string(),
   steps: z
     .array(z.looseObject({ type: z.string(), content: z.array(VideoContentSchema).optional() }))
     .optional(),
-  error: z
-    .looseObject({
-      code: z.union([z.string(), z.number()]).optional(),
-      message: z.string().optional(),
-      status: z.string().optional(),
-    })
-    .optional(),
+  error: ProviderErrorSchema.optional(),
   finish_reason: z.string().optional(),
 });
 type Interaction = z.infer<typeof InteractionSchema>;
@@ -1187,10 +1221,17 @@ const findVideo = (interaction: Interaction) =>
     .flatMap(step => step.content ?? [])
     .find(content => content.type === 'video' && !!content.uri);
 
+const matchesBlockMarker = (...values: Array<string | undefined>): boolean =>
+  values.some(value => value !== undefined && BLOCK_MARKERS.test(value));
+
 const isBlocked = (interaction: Interaction): boolean =>
-  [interaction.error?.status, interaction.error?.message, interaction.finish_reason].some(
-    value => typeof value === 'string' && BLOCK_MARKERS.test(value)
-  );
+  matchesBlockMarker(interaction.error?.status, interaction.error?.message, interaction.finish_reason);
+
+// A safety refusal can also arrive as a submit-time 4xx (W8); it is a content outcome, not a request error.
+const isBlockedSubmitBody = (raw: unknown): boolean => {
+  const parsed = ErrorBodySchema.safeParse(raw);
+  return parsed.success && matchesBlockMarker(parsed.data.error.status, parsed.data.error.message);
+};
 
 const failed = (code: string, retryable: boolean, raw: unknown): ProviderPollResult => ({
   status: 'failed',
@@ -1216,7 +1257,7 @@ const toPollResult = (interaction: Interaction): ProviderPollResult => {
     }
     case 'failed':
       return isBlocked(interaction)
-        ? { status: 'blocked', reason: 'gemini_omni_safety', raw: interaction }
+        ? { status: 'blocked', reason: SAFETY_REASON, raw: interaction }
         : failed('failed', false, interaction);
     case 'budget_exceeded':
     case 'requires_action':
@@ -1254,6 +1295,11 @@ export class GeminiOmniVideoProvider implements VideoProvider {
     }
     const raw = await readJson(response);
     if (!response.ok) {
+      // Never a ProviderSubmitError here: the engine could answer a definitive error by resubmitting a blocked prompt.
+      // The handle carries the verdict and poll() returns it without a network call (spec: provider filtering is blocked, not billed).
+      if (response.status >= 400 && response.status < 500 && isBlockedSubmitBody(raw)) {
+        return { provider: this.id, data: { blocked: true, reason: SAFETY_REASON } };
+      }
       throw new ProviderSubmitError(`gemini_omni_http_${response.status}`, response.status < 500, raw);
     }
     const parsed = InteractionSchema.safeParse(raw);
@@ -1262,6 +1308,7 @@ export class GeminiOmniVideoProvider implements VideoProvider {
   }
 
   async poll(handle: ProviderJobHandle, ctx: VideoProviderContext): Promise<ProviderPollResult> {
+    if (handle.data.blocked === true) return { status: 'blocked', reason: SAFETY_REASON, raw: handle.data };
     const id = interactionIdOf(handle);
     const response = await fetch(`${BASE_URL}/v1beta/interactions/${encodeURIComponent(id)}`, {
       headers: { 'x-goog-api-key': ctx.apiKey },
@@ -1311,9 +1358,9 @@ export class GeminiOmniVideoProvider implements VideoProvider {
 }
 ```
 
-The test-side handler for `http://...` in "refuses a non-https url" never fires because the adapter throws before fetching.
+The handlers in the "fetchOutput refuses %s" cases never fire: the adapter throws before fetching, and the test asserts it.
 
-- [ ] **Step 6: Export the adapter** (`b4m-core/utils/src/videoProviders/index.ts`)
+- [ ] **Step 5: Export the adapter** (`b4m-core/utils/src/videoProviders/index.ts`)
 
 ```ts
 export { GeminiOmniVideoProvider } from './geminiOmni/GeminiOmniVideoProvider';
@@ -1325,7 +1372,7 @@ Expected: PASS (8 conformance cases plus the specifics).
 Run: `pnpm turbo:core:build`
 Expected: success; `b4m-core/utils/dist/videoProviders/index.d.mts` declares `GeminiOmniVideoProvider` and `ProviderOutputUnavailableError`.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add b4m-core/utils/package.json pnpm-lock.yaml b4m-core/utils/src/videoProviders
@@ -1335,17 +1382,30 @@ git commit -m "feat(video): add the Gemini Omni Flash video provider"
 ---
 ### Task 6: Store step: fail fast on vanished output, and abort uploads with the step signal
 
-Depends on Task 5 (`ProviderOutputUnavailableError`).
+Owns `ProviderOutputUnavailableError` (Step 1): Task 5's adapter throws it, but this is the first task that needs it and it runs before Task 5.
 
 **Files:**
+- Modify: `b4m-core/utils/src/videoProviders/types.ts` (add `ProviderOutputUnavailableError`)
 - Modify: `b4m-core/services/src/videoJobs/types.ts` (`saveToFiles`, `saveToGeneratedBucket` params), `videoJobHandler.ts` (store step, line ~229-270), `videoJobHandler.test.ts`
 - Modify: `b4m-core/fab-pipeline/src/storage/S3Storage.ts` (`upload`), `S3Storage.test.ts`
 - Modify: `apps/client/server/generationJobs/wiring.ts` (`saveToFiles` line ~149, `saveToGeneratedBucket` line ~215), `wiringFiles.test.ts`
 
 **Interfaces:**
-- Produces: `VideoJobDeps['saveToFiles']` input gains `signal: AbortSignal`; `VideoJobDeps['saveToGeneratedBucket']` input gains `signal: AbortSignal`; `S3Storage.upload(input, destination, options?, abortSignal?: AbortSignal)`.
+- Produces: `ProviderOutputUnavailableError` (`constructor(readonly status: number)`), exported from `@bike4mind/utils/videoProviders` through the existing `export * from './types'`; `VideoJobDeps['saveToFiles']` input gains `signal: AbortSignal`; `VideoJobDeps['saveToGeneratedBucket']` input gains `signal: AbortSignal`; `S3Storage.upload(input, destination, options?, abortSignal?: AbortSignal)`.
 
-- [ ] **Step 1: Write the failing handler tests** (`videoJobHandler.test.ts`, next to the `output_too_large` tests; `user`, `request()`, `setup`, `stubProvider` already exist)
+- [ ] **Step 1: Add `ProviderOutputUnavailableError`** (`b4m-core/utils/src/videoProviders/types.ts`, after `VideoOutputTooLargeError`)
+
+```ts
+/** The provider no longer has the output (expired or purged); retrying the download cannot succeed. */
+export class ProviderOutputUnavailableError extends Error {
+  constructor(readonly status: number) {
+    super(`provider output is no longer available (HTTP ${status})`);
+    this.name = 'ProviderOutputUnavailableError';
+  }
+}
+```
+
+- [ ] **Step 2: Write the failing handler tests** (`videoJobHandler.test.ts`, next to the `output_too_large` tests; `user`, `request()`, `setup`, `stubProvider` already exist)
 
 ```ts
   it('fails once with provider_error and releases the hold when the output is gone', async () => {
@@ -1381,10 +1441,10 @@ Add `ProviderOutputUnavailableError` to the `@bike4mind/utils/videoProviders` im
 Run: `pnpm turbo:core:build && pnpm --filter @bike4mind/services exec vitest run src/videoJobs/videoJobHandler.test.ts`
 Expected: FAIL (the first test sees five `fetchOutput` calls and an attempts-exhausted failure; the second sees no `signal`).
 
-- [ ] **Step 2: Add `signal` to the deps types** (`b4m-core/services/src/videoJobs/types.ts`)
+- [ ] **Step 3: Add `signal` to the deps types** (`b4m-core/services/src/videoJobs/types.ts`)
 
 ```ts
-  saveToFiles(input: {
+  saveToFiles(params: {
     userId: string;
     jobId: string;
     bytes: Buffer;
@@ -1392,15 +1452,21 @@ Expected: FAIL (the first test sees five `fetchOutput` calls and an attempts-exh
     prompt: string;
     /** The step's lease-bounded signal; an abort must reject, never report an ordinary save failure. */
     signal: AbortSignal;
-  }): Promise<SaveToFilesResult>;
-  saveToGeneratedBucket(input: { key: string; bytes: Buffer; contentType: string; signal: AbortSignal }): Promise<{
-    s3Key: string;
-  }>;
+  }): Promise<
+    | { saved: true; fileId: string; s3Key: string }
+    | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' }
+  >;
+  saveToGeneratedBucket(params: {
+    key: string;
+    bytes: Buffer;
+    contentType: string;
+    signal: AbortSignal;
+  }): Promise<{ s3Key: string }>;
 ```
 
-Keep the existing return types and doc comments; only the `signal` members are new.
+Only the `signal` members are new; the inline result union stays as it is (there is no named result type).
 
-- [ ] **Step 3: Map the vanished output and pass the signal** (`videoJobHandler.ts` store step)
+- [ ] **Step 4: Map the vanished output and pass the signal** (`videoJobHandler.ts` store step)
 
 ```ts
       let bytes: Buffer;
@@ -1421,7 +1487,7 @@ and add `signal: context.signal,` to both the `deps.saveToFiles({ ... })` and `d
 Run: `pnpm --filter @bike4mind/services exec vitest run src/videoJobs`
 Expected: PASS.
 
-- [ ] **Step 4: Write the failing S3Storage test** (append to `S3Storage.test.ts`)
+- [ ] **Step 5: Write the failing S3Storage test** (append to `S3Storage.test.ts`)
 
 ```ts
 describe('S3Storage.upload', () => {
@@ -1446,7 +1512,7 @@ Imports: `vi` from vitest, `PutObjectCommand` from `@aws-sdk/client-s3`.
 Run: `pnpm --filter @bike4mind/fab-pipeline exec vitest run src/storage/S3Storage.test.ts`
 Expected: FAIL (`abortSignal` missing from the send options).
 
-- [ ] **Step 5: Add the parameter** (`S3Storage.ts`)
+- [ ] **Step 6: Add the parameter** (`S3Storage.ts`)
 
 ```ts
   async upload(
@@ -1474,7 +1540,22 @@ Expected: FAIL (`abortSignal` missing from the send options).
 Run: `pnpm --filter @bike4mind/fab-pipeline exec vitest run src/storage`
 Expected: PASS.
 
-- [ ] **Step 6: Write the failing wiring tests** (`wiringFiles.test.ts`, new `describe('saveToFiles signal')`; uses the file's `mocks`)
+- [ ] **Step 7: Write the failing wiring tests** (`wiringFiles.test.ts`)
+
+First give the existing `params` object in `describe('saveToFiles')` (line 66) a signal, because `saveToFiles` now reads `signal.aborted` and the type requires it:
+
+```ts
+  const params = {
+    userId: 'user1',
+    jobId: 'job1',
+    bytes: Buffer.from('mp4'),
+    contentType: 'video/mp4',
+    prompt: 'p',
+    signal: new AbortController().signal,
+  };
+```
+
+Then add a new `describe('saveToFiles signal')` (it uses the file's `mocks`):
 
 ```ts
 describe('saveToFiles signal', () => {
@@ -1524,7 +1605,7 @@ describe('saveToFiles signal', () => {
 Run: `pnpm --filter @bike4mind/client exec vitest run server/generationJobs/wiringFiles.test.ts`
 Expected: FAIL (the upload gets three arguments; the abort is swallowed as `{ saved: false, reason: 'error' }`).
 
-- [ ] **Step 7: Close over the signal in wiring** (`wiring.ts`)
+- [ ] **Step 8: Close over the signal in wiring** (`wiring.ts`)
 
 ```ts
 export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType, signal }) => {
@@ -1553,10 +1634,10 @@ const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ ke
 Run: `pnpm turbo:core:build && pnpm --filter @bike4mind/client exec vitest run server/generationJobs`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add b4m-core/services/src/videoJobs b4m-core/fab-pipeline/src/storage apps/client/server/generationJobs
+git add b4m-core/utils/src/videoProviders/types.ts b4m-core/services/src/videoJobs b4m-core/fab-pipeline/src/storage apps/client/server/generationJobs
 git commit -m "fix(video): fail fast on expired provider output and abort uploads with the step"
 ```
 
@@ -1611,7 +1692,8 @@ import {
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
 
-// Gemini is registered everywhere; whether a caller can use it depends on a resolvable key (isVideoModelUsable).
+// Gemini is registered everywhere; whether a caller can use it depends on a resolvable key (hasUsableKey in
+// server/videoGenerations/listUsableVideoModels.ts).
 export const buildProviders = (): VideoProvider[] => {
   const providers: VideoProvider[] = [new GeminiOmniVideoProvider()];
   // Set only on non-production stages by infra (TEST_VIDEO_PROVIDER_ENVIRONMENT); never registered in production.
@@ -1620,8 +1702,8 @@ export const buildProviders = (): VideoProvider[] => {
 };
 ```
 
-Run: `pnpm --filter @bike4mind/client exec vitest run server/generationJobs`
-Expected: PASS.
+Run: `pnpm turbo:core:build && pnpm --filter @bike4mind/client exec vitest run server pages/api/v1`
+Expected: PASS. The Task 12-14 tests stub a Gemini-shaped provider (they ran before this adapter existed) and must stay green with the real adapter registered; fix any drift here.
 
 - [ ] **Step 3: Commit**
 
@@ -1701,7 +1783,7 @@ export type StepOptions = {
     const context: GenerationJobStepContext = { signal: AbortSignal.timeout(stepBudgetMs) };
 ```
 
-Export `StepOptions` from `b4m-core/services/src/generationJobs/index.ts` next to the engine export.
+`StepOptions` reaches the package through the existing `export * from './engine'` in `generationJobs/index.ts`; add nothing there.
 
 Run: `pnpm --filter @bike4mind/services exec vitest run src/generationJobs`
 Expected: PASS.
@@ -1754,7 +1836,7 @@ git commit -m "fix(video): bound each job step by the invocation's remaining tim
 
 **Files:**
 - Modify: `b4m-core/common/src/types/entities/GenerationJobTypes.ts` (`findStalled`, line 155)
-- Modify: `packages/database/src/models/ai/GenerationJobModel.ts` (`findStalled`, lines 161-185), `GenerationJobModel.test.ts` (lines 233-253)
+- Modify: `packages/database/src/models/ai/GenerationJobModel.ts` (`findStalled`, lines 161-185), `GenerationJobModel.test.ts` (lines 176, 203, 211, 217 and 233-253)
 - Modify: `b4m-core/services/src/generationJobs/__test__/inMemoryGenerationJobRepository.ts` (`findStalled`, line ~127), `sweep.ts`, `sweep.test.ts`
 
 **Interfaces:**
@@ -1767,7 +1849,9 @@ export const SWEEP_LIMITS: StalledJobLimits = { inFlight: 200, terminal: 50 };
 runGenerationJobSweep(deps, options?: { overdueMs?: number; limits?: StalledJobLimits })
 ```
 
-- [ ] **Step 1: Rewrite the repository test** (replace the test at `GenerationJobModel.test.ts` lines 233-253)
+- [ ] **Step 1: Update the repository tests** (`GenerationJobModel.test.ts`)
+
+First change the four numeric limits to the new shape: the calls at lines 176, 203, 211 and 217 become `findStalled(plus(60_000), { inFlight: 50, terminal: 50 })` (line 176) and `findStalled(cutoff, { inFlight: 50, terminal: 50 })` (lines 203, 211, 217). Then replace the test at lines 233-253:
 
 ```ts
   const setUpdatedAt = (id: string, updatedAt: Date) =>
@@ -1884,12 +1968,62 @@ export async function runGenerationJobSweep(
   // ... unchanged
 ```
 
-In `sweep.test.ts`, change the `{ limit: 1 }` call (line 67) to `{ limits: { inFlight: 1, terminal: 0 } }` (that test pins in-flight ordering), and add:
+In `sweep.test.ts`, replace the test "recovers in-flight jobs ahead of terminal jobs stuck on a claim" (it used `{ limit: 1 }`, which passes vacuously under split limits) with the two tests below. Each declares its own `base` fixture, as the neighbouring tests in the file do:
 
 ```ts
+  it('sweeps in-flight and claimed terminal jobs, each within its own limit', async () => {
+    const now = new Date('2026-10-06T01:00:00Z');
+    const repository = createInMemoryGenerationJobRepository({ now: () => new Date('2026-10-06T00:00:00Z') });
+    const base = {
+      kind: 'video',
+      ownerType: CreditHolderType.User,
+      ownerId: 'u1',
+      requestedBy: 'u1',
+      source: 'studio',
+      payload: {} as IGenerationJob['payload'],
+      pollCount: 0,
+      attempts: 0,
+      cancelRequested: false,
+      deadlineAt: now,
+      creditHold: null,
+    } as const;
+    const claimedAt = new Date('2026-10-06T00:00:00Z');
+    const firstTerminal = await repository.createJob({ ...base, state: 'failed', terminalHandlingClaimedAt: claimedAt });
+    await repository.createJob({ ...base, state: 'failed', terminalHandlingClaimedAt: claimedAt });
+    const earlierInFlight = await repository.createJob({
+      ...base,
+      state: 'running',
+      nextPollAt: new Date('2026-10-06T00:40:00Z'),
+    });
+    await repository.createJob({ ...base, state: 'running', nextPollAt: new Date('2026-10-06T00:50:00Z') });
+    const enqueue = vi.fn(async (_jobId: string, _delay: number) => undefined);
+
+    await runGenerationJobSweep(
+      { repository, enqueue, now: () => now, logger: new Logger() },
+      { limits: { inFlight: 1, terminal: 1 } }
+    );
+
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue).toHaveBeenCalledWith(earlierInFlight.id, 0);
+    expect(enqueue).toHaveBeenCalledWith(firstTerminal.id, 0);
+  });
+
   it('sweeps a terminal job even when the in-flight backlog fills its limit', async () => {
     const now = new Date('2026-10-06T01:00:00Z');
     const repository = createInMemoryGenerationJobRepository({ now: () => new Date('2026-10-06T00:00:00Z') });
+    const base = {
+      kind: 'video',
+      ownerType: CreditHolderType.User,
+      ownerId: 'u1',
+      requestedBy: 'u1',
+      source: 'studio',
+      payload: {} as IGenerationJob['payload'],
+      pollCount: 0,
+      attempts: 0,
+      cancelRequested: false,
+      deadlineAt: now,
+      creditHold: null,
+    } as const;
     for (let i = 0; i < 3; i++) {
       await repository.createJob({ ...base, state: 'running', nextPollAt: new Date('2026-10-06T00:10:00Z') });
     }
@@ -1905,8 +2039,6 @@ In `sweep.test.ts`, change the `{ limit: 1 }` call (line 67) to `{ limits: { inF
     expect(enqueue).toHaveBeenCalledWith(terminal.id, 0);
   });
 ```
-
-(`base` is the job fixture the neighbouring test in this file already declares; hoist it to module scope if it is local.)
 
 Run: `pnpm turbo:core:build && pnpm --filter @bike4mind/database exec vitest run src/models/ai/GenerationJobModel.test.ts && pnpm --filter @bike4mind/services exec vitest run src/generationJobs`
 Expected: PASS.
@@ -1924,7 +2056,7 @@ git commit -m "fix(video): give the job sweep separate in-flight and terminal li
 
 **Files:**
 - Modify: `b4m-core/common/src/types/entities/GenerationJobTypes.ts`, `packages/database/src/models/ai/GenerationJobModel.ts` (indexes lines 58-64, new method), `GenerationJobModel.test.ts`, `b4m-core/services/src/generationJobs/__test__/inMemoryGenerationJobRepository.ts`
-- Create: `packages/scripts/migrate/migrations/20260921235992_ensure-generation-job-requester-index.ts`
+- Create: `packages/scripts/migrate/migrations/20260921235992_ensure-generation-job-requester-index.ts`, `b4m-core/services/src/generationJobs/__test__/inMemoryGenerationJobRepository.test.ts`
 - Modify: `packages/scripts/migrate/migrations/index.ts` (import after line ~157, list entry after line ~288)
 
 **Interfaces:**
@@ -1996,6 +2128,49 @@ listByRequester(query: ListByRequesterQuery): Promise<IGenerationJobDocument[]>;
   });
 ```
 
+Also create the in-memory repository test (`b4m-core/services/src/generationJobs/__test__/inMemoryGenerationJobRepository.test.ts`); its ids are `job<N>`, so it must page correctly past `job10`:
+
+```ts
+import { describe, expect, it } from 'vitest';
+import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
+import { createInMemoryGenerationJobRepository } from './inMemoryGenerationJobRepository';
+
+describe('in-memory listByRequester', () => {
+  it('pages newest first past job10, where a string sort would misorder', async () => {
+    const now = new Date('2026-10-06T00:00:00Z');
+    const repository = createInMemoryGenerationJobRepository({ now: () => now });
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const job = await repository.createJob({
+        kind: 'video',
+        ownerType: CreditHolderType.User,
+        ownerId: 'u1',
+        requestedBy: 'u1',
+        source: 'api',
+        state: 'pending',
+        payload: {} as IGenerationJob['payload'],
+        pollCount: 0,
+        attempts: 0,
+        cancelRequested: false,
+        deadlineAt: now,
+        creditHold: null,
+      });
+      ids.push(job.id);
+    }
+
+    const first = await repository.listByRequester({ requestedBy: 'u1', kind: 'video', limit: 5 });
+    expect(first.map(job => job.id)).toEqual(ids.slice(7).reverse());
+    const next = await repository.listByRequester({
+      requestedBy: 'u1',
+      kind: 'video',
+      beforeId: first[4].id,
+      limit: 10,
+    });
+    expect(next.map(job => job.id)).toEqual(ids.slice(0, 7).reverse());
+  });
+});
+```
+
 Run: `pnpm --filter @bike4mind/database exec vitest run src/models/ai/GenerationJobModel.test.ts`
 Expected: FAIL (`listByRequester` is not a function).
 
@@ -2037,24 +2212,28 @@ and in the repository class:
 
 ```ts
     async listByRequester({ requestedBy, kind, state, source, beforeId, limit }: ListByRequesterQuery) {
-      return [...jobs.values()]
+      // The Map keeps insertion (= creation) order. Ids here are `job<N>`, so a string sort would put job10 before job2.
+      const newestFirst = [...jobs.values()].reverse();
+      const start = beforeId === undefined ? 0 : newestFirst.findIndex(job => job.id === beforeId) + 1;
+      if (beforeId !== undefined && start === 0) return [];
+      return newestFirst
+        .slice(start)
         .filter(
           job =>
             job.requestedBy === requestedBy &&
             job.kind === kind &&
             (!state || job.state === state) &&
-            (!source || job.source === source) &&
-            (!beforeId || job.id < beforeId)
+            (!source || job.source === source)
         )
-        .sort((a, b) => (a.id < b.id ? 1 : -1))
         .slice(0, limit)
         .map(job => structuredClone(job));
     },
 ```
 
-(Plan-1 ids are lowercase 24-hex ObjectId strings, so string order is creation order.)
+(Mongo ids are ObjectIds, whose order is creation order; the in-memory ids are not, hence the insertion order.)
 
 Run: `pnpm turbo:core:build && pnpm --filter @bike4mind/database exec vitest run src/models/ai/GenerationJobModel.test.ts`
+Run: `pnpm --filter @bike4mind/services exec vitest run src/generationJobs/__test__`
 Expected: PASS.
 
 - [ ] **Step 3: Write the migration** (`20260921235992_ensure-generation-job-requester-index.ts`)
@@ -2171,7 +2350,7 @@ describe('video generation wire schemas', () => {
     });
   });
 
-  it('rejects camelCase fields silently dropped as unknown, and an over-long prompt', () => {
+  it('strips unknown camelCase fields and rejects an over-long prompt', () => {
     expect(CreateVideoGenerationBodySchema.parse({ model: 'm', prompt: 'p', durationSeconds: 5 })).not.toHaveProperty(
       'durationSeconds'
     );
@@ -2344,8 +2523,8 @@ Add `export * from './videoGenerations';` to `schemas/index.ts`.
 - [ ] **Step 4: Write the contracts** (`videoGeneration.contract.ts`: add these below the existing `generateVideoContract`, which Task 13 deletes)
 
 ```ts
-import { EXAMPLE_FILE_ID, EXAMPLE_RESOURCE_ID } from '../exampleIds';
-import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';
+// File imports: `EXAMPLE_RESOURCE_ID` (line 2) and `ApiErrorSchema` (line 6) are already imported by this file. Change
+// line 6 to `import { ApiErrorSchema, ScopeForbiddenErrorSchema } from '../../schemas/chat';` and add the block below.
 import {
   CreateVideoGenerationBodySchema,
   ListVideoGenerationsQuerySchema,
@@ -2509,7 +2688,7 @@ export const cancelVideoGenerationContract = defineEndpoint({
 });
 ```
 
-`codeSample` for a GET: check `types.ts` `CodeSample` (line ~99 shows a `noBody: true` variant) and use that variant; if the type names it differently, follow the type. Remove the now-unused `EXAMPLE_FILE_ID` import if no example uses it.
+`codeSample` for a GET: check `types.ts` `CodeSample` (line ~99 shows a `noBody: true` variant) and use that variant; if the type names it differently, follow the type. `EXAMPLE_SESSION_ID` stays imported until Task 13 deletes `generateVideoContract`.
 
 Run: `pnpm --filter @bike4mind/common exec vitest run src/schemas/videoGenerations.test.ts src/api-contract`
 Expected: PASS. If the convention gate names a missing status (for example a required `400`/`401`), add it with `ApiErrorSchema` and a one-line description; do not add an exemption.
@@ -2789,20 +2968,30 @@ describe('findOwnVideoJob', () => {
 
 ```ts
 import { describe, expect, it, vi } from 'vitest';
-import { usdToCredits, VideoModelSchema } from '@bike4mind/common';
-import { createVideoProviderRegistry, GeminiOmniVideoProvider, TestVideoProvider } from '@bike4mind/utils/videoProviders';
+import { usdToCredits, VideoModelSchema, type VideoProviderId } from '@bike4mind/common';
+import { createVideoProviderRegistry, TestVideoProvider, type VideoProvider } from '@bike4mind/utils/videoProviders';
 import { hasUsableKey, listUsableVideoModels } from './listUsableVideoModels';
 
-const deps = (overrides: { enabled?: Record<string, boolean>; key?: string | null; withTest?: boolean } = {}) => ({
-  providers: createVideoProviderRegistry([
-    new GeminiOmniVideoProvider(),
-    ...(overrides.withTest ? [new TestVideoProvider()] : []),
-  ]),
+// The real Gemini adapter is registered by a later task; the listing only needs a provider that serves its catalog model.
+const fakeGemini = (): VideoProvider => ({
+  id: 'gemini-omni',
+  models: ['gemini-omni-1.1-flash'],
+  submit: vi.fn(),
+  poll: vi.fn(),
+  fetchOutput: vi.fn(),
+});
+
+const deps = (
+  overrides: { enabled?: Record<string, boolean>; keys?: Partial<Record<VideoProviderId, string | null>>; withTest?: boolean } = {}
+) => ({
+  providers: createVideoProviderRegistry([fakeGemini(), ...(overrides.withTest ? [new TestVideoProvider()] : [])]),
   getSettings: vi.fn(async () => ({
     enforceCredits: true,
     videoGeneration: { enabledModels: overrides.enabled ?? {} },
   })),
-  resolveApiKey: vi.fn(async () => (overrides.key === undefined ? 'k' : overrides.key)),
+  resolveApiKey: vi.fn(async (providerId: VideoProviderId, _userId: string) =>
+    overrides.keys?.[providerId] === undefined ? 'k' : overrides.keys[providerId]
+  ),
 });
 
 describe('listUsableVideoModels', () => {
@@ -2819,14 +3008,25 @@ describe('listUsableVideoModels', () => {
       'gemini-omni-1.1-flash',
     ]);
     expect(await listUsableVideoModels('u1', deps({ enabled: { 'gemini-omni-1.1-flash': false } }))).toEqual([]);
-    expect(await listUsableVideoModels('u1', deps({ key: null }))).toEqual([]);
+    expect(await listUsableVideoModels('u1', deps({ keys: { 'gemini-omni': null } }))).toEqual([]);
+    expect(
+      (await listUsableVideoModels('u1', deps({ withTest: true, keys: { 'gemini-omni': null } }))).map(m => m.id)
+    ).toEqual(['test-video']);
   });
 
-  it('resolves each provider key once per listing', async () => {
-    const d = deps();
+  it('resolves one key per registered provider for the listing user', async () => {
+    const d = deps({ withTest: true });
     await listUsableVideoModels('u1', d);
-    expect(d.resolveApiKey).toHaveBeenCalledTimes(1);
-    expect(await hasUsableKey('gemini-omni', 'u1', deps({ key: null }))).toBe(false);
+    expect(d.resolveApiKey).toHaveBeenCalledTimes(2);
+    expect(d.resolveApiKey).toHaveBeenCalledWith('test', 'u1');
+    expect(d.resolveApiKey).toHaveBeenCalledWith('gemini-omni', 'u1');
+  });
+});
+
+describe('hasUsableKey', () => {
+  it('is false when no key resolves and true when one does', async () => {
+    expect(await hasUsableKey('gemini-omni', 'u1', deps({ keys: { 'gemini-omni': null } }))).toBe(false);
+    expect(await hasUsableKey('gemini-omni', 'u1', deps())).toBe(true);
   });
 });
 ```
@@ -2962,6 +3162,7 @@ git commit -m "feat(api): map generation jobs to the public video generation res
 - Delete: `apps/client/pages/api/v1/video-generations.ts` (Sora handler)
 - Create: `apps/client/pages/api/v1/video-generations/index.ts` (POST now; GET list added in Task 14)
 - Create: `apps/client/pages/api/v1/video-models.ts`
+- Create: `apps/client/server/videoGenerations/routeDeps.ts`, `apps/client/server/videoGenerations/__test__/routeHarness.ts`
 - Rewrite: `apps/client/pages/api/ai/generate-video.ts` (410)
 - Rewrite: `apps/client/pages/api/v1/__tests__/video-generations.integration.test.ts`
 - Create: `apps/client/pages/api/v1/__tests__/video-models.integration.test.ts`
@@ -2971,7 +3172,7 @@ git commit -m "feat(api): map generation jobs to the public video generation res
 
 **Interfaces:**
 - Consumes: Task 11 contracts, Task 12 mapper/signer/model listing, `createVideoJob` (plan 1), `getCreateVideoJobDeps`.
-- Produces: `createRouter` (exported from `video-generations/index.ts` for Task 14 to compose).
+- Produces: `server/videoGenerations/routeDeps.ts` (`mapperDeps`, `perUserRateLimit`) and `server/videoGenerations/__test__/routeHarness.ts` (`h`, `fire`, `validateWithScopes`, `asUser`, `videoJob`, `resetHarness`, `JOB_ID`, and the `vi.mock` factory builders); Task 14 reuses both. A `pages/` file exports only its default handler (and Next's `config`); `createRouter` stays module-local in `video-generations/index.ts`, where Task 14 composes the list router with it.
 
 - [ ] **Step 1: Swap the contract registration**
 
@@ -3004,21 +3205,25 @@ Delete `generateVideoContract` and `videoQuestPollResult` from `videoGeneration.
 Run: `pnpm --filter @bike4mind/common exec vitest run src/api-contract`
 Expected: PASS ("accepts the real published surface" now includes the five).
 
-- [ ] **Step 2: Write the failing create/auth integration test** (rewrite `pages/api/v1/__tests__/video-generations.integration.test.ts`). The block between `// HARNESS START` and `// HARNESS END` is copied verbatim into the Task 13/14 sibling test files.
+- [ ] **Step 2: Write the shared route harness and the failing create/auth integration test**
+
+First the harness (`apps/client/server/videoGenerations/__test__/routeHarness.ts`). It lives under `server/` (not `pages/`, where every file is a route) and is reused by Task 14's test files and the video-models test:
 
 ```ts
-// @vitest-environment node
 /**
- * Integration test for POST and GET /api/v1/video-generations through the real next-connect chain
- * (nextRouteForContract -> apiKeyAuth -> scope check -> validation -> handler). The domain (createVideoJob)
- * and the repository are mocked: their behaviour is covered in services and database.
+ * Test-only harness shared by the video route integration tests in pages/api/v1/__tests__. It imports vitest, so
+ * app code must never import it. vi.mock calls cannot live here (vitest hoists them per test file): each test
+ * file keeps its own vi.mock lines and points every factory at the builders below.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
+import { vi } from 'vitest';
+import { CreditHolderType, type IGenerationJobDocument } from '@bike4mind/common';
 
-// HARNESS START
-const h = vi.hoisted(() => ({
+type ImportOriginal = <T>() => Promise<T>;
+type ModuleExports = Record<string, unknown>;
+
+export const h = {
   validate: vi.fn(),
   userFindById: vi.fn(),
   rateLimit: vi.fn(),
@@ -3030,7 +3235,10 @@ const h = vi.hoisted(() => ({
   listUsableVideoModels: vi.fn(),
   hasUsableKey: vi.fn(),
   providersGet: vi.fn(),
-}));
+};
+
+export const VALID_KEY = 'sk-test-valid-key';
+export const JOB_ID = '664f1c2b9a1e4d0012ab34cd';
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -3040,14 +3248,16 @@ const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Remaining-Day': '999',
   'X-RateLimit-Reset-Day': '0',
 };
+const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', organizationId: null, isBanned: false, disputePending: false };
 
-vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
-  ...(await orig<Record<string, unknown>>()),
+// vi.mock factories (one per mocked module), called from each test file's own vi.mock lines.
+export const apiKeyRateLimitCheckMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
   checkApiKeyRateLimit: (...a: unknown[]) => h.rateLimit(...a),
-}));
-vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@bike4mind/services', async orig => {
-  const actual = await orig<Record<string, unknown>>();
+});
+
+export const servicesMock = async (orig: ImportOriginal) => {
+  const actual = await orig<ModuleExports>();
   return {
     ...actual,
     userApiKeyService: {
@@ -3055,13 +3265,15 @@ vi.mock('@bike4mind/services', async orig => {
       validateUserApiKey: (...a: unknown[]) => h.validate(...a),
     },
   };
-});
-vi.mock('@bike4mind/services/videoJobs', async orig => ({
-  ...(await orig<Record<string, unknown>>()),
+};
+
+export const videoJobsServiceMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
   createVideoJob: (...a: unknown[]) => h.createVideoJob(...a),
-}));
-vi.mock('@bike4mind/database', async orig => {
-  const actual = await orig<Record<string, unknown>>();
+});
+
+export const databaseMock = async (orig: ImportOriginal) => {
+  const actual = await orig<ModuleExports>();
   const RealUser = actual.User as Record<string, unknown>;
   return {
     ...actual,
@@ -3072,38 +3284,32 @@ vi.mock('@bike4mind/database', async orig => {
       findById: (...a: unknown[]) => h.findById(...a),
     },
   };
-});
-vi.mock('@server/generationJobs/wiring', () => ({
+};
+
+export const wiringMock = () => ({
   getCreateVideoJobDeps: () => ({ providers: { get: (...a: unknown[]) => h.providersGet(...a) } }),
   getVideoJobDeps: () => ({}),
   getGenerationJobEngine: () => ({ requestCancel: (...a: unknown[]) => h.requestCancel(...a) }),
-}));
-vi.mock('@server/videoGenerations/signOutputUrl', () => ({ signOutputUrl: (...a: unknown[]) => h.sign(...a) }));
-vi.mock('@server/videoGenerations/listUsableVideoModels', async orig => ({
-  ...(await orig<Record<string, unknown>>()),
-  listUsableVideoModels: (...a: unknown[]) => h.listUsableVideoModels(...a),
-  hasUsableKey: (...a: unknown[]) => h.hasUsableKey(...a),
-}));
-
-const JWT_USER = { id: 'jwt-user', _id: 'jwt-user', organizationId: null, isBanned: false, disputePending: false };
-vi.mock('@server/auth/auth', async orig => {
-  const actual = await orig<Record<string, unknown>>();
-  return {
-    ...actual,
-    // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
-    auth: (req: any, _res: any, next: any) => {
-      if (!req.user) req.user = JWT_USER;
-      next();
-    },
-  };
 });
 
-import { ApiKeyScope, CreditHolderType, type IGenerationJobDocument } from '@bike4mind/common';
+export const signOutputUrlMock = () => ({ signOutputUrl: (...a: unknown[]) => h.sign(...a) });
 
-const VALID_KEY = 'sk-test-valid-key';
-const JOB_ID = '664f1c2b9a1e4d0012ab34cd';
+export const listUsableVideoModelsMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
+  listUsableVideoModels: (...a: unknown[]) => h.listUsableVideoModels(...a),
+  hasUsableKey: (...a: unknown[]) => h.hasUsableKey(...a),
+});
 
-const fire = ({
+export const authMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
+  // any: node-mocks-http req/res aren't structurally the Express types this seam is typed for.
+  auth: (req: any, _res: any, next: any) => {
+    if (!req.user) req.user = JWT_USER;
+    next();
+  },
+});
+
+export const fire = ({
   method = 'GET',
   url,
   apiKey = VALID_KEY as string | null,
@@ -3126,7 +3332,7 @@ const fire = ({
   return { req: req as any, res: res as any };
 };
 
-const validateWithScopes = (scopes: string[], userId = 'user-1') =>
+export const validateWithScopes = (scopes: string[], userId = 'user-1') =>
   h.validate.mockResolvedValue({
     isValid: true,
     keyId: 'k1',
@@ -3135,10 +3341,10 @@ const validateWithScopes = (scopes: string[], userId = 'user-1') =>
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
   });
 
-const asUser = (id: string, organizationId: string | null = null) =>
+export const asUser = (id: string, organizationId: string | null = null) =>
   h.userFindById.mockResolvedValue({ id, _id: id, organizationId, isBanned: false, disputePending: false });
 
-const videoJob = (overrides: Partial<IGenerationJobDocument> = {}): IGenerationJobDocument =>
+export const videoJob = (overrides: Partial<IGenerationJobDocument> = {}): IGenerationJobDocument =>
   ({
     id: JOB_ID,
     kind: 'video',
@@ -3168,7 +3374,7 @@ const videoJob = (overrides: Partial<IGenerationJobDocument> = {}): IGenerationJ
     ...overrides,
   }) as IGenerationJobDocument;
 
-const resetHarness = () => {
+export const resetHarness = () => {
   vi.clearAllMocks();
   asUser('user-1');
   h.rateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
@@ -3176,7 +3382,54 @@ const resetHarness = () => {
   h.hasUsableKey.mockResolvedValue(true);
   h.sign.mockImplementation(async (_location: string, key: string) => `https://signed.example/${key}`);
 };
-// HARNESS END
+```
+
+Then rewrite `pages/api/v1/__tests__/video-generations.integration.test.ts`. Its header (the environment docblock, the imports and the nine `vi.mock` calls) is the pattern every route test file in this PR starts with; only the handler import below it differs.
+
+```ts
+// @vitest-environment node
+/**
+ * Integration test for POST and GET /api/v1/video-generations through the real next-connect chain
+ * (nextRouteForContract -> apiKeyAuth -> scope check -> validation -> handler). The domain (createVideoJob)
+ * and the repository are mocked: their behaviour is covered in services and database.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiKeyScope } from '@bike4mind/common';
+import {
+  asUser,
+  fire,
+  h,
+  JOB_ID,
+  resetHarness,
+  validateWithScopes,
+  videoJob,
+} from '@server/videoGenerations/__test__/routeHarness';
+
+vi.mock('@server/utils/apiKeyRateLimitCheck', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).apiKeyRateLimitCheckMock(orig)
+);
+vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@bike4mind/services', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
+);
+vi.mock('@bike4mind/services/videoJobs', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).videoJobsServiceMock(orig)
+);
+vi.mock('@bike4mind/database', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).databaseMock(orig)
+);
+vi.mock('@server/generationJobs/wiring', async () =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).wiringMock()
+);
+vi.mock('@server/videoGenerations/signOutputUrl', async () =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).signOutputUrlMock()
+);
+vi.mock('@server/videoGenerations/listUsableVideoModels', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).listUsableVideoModelsMock(orig)
+);
+vi.mock('@server/auth/auth', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).authMock(orig)
+);
 
 import handler from '../video-generations/index';
 
@@ -3299,12 +3552,21 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
-  it('rejects a camelCase-only body as a validation error (422) before the domain', async () => {
+  it('rejects a body without a prompt (422) before the domain', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = post({ model: 'gemini-omni-1.1-flash' });
     await handler(req, res);
     expect(res._getStatusCode()).toBe(422);
     expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('ignores camelCase field names and applies the catalog default duration', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', durationSeconds: 3 });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ durationSeconds: 6 });
   });
 });
 ```
@@ -3312,7 +3574,22 @@ describe('POST /api/v1/video-generations', () => {
 Run: `pnpm --filter @bike4mind/client exec vitest run pages/api/v1/__tests__/video-generations.integration.test.ts`
 Expected: FAIL (`../video-generations/index` not found).
 
-- [ ] **Step 3: Write the create handler** (delete `pages/api/v1/video-generations.ts`; create `pages/api/v1/video-generations/index.ts`)
+- [ ] **Step 3: Write the shared route deps and the create handler** (delete `pages/api/v1/video-generations.ts`; create `server/videoGenerations/routeDeps.ts` and `pages/api/v1/video-generations/index.ts`)
+
+`routeDeps.ts` holds what every video route repeats, so no pages file has to export helpers:
+
+```ts
+import { rateLimit } from '@server/middlewares/rateLimit';
+import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
+import { signOutputUrl } from './signOutputUrl';
+
+export const mapperDeps = { sign: signOutputUrl, now: () => new Date() };
+
+export const perUserRateLimit = (bucket: string) =>
+  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
+```
+
+`pages/api/v1/video-generations/index.ts`:
 
 ```ts
 /**
@@ -3334,11 +3611,9 @@ import {
 import { createVideoJob, type CreateVideoJobResult } from '@bike4mind/services/videoJobs';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { hasUsableKey } from '@server/videoGenerations/listUsableVideoModels';
-import { signOutputUrl } from '@server/videoGenerations/signOutputUrl';
+import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,255}$/;
@@ -3378,12 +3653,7 @@ const toHttpError = (refusal: Extract<CreateVideoJobResult, { ok: false }>) =>
     ? new NotFoundError(refusal.message, { errorCode: refusal.code })
     : new UnprocessableEntityError(refusal.message, { errorCode: refusal.code });
 
-export const mapperDeps = { sign: signOutputUrl, now: () => new Date() };
-
-const perUserRateLimit = (bucket: string) =>
-  rateLimit({ limit: req => resolveUserRateLimitPerMin(req.user), windowMs: 60 * 1000, bucket });
-
-export const createRouter = nextRouteForContract(createVideoGenerationContract, {
+const createRouter = nextRouteForContract(createVideoGenerationContract, {
   rateLimit: perUserRateLimit('POST /api/v1/video-generations'),
 }).post(async (req, res) => {
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
@@ -3422,7 +3692,7 @@ If `req.user.organizationId` is typed as an ObjectId-like value in the request u
 Run: `pnpm --filter @bike4mind/client exec vitest run pages/api/v1/__tests__/video-generations.integration.test.ts`
 Expected: PASS.
 
-- [ ] **Step 4: Write the failing video-models test** (`pages/api/v1/__tests__/video-models.integration.test.ts`: the HARNESS block from Step 2, then)
+- [ ] **Step 4: Write the failing video-models test** (`pages/api/v1/__tests__/video-models.integration.test.ts`). Start the file with the header from Step 2 (docblock, imports, the nine `vi.mock` calls), importing only `ApiKeyScope`, `fire`, `h`, `resetHarness` and `validateWithScopes` from the harness; then:
 
 ```ts
 import handler from '../video-models';
@@ -3458,18 +3728,13 @@ Expected: FAIL (module not found).
 /** GET /api/v1/video-models - the video models this caller can use right now. */
 import { listVideoModelsContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { getVideoJobDeps } from '@server/generationJobs/wiring';
 import { listUsableVideoModels } from '@server/videoGenerations/listUsableVideoModels';
+import { perUserRateLimit } from '@server/videoGenerations/routeDeps';
 
 const handler = nextRouteForContract(listVideoModelsContract, {
   exemptReadsFromDailyRateLimit: true,
-  rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
-    windowMs: 60 * 1000,
-    bucket: '/api/v1/video-models',
-  }),
+  rateLimit: perUserRateLimit('/api/v1/video-models'),
 }).get(async (req, res) => res.json({ models: await listUsableVideoModels(req.user.id, getVideoJobDeps()) }));
 
 export const config = {
@@ -3547,7 +3812,7 @@ git commit -m "feat(api)!: replace the Sora video endpoint with video generation
 - Create: `apps/client/pages/api/v1/__tests__/video-generation-by-id.integration.test.ts`
 
 **Interfaces:**
-- Consumes: `listByRequester` (Task 10), `findOwnVideoJob`, mapper (Task 12), `encodeCursor`/`decodeCursor`, `getGenerationJobEngine().requestCancel`.
+- Consumes: `listByRequester` (Task 10), `findOwnVideoJob`, mapper (Task 12), `routeDeps` and `routeHarness` (Task 13), `encodeCursor`/`decodeCursor`, `getGenerationJobEngine().requestCancel`.
 
 - [ ] **Step 1: Write the failing list tests** (append to `video-generations.integration.test.ts`)
 
@@ -3601,7 +3866,7 @@ describe('GET /api/v1/video-generations', () => {
     expect(h.listByRequester).not.toHaveBeenCalled();
   });
 
-  it('list never returns another member of the same org (queries by requester only)', async () => {
+  it("list never returns another member's jobs", async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE], 'member-a');
     asUser('member-a', 'org-1');
     h.listByRequester.mockResolvedValue([]);
@@ -3656,10 +3921,12 @@ const listRouter = nextRouteForContract(listVideoGenerationsContract, {
 export default dispatchByMethod({ GET: listRouter, POST: createRouter });
 ```
 
+The file already imports `perUserRateLimit`, `mapperDeps`, `UnprocessableEntityError`, `nextRouteForContract` and `dispatchByMethod` from Task 13; add the imports shown above. `createRouter` is the module-local constant from Task 13.
+
 Run: `pnpm --filter @bike4mind/client exec vitest run pages/api/v1/__tests__/video-generations.integration.test.ts`
 Expected: PASS.
 
-- [ ] **Step 3: Write the failing get/cancel tests** (`video-generation-by-id.integration.test.ts`: the HARNESS block, then)
+- [ ] **Step 3: Write the failing get/cancel tests** (`video-generation-by-id.integration.test.ts`). Start the file with the header from Task 13 Step 2 (docblock, imports, the nine `vi.mock` calls), adding `CreditHolderType` to the `@bike4mind/common` import and `JOB_ID`, `videoJob`, `asUser` to the harness import; then:
 
 ```ts
 import getHandler from '../video-generations/[id]/index';
@@ -3683,7 +3950,7 @@ describe('GET /api/v1/video-generations/{id}', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, state: 'pending', output: null });
   });
 
-  it('404s another member job in the same org', async () => {
+  it("404s another member's job in the same org", async () => {
     h.findById.mockResolvedValue(
       videoJob({ ownerType: CreditHolderType.Organization, ownerId: 'org-1', requestedBy: 'member-b' })
     );
@@ -3744,7 +4011,7 @@ describe('POST /api/v1/video-generations/{id}/cancel', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, state: 'running' });
   });
 
-  it('cancel during storing returns 200 with the job as-is', async () => {
+  it('cancel during storing returns 200 with the job as-is and does not mark cancelRequested', async () => {
     const storing = videoJob({ state: 'storing' });
     h.findById.mockResolvedValue(storing);
     h.requestCancel.mockResolvedValue(null);
@@ -3752,9 +4019,11 @@ describe('POST /api/v1/video-generations/{id}/cancel', () => {
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ state: 'storing', error: null });
+    expect(h.requestCancel).toHaveBeenCalledTimes(1);
+    expect(storing.cancelRequested).toBe(false);
   });
 
-  it('404s cancel of another user job without touching it', async () => {
+  it("404s cancel of another user's job", async () => {
     h.findById.mockResolvedValue(videoJob({ requestedBy: 'someone-else' }));
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
@@ -3775,24 +4044,18 @@ Expected: FAIL (modules not found).
 /** GET /api/v1/video-generations/{id} - one job the caller requested; anything else is a 404. */
 import { getVideoGenerationContract, NotFoundError } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { findOwnVideoJob } from '@server/videoGenerations/findOwnVideoJob';
-import { signOutputUrl } from '@server/videoGenerations/signOutputUrl';
+import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const handler = nextRouteForContract(getVideoGenerationContract, {
   // Clients poll this until the job is terminal; polling must not drain the daily request budget.
   exemptReadsFromDailyRateLimit: true,
-  rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
-    windowMs: 60 * 1000,
-    bucket: 'GET /api/v1/video-generations/[id]',
-  }),
+  rateLimit: perUserRateLimit('GET /api/v1/video-generations/[id]'),
 }).get(async (req, res) => {
   const job = await findOwnVideoJob(req.validatedParams.id, req.user.id);
   if (!job) throw new NotFoundError('Video generation not found');
-  return res.json(await toPublicVideoGeneration(job, { sign: signOutputUrl, now: () => new Date() }));
+  return res.json(await toPublicVideoGeneration(job, mapperDeps));
 });
 
 export const config = {
@@ -3809,26 +4072,20 @@ export default handler;
 import { cancelVideoGenerationContract, NotFoundError } from '@bike4mind/common';
 import { generationJobRepository } from '@bike4mind/database';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { rateLimit } from '@server/middlewares/rateLimit';
-import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import { getGenerationJobEngine } from '@server/generationJobs/wiring';
 import { findOwnVideoJob } from '@server/videoGenerations/findOwnVideoJob';
-import { signOutputUrl } from '@server/videoGenerations/signOutputUrl';
+import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
 const handler = nextRouteForContract(cancelVideoGenerationContract, {
-  rateLimit: rateLimit({
-    limit: req => resolveUserRateLimitPerMin(req.user),
-    windowMs: 60 * 1000,
-    bucket: 'POST /api/v1/video-generations/[id]/cancel',
-  }),
+  rateLimit: perUserRateLimit('POST /api/v1/video-generations/[id]/cancel'),
 }).post(async (req, res) => {
   const job = await findOwnVideoJob(req.validatedParams.id, req.user.id);
   if (!job) throw new NotFoundError('Video generation not found');
   // null: already storing or terminal, so the provider has produced (and charged for) the video; report it as is.
   const requested = await getGenerationJobEngine().requestCancel(job.id);
   const current = requested ?? (await generationJobRepository.findById(job.id)) ?? job;
-  return res.json(await toPublicVideoGeneration(current, { sign: signOutputUrl, now: () => new Date() }));
+  return res.json(await toPublicVideoGeneration(current, mapperDeps));
 });
 
 export const config = {
@@ -3921,8 +4178,11 @@ At line 751, replace `\`/api/v1/video-generations\`` in the image/video list wit
 
 - [ ] **Step 4: Verify and commit**
 
-Run (dispatch to `verify`): `pnpm --filter @bike4mind/client exec vitest run app/constants app/components/admin && git diff --exit-code --stat apps/client/public/openapi.json || true`
-Expected: tests PASS; the openapi diff is the regenerated file you are about to commit.
+Run (dispatch to `verify`): `pnpm --filter @bike4mind/client exec vitest run app/constants app/components/admin`
+Expected: PASS.
+
+Run: `git diff --stat apps/client/public/openapi.json`
+Expected: only the regenerated spec differs (the file you are about to commit).
 
 ```bash
 git add apps/client/public/openapi.json apps/client/app/components/admin/content/apiReferenceContent.ts apps/client/app/constants/apiKeyScopes.ts
@@ -3932,23 +4192,23 @@ git commit -m "docs(api): publish the video generation endpoints"
 ---
 ### Task 16: Remove Sora from the engine packages (common, utils, services, llm-adapters)
 
-The endpoint that used Sora is gone (Task 13), so the remaining Sora code is dead. Delete it rather than leave a deprecated path: OpenAI shut the Sora API down upstream on 2026-09-24.
+The endpoint that used Sora is gone (Task 13) and its apps and infra importers are gone (Tasks 17-18, which run before this task; see Execution order), so the remaining Sora code is dead. Delete it rather than leave a deprecated path: OpenAI shut the Sora API down upstream on 2026-09-24.
 
 **Files:**
 - Delete: `b4m-core/utils/src/videoGeneration/` (whole directory); remove its export at `b4m-core/utils/src/index.ts:85`
 - Delete: `b4m-core/common/src/videoGeneration.ts`; remove `b4m-core/common/src/index.ts:20`
 - Delete: `b4m-core/common/src/schemas/sora.ts` (and its export at `common/src/index.ts:25`), `b4m-core/common/src/schemas/videoApi.ts` (and `schemas/index.ts:38`)
 - Modify: `b4m-core/common/src/models.ts` (remove the Sora model block at lines ~528-553 and its spread at ~562)
-- Modify: `b4m-core/common/src/modelHelpers.ts` (remove `isVideoModel` and its callers)
+- Modify: `b4m-core/common/src/utils/modelHelpers.ts` (remove `isVideoModel`; its only apps caller, `apps/client/app/utils/commands.ts`, was cleaned in Task 18)
 - Delete: `b4m-core/services/src/llm/VideoGeneration.ts` + its test; remove `b4m-core/services/src/llm/index.ts:8`
-- Delete: `b4m-core/services/src/videoCostCalculator/` (whole directory) and its index export
-- Modify: `b4m-core/llm-adapters/src/openaiBackend.ts` (remove the video methods at ~944-990 and the Sora import at line 12)
-- Modify: `resolveDeprecatedModel.test.ts` (drop `sora-2`/`sora-2-pro` from `UNMAPPED_LEGACY` only if the test fails on them; they may legitimately stay as unmapped legacy ids)
-- Modify: `generationCallbackFinally.test.ts` (remove the Sora-only cases)
+- Delete: `b4m-core/services/src/llm/videoCostCalculator/` (whole directory including its `index.ts`; its only importer is `llm/VideoGeneration.ts`)
+- Modify: `b4m-core/llm-adapters/src/openaiBackend.ts` (remove the Sora model entries at ~944-990, which are model-list entries rather than methods, and the `VideoModels` import at line 12 once nothing else uses it)
+- Modify: `b4m-core/llm-adapters/src/resolveDeprecatedModel.test.ts` (drop `sora-2`/`sora-2-pro` from `UNMAPPED_LEGACY` only if the test fails on them; they may legitimately stay as unmapped legacy ids)
+- Modify: `apps/client/server/queueHandlers/generationCallbackFinally.test.ts` (remove the Sora-only cases; it imports the Sora services, so it belongs in this commit)
 
 - [ ] **Step 1: Find every importer before deleting**
 
-Dispatch to `scout`: "List every import of `videoGeneration`, `schemas/sora`, `schemas/videoApi`, `VideoGeneration` (services llm), `videoCostCalculator`, `isVideoModel`, `SoraVideo`, `OpenAIVideo` across `b4m-core/`, `apps/`, `packages/`. Return file:line." Expected: hits only in the files listed above plus the infra/client files of Tasks 17-18. Any other hit is added to this task's file list before Step 2.
+Dispatch to `scout`: "List every import of `videoGeneration`, `schemas/sora`, `schemas/videoApi`, `VideoGeneration` (services llm), `videoCostCalculator`, `isVideoModel`, `SoraVideo`, `OpenAIVideo` across `b4m-core/`, `apps/`, `packages/`. Return file:line." Expected: hits only in the files listed above (Tasks 17-18 already removed the infra and client ones). Any other hit is added to this task's file list before Step 2.
 
 - [ ] **Step 2: Delete and prune**
 
@@ -3956,13 +4216,13 @@ Delete the files and remove the lines listed. For `models.ts`, keep every non-So
 
 - [ ] **Step 3: Verify**
 
-Run (dispatch to `verify`): `pnpm turbo:core:build && pnpm --filter @bike4mind/common --filter @bike4mind/utils --filter @bike4mind/services --filter @bike4mind/llm-adapters typecheck && pnpm --filter @bike4mind/common --filter @bike4mind/utils --filter @bike4mind/services --filter @bike4mind/llm-adapters test`
-Expected: PASS. A typecheck failure in `apps/` is expected until Tasks 17-18 and is not part of this step.
+Run (dispatch to `verify`): `pnpm turbo:core:build && pnpm --filter @bike4mind/common --filter @bike4mind/utils --filter @bike4mind/services --filter @bike4mind/llm-adapters typecheck && pnpm --filter @bike4mind/common --filter @bike4mind/utils --filter @bike4mind/services --filter @bike4mind/llm-adapters test && pnpm --filter @bike4mind/client typecheck && pnpm --filter @bike4mind/client exec vitest run --project node server/queueHandlers`
+Expected: PASS (apps typechecks here because Tasks 17-18 already removed its Sora importers).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add -A b4m-core
+git add -A b4m-core apps/client/server/queueHandlers/generationCallbackFinally.test.ts
 git commit -m "refactor(video): remove the Sora generation code from the engine packages"
 ```
 
@@ -3970,21 +4230,23 @@ git commit -m "refactor(video): remove the Sora generation code from the engine 
 
 ### Task 17: Remove the Sora queue, its handler and its infra
 
+Runs before Task 16 (see Execution order): the handler it deletes imports the Sora services that Task 16 removes.
+
 **Files:**
-- Modify: `infra/queues.ts` (remove the `videoGenerationQueue` definition ~1096-1137 and its export entries ~1746/1783/1821)
-- Modify: `infra/web.ts` (lines 34, 70, 129, 193: the queue import, link, env and subscriber)
+- Modify: `infra/queues.ts` (remove the `videoGenerationDLQ`, `videoGenerationQueue` and subscription definitions ~1102-1137 and their export entries ~1746/1783/1821)
+- Modify: `infra/web.ts` (lines 34, 70, 129, 193: the queue import, DLQ import, DLQ url map entry and env)
 - Modify: `infra/dlqAlarms.ts` (line 44 and 366-372), `infra/logMonitor.ts` (line 26 and 197)
-- Modify: the DLQ registry (`dlqRegistry.ts` lines 113-118) and `dlqRegistry.test.ts` (line 53, and the total at line 40 from 40 to 39)
+- Modify: `apps/client/server/utils/dlqRegistry.ts` (the `video-generation` entry, ~lines 112-117) and `apps/client/server/utils/dlqRegistry.test.ts` (line 10 `video-generation` DLQ url entry, line 53 `videoGenerationQueue` source-queue entry, and the total at lines 102-104: the title "returns all 40 DLQ entries" and `toHaveLength(40)` become 39)
 - Delete: `apps/client/server/queueHandlers/videoGeneration.ts` + its test
 - Modify: `b4m-core/resource/src/index.test.ts` lines 125-127 (switch the example queue from `videoGenerationQueue` to `questExportQueue`, which has no self-host references)
-- Modify: `manifestCoverage.test.ts` line 138 (remove the `videoGenerationQueue` entry)
-- Modify: `sst-env.d.ts` (line 730 and 770-777) **by hand** (Plan-time correction 7: it is not regenerated in CI)
-- Keep: `queueFactory.test.ts` (its `videoGeneration` string is a generic fixture name, not this queue)
+- Modify: `b4m-core/resource/src/manifestCoverage.test.ts` line 138 (remove the `videoGenerationQueue` entry)
+- Modify: `sst-env.d.ts` (line 730, and the `videoGenerationDLQ` and `videoGenerationQueue` blocks at lines 766-773) **by hand** (Plan-time correction 7: it is not regenerated in CI)
+- Keep: `b4m-core/infra/src/__tests__/queueFactory.test.ts` (its `videoGeneration` names are generic fixture names, not this queue)
 
 - [ ] **Step 1: Confirm no other reader**
 
-Run: `command grep -rn "videoGenerationQueue\|VideoGenerationQueue\|queueHandlers/videoGeneration" --include=*.ts infra apps b4m-core packages | command grep -v node_modules`
-Expected: only the files listed above.
+Run: `command grep -rnE "videoGenerationQueue|videoGenerationDLQ|VideoGenerationQueue|queueHandlers/videoGeneration" --include='*.ts' infra apps b4m-core packages sst-env.d.ts | command grep -v node_modules`
+Expected: only the files listed above (plus the kept `queueFactory.test.ts`).
 
 - [ ] **Step 2: Remove**
 
@@ -3992,15 +4254,14 @@ Make the edits listed. In `dlqRegistry.test.ts` the total-count assertion drops 
 
 - [ ] **Step 3: Verify**
 
-Run (dispatch to `verify`): `pnpm --filter @bike4mind/resource test && pnpm --filter @bike4mind/client exec vitest run --project node server/queueHandlers && pnpm --filter @bike4mind/scripts test`
-Expected: PASS. Then: `command grep -rn "videoGenerationQueue" --include=*.ts infra apps b4m-core packages sst-env.d.ts | command grep -v node_modules`
-Expected: no output.
+Run (dispatch to `verify`): `pnpm --filter @bike4mind/resource test && pnpm --filter @bike4mind/client exec vitest run --project node server/queueHandlers server/utils/dlqRegistry && pnpm --filter @bike4mind/client typecheck && pnpm --filter @bike4mind/scripts test`
+Expected: PASS. Then: `command grep -rnE "videoGenerationQueue|videoGenerationDLQ" --include='*.ts' infra apps b4m-core packages sst-env.d.ts | command grep -v node_modules`
+Expected: only `b4m-core/infra/src/__tests__/queueFactory.test.ts`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add -A infra apps/client/server/queueHandlers b4m-core/resource sst-env.d.ts
-git add -u
+git add -A infra apps/client/server/queueHandlers apps/client/server/utils b4m-core/resource sst-env.d.ts
 git commit -m "refactor(infra): remove the Sora video generation queue"
 ```
 
@@ -4008,9 +4269,11 @@ git commit -m "refactor(infra): remove the Sora video generation queue"
 
 ### Task 18: Remove the Sora slash command from the client
 
+Runs before Task 16 (see Execution order); `isVideoModel` still exists in `@bike4mind/common` at this point, so removing its use here compiles.
+
 **Files:**
 - Delete: `apps/client/app/components/commands/VideoGenerationCommand.ts`
-- Modify: `sessionBottomConstants` (lines 9 and 29), `commands.ts` (lines 8, 11, 77, 101-104, 125, 142-143)
+- Modify: `apps/client/app/components/Session/SessionBottom/sessionBottomConstants.ts` (lines 9 and 29), `apps/client/app/utils/commands.ts` (lines 8, 11, 77, 101-104, 125, 142-143)
 - Modify: comments mentioning Sora in `useSendMessage` (~560, ~1127) and `intentClassifierShortCircuits` (~40): reword to describe the current behaviour without Sora; do not add new prose
 
 - [ ] **Step 1: Remove** the command, its registration and its constants.
@@ -4071,11 +4334,13 @@ Expected: exit 0 (the committed spec matches the contracts).
 
 - [ ] **Step 3: Hygiene**
 
-Run: `git diff main --name-only | command grep -E "\.(ts|tsx|json)$" | xargs command grep -nP "[^\x00-\x7F]" ; bash scripts/check-no-smart-punctuation.sh`
-Expected: no non-ASCII on added lines; the script exits 0.
+Run: `BASE=$(git merge-base HEAD origin/feat/video-generation-foundation) && git diff "$BASE" -U0 --diff-filter=AM -- '*.ts' '*.tsx' '*.json' | command grep -nP '^\+(?!\+\+).*[^\x00-\x7F]'; bash scripts/check-no-smart-punctuation.sh --changed "$BASE" && bash scripts/check-no-control-bytes.sh --changed "$BASE"`
+Expected: the grep prints nothing (no non-ASCII on added lines; whole-file greps are wrong here because `apiReferenceContent.ts`, `infra/queues.ts` and `openapi.json` already carry non-ASCII lines this PR does not touch) and both scripts exit 0. The scripts must be given `--changed <base>`: their default mode reads the staged diff, which is empty after commits.
 
-Run: `command grep -rnE "AIza|x-goog-api-key\"?\s*[:=]\s*\"[^\"]" b4m-core/utils/src/videoProviders/__fixtures__`
+Run (once Task 4 has recorded the fixtures; the directory does not exist before then): `command grep -rnE "AIza|x-goog-api-key\"?\s*[:=]\s*\"[^\"]" b4m-core/utils/src/videoProviders/geminiOmni/__fixtures__`
 Expected: no output (no key in fixtures).
+
+Tasks 4, 5 and 7 run after this task, so re-run Steps 1-3 once they land (the fixture check only has something to scan then).
 
 No commit unless a gate forced a fix; such a fix gets its own conventional commit naming what broke.
 
@@ -4083,9 +4348,9 @@ No commit unless a gate forced a fix; such a fix gets its own conventional commi
 
 ### Task 21: Self-host smoke (local, no spend)
 
-The self-host runner calls `runJobStep` with a 24h remaining time (Plan-time correction 1); confirm the step budget clamps to the lease and the test provider runs end to end.
+The self-host runner (`SelfHostWorker` in `apps/workers/src/selfhost/selfHostWorker.ts`) hands the generation-job queue handler a context whose `getRemainingTimeInMillis` reports 24 hours (Plan-time correction 1); confirm the step budget clamps to the lease and the test provider runs end to end.
 
-- [ ] **Step 1:** Boot the local self-host harness with `ENABLE_TEST_VIDEO_PROVIDER=true` (the flag Task 7 reads).
+- [ ] **Step 1:** Boot the local self-host harness with `ENABLE_TEST_VIDEO_PROVIDER=true` (the flag `buildProviders` in `wiring.ts` already reads; Task 7 keeps it).
 - [ ] **Step 2:** With a local API key carrying `ai:generate`: `GET /api/v1/video-models` lists `test-video`; `POST /api/v1/video-generations {"model":"test-video","prompt":"smoke"}` returns 202; polling `GET /api/v1/video-generations/{id}` reaches `succeeded` with an `output.url` that downloads a playable file.
 - [ ] **Step 3:** `POST .../{id}/cancel` on a fresh pending job returns 200 and the job reaches `cancelled` with `credits.settled` null.
 
@@ -4167,4 +4432,4 @@ The PR stays draft until #3899 merges.
 - Every task names its files, gives real code for new logic, and states the command and expected result.
 - Human gates: Task 4 (fixture recording) and Task 22 (live check) both stop and ask before any spend.
 - The two places the plan deliberately defers to code reality at implementation time are named in the step (the convention checker's call shape in Task 11, the `codeSample` GET variant), each with the rule to follow; neither changes a decision.
-- Review Focus items map to named tests: Task 12 and Task 14 (re-signing), Task 14 (org member 404s, list by requester), Task 13 (idempotency across org members), Tasks 5-6 (output gone), Task 14 (cancel during storing).
+- Review Focus items map to named tests: Task 12 and Task 14 (re-signing), Task 14 (org member 404s, list by requester), Task 13 (idempotency across org members), Tasks 5 and 6 (output gone), Task 14 (cancel during storing).
