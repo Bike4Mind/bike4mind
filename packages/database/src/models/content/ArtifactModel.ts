@@ -379,14 +379,22 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
    * wrote. Projected and batched: QuestMaster v5 calls this once per graph read
    * to attach a node's artifacts, so it must not be an N+1 and must not drag
    * `content` (which is the whole artifact body) across for a chip label.
+   *
+   * Scoped to `userId` because `sourceQuestId` is caller-supplied on the public
+   * create endpoint: without it, anyone holding a quest id could have their own
+   * artifact joined onto that quest's node. A run's artifacts are always written
+   * under the run's user (see persistAgentArtifacts).
    */
   async findByQuestIds(
-    questIds: string[]
+    questIds: string[],
+    userId: string
   ): Promise<Array<{ id: string; type: string; title: string; sourceQuestId: string }>> {
     if (!questIds.length) return [];
+    // A JS caller omitting userId would otherwise query `userId: undefined`, which strictQuery can strip.
+    if (!userId) throw new Error('findByQuestIds requires a userId');
     return this.model
       .find(
-        { sourceQuestId: { $in: questIds }, deletedAt: null },
+        { sourceQuestId: { $in: questIds }, userId, deletedAt: null },
         { _id: 0, id: 1, type: 1, title: 1, sourceQuestId: 1 }
       )
       .sort({ createdAt: 1 })
