@@ -94,4 +94,13 @@ describe('stripFrontmatter', () => {
     const content = '---\nRead this first\n---\nBody';
     expect(stripFrontmatter(content)).toBe(content);
   });
+
+  it('strips a lone prose line ending in a colon (known trade-off of spaced keys)', () => {
+    expect(stripFrontmatter('---\nImportant notice: please read\n---\nBody')).toBe('Body');
+  });
+
+  it('keeps a colon line whose text before the colon has punctuation', () => {
+    const content = '---\nPlease read this, carefully: ok\n---\nBody';
+    expect(stripFrontmatter(content)).toBe(content);
+  });
 });
