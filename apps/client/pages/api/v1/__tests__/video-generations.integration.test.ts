@@ -177,19 +177,24 @@ describe('POST /api/v1/video-generations', () => {
     expect(res._getJSONData()).toMatchObject({ errorCode: refusal.code });
   });
 
-  it('refuses an unknown model and a model without a usable key as model_unavailable', async () => {
+  it('refuses an unknown model as model_unavailable before the domain', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const unknown = post({ model: 'sora-2', prompt: 'p' });
     await handler(unknown.req, unknown.res);
     expect(unknown.res._getStatusCode()).toBe(422);
     expect(unknown.res._getJSONData()).toMatchObject({ errorCode: 'model_unavailable' });
-
-    h.hasUsableKey.mockResolvedValue(false);
-    const keyless = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
-    await handler(keyless.req, keyless.res);
-    expect(keyless.res._getStatusCode()).toBe(422);
-    expect(keyless.res._getJSONData()).toMatchObject({ errorCode: 'model_unavailable' });
     expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('leaves the key check to the domain, so a same-key retry replays after the key is removed', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.hasUsableKey.mockResolvedValue(false);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: false });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' }, { 'idempotency-key': 'retry-1' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(res._getJSONData()).toMatchObject({ id: videoJob().id });
+    expect(h.createVideoJob).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a body without a prompt (422) before the domain', async () => {

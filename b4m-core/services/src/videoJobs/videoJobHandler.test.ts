@@ -373,9 +373,11 @@ describe('video job end to end with the test provider', () => {
     const submit = vi.fn<VideoProvider['submit']>();
     const t = setup({
       providers: createVideoProviderRegistry([stubProvider({ submit })]),
-      resolveApiKey: async () => {
-        throw new Error('secrets store unavailable');
-      },
+      // The first answer is createVideoJob's key check; the outage hits the submit step.
+      resolveApiKey: vi
+        .fn<VideoJobDeps['resolveApiKey']>()
+        .mockResolvedValueOnce('key')
+        .mockRejectedValue(new Error('secrets store unavailable')),
     });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
@@ -482,8 +484,10 @@ describe('video job end to end with the test provider', () => {
     );
   });
 
-  it('fails cleanly when no API key resolves for the provider', async () => {
-    const t = setup({ resolveApiKey: async () => null });
+  it('fails cleanly when the API key is gone by the time the job runs', async () => {
+    const t = setup({
+      resolveApiKey: vi.fn<VideoJobDeps['resolveApiKey']>().mockResolvedValueOnce('key').mockResolvedValue(null),
+    });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({
@@ -495,7 +499,10 @@ describe('video job end to end with the test provider', () => {
   it('treats the expired-key sentinel as a missing key and never calls the provider', async () => {
     const submit = vi.fn<VideoProvider['submit']>();
     const t = setup({
-      resolveApiKey: async () => EXPIRED_KEY_SENTINEL,
+      resolveApiKey: vi
+        .fn<VideoJobDeps['resolveApiKey']>()
+        .mockResolvedValueOnce('key')
+        .mockResolvedValue(EXPIRED_KEY_SENTINEL),
       providers: createVideoProviderRegistry([stubProvider({ submit })]),
     });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
@@ -511,7 +518,8 @@ describe('video job end to end with the test provider', () => {
     const poll = vi.fn<VideoProvider['poll']>();
     const resolveApiKey = vi
       .fn<VideoJobDeps['resolveApiKey']>()
-      .mockResolvedValueOnce('key')
+      .mockResolvedValueOnce('key') // createVideoJob
+      .mockResolvedValueOnce('key') // submit
       .mockResolvedValue(EXPIRED_KEY_SENTINEL);
     const t = setup({ resolveApiKey, providers: createVideoProviderRegistry([stubProvider({ poll })]) });
     const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
@@ -524,7 +532,8 @@ describe('video job end to end with the test provider', () => {
     const cancel = vi.fn<NonNullable<VideoProvider['cancel']>>(async () => undefined);
     const resolveApiKey = vi
       .fn<VideoJobDeps['resolveApiKey']>()
-      .mockResolvedValueOnce('key')
+      .mockResolvedValueOnce('key') // createVideoJob
+      .mockResolvedValueOnce('key') // submit
       .mockResolvedValue(EXPIRED_KEY_SENTINEL);
     const t = setup({ resolveApiKey, providers: createVideoProviderRegistry([stubProvider({ cancel })]) });
     const warn = vi.spyOn(t.deps.logger, 'warn');

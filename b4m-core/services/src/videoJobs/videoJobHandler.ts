@@ -23,9 +23,8 @@ import {
   type VideoProviderContext,
 } from '@bike4mind/utils/videoProviders';
 import { releaseCreditHold, settleCreditHold, type CreditLedgerEntry } from '../creditService/creditHold';
-import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
-import type { VideoJobDeps } from './types';
+import { isUsableApiKey, type VideoJobDeps } from './types';
 
 const FEATURE_LABEL = 'video generation';
 
@@ -74,7 +73,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     { signal }: GenerationJobStepContext
   ): Promise<VideoProviderContext | null> => {
     const apiKey = await deps.resolveApiKey(job.payload.providerId, job.requestedBy);
-    if (!apiKey || apiKey === EXPIRED_KEY_SENTINEL) return null;
+    if (!isUsableApiKey(apiKey)) return null;
     return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
   };
 

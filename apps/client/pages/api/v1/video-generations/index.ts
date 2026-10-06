@@ -23,7 +23,6 @@ import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';
-import { hasUsableKey } from '@server/videoGenerations/listUsableVideoModels';
 import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
 
@@ -71,14 +70,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
 }).post(async (req, res) => {
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
-  const deps = getCreateVideoJobDeps();
-  const caps = getVideoModelCapabilities(request.model);
-  // An unregistered provider is reported by createVideoJob; a missing key would otherwise fail only at submit.
-  if (deps.providers.get(caps.provider) && !(await hasUsableKey(caps.provider, req.user.id, deps))) {
-    throw new UnprocessableEntityError(`${caps.displayName} has no API key configured`, {
-      errorCode: 'model_unavailable',
-    });
-  }
+  // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
       user: { id: req.user.id, organizationId: await resolveBillingOrgId(req, undefined) },
@@ -87,7 +79,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
       // The domain scopes keys per credit owner (the org for members); per user here keeps members apart.
       ...(idempotencyKey && { idempotencyKey: `api:${req.user.id}:${idempotencyKey}` }),
     },
-    deps
+    getCreateVideoJobDeps()
   );
   if (!result.ok) throw toHttpError(result);
   return res.status(202).json(await toPublicVideoGeneration(result.job, mapperDeps));

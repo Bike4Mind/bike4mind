@@ -8,8 +8,12 @@ import type {
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { VideoProviderRegistry } from '@bike4mind/utils/videoProviders';
+import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { CreditHoldAdapters } from '../creditService/creditHold';
 import type { GenerationJobEngine } from '../generationJobs/engine';
+
+/** Whether a resolveApiKey answer may reach a provider: shared by the create-time check and every job step. */
+export const isUsableApiKey = (apiKey: string | null): apiKey is string => !!apiKey && apiKey !== EXPIRED_KEY_SENTINEL;
 
 // Stamped on the job as deadlineAt at create; the engine fails a pending or running job past it.
 export const VIDEO_JOB_MAX_WALL_CLOCK_MS = 20 * 60_000;
