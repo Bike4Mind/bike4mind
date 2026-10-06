@@ -125,7 +125,7 @@ vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
 vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn(async () => undefined) }));
 // #2027: its own dedicated unit tests (notifySlackIndexingComplete.test.ts) cover the resolution
 // chain and every skip case - mocked here so this suite doesn't have to exercise the real thing.
-vi.mock('@server/queueHandlers/notifySlackIndexingComplete', () => ({
+vi.mock('@workers/queueHandlers/notifySlackIndexingComplete', () => ({
   notifySlackIndexingComplete: (...a: unknown[]) => h.notifySlackIndexingComplete(...a),
 }));
 vi.mock('@server/utils/dataLakeSpendNotifier', () => ({ makeDataLakeSpendNotifier: () => h.spendNotifier }));
@@ -184,7 +184,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(),
 import { fabFileChunkRepository, User } from '@bike4mind/database';
 import { FabFileSourceType } from '@bike4mind/common';
 import { sendToClient } from '@server/websocket/utils';
-import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from './sqsDelivery';
+import { FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatch } from './fabFileVectorize';
 
 const makeEvent = (body: Record<string, unknown>) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;

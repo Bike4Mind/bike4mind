@@ -134,7 +134,7 @@ const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
 });
 const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/fabFileVectorize.dispatch',
+    handler: 'apps/workers/src/queueHandlers/fabFileVectorize.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
@@ -202,7 +202,7 @@ const fabFileChunkQueue = new sst.aws.Queue('fabFileChunkQueue', {
 });
 const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/fabFileChunk.dispatch',
+    handler: 'apps/workers/src/queueHandlers/fabFileChunk.dispatch',
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
@@ -317,7 +317,7 @@ const generationCallbackQueue = new sst.aws.Queue('generationCallbackQueue', {
 });
 const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/generationCallback.dispatch',
+    handler: 'apps/workers/src/queueHandlers/generationCallback.dispatch',
     runtime: 'nodejs24.x',
     timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
     vpc: lambdaVpc,
@@ -457,7 +457,7 @@ const researchEngineQueue = new sst.aws.Queue('researchEngineQueue', {
 
 const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/researchEngineQueue.dispatch',
+    handler: 'apps/workers/src/queueHandlers/researchEngineQueue.dispatch',
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
@@ -857,7 +857,7 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
 // so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
 const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
@@ -879,7 +879,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
 // lake fails in isolation and DLQs on its own.
 const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
+    handler: 'apps/workers/src/queueHandlers/lakeMemoryExtraction.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -906,7 +906,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
 // SINGLE_RECORD_BATCH so one lake fails in isolation and DLQs on its own.
 const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/lakeInconsistencyModelDetection.dispatch',
+    handler: 'apps/workers/src/queueHandlers/lakeInconsistencyModelDetection.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -929,7 +929,7 @@ const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subs
 // writes a file - approving one of its proposals does, through the ordinary ingestion door.
 const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeResearchRun.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeResearchRun.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
