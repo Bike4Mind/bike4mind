@@ -37,7 +37,7 @@ const PromptMetaModelParametersSchema = z.object({
   response_format: z.string().optional(), // Response format (url/b64_json)
 
   // Video generation parameters
-  seconds: z.number().optional(), // Video duration in seconds (4, 8, or 12)
+  seconds: z.number().optional(), // Requested clip length in seconds
   model: z.string().optional(), // Video model name
 });
 
