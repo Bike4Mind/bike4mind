@@ -243,6 +243,14 @@ export interface IChatHistoryItem {
   correctsQuestId?: string;
 
   /**
+   * Ms from the client sending the prompt to rendering the first token, posted back by the client
+   * mid-stream (quests/[id]/client-timing). Top-level rather than under `promptMeta.performance`
+   * because the completion pipeline saves `promptMeta` whole from an in-memory copy that never has
+   * it, so the stream's final save would erase it. Older quests carry it at the promptMeta path.
+   */
+  clientFirstTokenTime?: number;
+
+  /**
    * Provenance of the routing decision that produced this quest (M4).
    * Drives the `AutoRouteBadge` rendering above auto-routed responses
    * (classifier- or rule-based complexity-routed) so users see when

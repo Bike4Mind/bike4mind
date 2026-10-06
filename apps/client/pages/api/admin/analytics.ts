@@ -88,6 +88,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
       firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
+      clientFirstTokenTime: quest.clientFirstTokenTime ?? quest.promptMeta?.performance?.clientFirstTokenTime,
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {
