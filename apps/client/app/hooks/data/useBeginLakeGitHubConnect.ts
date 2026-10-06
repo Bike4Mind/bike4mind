@@ -24,7 +24,8 @@ export function useBeginLakeGitHubConnect(dataLakeId: string) {
         }
         window.location.assign(authorizeUrl);
       },
-      // e.g. "is curated, change its origin", "already connected to a Google Drive folder".
+      // e.g. "already connected to a Google Drive folder", or "is curated" if the origin changed after
+      // GitHubConnectAction checked it.
       onError: (e: unknown) =>
         toast.error(getServerErrorField(e) || 'Could not start the GitHub connection. Please try again.'),
     });

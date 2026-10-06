@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { DataLakeOrigin } from '@bike4mind/common';
 import CloudIcon from '@mui/icons-material/Cloud';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import DriveConnectAction from '@client/app/components/DataLakeWizard/steps/DriveConnectAction';
@@ -19,6 +20,8 @@ export type LakeSourceLake = {
   organizationId?: string | null;
   canManage?: boolean;
   isCreator?: boolean;
+  /** Read by the GitHub panel, which offers to switch a non-connector-fed lake before connecting. */
+  origin?: DataLakeOrigin;
 };
 
 export type LakeSourceAvailability =
@@ -38,7 +41,7 @@ export type LakeSource = {
   /** Why this lake cannot take the source, or undefined when it can. Mirrors the server's connect gate. */
   unavailableReason: (lake: LakeSourceLake) => string | undefined;
   /** Connect/status control for an existing lake. */
-  Panel: ComponentType<{ lake: { id: string } }>;
+  Panel: ComponentType<{ lake: LakeSourceLake & { id: string } }>;
 };
 
 const googleDrive: LakeSource = {

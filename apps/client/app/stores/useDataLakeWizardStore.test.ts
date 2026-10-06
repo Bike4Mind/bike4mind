@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { useDataLakeWizardStore } from './useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from './useDataLakeWizardStore';
 import type { WizardFile } from '../utils/folderTreeParser';
 import { MAX_TAG_PREFIX_LENGTH, tagPrefixIssue } from '@bike4mind/common';
 
@@ -235,5 +235,18 @@ describe('useDataLakeWizardStore - GitHub repository picker', () => {
     useDataLakeWizardStore.getState().openGitHubRepoPicker('lake1');
     useDataLakeWizardStore.getState().closeManager();
     expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+  });
+});
+
+describe('toWizardTargetLake', () => {
+  const lake = { id: 'lake1', slug: 'docs', name: 'Docs', fileTagPrefix: 'docs', isCreator: false };
+
+  it('carries the origin, so the GitHub connect control can ask to switch a curated lake', () => {
+    expect(toWizardTargetLake({ ...lake, origin: 'curated' }).origin).toBe('curated');
+    expect(toWizardTargetLake({ ...lake, origin: 'connector-fed' }).origin).toBe('connector-fed');
+  });
+
+  it('leaves an absent origin absent, which the control reads as curated', () => {
+    expect(toWizardTargetLake(lake).origin).toBeUndefined();
   });
 });
