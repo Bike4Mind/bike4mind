@@ -55,14 +55,15 @@ import { VOICE_SESSION_ERROR } from '@client/shared/voiceSessionErrors';
 /** baseApi is collapsed above, so route a thrown error through errorHandler the way its onError does. */
 async function callRoute() {
   const { req, res } = createMocks({ method: 'POST', body: {} });
+  const logger = { warn: vi.fn(), error: vi.fn() };
   (req as any).user = { id: 'user-1', currentCredits: 1_000_000 };
-  (req as any).logger = { warn: vi.fn(), error: vi.fn() };
+  (req as any).logger = logger;
   try {
     await (voiceSessionsHandler as any)(req, res);
   } catch (error) {
     errorHandler(error, req as any, res as any);
   }
-  return res;
+  return { res, logger };
 }
 
 beforeEach(() => {
@@ -79,16 +80,19 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
   it.each([401, 403, 429, 500])('answers a coded 502, not the upstream %i', async upstreamStatus => {
     mockPost.mockRejectedValueOnce({ isAxiosError: true, response: { status: upstreamStatus, data: { error: 'x' } } });
 
-    const res = await callRoute();
+    const { res, logger } = await callRoute();
 
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
+    // An error-level log reaches the LiveOps alert filter; a rejected key is not a server fault.
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('answers a coded 502 when OpenAI is unreachable (no response)', async () => {
     mockPost.mockRejectedValueOnce({ isAxiosError: true });
 
-    const res = await callRoute();
+    const { res } = await callRoute();
 
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
@@ -97,7 +101,7 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
   it('does not echo the upstream response body to the client', async () => {
     mockPost.mockRejectedValueOnce({ isAxiosError: true, response: { status: 401, data: { secret: 'leak-me' } } });
 
-    const res = await callRoute();
+    const { res } = await callRoute();
 
     expect(res._getData()).not.toContain('leak-me');
   });
@@ -117,10 +121,11 @@ describe('POST /api/ai/voice-sessions upstream failures', () => {
   it('rejects a missing OpenAI key up front: coded 502, no OpenAI call, no credit movement', async () => {
     mockGetEffectiveApiKey.mockResolvedValueOnce(null);
 
-    const res = await callRoute();
+    const { res, logger } = await callRoute();
 
     expect(res._getStatusCode()).toBe(502);
     expect(res._getJSONData()).toMatchObject({ code: VOICE_SESSION_ERROR.unavailable });
+    expect(logger.error).not.toHaveBeenCalled();
     expect(mockPost).not.toHaveBeenCalled();
     expect(mockIncrementCredits).not.toHaveBeenCalled();
     expect(mockCreateSession).not.toHaveBeenCalled();
