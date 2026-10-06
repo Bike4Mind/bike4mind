@@ -354,6 +354,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       name: 'Voice',
       description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
     },
+    { name: 'Models', description: 'The models the caller can use, and the parameters each one accepts.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
     {
       name: 'Data Lakes',
