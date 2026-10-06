@@ -169,8 +169,8 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
       let reused = await findReusablePendingLake(req, organizationId);
       let lake = reused ?? (await createPendingGitHubLake(req, organizationId, suffix));
       if (!reused) {
-        // Two concurrent connects by one caller (a double-click) can both miss the finder and both insert.
-        // Re-reading after the insert lets the newer one yield to the older lake; there is no unique index.
+        // A double-click can make two connects both miss the finder and both insert. Re-reading converges them on
+        // the lowest-_id lake, best-effort only: there is no unique index and _id order is not insert order.
         const oldest = await findReusablePendingLake(req, organizationId);
         if (oldest && oldest.id !== lake.id) {
           await rollBackPendingLake(req, lake);
