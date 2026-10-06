@@ -16,3 +16,7 @@ export const GENERATED_IMAGE_EXTENSION_RE = /\.(png|jpe?g|webp|gif|svg|bmp|avif)
 // future generated-video path through quest.images must not be claimed here for the audio
 // player.
 export const GENERATED_AUDIO_EXTENSION_RE = /\.(mp3|wav|m4a|aac|flac|opus)$/i;
+
+// Rendered videos (VideoGeneration writes .mp4 onto quest.videos). Disjoint from the audio set
+// above, which leaves .webm to this one on purpose.
+export const GENERATED_VIDEO_EXTENSION_RE = /\.(mp4|webm|mov)$/i;

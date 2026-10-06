@@ -7,9 +7,10 @@ import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Request } from 'express';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { Resource } from 'sst';
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler(async (req: Request<{ fabFileId: string; chunkSize?: string }>, res) => {
     const { fabFileId, chunkSize } = req.body;
     if (!fabFileId || !chunkSize) throw new BadRequestError('Missing parameters: fabFileId or chunkSize');

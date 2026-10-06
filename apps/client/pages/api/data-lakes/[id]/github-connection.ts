@@ -1,11 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, orgGitHubLakeConnectionRepository } from '@bike4mind/database';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
-  buildGitHubLakeConnectUrls,
-  disconnectGitHubLakeConnection,
+  buildGitHubLakeAuthorizeUrl,
+  requestGitHubLakeDisconnect,
   requireGitHubLakeAppConfig,
   resolveConnectableLake,
   toGitHubLakeConnectionResponse,
@@ -29,12 +29,14 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
 
 /**
  * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null }
- * POST   /api/data-lakes/:id/github-connection -> { installUrl, authorizeUrl } (starts the connect; see
- *        buildGitHubLakeConnectUrls for when the callback page needs authorizeUrl. The page then
- *        completes the flow via POST /api/data-lakes/github-callback)
- * DELETE /api/data-lakes/:id/github-connection -> { installationRetained } (purges what the
- *        connection ingested and 409s while a sync is live - see disconnectGitHubLakeConnection,
- *        and releaseGitHubLakeConnection for when the App stays installed)
+ * POST   /api/data-lakes/:id/github-connection -> { authorizeUrl } (starts the connect, see
+ *        buildGitHubLakeAuthorizeUrl. The callback page relays GitHub's return to POST
+ *        /api/data-lakes/github-callback; the picker then lists .../repositories and binds via
+ *        .../complete)
+ * DELETE /api/data-lakes/:id/github-connection -> 202 { success, queued } (disables the connection
+ *        and queues the purge of what it ingested, 409 while a sync is live; the row stays, reading
+ *        `disconnecting`, until the purge releases it - see requestGitHubLakeDisconnect), or 204
+ *        when the lake has no connection
  *
  * Mirrors drive-connection.ts: GET answers a personal lake with a null connection (it genuinely has
  * none), so a 404 always means the lake is missing or the caller is not an org owner/manager. POST
@@ -54,14 +56,21 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     }
     await verifyOrgAccess(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
-    return res.json({ connection: conn ? toGitHubLakeConnectionResponse(conn) : null });
+    if (!conn) {
+      return res.json({ connection: null });
+    }
+    // Rides along for the disconnect confirmation, which must say how many files the purge deletes.
+    const fileCount = await fabFileRepository.countByGitHubConnectionIdInDataLake(conn.id, lake.datalakeTag);
+    return res.json({ connection: toGitHubLakeConnectionResponse(conn, fileCount) });
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
     const { lakeId } = await resolveConnectableLake(req.user, id);
-    return res.json(buildGitHubLakeConnectUrls(res, config, { userId: req.user.id, dataLakeId: lakeId }));
+    return res.json({
+      authorizeUrl: buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lakeId }),
+    });
   })
   .delete(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -74,9 +83,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     await verifyOrgAccess(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
     if (!conn) {
-      return res.json({ installationRetained: false });
+      return res.status(204).send();
     }
-    return res.json(await disconnectGitHubLakeConnection(lake, conn, req.logger));
+    const { queued } = await requestGitHubLakeDisconnect(conn, req.logger);
+    return res.status(202).json({ success: true, queued });
   });
 
 export const config = {

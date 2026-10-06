@@ -387,11 +387,8 @@ export interface FabFileSearchParams {
     /** When true, restrict results to vectorized files only (excludes unvectorized). */
     vectorizedOnly?: boolean;
     /**
-     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what the browse
-     * surfaces render as an "Uncategorized" bucket. One prefix for a single-lake browser; the
-     * whole accessible set for a MERGED tree, where a file categorized under any one lake is
-     * reachable through that lake's branch and only a file categorized under none of them is
-     * invisible.
+     * Narrow to the files carrying NO tag under ANY of these lake prefixes - what a single-lake
+     * browser renders as its "Uncategorized" bucket.
      *
      * NARROWING only, ANDed above the access arms: it never widens the scope. It must therefore
      * be paired with `restrictToDataLake`, or it returns every non-lake file the caller owns

@@ -109,10 +109,15 @@ function GrantRow({
   onRevoke?: () => void;
   revoking?: boolean;
 }) {
+  const principal = grant.principalName ?? grant.principalId;
+  const grantedBy = grant.grantedByName ?? grant.grantedByUserId;
+  // The id fallbacks are truncated for the same reason as HistoryRow's Reader cell below.
   return (
     <tr data-testid="datalake-access-grant-row">
       <td>
-        <Typography level="body-sm">{grant.principalName ?? grant.principalId}</Typography>
+        <Typography level="body-sm" noWrap title={principal} data-testid="datalake-access-grant-principal">
+          {principal}
+        </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
           {grant.principalType}
         </Typography>
@@ -133,7 +138,9 @@ function GrantRow({
         </Chip>
       </td>
       <td>
-        <Typography level="body-sm">{grant.grantedByName ?? grant.grantedByUserId}</Typography>
+        <Typography level="body-sm" noWrap title={grantedBy} data-testid="datalake-access-grant-granted-by">
+          {grantedBy}
+        </Typography>
       </td>
       <td>
         <Typography level="body-sm">{fmtDate(grant.grantedAt)}</Typography>
@@ -176,13 +183,18 @@ function ChannelChip({ channel }: { channel: LakeAccessChannel }) {
 }
 
 function HistoryRow({ entry }: { entry: LakeAccessHistoryEntry }) {
+  const reader = entry.principalName ?? entry.principalId;
+  const readerKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
   return (
     <tr data-testid="datalake-access-history-row">
+      {/* Truncated for the same reason as the Who cell in LakeConfigHistorySection: an unresolved id
+          is one unbreakable token, and this table is fixed-layout. */}
       <td>
-        <Typography level="body-sm">{entry.principalName ?? entry.principalId}</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">
-          {entry.principalKind}
-          {entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}
+        <Typography level="body-sm" noWrap title={reader} data-testid="datalake-access-history-reader">
+          {reader}
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary" noWrap title={readerKind}>
+          {readerKind}
         </Typography>
       </td>
       <td>

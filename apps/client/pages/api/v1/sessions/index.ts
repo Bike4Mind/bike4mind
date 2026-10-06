@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { isValidObjectId } from '@server/utils/objectId';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import {
   SessionEvents,
   ProjectEvents,
@@ -23,7 +24,10 @@ import {
   BadRequestError,
   ForbiddenError,
   NotFoundError,
+  canUseSurface,
+  getWorkspaceSurface,
 } from '@bike4mind/common';
+import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { projectService } from '@bike4mind/services';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { ActivityType } from '@client/config/activities';
@@ -47,6 +51,17 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
   const namesALakeByTagsOnly = !body.dataLakeId && Array.isArray(body.retrievalTags) && body.retrievalTags.length > 0;
   if (!namesALakeByTagsOnly) {
     delete body.corpusGroundingMode;
+  }
+
+  // Only REGISTERED surfaces are entitlement-checked. Private modules create sessions under surface
+  // strings this repo does not register (see surfaces.ts) and rely on that write passing through as
+  // it always has, so an unknown surface is deliberately left alone here.
+  if (
+    body.surface &&
+    getWorkspaceSurface(body.surface) &&
+    !canUseSurface(await surfaceAccessForRequest(req)(), body.surface)
+  ) {
+    throw new ForbiddenError('You do not have access to that workspace');
   }
 
   // Manage-but-not-member admission: a lake maintainer who is not a member of the lake's org (or
@@ -140,30 +155,35 @@ const handler = nextRouteForContract(createSessionContract).post(async (req, res
     createParams = { ...lakeDefaults, ...body } as CreateSessionRequestBody;
   }
 
-  const newSession = await sessionService.createSession(req.user, createParams, {
-    db: {
-      sessions: sessionRepository,
-      projects: projectRepository,
-      fabFiles: fabFileRepository,
-      agents: agentRepository,
+  const newSession = await sessionService.createSession(
+    req.user,
+    createParams,
+    {
+      db: {
+        sessions: sessionRepository,
+        projects: projectRepository,
+        fabFiles: fabFileRepository,
+        agents: agentRepository,
+      },
+      logger: req.logger,
+      // See the update route: the ownership reader cannot see a lake-membership file, so without
+      // this a session started from a teammate's org-lake file derives no scope at all.
+      //
+      // Imported at CALL time, not module load: the resolver's dependency graph reaches the Mongoose
+      // models, which pulls schema construction into the import graph of every consumer of this
+      // route. It is only needed when files are actually attached, so paying for it lazily keeps the
+      // route's static imports as they were.
+      resolveLakeAccess: async () =>
+        (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
+      // The attachment door's lake arms, so a supplied lake file passes the access check.
+      resolveAttachmentLakeAccess: async () =>
+        (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+          req.user,
+          req.logger
+        )(),
     },
-    logger: req.logger,
-    // See the update route: the ownership reader cannot see a lake-membership file, so without
-    // this a session started from a teammate's org-lake file derives no scope at all.
-    //
-    // Imported at CALL time, not module load: the resolver's dependency graph reaches the Mongoose
-    // models, which pulls schema construction into the import graph of every consumer of this
-    // route. It is only needed when files are actually attached, so paying for it lazily keeps the
-    // route's static imports as they were.
-    resolveLakeAccess: async () =>
-      (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScope(req),
-    // The attachment door's lake arms, so a supplied lake file passes the access check.
-    resolveAttachmentLakeAccess: async () =>
-      (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
-        req.user,
-        req.logger
-      )(),
-  });
+    { origin: resolveSessionOrigin(req) }
+  );
 
   // Separate, authorized write - never part of createSession's own params (see above). The
   // in-memory mutation keeps `newSession` faithful to the record for any later reader in this

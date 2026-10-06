@@ -296,6 +296,7 @@ const toManageableConfig = (
   manageable: boolean,
   canManageMemory: boolean,
   isOwn: boolean,
+  isCreator: boolean,
   canPreauthorize: boolean,
   ownerDisplayName?: string,
   pendingProposalCount?: number
@@ -317,6 +318,7 @@ const toManageableConfig = (
   // the one manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
   canManageMemory,
   isOwn,
+  isCreator,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
   // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
   ...(!isOwn && ownerDisplayName ? { ownerDisplayName } : {}),
@@ -331,6 +333,8 @@ const toManageableConfig = (
   // current selection; absent for a non-editor OR a lake predating the field (the picker then
   // falls back to the default mode, matching how the resolver treats an absent value).
   ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
+  // Editor-only, same gate: it drives the finish-connect banner, which only a manager can act on.
+  ...(manageable && dl.pendingConnector ? { pendingConnector: dl.pendingConnector } : {}),
   // Editor-only, same gate. Absent when the lake declares no target, which is exactly the state the
   // settings field renders as blank - and the state in which the lake never converges (#1681).
   ...(manageable && typeof dl.requiredPassageTokenTarget === 'number'
@@ -393,6 +397,7 @@ const toFallbackConfig = (
   canManageMemory: false,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
+  isCreator: false,
   // A registry lake has no document, and session-create resolves every pre-authorized id through
   // findById - so naming one could only ever 404. Never offer the affordance.
   canPreauthorize: false,
@@ -498,6 +503,7 @@ export const listDataLakes = async (
       manageableById.get(dl.id) ?? false,
       canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      String(dl.createdByUserId) === String(ctx.userId),
       canPreauthorizeById.get(dl.id) ?? false,
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]
@@ -563,6 +569,7 @@ export const listAllDataLakes = async (
       // predicate rather than hardcoded, so a change to the rule reaches this surface too.
       canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      String(dl.createdByUserId) === String(ctx.userId),
       canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
       ownerNames.get(dl.createdByUserId),
       pendingCounts[dl.id]

@@ -34,15 +34,16 @@ jobs:
     # switch this to pull_request_target: it would check out the untrusted head
     # and run an agent over it.
     if: github.event.label.name == 'bot-review-next' || github.event.label.name == 'bot-review-fold-next'
-    # workflow-templates main, 2026-09-30
-    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@468d672ad379ce13565a1f90cac0233bec6d21a7
+    # workflow-templates main, 2026-10-06
+    uses: Bike4Mind/workflow-templates/.github/workflows/pr-bot-review.yml@9837b06b460314dc09c9674d15126e793761c164
     secrets: inherit
     with:
       fold_mode: ${{ github.event.label.name == 'bot-review-fold-next' }}
       # b4m-devtools main, 2026-09-30
       skill_ref: 9e7b019a41b55e429e654006808215fc65732507
-      # Not APPROVE: under workflow_call the action's exchanged token cannot
-      # approve ("without explicit repository access"), though it can comment.
+      # Not APPROVE: GitHub has refused it from this token ("without explicit
+      # repository access"). The reusable submits this verdict through a pending
+      # review, the path on which REQUEST_CHANGES was refused too.
       verdict_on_clean: COMMENT
       changeset_guard: true
       runner_label: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}

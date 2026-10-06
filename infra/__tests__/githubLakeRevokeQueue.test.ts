@@ -48,13 +48,12 @@ describe('githubLakeRevokeQueue', () => {
     expect(minutes(queue, 'visibilityTimeout')).toBeGreaterThan(minutes(sub, 'timeout'));
   });
 
-  it('subscribes the handler with a 10-minute timeout, the VPC and the bucket, one record at a time, without linking its own queue', () => {
+  it('subscribes the handler with a 10-minute timeout, the VPC, the bucket and its own queue (slice re-enqueue), one record at a time', () => {
     const sub = cut(QUEUES, 'const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(', '\n);');
     expect(sub).toMatch(/handler:\s*'apps\/client\/server\/queueHandlers\/githubLakeRevoke\.dispatch'/);
     expect(sub).toMatch(/timeout:\s*'10 minutes'/);
     expect(sub).toMatch(/vpc:\s*lambdaVpc/);
-    expect(sub).toMatch(/link:\s*\[\.\.\.allSecrets,\s*fabFileBucket\]/);
-    expect(sub).not.toMatch(/githubLakeRevokeQueue\]/);
+    expect(sub).toMatch(/link:\s*\[\.\.\.allSecrets,\s*fabFileBucket,\s*githubLakeRevokeQueue\]/);
     expect(sub).toMatch(/SINGLE_RECORD_BATCH\s*$/);
   });
 

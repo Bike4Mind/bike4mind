@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 
 const h = vi.hoisted(() => ({
   findUpdateAccessById: vi.fn(),
@@ -352,5 +353,59 @@ describe('PUT /api/files/[id] - lake write authorization', () => {
 
     expect(h.setStats).toHaveBeenCalledWith(ORG_LAKE.id, expect.anything());
     expect(h.activateIfDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/files/[id] - scope gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.update.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    delete process.env[SCOPE_STAGING_ENV_VAR];
+  });
+
+  it('rejects a files:read-only key before any DB/service mock is touched', async () => {
+    const { res } = makeRes();
+
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(
+        req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', { keyId: 'k', scopes: ['files:read'] }),
+        res
+      )
+    ).rejects.toThrow(/files:write is required/);
+
+    expect(h.findUpdateAccessById).not.toHaveBeenCalled();
+    expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('passes the gate for a files:write key on the happy path (rename, no tag change)', async () => {
+    const previousTags = [{ name: 'notes', strength: 1 }];
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
+    const { res, json } = makeRes();
+
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(
+      req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', { keyId: 'k', scopes: ['files:write'] }),
+      res
+    );
+
+    expect(h.findByDatalakeTag).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalled();
+  });
+
+  it('honors API_KEY_SCOPE_STAGING, so a files:read-only key is not rejected by the gate', async () => {
+    process.env[SCOPE_STAGING_ENV_VAR] = 'files:read,files:write';
+    const previousTags = [{ name: 'notes', strength: 1 }];
+    h.findUpdateAccessById.mockResolvedValue(fabFile({ tags: previousTags }));
+    const { res } = makeRes();
+
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(
+      req({ fileName: 'renamed.txt' }, FILE_ID, 'u1', { keyId: 'k', scopes: ['files:read'] }),
+      res
+    );
+
+    expect(h.findUpdateAccessById).toHaveBeenCalled();
   });
 });

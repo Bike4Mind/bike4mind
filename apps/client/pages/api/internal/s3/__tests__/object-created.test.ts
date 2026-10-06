@@ -125,6 +125,28 @@ describe('POST /api/internal/s3/object-created', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 
+  it('skips libreoncology/mock-oral/ objects without a lookup', async () => {
+    const res = makeRes();
+    const req = makeReq('secret-token', 'libreoncology/mock-oral/scene-1/audio.mp3');
+    await handler(req, res);
+    expect(findOneMock).not.toHaveBeenCalled();
+    expect(sendToQueueMock).not.toHaveBeenCalled();
+    expect(req.logger.info).toHaveBeenCalledWith(
+      'Skipping S3 webhook for untracked file: libreoncology/mock-oral/scene-1/audio.mp3'
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it.each(['libreoncology/mock-oral-archive/x', 'uploads/libreoncology/mock-oral/x'])(
+    'still looks up %s, which only contains the mock-oral prefix text',
+    async key => {
+      findOneMock.mockResolvedValue(null);
+      const res = makeRes();
+      await handler(makeReq('secret-token', key), res);
+      expect(findOneMock).toHaveBeenCalledWith({ filePath: key });
+    }
+  );
+
   it('marks the file complete and enqueues chunking on the happy path', async () => {
     const res = makeRes();
     await handler(makeReq('secret-token', 'uploads/report.pdf'), res);

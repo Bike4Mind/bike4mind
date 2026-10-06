@@ -1,12 +1,7 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { NotFoundError } from '@bike4mind/utils';
 import { remove } from './remove';
-import {
-  IResearchAgentRepository,
-  IResearchDataRepository,
-  IOrganizationRepository,
-  IUserRepository,
-} from '@bike4mind/common';
+import { IResearchAgentRepository, IResearchDataRepository, IUserRepository } from '@bike4mind/common';
 
 vi.mock('../fabFileService/delete', () => ({
   deleteFabFile: vi.fn(),
@@ -28,9 +23,6 @@ describe('researchDataService - remove', () => {
     findByIdAndResearchAgentId: Mock;
     delete: Mock;
   };
-  let mockOrganizationRepo: {
-    incrementCurrentStorage: Mock;
-  };
   let mockUserRepo: {
     incrementCurrentStorage: Mock;
   };
@@ -38,7 +30,6 @@ describe('researchDataService - remove', () => {
     db: {
       researchAgents: IResearchAgentRepository;
       researchDatas: IResearchDataRepository;
-      organizations: IOrganizationRepository;
       users: IUserRepository;
       fabFiles: {
         findByIdAndUserId: Mock;
@@ -70,9 +61,6 @@ describe('researchDataService - remove', () => {
       findByIdAndResearchAgentId: vi.fn(),
       delete: vi.fn(),
     };
-    mockOrganizationRepo = {
-      incrementCurrentStorage: vi.fn(),
-    };
     mockUserRepo = {
       incrementCurrentStorage: vi.fn(),
     };
@@ -80,7 +68,6 @@ describe('researchDataService - remove', () => {
       db: {
         researchAgents: mockResearchAgentRepo as unknown as IResearchAgentRepository,
         researchDatas: mockResearchDataRepo as unknown as IResearchDataRepository,
-        organizations: mockOrganizationRepo as unknown as IOrganizationRepository,
         users: mockUserRepo as unknown as IUserRepository,
         fabFiles: {
           findByIdAndUserId: vi.fn(),
@@ -104,7 +91,7 @@ describe('researchDataService - remove', () => {
     };
   });
 
-  it('should successfully remove research data with organization file', async () => {
+  it('refunds the uploading user for a file carrying an organizationId', async () => {
     // Arrange
     const params = { id: mockResearchDataId, researchAgentId: mockResearchAgentId };
     const mockResearchAgent = { id: mockResearchAgentId };
@@ -120,7 +107,7 @@ describe('researchDataService - remove', () => {
     mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce(mockResearchData);
     mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
     (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: mockFabFile });
-    mockOrganizationRepo.incrementCurrentStorage.mockResolvedValueOnce(undefined);
+    mockUserRepo.incrementCurrentStorage.mockResolvedValueOnce(undefined);
 
     // Act
     await remove(mockUserId, params, adapters);
@@ -133,8 +120,7 @@ describe('researchDataService - remove', () => {
     );
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
-    expect(mockOrganizationRepo.incrementCurrentStorage).toHaveBeenCalledWith('org-123', -1024);
-    expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
+    expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -1024);
   });
 
   it('should throw NotFoundError when research agent is not found', async () => {
@@ -203,7 +189,6 @@ describe('researchDataService - remove', () => {
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -2048);
-    expect(mockOrganizationRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('should remove research data even when fabFile is not found', async () => {
@@ -223,7 +208,6 @@ describe('researchDataService - remove', () => {
     // Assert
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
-    expect(mockOrganizationRepo.incrementCurrentStorage).not.toHaveBeenCalled();
     expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
@@ -244,7 +228,6 @@ describe('researchDataService - remove', () => {
     // Assert
     expect(mockResearchDataRepo.delete).toHaveBeenCalledWith(mockResearchDataId);
     expect(deleteFabFile).toHaveBeenCalledWith(mockUserId, { id: mockFabFileId }, adapters);
-    expect(mockOrganizationRepo.incrementCurrentStorage).not.toHaveBeenCalled();
     expect(mockUserRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
@@ -271,7 +254,6 @@ describe('researchDataService - remove', () => {
 
     // Assert
     expect(mockUserRepo.incrementCurrentStorage).toHaveBeenCalledWith(mockUserId, -512);
-    expect(mockOrganizationRepo.incrementCurrentStorage).not.toHaveBeenCalled();
   });
 
   it('should handle storage management errors gracefully', async () => {
@@ -290,7 +272,7 @@ describe('researchDataService - remove', () => {
     mockResearchDataRepo.findByIdAndResearchAgentId.mockResolvedValueOnce(mockResearchData);
     mockResearchDataRepo.delete.mockResolvedValueOnce(undefined);
     (deleteFabFile as Mock).mockResolvedValueOnce({ action: 'deleted', fabFile: mockFabFile });
-    mockOrganizationRepo.incrementCurrentStorage.mockRejectedValueOnce(new Error('Storage update failed'));
+    mockUserRepo.incrementCurrentStorage.mockRejectedValueOnce(new Error('Storage update failed'));
 
     // Act & Assert
     const promise = remove(mockUserId, params, adapters);

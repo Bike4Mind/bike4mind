@@ -723,6 +723,63 @@ describe('runModelDiscovery', () => {
       });
     });
 
+    describe('bedrock inference profiles', () => {
+      const bedrockRecord = (id: string, name: string) =>
+        testRecord({
+          id,
+          vendor: 'anthropic',
+          backend: ModelBackend.Bedrock,
+          name,
+          adapterFamily: 'bedrock-anthropic',
+          dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+          lifecycle: { status: 'active' },
+        });
+
+      const seedActive = (harnessed: Harness, id: string, name: string) =>
+        harnessed.catalog.append({
+          modelId: id,
+          source: 'seed',
+          patch: bedrockRecord(id, name),
+          ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle'],
+          effectiveFrom: new Date(START.getTime() - DAY),
+        });
+
+      // The listing carries the bare foundation id, never a profile id; the
+      // catalog holds the profile id it is built from.
+      const bareFoundation: DiscoveredModel = {
+        modelId: 'anthropic.claude-sonnet-4-6',
+        patch: bedrockRecord('anthropic.claude-sonnet-4-6', 'Claude Sonnet 4.6 (Bedrock)'),
+        lifecycleEvidence: 'typed',
+      };
+
+      it('never absence-graduates a profile id the foundation listing covers', async () => {
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            records: [bareFoundation],
+            authoritativeFor: [ModelBackend.Bedrock],
+          }),
+        ]);
+        await seedActive(bedrock, 'global.anthropic.claude-sonnet-4-6', 'Claude Sonnet 4.6 (global)');
+        // Control: a bare Bedrock id the listing does NOT carry must still
+        // graduate, or a fix that disabled absence for all of Bedrock would pass.
+        await seedActive(bedrock, 'anthropic.foo-v1:0', 'Foo');
+
+        for (let run = 0; run < 3; run += 1) {
+          if (run > 0) bedrock.advance(DAY);
+          await runModelDiscovery(bedrock.adapters, bedrock.options);
+        }
+
+        const profileRows = bedrock.catalog.rows.filter(row => row.modelId === 'global.anthropic.claude-sonnet-4-6');
+        expect(profileRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+        expect(bedrock.state.states.get('global.anthropic.claude-sonnet-4-6')?.missCount ?? 0).toBe(0);
+
+        const controlRows = bedrock.catalog.rows.filter(row => row.modelId === 'anthropic.foo-v1:0');
+        expect(controlRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
+      });
+    });
+
     describe('typed and docs signals', () => {
       const sunset = (lifecycle: NonNullable<DiscoveredModel['patch']['lifecycle']>, evidence: 'typed' | 'docs') => ({
         ...gpt6,

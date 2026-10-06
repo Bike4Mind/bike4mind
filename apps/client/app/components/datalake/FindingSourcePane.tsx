@@ -1,4 +1,4 @@
-import { Alert, Box, Link, Skeleton, Typography } from '@mui/joy';
+import { Alert, Box, Button, Chip, Link, Skeleton, Typography } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import type { LakeFindingSource } from '@bike4mind/common';
 import { useGetFabFile, useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
@@ -17,7 +17,19 @@ import MarkdownViewer, { UnmarkedCitedPassage } from '@client/app/components/Kno
  * Fetches its own document rather than taking content as a prop: a finding carries file IDS, the
  * panes are independent, and a slow S3 read on one source must not hold up the other.
  */
-export default function FindingSourcePane({ source }: { source: LakeFindingSource }) {
+export default function FindingSourcePane({
+  source,
+  superseded = false,
+  onReturnToRanking,
+  returning = false,
+}: {
+  source: LakeFindingSource;
+  /** A curator has retired this document from ranking in this lake. */
+  superseded?: boolean;
+  /** Present only when the caller may undo that ruling; the button is omitted without it. */
+  onReturnToRanking?: () => void;
+  returning?: boolean;
+}) {
   const { data: file, isLoading: fileLoading, isError: fileError } = useGetFabFile(source.fabFileId);
   const {
     data: content,
@@ -45,14 +57,23 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
       }}
     >
       <Box sx={{ px: 1.5, py: 1, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.level1' }}>
-        <Typography level="title-sm" noWrap data-testid="finding-source-title">
-          {title}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <Typography level="title-sm" noWrap data-testid="finding-source-title" sx={{ minWidth: 0 }}>
+            {title}
+          </Typography>
+          {superseded && (
+            <Chip size="sm" variant="soft" color="warning" data-testid="finding-source-superseded-chip">
+              Retired from ranking
+            </Chip>
+          )}
+        </Box>
         {/* The citation, and a working one: the `?article=` deep link is the shareable form the
-            router keeps alive for exactly this. New tab, because losing the comparison to follow
-            one side of it defeats the surface. */}
+            router keeps alive for exactly this. Carry the passage anchor so the viewer highlights
+            it. New tab to preserve the side-by-side comparison. */}
         <Link
-          href={`/data-lakes?article=${encodeURIComponent(source.fabFileId)}`}
+          href={`/data-lakes?article=${encodeURIComponent(source.fabFileId)}&passage=${encodeURIComponent(
+            source.excerpt
+          )}`}
           target="_blank"
           rel="noopener noreferrer"
           level="body-xs"
@@ -61,6 +82,19 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
         >
           Open document
         </Link>
+        {superseded && onReturnToRanking && (
+          <Button
+            size="sm"
+            variant="outlined"
+            color="neutral"
+            loading={returning}
+            onClick={onReturnToRanking}
+            sx={{ ml: 1.5 }}
+            data-testid="finding-source-return-to-ranking-btn"
+          >
+            Return to ranking
+          </Button>
+        )}
       </Box>
 
       {/* Its own scroller: each pane scrolls to its own marked passage, and a shared one would let
@@ -73,7 +107,7 @@ export default function FindingSourcePane({ source }: { source: LakeFindingSourc
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} citedPassage={source.excerpt} />
+          <MarkdownViewer content={content} citedPassage={source.excerpt} stripFrontmatter />
         ) : (
           // The document could not be read - deleted since detection, or unreadable to this curator.
           // The quoted passage is still shown: it is the evidence the finding rests on, and a pane

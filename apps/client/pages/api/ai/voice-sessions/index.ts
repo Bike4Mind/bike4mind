@@ -23,6 +23,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
 import axios from 'axios';
 import { z } from 'zod';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 
 const CreateSessionBodySchema = z.object({
   sessionId: z.string().optional(),
@@ -129,7 +130,8 @@ const handler = baseApi().post(async (req, res) => {
         // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
         resolveLakeAccess: async () =>
           (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
-      }
+      },
+      { origin: resolveSessionOrigin(req) }
     );
   }
 

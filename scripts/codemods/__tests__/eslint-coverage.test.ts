@@ -108,25 +108,29 @@ describe('apps/workers <-> apps/client import boundary', () => {
     return results[0].messages;
   }
 
-  function hasRestrictedImportError(messages: Awaited<ReturnType<typeof lint>>) {
-    return messages.some(m => m.ruleId === 'no-restricted-imports' && m.severity === 2);
+  // Matched on message text too, so a case cannot pass on some unrelated restriction firing.
+  const WORKERS_BOUNDARY = 'apps/client must never depend on apps/workers';
+  const WORKERS_NO_UI = 'apps/workers must never import UI code';
+
+  function hasRestrictedImportError(messages: Awaited<ReturnType<typeof lint>>, expected = '') {
+    return messages.some(m => m.ruleId === 'no-restricted-imports' && m.severity === 2 && m.message.includes(expected));
   }
 
   it('flags apps/client importing from apps/workers via the @workers/* alias', async () => {
     const messages = await lint(`import x from '@workers/events/spider';`, 'apps/client/server/foo.ts');
-    expect(hasRestrictedImportError(messages)).toBe(true);
+    expect(hasRestrictedImportError(messages, WORKERS_BOUNDARY)).toBe(true);
   });
 
   it('flags apps/client/app (the Next.js block) importing from apps/workers', async () => {
     const messages = await lint(`import x from '@workers/events/spider';`, 'apps/client/app/foo.tsx');
-    expect(hasRestrictedImportError(messages)).toBe(true);
+    expect(hasRestrictedImportError(messages, WORKERS_BOUNDARY)).toBe(true);
   });
 
-  it.each(['@bike4mind/workers', '@bike4mind/workers/src/events/spider'])(
+  it.each(['@bike4mind/workers', '@bike4mind/workers/package.json'])(
     'flags apps/client importing the workers package by name (%s)',
     async specifier => {
       const messages = await lint(`import x from '${specifier}';`, 'apps/client/server/foo.ts');
-      expect(hasRestrictedImportError(messages)).toBe(true);
+      expect(hasRestrictedImportError(messages, WORKERS_BOUNDARY)).toBe(true);
     }
   );
 
@@ -135,22 +139,45 @@ describe('apps/workers <-> apps/client import boundary', () => {
       `import x from '../../../workers/src/events/spider';`,
       'apps/client/server/utils/foo.ts'
     );
-    expect(hasRestrictedImportError(messages)).toBe(true);
+    expect(hasRestrictedImportError(messages, WORKERS_BOUNDARY)).toBe(true);
   });
 
-  it.each(['@client/app/components/Foo', '@/app/components/Foo', '@pages/api/foo'])(
-    'flags apps/workers importing client UI or route code via %s',
-    async specifier => {
-      const messages = await lint(`import x from '${specifier}';`, 'apps/workers/src/events/foo.ts');
-      expect(hasRestrictedImportError(messages)).toBe(true);
-    }
-  );
+  it.each([
+    'apps/client/vitest.config.mts',
+    'apps/client/server/chatCompletion/foo.mjs',
+    'apps/client/scripts/foo.cts',
+  ])('flags a non-.ts/.tsx apps/client file (%s) importing from apps/workers', async filePath => {
+    const messages = await lint(`import x from '@workers/events/spider';`, filePath);
+    expect(hasRestrictedImportError(messages, WORKERS_BOUNDARY)).toBe(true);
+  });
+
+  it.each([
+    '@client/app/components/Foo',
+    '@/app/components/Foo',
+    '@pages/api/foo',
+    '@client/app',
+    '@/app',
+    '@pages',
+    '../../../client/app/components/Foo',
+    '../../../client/app',
+  ])('flags apps/workers importing client UI or route code via %s', async specifier => {
+    const messages = await lint(`import x from '${specifier}';`, 'apps/workers/src/events/foo.ts');
+    expect(hasRestrictedImportError(messages, WORKERS_NO_UI)).toBe(true);
+  });
 
   it.each(['react', 'react/jsx-runtime', 'react-dom/client', 'react-dom/server'])(
     'flags apps/workers importing UI code (%s)',
     async specifier => {
       const messages = await lint(`import x from '${specifier}';`, 'apps/workers/src/events/foo.ts');
-      expect(hasRestrictedImportError(messages)).toBe(true);
+      expect(hasRestrictedImportError(messages, WORKERS_NO_UI)).toBe(true);
+    }
+  );
+
+  it.each(['../../../client/server/utils/config', '../../../client/appendix', '../../../llm-client/app/x'])(
+    'does not flag apps/workers importing non-UI code by a relative path (%s)',
+    async specifier => {
+      const messages = await lint(`import x from '${specifier}';`, 'apps/workers/src/events/foo.ts');
+      expect(hasRestrictedImportError(messages)).toBe(false);
     }
   );
 
@@ -164,7 +191,7 @@ describe('apps/workers <-> apps/client import boundary', () => {
   // no-restricted-imports is last-rule-wins per file, so a careless merge would silently drop this.
   it('still flags apps/workers reaching into Overwatch internals (pre-existing Overwatch barrier)', async () => {
     const messages = await lint(`import x from '@server/overwatch/services/foo';`, 'apps/workers/src/events/foo.ts');
-    expect(hasRestrictedImportError(messages)).toBe(true);
+    expect(hasRestrictedImportError(messages, '@server/overwatch barrel')).toBe(true);
   });
 });
 

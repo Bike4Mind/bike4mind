@@ -128,6 +128,19 @@ describe('ChatCompletionInvoke.invoke - session access', () => {
 
     expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ deniedTools: ['create_data_lake'] }));
   });
+  // Same boundary: dropped here, a key-driven lake write would be audited as the key's owner.
+  it('carries the server-set apiKeyId onto questStartParams', async () => {
+    mockedGetAvailableModels.mockResolvedValue([
+      { id: 'gpt-4', type: 'text', name: 'GPT-4', max_tokens: 100, contextWindow: 1000, pricing: {} },
+    ] as any);
+    mockDb.quests.create.mockResolvedValue({ id: 'quest-1', promptMeta: {} });
+    mockDb.adminSettings.getSettingsValue.mockResolvedValue('text-embedding-ada-002');
+
+    const invoke = makeInvoke();
+    await invoke.invoke({ body, userId: OWNER_ID, apiKeyId: 'key1' });
+
+    expect((invoke as any).questStartParams).toEqual(expect.objectContaining({ apiKeyId: 'key1' }));
+  });
 });
 
 // promptMeta.model.type is declared as 'text' | 'image' | 'video', while the catalog also serves

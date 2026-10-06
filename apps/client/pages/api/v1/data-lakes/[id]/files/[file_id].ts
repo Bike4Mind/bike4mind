@@ -15,7 +15,7 @@
  * platform admin who is not a member of the lake reaches neither its files nor its membership
  * through the public API.
  */
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import {
   addDataLakeFileContract,
   getDataLakeFileContract,
@@ -34,6 +34,7 @@ import {
   lakeMembershipRemovalRepository,
   scopedSettingsRepository,
 } from '@bike4mind/database';
+import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -170,16 +171,8 @@ const removeRouter = nextRouteForContract(removeDataLakeFileContract, { rateLimi
     return res.json(body);
   });
 
-// One contract per method, and nextRouteForContract refuses a verb its contract does not declare,
-// so each method has its own router and this dispatches between them.
-export default function handler(req: Request, res: Response) {
-  // Each router's declared param type carries its contract's validated fields, which exist only
-  // once its own prelude has run - a plain incoming Request satisfies that at runtime but not
-  // structurally, hence the casts.
-  if (req.method === 'POST') return addRouter(req as Parameters<typeof addRouter>[0], res);
-  if (req.method === 'DELETE') return removeRouter(req as Parameters<typeof removeRouter>[0], res);
-  return getRouter(req as Parameters<typeof getRouter>[0], res);
-}
+// One contract per method, each on its own router (see dispatchByMethod).
+export default dispatchByMethod({ GET: getRouter, POST: addRouter, DELETE: removeRouter });
 
 export const config = {
   api: { externalResolver: true },

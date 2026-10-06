@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/workers",
-  "version": "0.0.1",
+  "version": "0.0.5",
   "private": true,
   "scripts": {
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
@@ -10,7 +10,11 @@
     "test:integration": "WORKERS_TEST_LANE=integration vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1080.0",
+    "@aws-sdk/client-lambda": "^3.1080.0",
+    "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/client-sqs": "^3.1080.0",
+    "@aws-sdk/s3-request-presigner": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
@@ -19,22 +23,29 @@
     "@bike4mind/memory": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
+    "@bike4mind/scripts": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/slack": "workspace:*",
     "@bike4mind/utils": "workspace:*",
+    "axios": "1.20.0",
     "dayjs": "^1.11.23",
+    "mailparser": "^3.9.26",
+    "mongodb": "^6.20.0",
     "mongoose": "^8.24.1",
+    "p-limit": "^7.3.2",
     "sst": "4.17.1",
-    "uuid": "^14.0.2"
+    "uuid": "^14.0.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@bike4mind/typescript-config": "workspace:*",
     "@types/aws-lambda": "^8.10.162",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^24.0.0",
     "mongodb-memory-server": "^11.2.0",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

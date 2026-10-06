@@ -3,11 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertCanWriteDataLakeTags: vi.fn(),
   toggleTags: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the data-lake route tests).
+// Captures the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'POST']?.(req, res), {
       use: () => chain,
@@ -256,5 +259,9 @@ describe('POST /api/files/tags/toggle', () => {
     );
 
     expect(json).toHaveBeenCalledWith([{ id: 'f1' }]);
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

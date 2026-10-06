@@ -16,7 +16,10 @@ import {
   KnowledgeType,
   FabFileSourceType,
   type IUserDocument,
+  driveConnectionOwnerForLake,
+  driveConnectionOwnerOf,
   isLakeIngestable,
+  isSameDriveConnectionOwner,
 } from '@bike4mind/common';
 import { BadRequestError, checkStorageLimit, getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { dataLakeService } from '@bike4mind/services';
@@ -172,8 +175,19 @@ export type DriveChangeClassification = {
   adds: WalkedDriveFile[];
   /** Previously-tracked files whose content moved and are still under the connected root. */
   changed: WalkedDriveFile[];
-  /** driveFileIds to prune: Drive deleted/trashed them, or they moved out of the connected tree. */
+  /**
+   * driveFileIds Drive POSITIVELY confirms are gone: a `file` the caller can still see with
+   * `trashed: true`, or an already-tracked file proven (by a live ancestry walk) to have left the
+   * connected tree. Only these may be deleted outright.
+   */
   removedFileIds: string[];
+  /**
+   * driveFileIds whose removal Drive did NOT positively confirm: a bare `removed: true` with no
+   * `file`. Drive emits that for a genuine permanent delete AND for the caller losing access, and the
+   * two are indistinguishable here, so these are unpicked only - reversible - and any resulting
+   * orphan is left to the disconnect sweep. See the header for why the split matters.
+   */
+  unconfirmedRemovalIds: string[];
   /**
    * Entries this run could not DECIDE: the ancestry lookup hit a transient Drive failure, so neither
    * "under the root" nor "moved out" was proven and the entry was left unapplied. Non-zero means this
@@ -204,6 +218,14 @@ function toWalkedDriveFile(file: DriveFile & { parents?: string[]; trashed?: boo
  * which case it is folded into removedFileIds - matching what a full walk would report for a file
  * that moved out of the tree (present elsewhere in Drive, but no longer a candidate here).
  *
+ * A removal the caller will act on comes back in one of two lists. `removedFileIds` holds the ones
+ * Drive POSITIVELY confirms: a `file` the caller can still see with `trashed: true`, or a tracked file
+ * whose live ancestry walk PROVES it left the connected tree. `unconfirmedRemovalIds` holds a bare
+ * `removed: true` with no `file` - Drive emits that for a genuine permanent delete AND for the caller
+ * losing access to the file (see driveClient's DriveChange doc), and nothing here can tell them apart.
+ * Only the confirmed removals may be deleted; an unconfirmed one is unpicked only, which is reversible
+ * and leaves any resulting orphan to the disconnect sweep.
+ *
  * The feed is a LOG, not a snapshot: one record per modification, and Drive only collapses records
  * WITHIN a page. A file renamed and later edited, or edited either side of a page boundary, arrives
  * as several entries for one fileId. They are collapsed to the last entry per id up front (last wins -
@@ -232,6 +254,7 @@ export async function classifyDriveChanges(
   const adds: WalkedDriveFile[] = [];
   const changed: WalkedDriveFile[] = [];
   const removedFileIds: string[] = [];
+  const unconfirmedRemovalIds: string[] = [];
   const ancestryCache = new Map<string, string[] | null>();
   let ambiguous = 0;
 
@@ -246,7 +269,11 @@ export async function classifyDriveChanges(
 
     if (tracked) {
       if (gone) {
-        removedFileIds.push(fileId);
+        // A `file` we can still see that is trashed is a confirmed delete - a caller that had merely
+        // lost access would not receive the file at all. A bare `removed: true` carries no such proof,
+        // so it is unpicked only (see the header).
+        if (file?.trashed === true) removedFileIds.push(fileId);
+        else unconfirmedRemovalIds.push(fileId);
         continue;
       }
       if (!file || isFolder(file)) continue; // nothing ingestible changed
@@ -262,7 +289,7 @@ export async function classifyDriveChanges(
         continue;
       }
       if (!underRoot) {
-        removedFileIds.push(fileId); // moved out of the connected tree
+        removedFileIds.push(fileId); // proven moved out of the connected tree
       } else if (hasDriveFileChanged(tracked, file)) {
         changed.push(toWalkedDriveFile(file));
       }
@@ -290,7 +317,7 @@ export async function classifyDriveChanges(
     }
   }
 
-  return { adds, changed, removedFileIds, ambiguous };
+  return { adds, changed, removedFileIds, unconfirmedRemovalIds, ambiguous };
 }
 
 /**
@@ -352,16 +379,20 @@ export async function classifyDriveChanges(
  * connectedBy (drive-sync.ts), and running as a non-owner would either deny (accumulating one orphan copy
  * per edit) or take deleteFabFile's self-unshare branch and mutate the file instead of reaping it.
  *
- * A genuine delete (gone from the folder) keeps the membership-only unpick and never deletes - the file left
- * the folder but the owner keeps their copy, which is not superseded by anything.
+ * A genuine delete (gone from the folder) is a connector-minted file leaving with its source: the same
+ * unpick -> gate -> deleteFabFile sequence as an edit-retire, minus the carry-forward (there is no
+ * replacement). A copy a share, another lake, or a missing owner still claims is left unpicked-but-alive,
+ * exactly as on the edit path. And only a removal Drive POSITIVELY confirms is deleted at all: a bare
+ * `removed: true` also means the caller lost access, so it is unpicked only - see classifyDriveChanges.
+ * (A full walk has no such per-file confirmation signal, so its removals all go through the gate.)
  *
  * OUT OF SCOPE for E1 (#1589 follow-ups): a rename/move in Drive (md5 unchanged, only modifiedTime
  * moves) is classified unchanged, so the stale fileName/relativePath is not reconciled; a
  * permanently-unsupported file (unsupported type, oversized Editors export) is never a durable member,
  * so it re-appears as a candidate and re-skips on every poll - noise, not harm, but it never converges;
- * and an unpicked file keeps its `driveConnectionId`/`sourceLakeId`, so one that leaves the folder and
- * later returns is re-ingested as a brand-new FabFile while the unpicked original lingers in the owner's
- * Files.
+ * and a gate-KEPT unpicked file keeps its `driveConnectionId`/`sourceLakeId`, so one that leaves the
+ * folder and later returns is re-ingested as a brand-new FabFile while that unpicked original lingers
+ * in the owner's Files until a disconnect sweeps it (see the disconnect orphan path).
  *
  * Ordering is load-bearing. `storage.upload` fires `objectCreated` synchronously, which walks
  * objectCreated -> chunk -> vectorize; each stage advances batch progress by claiming its manifest
@@ -573,6 +604,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await releaseClaim(null);
       return;
     }
+    // The connect door (authorizeLakeDriveAccess) only binds a connection to a lake of the same owner -
+    // the lake's org, or for a personal lake its creator. Re-checked here because the admin-actor
+    // membership writes below are justified by exactly that, and a mismatched row must not ride it.
+    const connectionOwner = driveConnectionOwnerOf(connection);
+    if (!isSameDriveConnectionOwner(connectionOwner, driveConnectionOwnerForLake(lake))) {
+      logger.warn('[driveLakeIngest] connection owner does not match the target lake; dropping', { connectionId });
+      if (resumeBatchId) await settleChainedBatch(resumeBatchId);
+      await releaseClaim('This Drive connection no longer matches its data lake owner. Reconnect the folder.');
+      return;
+    }
     const user = await User.findById(connection.connectedBy);
     if (!user) {
       logger.warn('[driveLakeIngest] connecting user not found; dropping', { connectionId });
@@ -582,9 +623,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
     const ability = defineAbilitiesFor(user as unknown as IUserDocument);
 
-    // Prefer the connection's own token; falls back to the connecting user's (D not built yet).
+    // An org connection's own token, else (every personal connection) the connecting user's live grant.
     // A credential failure marks the connection credential_error and throws so SQS retries -> DLQ.
-    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connection.organizationId);
+    const accessToken = await getValidConnectionDriveAccessToken(connectionId, connectionOwner);
     const drive = createDriveClient(accessToken);
 
     // 1) Resolve this run's Drive-side signal: an incremental `changes.list` pull (scoped to what
@@ -752,6 +793,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     let pureAdds: WalkedDriveFile[];
     let changed: WalkedDriveFile[];
     let removed: (typeof existingDocs)[number][];
+    // Copies whose removal Drive did NOT positively confirm (a bare `removed: true`). Every copy of
+    // such an id, same as `removed`: unpicked from this lake but never deleted, because the same feed
+    // signal also means the caller lost access. Full-walk mode has no such signal, so it stays [].
+    let unconfirmedRemovals: (typeof existingDocs)[number][];
     // Everything currently believed live, by driveFileId - what the cap check and the duplicate-retire
     // scan below both mean by "still in the folder". A full walk answers this directly (walkedIds);
     // incremental mode has no fresh listing to read it off, so it is reconstructed from what IS known
@@ -769,6 +814,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // incremental run revisits it either. An older copy missed here would stay a live, searchable
       // lake member holding content the user deleted from Drive, with nothing left to clean it up.
       removed = classified.removedFileIds.flatMap(id => existingByDriveId.get(id) ?? []);
+      // A removal Drive did not confirm: `removed: true` with no `file` also means the caller lost
+      // access to the file, and the two are indistinguishable here. Unpick only - reversible - and
+      // leave any resulting orphan to the disconnect sweep (see classifyDriveChanges and step 4).
+      const unconfirmedIds = new Set(classified.unconfirmedRemovalIds);
+      unconfirmedRemovals = classified.unconfirmedRemovalIds.flatMap(id => existingByDriveId.get(id) ?? []);
       // An unresolved entry means this run's delta is INCOMPLETE, so do not advance past it: dropping
       // pendingSyncCursor leaves the stored cursor where it is and the next poll re-pulls the same
       // window. Re-applying a delta is idempotent; losing one of its changes is not (classifyDriveChanges).
@@ -781,6 +831,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
       walkedIds = new Set(existingByDriveId.keys());
       for (const id of removedIds) walkedIds.delete(id);
+      for (const id of unconfirmedIds) walkedIds.delete(id);
       for (const add of pureAdds) walkedIds.add(add.id);
       // Log/cap-check stand-in for "what this run saw": the actual delta, not a corpus-wide listing
       // (there isn't one to report - see walkAndDiffSize's use of existingDocs.length below).
@@ -793,6 +844,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       });
       removed = existingDocs.filter(doc => doc.driveFileId != null && !seenIds.has(doc.driveFileId));
       walkedIds = seenIds;
+      // A full walk has no per-file confirmation signal to read - absence from the listing is the
+      // whole evidence - so every removal it reports goes through the delete gate as before.
+      unconfirmedRemovals = [];
 
       // Transient-glitch guard: an EMPTY walk while the lake still holds this connection's files is
       // far likelier a permission blip or a Drive hiccup than a real empty-out. walkFolder throws on a
@@ -845,7 +899,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const candidates = [...pureAdds, ...changed].filter(f => !alreadyIngested.has(f.id));
 
     // A trusted system reconcile acts as admin for membership writes (canManageLake): the connection
-    // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
+    // was authorized at connect time by an org owner/manager, or for a personal lake by its creator
+    // (authorizeLakeDriveAccess; the owner match above re-asserts it). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
     // Every membership write in this handler is the Drive connector sync itself, not a person at
@@ -893,26 +948,40 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       return;
     }
 
-    // 4) Apply genuine deletes now: a file gone from the folder has no replacement pending, so the
-    //    membership-only unpick loses nothing (the FabFile stays in the owner's Files, chunks untouched).
-    //    Stats recompute is deferred to the end so it also reflects the stale copies retired in the loop.
-    for (const doc of removed) {
-      await dataLakeService.removeFileFromLake(
-        membershipActor,
-        lake,
-        doc.id,
-        { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
-        { origin: 'connector' }
-      );
-    }
-
     let retired = 0;
+    let unpicked = 0;
 
-    // Everything that retires a copy runs inside this `try`, step 4b included, so that a throw part
-    // way through EITHER the duplicate sweep or the ingest loop still settles what the committed
-    // deletes changed: the reclaimed bytes (the retry re-walks without seeing those files, so they
-    // would stay counted against their owners forever) and the lake's stats.
+    // Everything that retires a copy runs inside this `try`, step 4 AND step 4b included, so that a
+    // throw part way through any of them still settles what the committed deletes changed: the
+    // reclaimed bytes (the retry re-walks without seeing those files, so they would stay counted
+    // against their owners forever) and the lake's stats.
     try {
+      // 4) Genuine deletes: a file gone from the folder leaves with its source. The same gated retire
+      //    as an edit - unpick, then delete only if nothing else claims the copy - minus the
+      //    carry-forward, because there is no replacement to carry notebook links or tags onto.
+      //
+      //    Only a removal Drive POSITIVELY confirms is deleted: a trashed `file` the caller can still
+      //    see, or a tracked file proven to have left the tree. A bare `removed: true` is ALSO what
+      //    Drive emits when the caller loses access, and that cannot be told apart from a permanent
+      //    delete - so those are unpicked only in the loop below, never deleted (classifyDriveChanges).
+      //    Stats recompute is deferred to the end so it reflects both loops.
+      for (const doc of removed) {
+        await retireSupersededCopy(doc, null);
+        retired++;
+      }
+      // An unconfirmed removal: unpick from this lake only, leaving the FabFile alive as an orphan for
+      // the disconnect sweep. Counted apart from `retired`, which means "delete-gated".
+      for (const doc of unconfirmedRemovals) {
+        await dataLakeService.removeFileFromLake(
+          membershipActor,
+          lake,
+          doc.id,
+          { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+          { origin: 'connector' }
+        );
+        unpicked++;
+      }
+
       // 4b) Retire pre-existing duplicates: extra copies of a driveFileId that is STILL in the folder,
       //     left behind by the add-only handler this replaced (a multi-parented file, or an SQS retry
       //     after a partial run). They hold pre-edit content, stay lake members, and are invisible to
@@ -938,6 +1007,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           removed: removed.length,
           updated: changed.length,
           retired,
+          unpicked,
         });
         // A chain whose last slice happened to consume the remainder exactly lands here, with its
         // batch still open on the previous slice's plan. Settle it rather than leaving it processing.
@@ -1197,6 +1267,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         deferred,
         rateLimited,
         retired,
+        unpicked,
       });
 
       // 7) Files left over (out of time, or Drive throttling us): hand the claim and the batch to
@@ -1317,7 +1388,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // the upload synchronously, right after storage.upload, rather than waiting on the async S3
       // objectCreated event), so this recompute already counts them - unlike a plain add on `main`,
       // which stays 'pending' until objectCreated flips it and has to wait for that later recompute.
-      if (removed.length > 0 || retired > 0) {
+      if (removed.length > 0 || retired > 0 || unpicked > 0) {
         await recomputeStats().catch(e =>
           logger.error('[driveLakeIngest] failed to recompute lake stats', {
             connectionId,

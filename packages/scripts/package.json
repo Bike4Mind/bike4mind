@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.81",
+  "version": "0.1.85",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -55,6 +55,8 @@
     "migrate:encrypt-admin-secrets": "tsx migrate/encrypt-admin-settings-and-apikeys.ts",
     "backfill:pending-free-credits": "tsx backfillPendingFreeCredits.ts",
     "backfill:fabfile-moderation-status": "tsx src/backfill-fabfile-moderation-status.ts",
+    "backfill:session-image-count": "tsx src/backfill-session-image-count.ts",
+    "repair:bedrock-profile-absence": "tsx src/repair-bedrock-profile-absence.ts",
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts",
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
@@ -97,6 +99,6 @@
     "mailparser": "^3.9.26",
     "ora": "^9.4.1",
     "tsx": "^4.23.0",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

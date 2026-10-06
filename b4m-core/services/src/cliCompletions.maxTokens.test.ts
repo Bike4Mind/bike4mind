@@ -126,6 +126,24 @@ describe('executeCompletion - output budget', () => {
     expect(capturedOptions?.maxTokens).toBe(DEFAULT_OUTPUT_MAX_TOKENS);
   });
 
+  it('forwards reasoningEffort to the adapter when set', async () => {
+    availableModels = [PLAIN_MODEL];
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, model: 'plain-model', db, options: { reasoningEffort: 'low' } });
+
+    expect(capturedOptions?.reasoningEffort).toBe('low');
+  });
+
+  it('omits reasoningEffort when not sent', async () => {
+    availableModels = [PLAIN_MODEL];
+    const { db } = buildDb();
+
+    await executeCompletion({ ...baseParams, model: 'plain-model', db });
+
+    expect(capturedOptions).not.toHaveProperty('reasoningEffort');
+  });
+
   it('never raises a budget the caller asked for explicitly', async () => {
     availableModels = [ADAPTIVE_MODEL];
     const { db } = buildDb();

@@ -155,6 +155,29 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     expect(mockCreateKey).toHaveBeenCalled();
   });
 
+  // The service picks the per-user cap pool from metadata.createdFrom (see ApiKeyCapPool).
+  it('ignores a body-supplied metadata, so an admin mint cannot claim the oauth-exchange cap pool', async () => {
+    const { req, res } = post({
+      name: 'plain',
+      scopes: ['notebooks:read'],
+      metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'spoofed-client' },
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({
+        metadata: expect.not.objectContaining({ oauthClientId: expect.anything() }),
+      }),
+      expect.anything()
+    );
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ metadata: expect.objectContaining({ createdFrom: 'dashboard' }) }),
+      expect.anything()
+    );
+  });
+
   it('records the acting admin, so the key is not readable as a self-service mint', async () => {
     const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
     await mockRefs.postHandler!(req, res);

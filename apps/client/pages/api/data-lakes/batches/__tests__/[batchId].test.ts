@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   markTerminalIfActive: vi.fn(),
   lakeFindById: vi.fn(),
   recomputeLakeStats: vi.fn(),
+  recordLakeUploadBatch: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as upload-complete.test.ts).
@@ -37,9 +38,12 @@ vi.mock('@bike4mind/database', () => ({
     markTerminalIfActive: h.markTerminalIfActive,
   },
   dataLakeRepository: { findById: h.lakeFindById },
+  dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { recomputeLakeStats: h.recomputeLakeStats } }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: { recomputeLakeStats: h.recomputeLakeStats, recordLakeUploadBatch: h.recordLakeUploadBatch },
+}));
 
 import handler from '../[batchId]';
 
@@ -105,6 +109,32 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
         }),
       })
     );
+  });
+
+  it('records an upload cancelled History row from the cancelled batch, before the recompute', async () => {
+    const cancelled = { id: 'b1', userId: 'u1', status: 'cancelled', vectorizedFiles: 2 };
+    h.markTerminalIfActive.mockResolvedValue(cancelled);
+    const { res } = makeRes();
+
+    await run('DELETE', res);
+
+    expect(h.recordLakeUploadBatch).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lake1' }),
+      cancelled,
+      expect.objectContaining({
+        db: expect.objectContaining({ batches: expect.anything(), lakeConfigChangeEvents: expect.anything() }),
+      }),
+      'cancelled'
+    );
+    expect(h.recordLakeUploadBatch.mock.invocationCallOrder[0]).toBeLessThan(
+      h.recomputeLakeStats.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('records no upload row for a client-reported failure', async () => {
+    const { res } = makeRes();
+    await run('PUT', res, { status: 'failed', failedFiles: 1 });
+    expect(h.recordLakeUploadBatch).not.toHaveBeenCalled();
   });
 
   it('does not recompute a terminal status the batch already holds', async () => {

@@ -44,6 +44,7 @@ export default $config({
         aws: {
           region: 'us-east-2',
         },
+        random: '4.18.3',
       },
     };
   },

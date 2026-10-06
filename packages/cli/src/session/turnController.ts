@@ -38,6 +38,7 @@ import { isReadOnlyTool } from '../config/toolSafety.js';
 import type { TodoStore } from '../tools/writeTodosTool.js';
 import type { DecisionStore } from '../tools/decisionLogTool.js';
 import type { BlockerStore } from '../tools/blockerTool.js';
+import { DRAIN_BUDGET_MS, type PostEditDiagnostics } from '../diagnostics/PostEditDiagnostics.js';
 
 /**
  * Collaborators a single turn needs. React-free by design: the two setters are
@@ -66,6 +67,12 @@ export interface TurnContext {
   todoStore: TodoStore | null;
   decisionStore: DecisionStore | null;
   blockerStore: BlockerStore | null;
+  /**
+   * Background tsc/eslint checker for files the agent edits. Null when the host
+   * has no file-writing tools; only active when the postEditDiagnostics
+   * preference is on.
+   */
+  postEditDiagnostics: PostEditDiagnostics | null;
   /**
    * In-memory durable-workflow stores. Flushed onto the session before
    * compaction so decisions/blockers logged this turn are not dropped when a
@@ -101,6 +108,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     todoStore,
     decisionStore,
     blockerStore,
+    postEditDiagnostics,
     workflowStores,
     setCommandHistory,
     setAbortController,
@@ -295,6 +303,9 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
           }
         : undefined;
 
+    const diagnostics = cliConfig.preferences.postEditDiagnostics === true ? postEditDiagnostics : null;
+    diagnostics?.beginTurn();
+
     let result;
     try {
       result = await agent.run(messageContent, {
@@ -303,12 +314,16 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
         isReadOnlyTool,
         workflowReminder,
+        drainFeedback: diagnostics
+          ? phase => diagnostics.drain(DRAIN_BUDGET_MS[phase], abortController.signal)
+          : undefined,
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.
         onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
       });
     } finally {
+      diagnostics?.endTurn();
       backgroundManager?.setCurrentTurn(null);
     }
 

@@ -13,8 +13,7 @@ import { deleteFromQueue, receiveFromQueue } from '@server/utils/sqs';
  * the hosted Lambda uses (e.g. researchEngineQueue.dispatch), wrapped in a synthetic
  * EventBridge/SQS-shaped event, so there is one code path in every environment.
  *
- * ElasticMQ has no dead-letter queue, so this implements a poison-message guard in
- * software: a message whose handler keeps throwing is left for redelivery until
+ * Queues without broker-managed redrive use a poison-message guard in software: a message whose handler keeps throwing is left for redelivery until
  * ApproximateReceiveCount exceeds maxReceiveCount, then deleted with an error log.
  */
 
@@ -28,6 +27,7 @@ interface QueueHandlerRegistration {
   visibilityTimeoutSec: number;
   batchSize: number;
   maxReceiveCount: number;
+  runBudgetMs?: number;
 }
 
 interface ScheduledTaskRegistration {
@@ -78,7 +78,17 @@ export class SelfHostWorker {
     name: string,
     url: string,
     dispatch: QueueDispatch,
-    opts?: { visibilityTimeoutSec?: number; maxReceiveCount?: number; batchSize?: number }
+    opts?: {
+      visibilityTimeoutSec?: number;
+      maxReceiveCount?: number;
+      batchSize?: number;
+      /**
+       * Per-dispatch deadline reported by `getRemainingTimeInMillis`, for a handler that slices its
+       * work by time and must yield before its message's visibility lapses (redelivered mid-run
+       * otherwise). Keep it under `visibilityTimeoutSec`. Unset: no deadline (NO_DEADLINE_REMAINING_MS).
+       */
+      runBudgetMs?: number;
+    }
   ): void {
     const batchSize = opts?.batchSize ?? MAX_MESSAGES_PER_RECEIVE;
     if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MAX_MESSAGES_PER_RECEIVE) {
@@ -91,6 +101,7 @@ export class SelfHostWorker {
       dispatch,
       visibilityTimeoutSec: opts?.visibilityTimeoutSec ?? 30,
       maxReceiveCount: opts?.maxReceiveCount ?? 3,
+      runBudgetMs: opts?.runBudgetMs,
     });
   }
 
@@ -232,7 +243,7 @@ export class SelfHostWorker {
     // on receive count (e.g. isFinalDeliveryAttempt) needs the count it sees at its own last
     // invocation to line up with maxReceiveCount, exactly as it would on a real SQS-backed queue.
     if (receiveCount > q.maxReceiveCount) {
-      // Poison guard: no DLQ in ElasticMQ, so drop after the cap and log loudly.
+      // Default poison guard. Broker-redriven queues opt out with their registration cap.
       this.logger.error(
         `[selfHostWorker] "${q.name}" message dropped after ${receiveCount} deliveries (> ${q.maxReceiveCount})`,
         { messageId: message.MessageId }
@@ -243,7 +254,7 @@ export class SelfHostWorker {
       return;
     }
     try {
-      const result = await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
+      const result = await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name, q.runBudgetMs));
       if (result && typeof result === 'object' && 'batchItemFailures' in result) {
         const failures = result.batchItemFailures;
         // Dispatch receives one record: any reported failure (including an invalid ID) retries it.
@@ -289,14 +300,17 @@ export class SelfHostWorker {
    * That last one is not decoration: handlers with a time budget (research runs, lake-memory
    * extraction) call it unconditionally, and the `as unknown as Context` cast hides its absence
    * from the compiler, so omitting it turns into a TypeError on the first candidate at runtime.
-   * A long-lived worker has no deadline, so the honest answer is a value no reserve can exceed.
+   * A long-lived worker has no deadline, so the honest answer is a value no reserve can exceed,
+   * unless the registration set a `runBudgetMs`.
    */
-  private fakeContext(name: string): Context {
+  private fakeContext(name: string, runBudgetMs?: number): Context {
+    const deadline = runBudgetMs === undefined ? undefined : Date.now() + runBudgetMs;
     return {
       awsRequestId: randomUUID(),
       functionName: `selfHostWorker:${name}`,
       functionVersion: '$LATEST',
-      getRemainingTimeInMillis: () => NO_DEADLINE_REMAINING_MS,
+      getRemainingTimeInMillis: () =>
+        deadline === undefined ? NO_DEADLINE_REMAINING_MS : Math.max(0, deadline - Date.now()),
     } as unknown as Context;
   }
 }
