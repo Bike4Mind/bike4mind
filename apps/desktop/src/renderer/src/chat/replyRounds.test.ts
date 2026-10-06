@@ -44,7 +44,7 @@ describe('roundsOf', () => {
     ]);
   });
 
-  it('drops a round that carries only reasoning, since reasoning is not drawn', () => {
+  it('keeps a round that carries only reasoning, which now has a row of its own', () => {
     const drawn = roundsOf(
       message({
         content: 'Found it.',
@@ -55,15 +55,40 @@ describe('roundsOf', () => {
       })
     );
 
-    expect(drawn).toEqual([{ text: 'Found it.', toolCallIds: [] }]);
+    expect(drawn).toEqual([
+      { text: '', toolCallIds: [], reasoning: 'planning' },
+      { text: 'Found it.', toolCallIds: [] },
+    ]);
   });
 
-  // The shape a reply holds for as long as the model reasons before saying anything: an empty
-  // transcript is right, and the turn status line is what reports that the turn is working.
-  it('draws nothing while a reply is still only reasoning', () => {
-    const drawn = roundsOf(message({ rounds: [{ text: '', toolCallIds: [], reasoning: 'planning' }] }));
+  it('carries the reasoning of a wordless round into the round it is folded into', () => {
+    const drawn = roundsOf(
+      message({
+        rounds: [
+          { text: 'Looking.', toolCallIds: ['a'], reasoning: 'first thought' },
+          { text: '', toolCallIds: ['b'], reasoning: 'second thought' },
+        ],
+        toolCalls: [call('a'), call('b')],
+      })
+    );
 
-    expect(drawn).toEqual([]);
+    expect(drawn).toEqual([
+      { text: 'Looking.', toolCallIds: ['a', 'b'], reasoning: 'first thought\n\nsecond thought' },
+    ]);
+  });
+
+  it('folds a wordless round with no reasoning without inventing an empty one', () => {
+    const drawn = roundsOf(
+      message({
+        rounds: [
+          { text: 'Looking.', toolCallIds: ['a'] },
+          { text: '', toolCallIds: ['b'] },
+        ],
+        toolCalls: [call('a'), call('b')],
+      })
+    );
+
+    expect(drawn).toEqual([{ text: 'Looking.', toolCallIds: ['a', 'b'] }]);
   });
 
   it('keeps the calls of a reasoning-only round that went on to run tools', () => {
