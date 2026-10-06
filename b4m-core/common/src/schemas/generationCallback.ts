@@ -58,7 +58,7 @@ export type IQuestCallback = {
 /**
  * The `callbackUrl` paragraph of every queued-generation contract description (image generation,
  * image edit, video generation), shared so the three cannot drift. Must stay true of
- * apps/client/server/queueHandlers/generationCallback.ts and server/webhooks/signedWebhook.ts.
+ * apps/workers/src/queueHandlers/generationCallback.ts and server/webhooks/signedWebhook.ts.
  */
 export const GENERATION_CALLBACK_DESCRIPTION =
   'Optional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, ' +

@@ -365,7 +365,7 @@ describe('reset -> worker claim handoff (real DB)', () => {
   });
 
   const STALE_MS = 30 * 60_000;
-  // Byte-for-byte the claim in apps/client/server/queueHandlers/fabFileChunk.ts. If that query
+  // Byte-for-byte the claim in apps/workers/src/queueHandlers/fabFileChunk.ts. If that query
   // changes, this must change with it - which is the point.
   const workerClaim = async (id: string) => {
     const now = new Date();
