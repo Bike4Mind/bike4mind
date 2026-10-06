@@ -22,11 +22,12 @@ const pulse = keyframes({
 });
 
 /**
- * What the line discloses when it is opened: the live thing the label names.
+ * What the line discloses when it is opened: the live thing the thread is NOT showing.
  *
- * Every part of it arrives already bounded - see activityDetail - so the panel below cannot grow
- * with the turn. `maxHeight` is the second bound and a different one: it keeps a twelve-line
- * tail from pushing the composer down the window while the user is reading it.
+ * Only ever the hidden body of code being written, or one line about a stream that has gone
+ * quiet - see TurnActivity for why there is nothing else to put here. The body arrives already
+ * bounded, so this cannot grow with the turn; `maxHeight` is the second bound and a different
+ * one, keeping a twelve-line tail from pushing the composer down the window.
  */
 function ActivityDetailView({
   detail,
@@ -41,12 +42,7 @@ function ActivityDetailView({
     <Box
       ref={panel}
       id={id}
-      sx={{
-        minWidth: 0,
-        pl: 1.5,
-        borderLeft: '2px solid',
-        borderColor: 'divider',
-      }}
+      sx={{ minWidth: 0, pl: 1.5, borderLeft: '2px solid', borderColor: 'divider' }}
       data-testid="chat-turn-status-detail"
     >
       {detail.note && (
@@ -54,30 +50,6 @@ function ActivityDetailView({
           {detail.note}
         </Typography>
       )}
-
-      {detail.rows?.map(row => (
-        <Stack
-          key={row.id}
-          direction="row"
-          spacing={0.75}
-          sx={{ minWidth: 0 }}
-          data-testid="chat-turn-status-detail-row"
-        >
-          <Typography level="body-xs" textColor="text.secondary" noWrap sx={{ flex: '0 0 auto' }}>
-            {row.label}
-          </Typography>
-          {row.input && (
-            <Typography level="body-xs" fontFamily="monospace" textColor="text.tertiary" noWrap sx={{ minWidth: 0 }}>
-              {row.input}
-            </Typography>
-          )}
-          {row.progress && (
-            <Typography level="body-xs" textColor="text.tertiary" noWrap sx={{ minWidth: 0 }}>
-              {row.progress}
-            </Typography>
-          )}
-        </Stack>
-      ))}
 
       {detail.body && (
         <Typography

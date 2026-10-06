@@ -31,7 +31,7 @@ import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
-import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
+import { contextTokens, describeActivity, latestReply, writingProse, type ComposerUsage } from './statusLine';
 import { useAccountCredits } from './useAccountCredits';
 import { toAttachmentInputs, useAttachmentDraft } from './useAttachments';
 import { useBackgroundProcesses } from './useBackgroundProcesses';
@@ -250,14 +250,13 @@ export function ChatShell({ account }: { account?: AccountStrip }) {
   // the last message can be that reply, so nothing earlier is consulted.
   const inFlight = conversation.messages[conversation.messages.length - 1];
   const liveText = inFlight ? (roundsOf(inFlight).at(-1)?.text ?? '') : '';
-  // The same parse the thread draws from, so the line names what the transcript is showing and
-  // the hidden code it is not.
-  const presented = presentReply(liveText, true);
+  // The same parse the thread draws from, which is what lets the line speak for the two things
+  // the thread leaves out: the code presentReply hides, and the reasoning it never draws.
   const activity = describeActivity(
     inFlight?.toolCalls ?? [],
-    (inFlight?.content.length ?? 0) > 0,
-    presented.pending,
-    presented.text
+    writingProse(inFlight),
+    presentReply(liveText, true).pending,
+    conversation.turn?.reasoning
   );
 
   /**

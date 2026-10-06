@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatToolCall, ChatUsage } from '@shared/chat';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
-import { activePhrase, summarizeInput } from './toolRows';
+import { activePhrase } from './toolRows';
 
 /**
  * What the status line under the transcript knows about the turn in flight.
@@ -17,6 +17,20 @@ export interface TurnProgress {
   tokens: number | null;
   /** The same report the count came from, for the split and the cost. */
   usage?: ChatUsage | null;
+  /**
+   * The live tail of what the model is REASONING, when that is the last thing that arrived.
+   *
+   * Main emits a 'reasoning' event per chunk and the thread deliberately draws none of it, so a
+   * model that thinks for five minutes before writing a word arrives as five minutes of nothing
+   * - which is how a turn mid-thought and a turn whose stream died came to render identically,
+   * both as "Responding...". Held here rather than on the message because it is not part of the
+   * reply: it is evidence that the turn is alive, and the one thing in flight that the
+   * transcript has no copy of.
+   *
+   * Bounded to REASONING_TAIL_CHARS and republished no more than once a second - see
+   * EVENT_STAMP_RESOLUTION_MS. Cleared the moment text or a tool arrives.
+   */
+  reasoning?: string;
   /**
    * Epoch ms the last stream event arrived, which is the only thing separating a working turn
    * from a dead one. Elapsed-since-start cannot: a turn that stopped receiving anything twenty
@@ -45,6 +59,14 @@ export const STALL_AFTER_MS = 10_000;
  * every frame of a fast stream.
  */
 export const EVENT_STAMP_RESOLUTION_MS = 1000;
+
+/**
+ * How much of the model's reasoning is kept for the disclosure.
+ *
+ * A tail, and bounded where it is accumulated rather than where it is shown: a long think runs
+ * to tens of thousands of tokens and none of it is worth holding in state to print twelve lines.
+ */
+export const REASONING_TAIL_CHARS = 2000;
 
 /**
  * New input, cache writes and output. Cache reads are left out: a long tool loop re-reads the
@@ -99,27 +121,30 @@ export function formatTokens(count: number): string {
 }
 
 /**
- * The third field: WHAT the turn is doing, as something that can be opened.
+ * The third field: WHAT the turn is doing, and - where the transcript cannot show it - a way in.
  *
  * Read off the state the turn already publishes - tool statuses, the progress lines the slow
- * tools report, the text arriving - rather than asked for. Approval outranks everything,
- * because a turn parked at the gate is not working on anything at all.
+ * tools report - rather than asked for. Approval outranks everything, because a turn parked at
+ * the gate is not working on anything at all.
  *
- * `label` is the one line the status row reads at rest. Everything beside it is a HANDLE on the
- * live thing - the call, the calls, the streamed body - and never a rendered string: this is
- * recomputed on every frame of a stream, and the detail behind the label is built only once
- * somebody expands it. See activityDetail.
+ * The line DISCLOSES ONLY WHAT THE TRANSCRIPT IS NOT ALREADY SHOWING, which is nearly nothing:
+ * prose streams into the thread as it arrives, tool rows are drawn there with their own
+ * disclosures, and an approval is a card the user is already looking at. Naming any of those a
+ * second time under the line is the same words twice on one screen. The exceptions are the two
+ * things the thread genuinely does not have: code being written, which presentReply HIDES, and
+ * a stream that has gone quiet, which is an absence and so cannot be drawn anywhere.
  *
- * Code being written is still named rather than shown in the transcript; `pending` carries its
- * body for the disclosure, which the user opens on purpose. See presentReply.
+ * So most kinds carry a label and nothing else. `pending` is a handle on the live body rather
+ * than a rendered string, because this is recomputed on every frame of a stream and the detail
+ * is built only once somebody opens it. See activityDetail.
  */
 export type TurnActivity =
-  | { kind: 'approval'; label: string; call: ChatToolCall }
-  | { kind: 'tool'; label: string; call: ChatToolCall }
-  | { kind: 'tools'; label: string; calls: readonly ChatToolCall[] }
+  | { kind: 'approval'; label: string }
+  | { kind: 'tool'; label: string }
+  | { kind: 'tools'; label: string }
   | { kind: 'code'; label: string; pending: PendingCode }
-  | { kind: 'text'; label: string; text: string }
-  | { kind: 'thinking'; label: string }
+  | { kind: 'text'; label: string }
+  | { kind: 'thinking'; label: string; reasoning?: string }
   | { kind: 'stalled'; label: string; silentMs: number; last: TurnActivity };
 
 /** As much of a label as fits a line that must not wrap at any window width. */
@@ -132,47 +157,51 @@ function oneLine(text: string): string {
 }
 
 /**
- * As much of the last line with anything on it as a label could ever use.
+ * Whether prose for the ROUND IN FLIGHT is arriving.
  *
- * Scanned backwards rather than `split('\n').at(-1)`, and only the first LABEL_SCAN_CHARS of the
- * line are taken: both halves of that are the per-frame cost. A reply with no newline in it at
- * all is one line of half a megabyte, and trimming and flattening the whole of it to print
- * ninety characters measured 2.2ms per frame - on a path that runs on every frame of a stream.
+ * Not "has this reply said anything". A turn that spoke, ran tools and is now composing its
+ * next step has said plenty and is saying nothing, and "Responding..." sitting over a finished
+ * tool row is exactly the stale label this line exists to stop - it is also why "Thinking..."
+ * was almost never seen, since the first sentence of a turn made the whole rest of it read as
+ * responding.
+ *
+ * Text that arrives after a round's tool calls opens a NEW round (see appendText in
+ * shared/liveReply), so a last round carrying calls is a round that has no prose yet. A message
+ * stored before rounds were recorded has none to read, and falls back to its flattened content.
  */
-const LABEL_SCAN_CHARS = 400;
-
-function lastLine(text: string): string {
-  let end = text.length;
-  while (end > 0) {
-    const start = text.lastIndexOf('\n', end - 1) + 1;
-    const line = text.slice(start, Math.min(end, start + LABEL_SCAN_CHARS)).trim();
-    if (line) return line;
-    end = start - 1;
-  }
-  return '';
+export function writingProse(message: ChatMessage | undefined | null): boolean {
+  if (!message) return false;
+  const open = message.rounds?.[message.rounds.length - 1];
+  if (!open) return message.content.length > 0;
+  return open.toolCallIds.length === 0 && open.text.length > 0;
 }
 
 export function describeActivity(
   calls: readonly ChatToolCall[],
   hasText: boolean,
   pending: PendingCode | null = null,
-  text = ''
+  reasoning?: string
 ): TurnActivity {
-  const waiting = calls.find(call => call.status === 'awaiting-approval');
-  if (waiting) return { kind: 'approval', label: 'Waiting for your answer...', call: waiting };
+  if (calls.some(call => call.status === 'awaiting-approval'))
+    return { kind: 'approval', label: 'Waiting for your answer...' };
 
   const running = calls.filter(call => call.status === 'running');
   if (running.length === 1) {
     const only = running[0];
-    return { kind: 'tool', label: oneLine(only.progress ?? '') || activePhrase(only.name), call: only };
+    return { kind: 'tool', label: oneLine(only.progress ?? '') || activePhrase(only.name) };
   }
-  if (running.length > 1) return { kind: 'tools', label: `Running ${running.length} tools...`, calls: running };
+  if (running.length > 1) return { kind: 'tools', label: `Running ${running.length} tools...` };
   if (pending) return { kind: 'code', label: pendingCodePhrase(pending), pending };
 
-  if (!hasText) return { kind: 'thinking', label: 'Thinking...' };
-  // The text itself, not a word for it: "Responding..." is true of every turn that ever ran and
-  // tells the reader nothing about this one. Only when there is no line yet to show.
-  return { kind: 'text', label: oneLine(lastLine(text)) || 'Responding...', text };
+  // Reasoning outranks both words below it, and only those two. A model that wrote a sentence
+  // and then thought for four minutes is NOT still responding - nothing has been added to the
+  // reply in all that time - and reporting it as such is the five-to-ten-minute "Responding..."
+  // that this line was built to end.
+  if (reasoning) return { kind: 'thinking', label: 'Thinking...', reasoning };
+
+  // "Responding..." says little, and that is correct here: the words it would otherwise repeat
+  // are being drawn in the thread a few lines above as they arrive.
+  return hasText ? { kind: 'text', label: 'Responding...' } : { kind: 'thinking', label: 'Thinking...' };
 }
 
 /**
@@ -193,21 +222,9 @@ export function withStall(activity: TurnActivity, turn: TurnProgress, now: numbe
   return { kind: 'stalled', label: `Waiting for the model... ${formatElapsed(silentMs)}`, silentMs, last: activity };
 }
 
-/** One running tool inside the disclosure, as its own row. */
-export interface ActivityDetailRow {
-  id: string;
-  /** Present tense: these rows are things still happening. */
-  label: string;
-  /** What it was called with, already flattened to a line. */
-  input?: string;
-  /** The tool's latest progress line, when it reports one. */
-  progress?: string;
-}
-
 /** What the line discloses, built only for an OPEN disclosure. */
 export interface ActivityDetail {
   note?: string;
-  rows?: ActivityDetailRow[];
   /** A block of text, already bounded to a tail this view can hold. */
   body?: string;
 }
@@ -215,35 +232,18 @@ export interface ActivityDetail {
 /**
  * Whether the label has anything behind it, cheaply enough to ask on every frame.
  *
- * Deliberately not "is the detail non-empty", which would mean building the detail to find out -
- * the one thing a collapsed line must never do.
+ * False for everything the thread already draws, which is what keeps the line from being a
+ * second copy of the reply. Deliberately not "is the detail non-empty", which would mean
+ * building the detail to find out - the one thing a collapsed line must never do.
  */
 export function hasActivityDetail(activity: TurnActivity): boolean {
-  switch (activity.kind) {
-    case 'approval':
-    case 'tool':
-    case 'tools':
-    case 'stalled':
-      return true;
-    case 'code':
-      return activity.pending.body.trim().length > 0;
-    case 'text':
-      return activity.text.trim().length > 0;
-    default:
-      return false;
-  }
+  if (activity.kind === 'code') return activity.pending.body.trim().length > 0;
+  if (activity.kind === 'thinking') return (activity.reasoning ?? '').trim().length > 0;
+  return activity.kind === 'stalled';
 }
 
 const DETAIL_CHARS = 1200;
 const DETAIL_LINES = 12;
-
-/**
- * How many tools one disclosure lists.
- *
- * A turn can fan out further than this, and a panel that grows a row per call is the unbounded
- * block this view exists to avoid. The rest are counted rather than drawn.
- */
-const MAX_DETAIL_ROWS = 6;
 
 /** The end of a stream, which is where the news is. Bounded twice: characters, then lines. */
 function tailBlock(text: string): string {
@@ -252,68 +252,29 @@ function tailBlock(text: string): string {
   return (lines.length > DETAIL_LINES ? lines.slice(lines.length - DETAIL_LINES) : lines).join('\n').trim();
 }
 
-/** The start of a fixed argument, which is where ITS meaning is - a command, a path, a prompt. */
-function headBlock(text: string): string {
-  const lines = text.slice(0, DETAIL_CHARS).split('\n');
-  const kept = lines.length > DETAIL_LINES ? lines.slice(0, DETAIL_LINES) : lines;
-  const block = kept.join('\n').trim();
-  return block.length < text.trim().length ? `${block}\n...` : block;
-}
-
-function runningRow(call: ChatToolCall): ActivityDetailRow {
-  const input = oneLine(summarizeInput(call));
-  const progress = oneLine(call.progress ?? '');
-  return {
-    id: call.id,
-    // activePhrase, never the transcript's row label: that one is past tense, and a call that is
-    // still running has not done anything yet.
-    label: activePhrase(call.name),
-    ...(input ? { input } : {}),
-    ...(progress ? { progress } : {}),
-  };
-}
-
-function runningRows(calls: readonly ChatToolCall[]): ActivityDetailRow[] {
-  const shown = calls.slice(0, MAX_DETAIL_ROWS).map(runningRow);
-  const hidden = calls.length - shown.length;
-  return hidden > 0 ? [...shown, { id: 'more', label: `and ${hidden} more...` }] : shown;
-}
-
 /**
  * The live detail behind the label - the only expensive thing in this file.
  *
- * Called ONLY from an expanded disclosure, once per render of it, and every branch returns
- * something bounded: a capped head or tail of a block, or at most MAX_DETAIL_ROWS rows carrying
- * one progress line each. Nothing here grows with the length of a turn.
+ * Called ONLY from an expanded disclosure, once per render of it, and bounded: a capped tail of
+ * the hidden body, or one line naming the silence. Nothing here grows with the length of a turn,
+ * and nothing here repeats something the thread is already drawing.
  */
 export function activityDetail(activity: TurnActivity): ActivityDetail | null {
-  switch (activity.kind) {
-    case 'approval': {
-      const asked = activity.call.approvalDetail ?? summarizeInput(activity.call);
-      return {
-        note: 'Waiting for you to answer this in the transcript:',
-        ...(asked ? { body: headBlock(asked) } : {}),
-      };
-    }
-    case 'tool':
-      return { rows: runningRows([activity.call]) };
-    case 'tools':
-      return { rows: runningRows(activity.calls) };
-    case 'code':
-      return { body: tailBlock(activity.pending.body) };
-    case 'text':
-      return { body: tailBlock(activity.text) };
-    case 'stalled': {
-      const under = activityDetail(activity.last);
-      return {
-        note: `Nothing has arrived for ${formatElapsed(activity.silentMs)}. Last: ${activity.last.label}`,
-        ...(under?.rows ? { rows: under.rows } : {}),
-        ...(under?.body ? { body: under.body } : {}),
-      };
-    }
-    default:
-      return null;
-  }
+  if (activity.kind === 'code') return { body: tailBlock(activity.pending.body) };
+  if (activity.kind === 'thinking') return activity.reasoning ? { body: tailBlock(activity.reasoning) } : null;
+  if (activity.kind !== 'stalled') return null;
+
+  // The body only where the thread does not have it either: a turn that went quiet mid-artifact
+  // still has that source hidden, and a turn that went quiet mid-sentence does not.
+  const under = activityDetail(activity.last);
+  // Says what the silence IS, because the label cannot: nothing arriving is not proof of a dead
+  // turn - a model can reason for a minute before its first token - and this client cannot tell
+  // the two apart. Naming both is the honest reading, and it is what the user needs in order to
+  // decide whether to wait or to stop the turn.
+  return {
+    note: `Nothing has arrived from the model for ${formatElapsed(activity.silentMs)}. It may still be working, or the stream may have stopped.`,
+    ...(under?.body ? { body: under.body } : {}),
+  };
 }
 
 /** The whole line, dot-separated, as one string - which is also how a test can read it. */
