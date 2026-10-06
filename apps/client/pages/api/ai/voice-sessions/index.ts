@@ -33,6 +33,17 @@ const CreateSessionBodySchema = z.object({
   isReconnect: z.boolean().optional(),
 });
 
+// Marked expected so errorHandler logs it at warn: an error-level log reaches the LiveOps alert filter,
+// and a missing or rejected OpenAI key is a handled third-party condition, not a server fault.
+function voiceUnavailableError(extra?: Record<string, unknown>) {
+  const error = new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, {
+    code: VOICE_SESSION_ERROR.unavailable,
+    ...extra,
+  });
+  error.expected = true;
+  return error;
+}
+
 const handler = baseApi().post(async (req, res) => {
   const { sessionId, isReconnect } = CreateSessionBodySchema.parse(req.body);
 
@@ -98,8 +109,8 @@ const handler = baseApi().post(async (req, res) => {
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
   if (!openaiApiKey) {
-    req.logger.error('[Voice Session] No OpenAI API key configured');
-    throw new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, { code: VOICE_SESSION_ERROR.unavailable });
+    req.logger.warn('[Voice Session] No OpenAI API key configured');
+    throw voiceUnavailableError();
   }
 
   let session: ISessionDocument | null = null;
@@ -364,12 +375,9 @@ When you get the tool result back, summarize it conversationally for voice.`;
       const responseData = error.response?.data;
       const status = error.response?.status;
       console.error('[Voice Session] OpenAI Realtime API error:', status, JSON.stringify(responseData));
-      // Never relay OpenAI's status: a bare 401 reads to ApiContext as a dead login session and
-      // signs the user out. A coded 502 keeps the session and lets the client say voice is down.
-      throw new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, {
-        code: VOICE_SESSION_ERROR.unavailable,
-        upstreamStatus: status,
-      });
+      // Never relay OpenAI's status: a 401 from this route makes ApiContext tear down the login
+      // session. A 502 never enters that path, so the user stays signed in.
+      throw voiceUnavailableError({ upstreamStatus: status });
     }
     throw error;
   }
