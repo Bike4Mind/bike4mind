@@ -814,8 +814,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * that helper's own `$or` (gateless OR held tag OR held entitlement): a lake matching NONE of
    * those arms has a gate the caller does not hold, which is exactly the population this counts.
    *
-   * Without `restrictToTags`, visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
-   * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
+   * Without `restrictToTags`, visibility is org membership OR administered org OR public -
+   * deliberately narrower than `findActiveByUserTagsAndEntitlements`'s own arms (no owner bypass,
+   * no grant arm): those two arms are exactly what make a lake NOT
    * excluded regardless of its gate, so they are subtracted here instead of counted as visible.
    * The user-grant arm is an unconditional `_id: $nin` (a user-principal grant crosses orgs by
    * design). The org-grant arm reuses `orgGrantArms` under `$nor`, one arm per granting org,
@@ -875,7 +876,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       });
     }
 
-    const visibilityArms = callerVisibilityArms({ organizationIds, publicArm: { isPublic: true } });
+    const visibilityArms = callerVisibilityArms({
+      organizationIds,
+      administeredOrgIds: opts?.administeredOrgIds,
+      publicArm: { isPublic: true },
+    });
 
     const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
     const orgGrantExemptionArms = orgGrantArms(opts?.orgGrantedLakes);
