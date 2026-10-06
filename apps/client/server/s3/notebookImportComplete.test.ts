@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   deleteFile: vi.fn(),
   importNotebooks: vi.fn(),
   getImportedKnowledgeFilePaths: vi.fn(),
+  chargeImportedKnowledgeStorage: vi.fn(),
 }));
 
 vi.mock('@server/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
@@ -75,6 +76,7 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: 
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
 vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: vi.fn() }));
+vi.mock('@server/s3/storageCharge', () => ({ chargeImportedKnowledgeStorage: h.chargeImportedKnowledgeStorage }));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: h.deleteFile, upload: vi.fn(), getContentAsBuffer: vi.fn() }),
 }));
@@ -217,6 +219,7 @@ describe('notebook import: uploaded knowledge objects track the transaction outc
     // These rows committed, so their objects are referenced and must survive - the compensation
     // exists only for the rejection path, and must not reach into the committed one.
     expect(h.deleteFile).not.toHaveBeenCalled();
+    expect(h.chargeImportedKnowledgeStorage).toHaveBeenCalledWith('user-1', ['knowledge/user-1/a'], undefined);
     expect(moderateImportedKnowledgeFiles).toHaveBeenCalledWith(
       expect.objectContaining({ filePaths: ['knowledge/user-1/a'] })
     );

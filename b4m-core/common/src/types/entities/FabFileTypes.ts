@@ -434,6 +434,13 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
+   * Upload time of the bytes last charged to the owner's `currentStorageSize`. Advanced by
+   * compare-and-set, so an upload is charged once whether the S3 ObjectCreated handler or a notebook
+   * import charges it (apps/client/server/s3/storageCharge.ts). Absent on rows that predate it.
+   */
+  storageChargedAt?: Date;
+
+  /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
    * terminal verdict - incremented by the rescue sweep's stale-claim reclaim and by a transient
    * release. The rescue sweep orders its selection by this ascending, so a never-attempted

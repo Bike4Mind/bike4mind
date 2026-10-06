@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   recomputeUploaded: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
+  changeStorageSize: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -25,7 +26,7 @@ vi.mock('@server/s3/utils', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
-  changeStorageSize: vi.fn(),
+  changeStorageSize: h.changeStorageSize,
   dataLakeBatchRepository: { claimFileStatus: h.claimFileStatus, incrementCounter: h.incrementCounter },
   FabFile: {
     findOne: h.findOne,
@@ -268,5 +269,34 @@ describe('objectCreated - moderation claim identity', () => {
       expect.objectContaining({ action: 'image_moderation_status', moderationStatus: 'pending' })
     );
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
+  });
+});
+
+describe('objectCreated - storage charge', () => {
+  const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
+
+  it('charges the owner once it wins the storage-charge claim on the row', async () => {
+    h.findOne.mockResolvedValue(metadata());
+
+    await run();
+
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: expect.any(Date) } }] },
+      { $set: { storageChargedAt: expect.any(Date) } },
+      expect.anything()
+    );
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
+  });
+
+  it('does not charge an upload that was already charged', async () => {
+    // A redelivered event, or a notebook import's object the import charged in its own transaction.
+    h.findOne.mockResolvedValue(metadata());
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? { matchedCount: 0, modifiedCount: 0 } : { matchedCount: 1, modifiedCount: 1 }
+    );
+
+    await run();
+
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
   });
 });

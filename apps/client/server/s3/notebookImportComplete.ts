@@ -21,6 +21,7 @@ import {
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { chargeImportedKnowledgeStorage } from '@server/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@server/s3/utils';
 import type { ClientSession, FilterQuery } from 'mongoose';
@@ -319,6 +320,10 @@ const processNotebookImport = async (
       if (result.errors?.length) {
         throw new Error(`Imported no notebooks: ${result.errors.join('; ')}`);
       }
+
+      // Last write before the job is marked complete, so the user document is held for as short a
+      // window as possible - see chargeImportedKnowledgeStorage.
+      await chargeImportedKnowledgeStorage(userId, result.importedKnowledgeFilePaths ?? [], session);
 
       await markImportComplete(importHistoryJobId, userId, {
         processedItems: result.importedNotebooks + result.importedMessages,
