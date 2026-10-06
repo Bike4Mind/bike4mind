@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { NotFoundError } from '@server/utils/errors';
 import { Logger } from '@bike4mind/observability';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, { urgent?: boolean }, { id?: string }>(async (req, res) => {
@@ -17,6 +18,11 @@ const handler = baseApi().post(
     });
 
     const result = await stopReply(sessionId, req.ability!);
+    // A stop settles the quest, so it is one of the completion-callback settle sites (see
+    // dispatchQuestCallback); a no-op for a quest with no armed callback.
+    if (result?.status === 'stopped') {
+      await dispatchQuestCallback(result.id, req.logger);
+    }
 
     return res.json({
       msg: 'Chat stopped',

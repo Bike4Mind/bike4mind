@@ -252,7 +252,7 @@ describe('POST /api/overwatch/v1/events (integration — real middleware chain)'
       // The passthrough-mocked unit test asserts the latter; only this integration
       // test sees what callers actually get.
       expect(res._getStatusCode()).toBe(401);
-      expect(res._getJSONData()).toMatchObject({ error: 'Unauthorized' });
+      expect(res._getJSONData()).toMatchObject({ error: 'Authentication required' });
       expect(mockSendBatch).not.toHaveBeenCalled();
     });
 

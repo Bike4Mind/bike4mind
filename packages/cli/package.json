@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/cli",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "mcpName": "io.github.bike4mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
@@ -147,7 +147,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

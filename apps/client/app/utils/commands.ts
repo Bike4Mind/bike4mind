@@ -29,6 +29,11 @@ export type CommandArgExtra = {
   currentSession: ISessionDocument | null;
   model: string;
   workBenchFiles: IFabFileDocument[];
+  /**
+   * Agents the composer's Agents panel has selected. Sent only on the turn that creates a session
+   * (see LLMCommandArgs.agentIds).
+   */
+  agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];

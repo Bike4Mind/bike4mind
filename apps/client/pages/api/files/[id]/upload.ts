@@ -6,6 +6,7 @@ import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import { getFilesStorage } from '@server/utils/storage';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import type { Request, Response } from 'express';
 
 /**
@@ -29,7 +30,7 @@ import type { Request, Response } from 'express';
 /** Coarse Content-Length pre-check ceiling; the exact MaxFileSize cap is enforced mid-stream. */
 const BODY_CEILING_BYTES = 512 * 1024 * 1024;
 
-const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
+const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES, requiredScopes: FILES_WRITE_SCOPES }).put(
   asyncHandler(async (req: Request, res: Response) => {
     if (process.env.B4M_SELF_HOST !== 'true') {
       return res.status(404).json({ error: 'Not found' });

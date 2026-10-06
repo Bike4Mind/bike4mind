@@ -1182,7 +1182,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
-      userDetails: [{ id: 'u1', usedCredits: 500 }],
+      userDetails: [{ id: 'u1', usedCredits: 500, periodStart: new Date() }],
     });
 
     await expect(handler(makeReq({ query: 'onboarding' }), makeRes())).rejects.toThrow(/member credit limit/i);
@@ -1246,7 +1246,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
-      userDetails: [{ id: 'u1', usedCredits: 1 }],
+      userDetails: [{ id: 'u1', usedCredits: 1, periodStart: new Date() }],
     });
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
@@ -1295,7 +1295,7 @@ describe('POST /api/data-lakes/semantic-search credit pre-flight', () => {
       id: 'org1',
       currentCredits: 0,
       maxCreditsPerMember: 500,
-      userDetails: [{ id: 'u1', usedCredits: 500 }],
+      userDetails: [{ id: 'u1', usedCredits: 500, periodStart: new Date() }],
     });
 
     await handler(makeReq({ query: 'onboarding', embedding_model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT }), makeRes());

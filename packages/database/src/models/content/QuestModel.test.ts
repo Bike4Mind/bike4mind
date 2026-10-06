@@ -51,6 +51,56 @@ describe('Quest.attachmentDelivery persistence', () => {
   });
 });
 
+describe('Quest.fallbackInfo persistence', () => {
+  const fallbackInfo = {
+    sessionId: 'session-1',
+    primaryModel: 'claude-opus-4-8',
+    primaryModelName: 'Claude Opus 4.8',
+    fallbackModel: 'gpt-5',
+    fallbackModelName: 'GPT-5',
+    primaryModelBackend: 'anthropic',
+    fallbackModelBackend: 'openai',
+    reason: '429 rate limit exceeded',
+    timestamp: 1_760_000_000_000,
+  };
+
+  it('round-trips through create and a fresh read', async () => {
+    const quest = await makeQuest({ fallbackInfo });
+
+    const raw = await readRaw(quest._id.toString());
+
+    expect(raw?.fallbackInfo).toEqual(fallbackInfo);
+  });
+
+  // The completion pipeline writes through BaseRepository.update, not create.
+  it('survives the update path the completion pipeline saves through', async () => {
+    const quest = await makeQuest();
+
+    await questRepository.update({ id: quest._id.toString(), fallbackInfo });
+
+    const raw = await readRaw(quest._id.toString());
+    expect(raw?.fallbackInfo).toEqual(fallbackInfo);
+  });
+
+  // `$set` drops undefined, so retries and switched-then-failed turns clear it with null.
+  it('is cleared by an update that sets it to null', async () => {
+    const quest = await makeQuest({ fallbackInfo });
+
+    await questRepository.update({ id: quest._id.toString(), fallbackInfo: null });
+
+    const raw = await readRaw(quest._id.toString());
+    expect(raw?.fallbackInfo).toBeNull();
+  });
+
+  it('stays absent on a turn that did not fall back', async () => {
+    const quest = await makeQuest();
+
+    const raw = await readRaw(quest._id.toString());
+
+    expect(raw && 'fallbackInfo' in raw).toBe(false);
+  });
+});
+
 describe('QuestRepository.recordAttachmentOutcomeByAgentExecutionId', () => {
   it('writes both attachmentNotices and attachmentDelivery when notices are non-empty', async () => {
     const quest = await makeQuest({ agentExecutionId: 'exec-1' });

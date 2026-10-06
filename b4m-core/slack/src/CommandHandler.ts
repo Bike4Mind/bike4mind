@@ -526,13 +526,13 @@ export class CommandHandler {
     // Typed once here, at the DI boundary, instead of `any`-cast at each use below: dropping the
     // `.exec()` on the memoized lookup then becomes a compile error rather than a runtime
     // "Query was already executed" throw on an org-affiliated user's second attachment (the
-    // exact bug the round-2 fix caught). `.select(...)` narrows the round-trip to the two fields
+    // exact bug the round-2 fix caught). `.select(...)` narrows the round-trip to the one field
     // checkStorageLimitForFile actually reads, instead of pulling the whole organization doc.
     const { Organization } = getSlackDb() as unknown as {
       Organization: {
         findById(id: string): {
           select(fields: string): {
-            lean(): { exec(): Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> };
+            lean(): { exec(): Promise<Pick<IOrganizationDocument, 'storageLimit'> | null> };
           };
         };
       };
@@ -562,8 +562,7 @@ export class CommandHandler {
     // memoized as the rejection, so every attachment in the message that needs it fails the
     // same way. Unlike an absent MaxFileSize, there is no safe "no limit" fallback for a
     // storage check we could not actually run.
-    let organizationLookup:
-      Promise<Pick<IOrganizationDocument, 'storageLimit' | 'currentStorageSize'> | null> | undefined;
+    let organizationLookup: Promise<Pick<IOrganizationDocument, 'storageLimit'> | null> | undefined;
     const findOrganizationOnce = (id: string) => {
       // `.exec()` is load-bearing: `.lean()` alone returns a thenable Mongoose Query, not a
       // Promise - memoizing the Query itself and awaiting it more than once throws "Query was
@@ -571,13 +570,13 @@ export class CommandHandler {
       // org-affiliated user with 2+ attachments in one message (checkStorageLimitForFile awaits
       // this once per accepted attachment). Typed on `Organization` above, so removing `.exec()`
       // is now a compile error instead of a runtime throw.
-      organizationLookup ??= Organization.findById(id).select('storageLimit currentStorageSize').lean().exec();
+      organizationLookup ??= Organization.findById(id).select('storageLimit').lean().exec();
       // TS can't narrow a closed-over variable past `??=` on its own - it is always assigned
-      // by this point. checkStorageLimitForFile only reads the two selected fields, so the lean
+      // by this point. checkStorageLimitForFile only reads the selected field, so the lean
       // projection satisfies it despite not being a full Mongoose document.
       return organizationLookup as Promise<IOrganizationDocument | null>;
     };
-    // `this.user`/the org doc's `currentStorageSize` is a snapshot taken once for this whole
+    // `this.user.currentStorageSize` is a snapshot taken once for this whole
     // call - it is only updated asynchronously later via the S3 `objectCreated` event, not as
     // attachments are accepted here. Tracking bytes accepted so far in THIS message and adding
     // them to each subsequent check keeps a user right at quota from overshooting it by

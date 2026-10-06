@@ -1,5 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
-import type { DataLakeOrigin, DataLakeStatus } from '../types/entities/DataLakeTypes';
+import type { DataLakeOrigin, DataLakePendingConnector, DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -420,6 +420,23 @@ export interface DataLakeConfig {
 }
 
 /**
+ * Opt-in row label on GET /api/data-lakes (`?includeRetrievability=true`), never set by the list
+ * projections. The one authoritative statement of its contract:
+ * - `retrievable`: whether chat retrieval searches this lake for the CALLER (always the caller, even
+ *   when `?preauthorizableFor` relabels `canPreauthorize`). With `&sessionId=` naming one of the
+ *   caller's own sessions, it also counts that session's still-managed pre-authorizations, i.e.
+ *   whether chat searches the lake in that session once the session's scope includes it. Any other
+ *   session id is treated as no session. Drafts read `false`.
+ * - Absent means unknown (not requested, or the scope was unresolved or degraded) and must be
+ *   treated as searchable.
+ */
+export interface DataLakeRetrievabilityLabel {
+  retrievable?: boolean;
+}
+
+export type RetrievabilityLabeledDataLake = ManageableDataLakeConfig & DataLakeRetrievabilityLabel;
+
+/**
  * DataLakeConfig plus the fields only a lake's EDITORS may read. Returned exclusively by the
  * actor-aware list projections (listDataLakes / listAllDataLakes), which populate the extra
  * fields per lake and only when `canManage` holds for the requesting caller.
@@ -463,6 +480,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * green typecheck. Required makes that a compile error instead.
    */
   isOwn: boolean;
+  /**
+   * Whether the caller is the lake's `createdByUserId` - the identity lake membership (and so the
+   * file count and reachability) is anchored to; see services/src/dataLakeService/lakeMembershipScope.ts.
+   * Differs from `isOwn` after an ownership transfer. Built-in fallback lakes have no creator: `false`.
+   */
+  isCreator: boolean;
   /**
    * Whether the caller may name this lake in `preauthorizedLakeIds` at session create - i.e. the
    * manage-but-not-member admission that lets a maintainer ground a scoped session on a lake the
@@ -518,6 +541,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    * its EFFECT via the create-time resolver, never the setting itself).
    */
   groundingMode?: DataLakeGroundingMode;
+  /**
+   * The connector this lake still waits on (see IDataLake.pendingConnector). EDITOR-ONLY, same gate
+   * as the fields above: only a manager can finish the connect it names. Absent when the caller
+   * can't manage the lake, the lake was never created for a connector, or a connection has bound.
+   */
+  pendingConnector?: DataLakePendingConnector;
   /**
    * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
    * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present

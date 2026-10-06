@@ -27,6 +27,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakeUncategorizedFiles: () => ({ data: undefined, isLoading: false }),
   useGetDataLakeArticles: () => ({ data: { data: [] }, isLoading: false }),
   useGetDataLakes: () => ({ data: [] }),
+  useGetDataLakesWithRetrievability: () => ({ data: [] }),
   useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

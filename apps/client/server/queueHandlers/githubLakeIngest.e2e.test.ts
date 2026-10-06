@@ -10,7 +10,6 @@ import {
   FabFile,
   OrgGitHubLakeConnection,
   User,
-  dataLakeRepository,
   fabFileRepository,
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
@@ -56,7 +55,10 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
 }));
 
 import { dispatch } from './githubLakeIngest';
-import { disconnectGitHubLakeConnection } from '@server/integrations/github/dataLake/githubLakeConnection';
+import {
+  requestGitHubLakeDisconnect,
+  revokeGitHubLakeConnection,
+} from '@server/integrations/github/dataLake/githubLakeConnection';
 
 let mongo: MongoMemoryReplSet;
 const logger = {
@@ -263,11 +265,12 @@ describe('githubLakeIngest end to end', () => {
     await run({ connectionId });
     expect(await FabFile.countDocuments({ githubConnectionId: connectionId })).toBe(2);
 
-    const lake = await dataLakeRepository.findById(lakeId);
+    // The disconnect door only queues the purge; the revoke consumer runs it.
     const connection = await orgGitHubLakeConnectionRepository.findById(connectionId);
-    await expect(disconnectGitHubLakeConnection(lake!, connection!, logger)).resolves.toEqual({
-      installationRetained: false,
-    });
+    await expect(requestGitHubLakeDisconnect(connection!, logger)).resolves.toEqual({ queued: true });
+    const revokeMessage = { connectionId, installationId: connection!.installationId };
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.test/githubLakeRevokeQueue', revokeMessage);
+    await revokeGitHubLakeConnection(revokeMessage, logger);
     expect(await orgGitHubLakeConnectionRepository.findById(connectionId)).toBeNull();
     expect(
       await FabFile.countDocuments({ githubConnectionId: connectionId }).setOptions({ includeDeleted: true })

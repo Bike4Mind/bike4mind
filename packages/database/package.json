@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/database",
-  "version": "0.4.5",
+  "version": "0.4.9",
   "private": true,
   "type": "module",
   "main": "dist/index.mjs",
@@ -75,13 +75,13 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.10",
-    "@vitest/ui": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/ui": "^4.1.11",
     "mongodb-memory-server": "^11.2.0",
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "zod": "^4.4.3"
   }
 }

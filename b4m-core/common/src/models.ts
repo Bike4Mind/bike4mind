@@ -2,6 +2,7 @@ import { z } from 'zod';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
  * Model backends
@@ -37,6 +38,8 @@ export enum ImageModels {
   GPT_IMAGE_1_5 = 'gpt-image-1.5',
   GPT_IMAGE_1_MINI = 'gpt-image-1-mini',
   GPT_IMAGE_2 = 'gpt-image-2',
+  GPT_IMAGE_2_5_SUNBURST = 'gpt-image-2.5-sunburst',
+  GPT_IMAGE_2_5_FLARE = 'gpt-image-2.5-flare',
   DALL_E_2 = 'dall-e-2',
   FLUX_PRO = 'flux-pro',
   FLUX_PRO_1_1 = 'flux-pro-1.1',
@@ -678,6 +681,11 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * Size rules and supported params of an image model. Attached by GET /api/models (see
+   * getImageModelCapabilities), not by the backends, so every image row derives it the same way.
+   */
+  image?: ImageModelCapabilities;
 };
 
 // Pricing info type. Optional cache_read / cache_write override the defaults

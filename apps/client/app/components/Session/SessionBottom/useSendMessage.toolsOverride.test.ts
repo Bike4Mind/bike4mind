@@ -17,7 +17,7 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
 
   it('derives the dispatch tool selection from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist)', () => {
     expect(source).toMatch(
-      /const \{ enabledTools, enabledToolsAreAmbient \} = resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*orchestrationAgent\?\.allowedTools\s*\);/
+      /const \{ enabledTools, enabledToolsAreAmbient \} = resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*dispatchAgent\?\.allowedTools\s*\);/
     );
   });
 

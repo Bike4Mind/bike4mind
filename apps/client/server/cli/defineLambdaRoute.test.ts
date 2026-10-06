@@ -64,6 +64,21 @@ describe('defineLambdaRoute + chatContract', () => {
     const res = asResult(await route(makeEvent({ notMessage: 1 })));
     expect(res.statusCode).toBe(401);
   });
+
+  it('405s a method the contract does not declare, before auth, with an Allow header', async () => {
+    const event = { ...makeEvent({ message: 'hi' }), requestContext: { http: { method: 'GET' } } };
+    const res = asResult(await route(event as unknown as APIGatewayProxyEventV2));
+    expect(res.statusCode).toBe(405);
+    expect(res.headers?.Allow).toBe('POST');
+    expect(JSON.parse(res.body as string)).toMatchObject({ request_id: expect.any(String) });
+    expect(mockResolveAuth).not.toHaveBeenCalled();
+  });
+
+  it("serves the contract's own method", async () => {
+    const event = { ...makeEvent({ message: 'hi' }), requestContext: { http: { method: 'POST' } } };
+    const res = asResult(await route(event as unknown as APIGatewayProxyEventV2));
+    expect(res.statusCode).toBe(200);
+  });
 });
 
 /**

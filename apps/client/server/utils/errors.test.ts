@@ -10,6 +10,7 @@ describe('ensureAdmin', () => {
 
   it('throws ForbiddenError for a non-admin / missing flag', () => {
     expect(() => ensureAdmin(false)).toThrow(ForbiddenError);
+    expect(() => ensureAdmin(false)).toThrow(expect.objectContaining({ statusCode: 403 }));
     expect(() => ensureAdmin(null)).toThrow(ForbiddenError);
     expect(() => ensureAdmin(undefined)).toThrow(ForbiddenError);
   });
