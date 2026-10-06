@@ -45,10 +45,14 @@ export interface TurnProgress {
 /**
  * How long a turn may go quiet before the line stops claiming it is working.
  *
- * A second or two between tokens is ordinary model latency; ten is not. The case this exists
- * for sat at "Responding..." for 27 minutes with nothing arriving behind it.
+ * Measured against this server rather than guessed: a thinking model sends NOTHING while it
+ * thinks - the completions stream carries no frame for it - so the quiet before a Claude turn's
+ * first token is normal and long. Two turns timed through the hosted backend went 12.5s and 42s
+ * from the request to their first event, and a resumed turn on a large conversation was reported
+ * at over a minute. A threshold under that would call every thinking turn stalled, which is how
+ * a warning stops being read. The case this exists for sat at "Responding..." for 27 minutes.
  */
-export const STALL_AFTER_MS = 10_000;
+export const STALL_AFTER_MS = 45_000;
 
 /**
  * The finest `lastEventAt` is recorded to.
@@ -272,7 +276,7 @@ export function activityDetail(activity: TurnActivity): ActivityDetail | null {
   // the two apart. Naming both is the honest reading, and it is what the user needs in order to
   // decide whether to wait or to stop the turn.
   return {
-    note: `Nothing has arrived from the model for ${formatElapsed(activity.silentMs)}. It may still be working, or the stream may have stopped.`,
+    note: `Nothing has arrived from the model for ${formatElapsed(activity.silentMs)}. A thinking model sends nothing while it thinks, so it may still be working, or the stream may have stopped.`,
     ...(under?.body ? { body: under.body } : {}),
   };
 }

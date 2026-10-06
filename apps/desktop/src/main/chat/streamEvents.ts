@@ -47,8 +47,9 @@ export const streamEventSchema = z.discriminatedUnion('type', [
     type: z.literal('tool_use'),
     text: z.string().optional(),
     tools: z.array(toolUseSchema).optional(),
-    // Opaque provider reasoning blocks (Anthropic extended thinking). They must be replayed
-    // verbatim alongside the tool_use they accompany, or the next turn is rejected.
+    // Provider reasoning blocks (Anthropic extended thinking). They must be replayed verbatim
+    // alongside the tool_use they accompany, or the next turn is rejected - hence `unknown`,
+    // which is about never rewriting them, not about being unreadable: see readableThinking.
     thinking: z.array(z.unknown()).optional(),
     usage: usageSchema.optional(),
     credits: creditsSchema.optional(),

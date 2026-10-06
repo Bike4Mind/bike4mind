@@ -281,19 +281,26 @@ describe('withStall', () => {
     const stalled = withStall(thinking, turn, turn.lastEventAt + 125_000);
     expect(stalled.label).toBe('Waiting for the model... 2m 5s');
     expect(activityDetail(stalled)?.note).toBe(
-      'Nothing has arrived from the model for 2m 5s. It may still be working, or the stream may have stopped.'
+      'Nothing has arrived from the model for 2m 5s. A thinking model sends nothing while it thinks, so it may still be working, or the stream may have stopped.'
     );
   });
 
   it('measures from the start of the turn until the first event lands', () => {
     const fresh = { startedAt: 1_000_000, tokens: null };
-    expect(withStall(thinking, fresh, fresh.startedAt + 30_000).label).toBe('Waiting for the model... 30s');
+    expect(withStall(thinking, fresh, fresh.startedAt + 60_000).label).toBe('Waiting for the model... 1m 0s');
+  });
+
+  // Measured, not assumed: see STALL_AFTER_MS. A turn that is merely thinking sends nothing for
+  // tens of seconds on this server, and a line that called that stalled would be crying wolf on
+  // every Claude turn.
+  it('leaves a turn that has been quiet for half a minute alone', () => {
+    expect(withStall(thinking, turn, turn.lastEventAt + 30_000)).toBe(thinking);
   });
 
   it('explains the silence rather than repeating the sentence it fell in the middle of', () => {
     const stalled = withStall(describeActivity([], true), turn, turn.lastEventAt + 60_000);
     expect(activityDetail(stalled)).toEqual({
-      note: 'Nothing has arrived from the model for 1m 0s. It may still be working, or the stream may have stopped.',
+      note: 'Nothing has arrived from the model for 1m 0s. A thinking model sends nothing while it thinks, so it may still be working, or the stream may have stopped.',
     });
   });
 
