@@ -11,6 +11,10 @@ export const FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT = 3; // mirrors fabFileVectori
 export const GENERATION_CALLBACK_MAX_RECEIVE_COUNT = 5; // mirrors generationCallbackQueue.dlq.retry
 // Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
 export const GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC = 120; // mirrors generationCallbackQueue.visibilityTimeout
+// Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
+export const GENERATION_JOB_MAX_RECEIVE_COUNT = 5; // mirrors generationJobQueue.dlq.retry
+// Also passed to the self-host worker for this queue (apps/workers/src/selfhost/main.ts).
+export const GENERATION_JOB_VISIBILITY_TIMEOUT_SEC = 360; // mirrors generationJobQueue.visibilityTimeout
 
 /**
  * Delivery number of this SQS message (1-based). Both queues these helpers serve are pinned to

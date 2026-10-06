@@ -18,6 +18,7 @@ export * from './generatedAudio';
 export * from './voiceGeneration';
 export * from './voicePricing';
 export * from './videoGeneration';
+export * from './video';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
