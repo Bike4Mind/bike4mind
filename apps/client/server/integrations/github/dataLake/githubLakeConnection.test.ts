@@ -20,6 +20,8 @@ const h = vi.hoisted(() => ({
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
   dlRenameIfPlaceholder: vi.fn(),
+  grantsListByLake: vi.fn(),
+  orgFindIdsWithAdminRights: vi.fn(),
   recordLakeConfigChange: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   ghConnFindByInstallationId: vi.fn(),
@@ -86,6 +88,11 @@ vi.mock('@bike4mind/database', async importOriginal => {
       ...actual.dataLakeRepository,
       findById: h.dlFindById,
       renameIfPlaceholderAndClearPending: h.dlRenameIfPlaceholder,
+    },
+    dataLakeAccessGrantRepository: { ...actual.dataLakeAccessGrantRepository, listByLake: h.grantsListByLake },
+    organizationRepository: {
+      ...actual.organizationRepository,
+      findIdsWithAdminRights: h.orgFindIdsWithAdminRights,
     },
     lakeConnectorClaimRepository: {
       ...actual.lakeConnectorClaimRepository,
@@ -577,6 +584,8 @@ describe('completeGitHubLakeConnection', () => {
     h.consumeGitHubLakeAuthGrant.mockResolvedValue(undefined);
     h.dlRenameIfPlaceholder.mockResolvedValue(null);
     h.recordLakeConfigChange.mockResolvedValue(undefined);
+    h.grantsListByLake.mockResolvedValue([]);
+    h.orgFindIdsWithAdminRights.mockResolvedValue([]);
   });
 
   it('creates the connection with the picked repo, installation account, and connecting user', async () => {
@@ -665,7 +674,9 @@ describe('completeGitHubLakeConnection', () => {
 
   it('clears the pending connector and offers the placeholder rename once the connection is created', async () => {
     await completeGitHubLakeConnection(params());
-    expect(h.dlRenameIfPlaceholder).toHaveBeenCalledWith('lake1', GITHUB_LAKE_PLACEHOLDER_NAME, REPO.fullName);
+    expect(h.dlRenameIfPlaceholder).toHaveBeenCalledWith('lake1', GITHUB_LAKE_PLACEHOLDER_NAME, REPO.fullName, {
+      lastUpdatedByUserId: USER.id,
+    });
     expect(h.recordLakeConfigChange).not.toHaveBeenCalled();
   });
 
@@ -676,15 +687,19 @@ describe('completeGitHubLakeConnection', () => {
       createdByUserId: 'u1',
       organizationId: 'orgA',
     });
+    const ownerGrant = { principalType: 'user', principalId: USER.id, role: 'owner' };
+    h.grantsListByLake.mockResolvedValue([ownerGrant]);
+    h.orgFindIdsWithAdminRights.mockResolvedValue(['orgA']);
     await completeGitHubLakeConnection(params());
     expect(h.recordLakeConfigChange).toHaveBeenCalledWith(
       expect.objectContaining({
-        actor: expect.objectContaining({ userId: USER.id }),
+        actor: expect.objectContaining({ userId: USER.id, administeredOrgIds: ['orgA'] }),
         lake: expect.objectContaining({ id: 'lake1' }),
+        grants: [ownerGrant],
         action: 'update',
         changes: [{ field: 'name', kind: 'literal', before: GITHUB_LAKE_PLACEHOLDER_NAME, after: REPO.fullName }],
       }),
-      expect.anything()
+      expect.objectContaining({ logger })
     );
   });
 

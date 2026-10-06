@@ -6,13 +6,9 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import {
-  DataLakeModel,
-  DataLakeAccessGrantModel,
-  LakeConfigChangeEventModel,
-  dataLakeRepository,
-} from '@bike4mind/database';
+import { DataLakeModel, DataLakeAccessGrantModel, LakeConfigChangeEventModel } from '@bike4mind/database';
 import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
+import { nameLakeAfterRepository } from '@server/integrations/github/dataLake/githubLakeConnection';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -90,13 +86,16 @@ const makeRes = () => {
   const setCookies = () => [headers['set-cookie'] ?? []].flat().map(String);
   return { res: res as never, json, status, setCookies };
 };
-const makeReq = (body: Record<string, unknown>, userId = 'user-gh-connect') =>
+const makeReq = (body: Record<string, unknown>, userId = 'user-gh-connect', extra: Record<string, unknown> = {}) =>
   ({
     method: 'POST',
     body,
     user: { id: userId, isAdmin: false },
     logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+    ...extra,
   }) as never;
+const lakeIdOf = (json: ReturnType<typeof makeRes>['json']) =>
+  (json.mock.calls[0][0] as { dataLakeId: string }).dataLakeId;
 type Handler = (req: unknown, res: unknown) => Promise<void>;
 const run = (req: unknown, res: unknown, h_: unknown = handler) => (h_ as Handler)(req, res);
 
@@ -165,8 +164,60 @@ describe('POST /api/data-lakes/github-connect', () => {
     ['an empty organizationId', { organizationId: '  ' }],
   ])('refuses %s with a 400 before creating anything', async (_label, body) => {
     const { res } = makeRes();
-    await expect(run(makeReq(body), res)).rejects.toMatchObject({ name: 'ZodError' });
+    await expect(run(makeReq(body), res)).rejects.toMatchObject({ statusCode: 400 });
     expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
+  });
+
+  it('refuses an API-key caller with a 403 before creating anything', async () => {
+    const { res } = makeRes();
+    // Write-scoped, so the scope gate admits it and only the session-only refusal can stop it.
+    const req = makeReq({ organizationId: ORG }, 'user-gh-connect', {
+      apiKeyInfo: { keyId: 'key-1', scopes: ['datalake:write'] },
+    });
+    await expect(run(req, res)).rejects.toMatchObject({
+      statusCode: 403,
+      message: expect.stringMatching(/signed-in session/),
+    });
+    expect(await counts()).toEqual({ lakes: 0, grants: 0, audits: 0 });
+    expect(h.verifyOrgAccess).not.toHaveBeenCalled();
+  });
+
+  it("reuses the caller's unbound placeholder lake on a retried connect instead of inserting another", async () => {
+    const first = makeRes();
+    await run(makeReq({ organizationId: ORG }), first.res);
+    const second = makeRes();
+    await run(makeReq({ organizationId: ORG }), second.res);
+
+    expect(lakeIdOf(second.json)).toBe(lakeIdOf(first.json));
+    expect(await counts()).toEqual({ lakes: 1, grants: 1, audits: 1 });
+    const { authorizeUrl } = second.json.mock.calls[0][0] as { authorizeUrl: string };
+    expect(new URL(authorizeUrl).searchParams.get('state')).toBe(`state-for-${lakeIdOf(first.json)}`);
+  });
+
+  it.each([
+    ['started by another user', { createdByUserId: 'someone-else' }],
+    ['already bound (pending connector cleared)', { $unset: { pendingConnector: 1 } }],
+    ['renamed by the user', { name: 'My lake' }],
+    ['no longer a draft', { status: 'active' }],
+  ])('does not reuse a placeholder lake %s', async (_label, update) => {
+    const first = makeRes();
+    await run(makeReq({ organizationId: ORG }), first.res);
+    await DataLakeModel.updateOne({ _id: lakeIdOf(first.json) }, update);
+
+    const second = makeRes();
+    await run(makeReq({ organizationId: ORG }), second.res);
+    expect(lakeIdOf(second.json)).not.toBe(lakeIdOf(first.json));
+    expect(await DataLakeModel.countDocuments({})).toBe(2);
+  });
+
+  it('keeps a reused lake when the authorize URL cannot be minted', async () => {
+    const first = makeRes();
+    await run(makeReq({ organizationId: ORG }), first.res);
+    h.createStateToken.mockImplementation(() => {
+      throw new Error('JWT secret missing');
+    });
+    await expect(run(makeReq({ organizationId: ORG }), makeRes().res)).rejects.toThrow('JWT secret missing');
+    expect(await counts()).toEqual({ lakes: 1, grants: 1, audits: 1 });
   });
 
   it('refuses a caller who cannot manage the org before creating anything', async () => {
@@ -200,13 +251,23 @@ describe('POST /api/data-lakes/github-connect', () => {
 
     expect(await DataLakeModel.countDocuments({})).toBe(0);
     expect(await DataLakeAccessGrantModel.countDocuments({})).toBe(0);
+    const audits = await LakeConfigChangeEventModel.find({}).sort({ createdAt: 1, _id: 1 }).lean();
+    expect(audits.map(a => a.action)).toEqual(['create', 'delete']);
+    expect(new Set(audits.map(a => a.dataLakeId)).size).toBe(1);
+    expect(audits[1]).toMatchObject({ principalId: 'user-gh-connect' });
+    expect(audits[1].changes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'status', before: 'draft', after: 'deleted' })])
+    );
     expect(setCookies().some(c => c.includes('github-lake-connect=;') && c.includes('Max-Age=0'))).toBe(true);
   });
 
-  it('gives two concurrent connects in one org distinct lakes', async () => {
+  it('gives two users connecting concurrently in one org distinct lakes', async () => {
     const a = makeRes();
     const b = makeRes();
-    await Promise.all([run(makeReq({ organizationId: ORG }), a.res), run(makeReq({ organizationId: ORG }), b.res)]);
+    await Promise.all([
+      run(makeReq({ organizationId: ORG }, 'user-a'), a.res),
+      run(makeReq({ organizationId: ORG }, 'user-b'), b.res),
+    ]);
     const ids = [a.json, b.json].map(j => (j.mock.calls[0][0] as { dataLakeId: string }).dataLakeId);
     const lakes = await DataLakeModel.find({ _id: { $in: ids } }).lean();
     expect(lakes).toHaveLength(2);
@@ -214,28 +275,36 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(new Set(lakes.map(l => l.datalakeTag)).size).toBe(2);
   });
 
-  it('creates a lake the bind-time rename recognizes as still on its placeholder', async () => {
+  it('creates a lake the bind-time rename renames, stamps and audits', async () => {
     const { res, json } = makeRes();
     await run(makeReq({ organizationId: ORG }), res);
-    const { dataLakeId } = json.mock.calls[0][0] as { dataLakeId: string };
+    const dataLakeId = lakeIdOf(json);
     const created = await DataLakeModel.findById(dataLakeId).lean();
+    const logger = { warn: vi.fn() };
 
-    await dataLakeRepository.renameIfPlaceholderAndClearPending(dataLakeId, GITHUB_LAKE_PLACEHOLDER_NAME, 'acme/repo');
+    await nameLakeAfterRepository(dataLakeId, 'acme/repo', { id: 'binder-1', isAdmin: false }, logger);
 
     const bound = await DataLakeModel.findById(dataLakeId).lean();
     expect(bound?.name).toBe('acme/repo');
+    expect(bound?.lastUpdatedByUserId).toBe('binder-1');
     expect(bound).not.toHaveProperty('pendingConnector');
     expect(bound?.slug).toBe(created?.slug);
     expect(bound?.datalakeTag).toBe(created?.datalakeTag);
+    const update = await LakeConfigChangeEventModel.findOne({ dataLakeId, action: 'update' }).lean();
+    expect(update).toMatchObject({ principalId: 'binder-1', organizationId: ORG });
+    expect(update?.changes).toEqual([
+      expect.objectContaining({ field: 'name', before: GITHUB_LAKE_PLACEHOLDER_NAME, after: 'acme/repo' }),
+    ]);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('retries once with a fresh suffix when the first one collides', async () => {
     const suffixes = ['0000aaaa', '0000aaaa', '1111bbbb'];
     const collidingHandler = createGitHubConnectHandler(() => suffixes.shift()!);
-    await run(makeReq({ organizationId: ORG }), makeRes().res, collidingHandler);
+    await run(makeReq({ organizationId: ORG }, 'user-a'), makeRes().res, collidingHandler);
 
     const second = makeRes();
-    await run(makeReq({ organizationId: ORG }), second.res, collidingHandler);
+    await run(makeReq({ organizationId: ORG }, 'user-b'), second.res, collidingHandler);
     const { dataLakeId } = second.json.mock.calls[0][0] as { dataLakeId: string };
     expect((await DataLakeModel.findById(dataLakeId).lean())?.slug).toBe('github-repo-1111bbbb');
     expect(suffixes).toHaveLength(0);

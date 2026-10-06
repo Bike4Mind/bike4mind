@@ -1,9 +1,11 @@
 import type { Response } from 'express';
 import {
+  dataLakeAccessGrantRepository,
   dataLakeRepository,
   fabFileRepository,
   isGitHubLakeSyncClaimLive,
   orgGitHubLakeConnectionRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   GITHUB_LAKE_PLACEHOLDER_NAME,
@@ -428,7 +430,7 @@ export async function completeGitHubLakeConnection(params: {
 
   // The binding stands without it: a stale intent only feeds the finish-connect banner, which also
   // hides once a connection exists, and a lake left on the placeholder name can be renamed by hand.
-  await nameLakeAfterRepository(lakeId, repository.fullName, user).catch((error: unknown) =>
+  await nameLakeAfterRepository(lakeId, repository.fullName, user, logger).catch((error: unknown) =>
     logger.warn('GitHub lake connect: could not clear the pending connector or name the lake', {
       connectionId: connection.id,
       error: serializeError(error),
@@ -450,21 +452,34 @@ export async function completeGitHubLakeConnection(params: {
  * to the bound repository's owner/repo, and clears its pending connector either way. A lake the user
  * already renamed keeps its name; one they named exactly the placeholder is renamed too.
  */
-async function nameLakeAfterRepository(lakeId: string, repositoryFullName: string, user: LakeUser): Promise<void> {
+export async function nameLakeAfterRepository(
+  lakeId: string,
+  repositoryFullName: string,
+  user: LakeUser,
+  logger: Pick<Logger, 'warn'>
+): Promise<void> {
   const before = await dataLakeRepository.renameIfPlaceholderAndClearPending(
     lakeId,
     GITHUB_LAKE_PLACEHOLDER_NAME,
-    repositoryFullName
+    repositoryFullName,
+    { lastUpdatedByUserId: user.id }
   );
   if (!before) return;
+  // Same grant set and org-admin set the route-driven lake writes resolve, so the audit rung names
+  // the grant owner or org admin that made the bind rather than collapsing to creator/system.
+  const [grants, administeredOrgIds] = await Promise.all([
+    dataLakeService.loadActiveLakeGrants(before, { db: { dataLakeAccessGrants: dataLakeAccessGrantRepository } }),
+    user.isAdmin ? Promise.resolve([]) : organizationRepository.findIdsWithAdminRights(user.id),
+  ]);
   await dataLakeService.recordLakeConfigChange(
     {
-      actor: { userId: user.id, isAdmin: user.isAdmin, administeredOrgIds: [] },
+      actor: { userId: user.id, isAdmin: user.isAdmin, administeredOrgIds },
       lake: before,
+      grants,
       action: 'update',
       changes: dataLakeService.diffLakeConfig({ name: before.name }, { name: repositoryFullName }),
     },
-    { db: lakeConfigAuditDb }
+    { db: lakeConfigAuditDb, logger }
   );
 }
 

@@ -6,11 +6,18 @@ import { DATA_LAKE_WRITE_SCOPES, assertDataLakeWriteScope } from '@server/dataLa
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
-import { GITHUB_LAKE_PLACEHOLDER_NAME, type IDataLakeDocument } from '@bike4mind/common';
+import {
+  BadRequestError,
+  ForbiddenError,
+  GITHUB_LAKE_PLACEHOLDER_NAME,
+  HTTPError,
+  type IDataLakeDocument,
+} from '@bike4mind/common';
 import { getGitHubLakeAppConfig } from '@server/integrations/github/dataLake/lakeAppClient';
 import {
   buildGitHubLakeAuthorizeUrl,
   requireGitHubLakeAppConfig,
+  resolveConnectableLake,
 } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
@@ -62,16 +69,38 @@ async function createPendingGitHubLake(req: Request, organizationId: string, suf
 }
 
 /**
+ * The caller's earlier, still-unbound placeholder lake in this org, so a retried or abandoned connect
+ * does not pile up another one. Null when there is none or it can no longer take a connection.
+ */
+async function findReusablePendingLake(req: Request, organizationId: string): Promise<IDataLakeDocument | null> {
+  const lake = await dataLakeRepository.findPendingPlaceholderLake(
+    req.user.id,
+    organizationId,
+    'github',
+    GITHUB_LAKE_PLACEHOLDER_NAME
+  );
+  if (!lake) return null;
+  try {
+    // A bind whose best-effort pending-connector clear failed still matches the finder.
+    await resolveConnectableLake(req.user, lake.id);
+    return lake;
+  } catch (error) {
+    if (error instanceof HTTPError) return null;
+    throw error;
+  }
+}
+
+/**
  * Removes a lake this request just created when its connect never started. The lake is brand new
- * (no files, no connection), so the row and its owner grant are all there is; the `create` audit row
- * stays, as it does for every deleted lake, and ages out on the audit retention window.
+ * (no files, no connection), so the row and its owner grant are all there is. The audit history is
+ * append-only, so a `delete` event follows the `create` row instead of the row being removed.
  */
 async function rollBackPendingLake(req: Request, lake: IDataLakeDocument): Promise<void> {
-  const results = await Promise.allSettled([
+  const [lakeResult, grantResult] = await Promise.allSettled([
     dataLakeRepository.delete(lake.id),
     dataLakeAccessGrantRepository.removeAllForLake(lake.id),
   ]);
-  for (const result of results) {
+  for (const result of [lakeResult, grantResult]) {
     if (result.status === 'rejected') {
       req.logger.error('GitHub lake connect: could not roll back the pending lake', {
         dataLakeId: lake.id,
@@ -79,15 +108,31 @@ async function rollBackPendingLake(req: Request, lake: IDataLakeDocument): Promi
       });
     }
   }
+  if (lakeResult.status !== 'fulfilled') return;
+  await dataLakeService.recordLakeConfigChange(
+    {
+      actor: {
+        userId: req.user.id,
+        isAdmin: false,
+        administeredOrgIds: [],
+        auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
+      },
+      lake,
+      action: 'delete',
+      changes: dataLakeService.diffLakeConfig(lake, { ...lake, status: 'deleted' }),
+    },
+    { db: lakeConfigAuditDb, logger: req.logger }
+  );
 }
 
 /**
  * POST /api/data-lakes/github-connect { organizationId } -> { dataLakeId, authorizeUrl }
  *
  * Connector-first GitHub connect: creates an org lake (draft, connector-fed, placeholder name,
- * pendingConnector github) and starts the same connect as POST /api/data-lakes/:id/github-connection.
- * Every refusal (personal scope, non-manager, flag, missing App config) lands before the insert so a
- * refused request leaves nothing behind. Not an /api/v1 contract route: the flow is cookie-bound.
+ * pendingConnector github), or reuses the caller's own unbound one in that org, and starts the same
+ * connect as POST /api/data-lakes/:id/github-connection. Every refusal (API key, personal scope,
+ * non-manager, flag, missing App config) lands before the insert so a refused request leaves nothing
+ * behind. Session-only and not an /api/v1 contract route: the flow is bound to a browser nonce cookie.
  */
 export function createGitHubConnectHandler(suffix: () => string = newPlaceholderSuffix) {
   return baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
@@ -95,18 +140,27 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
     .use(requireFeatureEnabled('EnableDataLakeGitHub'))
     .post(async (req: Request, res: Response) => {
       assertDataLakeWriteScope(req);
-      const { organizationId } = Body.parse(req.body);
+      // An API key can never finish the connect (no browser to carry the nonce cookie back).
+      if (req.apiKeyInfo) {
+        throw new ForbiddenError('Connecting a GitHub repository requires a signed-in session, not an API key');
+      }
+      const body = Body.safeParse(req.body);
+      if (!body.success) {
+        throw new BadRequestError('organizationId is required: a GitHub data lake must belong to an organization');
+      }
+      const { organizationId } = body.data;
       await verifyOrgAccess(req.user, organizationId);
       const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
 
-      const lake = await createPendingGitHubLake(req, organizationId, suffix);
+      const reused = await findReusablePendingLake(req, organizationId);
+      const lake = reused ?? (await createPendingGitHubLake(req, organizationId, suffix));
       let authorizeUrl: string;
       try {
         authorizeUrl = buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lake.id });
       } catch (error) {
         // The nonce cookie is already on the response by the time the state token is signed.
         clearStateNonce(res, NONCE_SLOT.githubLakeConnect);
-        await rollBackPendingLake(req, lake);
+        if (!reused) await rollBackPendingLake(req, lake);
         throw error;
       }
       return res.json({ dataLakeId: lake.id, authorizeUrl });

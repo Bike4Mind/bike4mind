@@ -18,6 +18,7 @@ import type {
   BatchCompletionReason,
   BatchCounterField,
   AccessContext,
+  DataLakePendingConnector,
   DataLakeStatus,
   FindAccessibleArm,
   LakeSettleFields,
@@ -1247,15 +1248,32 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     await this.dataLakeModel.updateOne({ _id: id }, { $unset: { pendingConnector: 1 } });
   }
 
+  async findPendingPlaceholderLake(
+    userId: string,
+    organizationId: string,
+    connector: DataLakePendingConnector,
+    placeholder: string
+  ): Promise<IDataLakeDocument | null> {
+    if (!userId || !organizationId) return null;
+    return this.dataLakeModel.findOne({
+      createdByUserId: userId,
+      organizationId,
+      pendingConnector: connector,
+      name: placeholder,
+      status: 'draft',
+    });
+  }
+
   async renameIfPlaceholderAndClearPending(
     id: string,
     placeholder: string,
-    name: string
+    name: string,
+    extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}
   ): Promise<IDataLakeDocument | null> {
     // The name match is the guard: a rename the user made meanwhile is never overwritten.
     const renamed = await this.dataLakeModel.findOneAndUpdate(
       { _id: id, name: placeholder },
-      { $set: { name }, $unset: { pendingConnector: 1 } },
+      { $set: { name, ...extra }, $unset: { pendingConnector: 1 } },
       { new: false }
     );
     if (!renamed) await this.clearPendingConnector(id);
