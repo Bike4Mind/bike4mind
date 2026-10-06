@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -159,6 +159,37 @@ describe('useLakeGitHubConnection', () => {
   it('does not fetch without a lake id', () => {
     renderLakeGitHubConnection(undefined);
     expect(get).not.toHaveBeenCalled();
+  });
+});
+
+// The query data is { connection, canManage } while consumers read only the connection, so the poll
+// cadence has to key off `data.connection` - reading the wrapper would silently stop polling.
+describe('useLakeGitHubConnection polling', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('keeps polling an existing connection at the idle cadence', async () => {
+    get.mockResolvedValue({
+      data: { connection: { id: 'c1', status: 'connected', syncStale: false, disconnecting: false, fileCount: 1 } },
+    });
+    renderLakeGitHubConnection('lake1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(get).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(GITHUB_CONNECTION_IDLE_POLL_MS);
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not poll when the lake has no connection', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: false } });
+    renderLakeGitHubConnection('lake1');
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(GITHUB_CONNECTION_IDLE_POLL_MS * 3);
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });
 
