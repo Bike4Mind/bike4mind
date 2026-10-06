@@ -5,6 +5,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/commo
 const h = vi.hoisted(() => ({
   captured: {} as { get?: (req: unknown, res: unknown) => Promise<unknown> },
   previewDataLakeSlug: vi.fn(),
+  previewDataLakeTagPrefix: vi.fn(),
   findAccessibleById: vi.fn(),
   findOrgById: vi.fn(),
 }));
@@ -29,7 +30,9 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { tag: 'repo' },
   organizationRepository: { shareable: { findAccessibleById: h.findAccessibleById }, findById: h.findOrgById },
 }));
-vi.mock('@bike4mind/services', () => ({ dataLakeService: { previewDataLakeSlug: h.previewDataLakeSlug } }));
+vi.mock('@bike4mind/services', () => ({
+  dataLakeService: { previewDataLakeSlug: h.previewDataLakeSlug, previewDataLakeTagPrefix: h.previewDataLakeTagPrefix },
+}));
 
 import '../slug-preview';
 
@@ -46,6 +49,7 @@ const get = (
 
 beforeEach(() => {
   h.previewDataLakeSlug.mockReset().mockResolvedValue('vendor-contracts-1');
+  h.previewDataLakeTagPrefix.mockReset().mockImplementation(async (_db, base: string) => base.replace(/:$/, '-1:'));
   h.findAccessibleById
     .mockReset()
     .mockImplementation(async (_user: unknown, id: string) => (id === 'org-1' ? { id: 'org-1' } : null));
@@ -75,13 +79,43 @@ describe('GET /api/data-lakes/slug-preview', () => {
     expect(h.previewDataLakeSlug).not.toHaveBeenCalled();
   });
 
-  it('resolves the org like create and returns only the slug', async () => {
+  it('400s on a repeated tagPrefix', async () => {
+    await expect(get({ name: 'x-lake', tagPrefix: ['a:', 'b:'] }).done).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it("resolves the org like create and previews the name-derived prefix in the caller's scope", async () => {
     const { req, res, done } = get({ name: 'Vendor Contracts', organizationId: 'org-1' });
     await done;
 
     expect(h.findAccessibleById).toHaveBeenCalledWith(req.user, 'org-1');
     expect(h.previewDataLakeSlug).toHaveBeenCalledWith({ dataLakes: { tag: 'repo' } }, 'Vendor Contracts', 'org-1');
-    expect(res.json).toHaveBeenCalledWith({ slug: 'vendor-contracts-1' });
+    expect(h.previewDataLakeTagPrefix).toHaveBeenCalledWith({ dataLakes: { tag: 'repo' } }, 'vendor-contracts:', {
+      createdByUserId: 'u1',
+      organizationId: 'org-1',
+    });
+    expect(res.json).toHaveBeenCalledWith({ slug: 'vendor-contracts-1', tagPrefix: 'vendor-contracts-1:' });
+  });
+
+  it('judges a typed prefix in its submitted form', async () => {
+    const { res, done } = get({ name: 'Vendor Contracts', tagPrefix: ' legal ' });
+    await done;
+
+    expect(h.previewDataLakeTagPrefix.mock.calls[0][1]).toBe('legal:');
+    expect(res.json).toHaveBeenCalledWith({ slug: 'vendor-contracts-1', tagPrefix: 'legal-1:' });
+  });
+
+  it.each([
+    ['empty', { name: 'Vendor Contracts', tagPrefix: '' }],
+    ['reserved', { name: 'Vendor Contracts', tagPrefix: 'datalake:' }],
+    ['blank-segment', { name: 'Vendor Contracts', tagPrefix: 'a::' }],
+    ['over-long', { name: 'Vendor Contracts', tagPrefix: 'x'.repeat(200) }],
+    ['reserved name-derived', { name: 'Datalake' }],
+  ])('returns tagPrefix null for an unusable %s base, slug still previewed', async (_label, query) => {
+    const { res, done } = get(query);
+    await done;
+
+    expect(h.previewDataLakeTagPrefix).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ slug: 'vendor-contracts-1', tagPrefix: null });
   });
 
   it('previews in personal scope when no organizationId is sent', async () => {

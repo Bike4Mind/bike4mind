@@ -933,18 +933,18 @@ describe('useDataLakeSlugPreview', () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
-    return { queryClient, ...renderHook(() => useDataLakeSlugPreview(name, enabled), { wrapper }) };
+    return { queryClient, ...renderHook(() => useDataLakeSlugPreview(name, undefined, enabled), { wrapper }) };
   };
 
   beforeEach(() => {
-    apiGet.mockReset().mockResolvedValue({ data: { slug: 'slug-1' } });
+    apiGet.mockReset().mockResolvedValue({ data: { slug: 'slug-1', tagPrefix: 'vendor-1:' } });
   });
 
   it('sends the active org and caches under the org-keyed slug-preview key', async () => {
     account.selected = { id: 'org-1', personal: false };
     const { queryClient, result } = mount('Vendor Contracts');
 
-    await waitFor(() => expect(result.current.data).toBe('slug-1'));
+    await waitFor(() => expect(result.current.data).toEqual({ slug: 'slug-1', tagPrefix: 'vendor-1:' }));
     expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/slug-preview', {
       params: { name: 'Vendor Contracts', organizationId: 'org-1' },
     });
@@ -956,7 +956,7 @@ describe('useDataLakeSlugPreview', () => {
   it('omits organizationId entirely in personal scope', async () => {
     const { queryClient, result } = mount('Vendor Contracts');
 
-    await waitFor(() => expect(result.current.data).toBe('slug-1'));
+    await waitFor(() => expect(result.current.data).toEqual({ slug: 'slug-1', tagPrefix: 'vendor-1:' }));
     const params = apiGet.mock.calls[0][1].params as Record<string, unknown>;
     expect(params).toEqual({ name: 'Vendor Contracts' });
     expect('organizationId' in params).toBe(false);
