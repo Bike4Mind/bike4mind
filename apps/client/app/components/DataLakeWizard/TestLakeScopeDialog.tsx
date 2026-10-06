@@ -141,7 +141,13 @@ export function TestLakeScopeDialog({ anchorLakeId, onClose, onConfirm, confirmi
                     onChange={() => toggle(lake.id)}
                     data-testid={`test-lake-scope-checkbox-${lake.id}`}
                     label={
-                      <Stack direction="row" gap={0.5} alignItems="center">
+                      // Joy's checkbox action overlay (zIndex 1) covers the label and would swallow icon tooltip hovers.
+                      <Stack
+                        direction="row"
+                        gap={0.5}
+                        alignItems="center"
+                        sx={{ position: 'relative', zIndex: 2, cursor: 'pointer' }}
+                      >
                         <Typography level="body-sm">{lake.name}</Typography>
                         {lake.isOwn === false && (
                           <LakeOwnerIcon lake={lake} testId={`test-lake-scope-owner-icon-${lake.id}`} />
