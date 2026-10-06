@@ -156,14 +156,14 @@ describe('DataLakeTreeEmptyState - GitHub first sync', () => {
   const renderEmptyLake = (sourceLake = orgLake) =>
     wrap(<DataLakeTreeEmptyState variant="lake-empty" onAddFiles={vi.fn()} sourceLake={sourceLake} />);
 
-  it('says the repository is syncing, with progress, instead of offering to add files', () => {
+  it('says the repository is syncing, without repeating the source card progress, instead of offering to add files', () => {
     h.connection.current = gitHubConnection();
     renderEmptyLake();
 
     const empty = screen.getByTestId('datalake-tree-empty');
     expect(empty).toHaveAttribute('data-variant', 'github-syncing');
     expect(screen.getByTestId('datalake-tree-empty-github-syncing')).toHaveTextContent('Syncing acme/docs (main)');
-    expect(screen.getByTestId('github-sync-progress-count')).toHaveTextContent('4 of 10 files indexed');
+    expect(screen.queryByTestId('github-sync-progress')).toBeNull();
     expect(screen.queryByTestId('datalake-tree-empty-addfiles-btn')).toBeNull();
   });
 

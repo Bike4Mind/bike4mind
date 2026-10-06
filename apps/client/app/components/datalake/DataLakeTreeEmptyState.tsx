@@ -6,7 +6,6 @@ import { useState } from 'react';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
-import GitHubLakeSyncProgress from './GitHubLakeSyncProgress';
 import type { LakeSourceKind, LakeSourcePanelLake } from '@client/app/components/datalake/lakeSources';
 import ConnectSourceMenu from './ConnectSourceMenu';
 import LakeSourceConnectModal from './LakeSourceConnectModal';
@@ -84,6 +83,7 @@ export default function DataLakeTreeEmptyState({
   }[variant];
 
   // A connected repo's first files are still on their way: say so instead of offering to add files.
+  // The live count stays on the source card above (GitHubConnectAction), which shares this pane.
   if (watchGitHub && gitHubConnection?.status === 'syncing' && !gitHubConnection.syncStale) {
     return (
       <Box data-testid="datalake-tree-empty" data-variant="github-syncing" sx={EMPTY_STATE_SX}>
@@ -91,7 +91,9 @@ export default function DataLakeTreeEmptyState({
           Syncing {gitHubConnection.repositoryFullName}
           {gitHubConnection.defaultBranch && ` (${gitHubConnection.defaultBranch})`}
         </Typography>
-        <GitHubLakeSyncProgress connection={gitHubConnection} />
+        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+          Files appear here as they are indexed.
+        </Typography>
       </Box>
     );
   }
