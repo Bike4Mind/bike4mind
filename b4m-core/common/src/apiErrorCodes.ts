@@ -1,3 +1,5 @@
+export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
  * (CONVENTIONS.md section 1, "One error-code vocabulary").
@@ -15,6 +17,8 @@
  * local one.
  */
 export const API_ERROR_CODES = [
+  /** The user must revoke an active API key or wait for one to expire before minting another. */
+  API_KEY_USER_CAP_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */

@@ -8,10 +8,11 @@ import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetecti
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, MethodNotAllowedError } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@server/utils/config';
+import { createMethodGuard } from '@server/utils/allowedMethods';
 
 // Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
 registerToolGearObserver();
@@ -74,6 +75,34 @@ interface BaseAPIOptions {
    * who may call the route. Defaults to false.
    */
   meterAsKeyManagement?: boolean;
+  /**
+   * HTTP methods this route serves (GET implies HEAD). When set, any other method is answered
+   * 405 with an `Allow` header AHEAD of the auth chain, so a wrong verb is never misreported as
+   * a missing credential or scope. Omit to leave method matching to next-connect, whose
+   * no-match answer is a 404 that only fires after auth has already run.
+   */
+  allowedMethods?: readonly string[];
+}
+
+/** 405s any method outside `allowedMethods` (GET implies HEAD), setting `Allow`; passes the rest. */
+function methodGuard(allowedMethods: readonly string[]) {
+  const checkMethod = createMethodGuard(allowedMethods);
+  return (req: Request, res: Response, next: () => void) => {
+    const result = checkMethod(req.method);
+    if (result.allowed) return next();
+    res.setHeader('Allow', result.allowHeader);
+    throw new MethodNotAllowedError(result.message);
+  };
+}
+
+/**
+ * A handler that only ever answers 405, for a page that dispatches each method to its own
+ * contract router: those routers' `Allow` names only their own method, while this one names
+ * everything the path serves. It has no auth because it serves nothing - the dispatcher must
+ * route every listed method elsewhere.
+ */
+export function methodNotAllowedHandler(allowedMethods: readonly string[]) {
+  return nc<Request, Response>({ onError: errorHandler }).use(logging).all(methodGuard(allowedMethods));
 }
 
 /** Default max body size: 1MB - prevents memory exhaustion from large payloads */
@@ -137,6 +166,16 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     res.on('close', emit);
     next();
   });
+
+  // After logging (so the 405 body carries request_id), before the DB connect and every
+  // auth middleware.
+  const { allowedMethods } = resolvedOptions;
+  if (allowedMethods) {
+    // `all`, not `use`: next-connect 404s without running any middleware when only `use`
+    // handlers match the method, so a `use` guard is skipped on any route without a mounted
+    // auth sub-router (every `auth: false` route). An `all` handler matches every method.
+    router.all(methodGuard(allowedMethods));
+  }
 
   // Check request body size to prevent memory exhaustion
   router.use((req, res, next) => {

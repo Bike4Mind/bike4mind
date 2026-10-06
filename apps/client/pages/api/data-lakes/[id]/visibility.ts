@@ -2,7 +2,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { withTransaction, dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
+import {
+  withTransaction,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  orgGoogleDriveConnectionRepository,
+} from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
@@ -62,6 +67,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
           db: {
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            orgGoogleDriveConnections: orgGoogleDriveConnectionRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

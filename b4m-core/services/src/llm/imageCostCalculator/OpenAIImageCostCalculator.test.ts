@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { OMITTED_QUALITY_TIER, OpenAIImageCostCalculator } from './OpenAIImageCostCalculator';
-import { ImageModels } from '@bike4mind/common';
+import { ImageModels, OPENAI_IMAGE_MODELS } from '@bike4mind/common';
 
 describe('OpenAIImageCostCalculator', () => {
   const calculator = new OpenAIImageCostCalculator();
@@ -61,6 +61,42 @@ describe('OpenAIImageCostCalculator', () => {
     });
   });
 
+  describe('gpt-image-2.5', () => {
+    const models = [ImageModels.GPT_IMAGE_2_5_SUNBURST, ImageModels.GPT_IMAGE_2_5_FLARE] as const;
+
+    // Expected values follow OpenAI's published output-token formula at $30/1M.
+    it.each(models)('prices every %s tier, including xhigh and max, from its own table', model => {
+      expect(calculator.getCost({ model, quality: 'low', size: '1024x1024' })).toBe(0.00588);
+      expect(calculator.getCost({ model, quality: 'medium', size: '1024x1024' })).toBe(0.01317);
+      expect(calculator.getCost({ model, quality: 'high', size: '1536x1024' })).toBe(0.04116);
+      expect(calculator.getCost({ model, quality: 'xhigh', size: '1024x1536' })).toBe(0.07377);
+      expect(calculator.getCost({ model, quality: 'max', size: '1024x1024' })).toBe(0.21072);
+    });
+
+    it.each(models)("bills 'auto' on %s at its max ceiling, not gpt-image-2's high", model => {
+      expect(calculator.getCost({ model, quality: 'auto', size: '1024x1024' })).toBe(0.21072);
+    });
+
+    it.each(['gpt-image-2.5-sunburst-2026-09-08', 'gpt-image-2.5-flare-2026-09-08'])(
+      'prices the dated snapshot %s from the 2.5 table, not gpt-image-2',
+      model => {
+        expect(calculator.getCost({ model, quality: 'medium', size: '1024x1024' })).toBe(0.01317);
+        expect(calculator.getCost({ model, quality: 'max', size: '1024x1024' })).toBe(0.21072);
+      }
+    );
+  });
+
+  describe('xhigh/max on a model without them', () => {
+    it.each([ImageModels.GPT_IMAGE_2, ImageModels.GPT_IMAGE_1_5, 'gpt-image-2-2026-04-21'])(
+      'bills %s at its high tier',
+      model => {
+        const high = calculator.getCost({ model, quality: 'high', size: '1024x1024' });
+        expect(calculator.getCost({ model, quality: 'xhigh', size: '1024x1024' })).toBe(high);
+        expect(calculator.getCost({ model, quality: 'max', size: '1024x1024' })).toBe(high);
+      }
+    );
+  });
+
   describe('gpt-image-2', () => {
     it('returns correct price for low quality 1024x1024', () => {
       expect(calculator.getCost({ model: ImageModels.GPT_IMAGE_2, quality: 'low', size: '1024x1024' })).toBe(0.006);
@@ -109,6 +145,8 @@ describe('OpenAIImageCostCalculator', () => {
       { model: ImageModels.GPT_IMAGE_1_5, expectedMedium1024: 0.034 },
       { model: ImageModels.GPT_IMAGE_1_MINI, expectedMedium1024: 0.011 },
       { model: ImageModels.GPT_IMAGE_2, expectedMedium1024: 0.053 },
+      { model: ImageModels.GPT_IMAGE_2_5_SUNBURST, expectedMedium1024: 0.01317 },
+      { model: ImageModels.GPT_IMAGE_2_5_FLARE, expectedMedium1024: 0.01317 },
     ] as const;
 
     for (const { model, expectedMedium1024 } of models) {
@@ -185,14 +223,8 @@ describe('OpenAIImageCostCalculator', () => {
   // here, so the render matches the charge. OMITTED_QUALITY_TIER is the single value both
   // halves read; these fail if the price and the pin are ever edited apart.
   describe('omitted quality is priced at OMITTED_QUALITY_TIER', () => {
-    const models = [
-      ImageModels.GPT_IMAGE_1,
-      ImageModels.GPT_IMAGE_1_5,
-      ImageModels.GPT_IMAGE_1_MINI,
-      ImageModels.GPT_IMAGE_2,
-    ] as const;
-
-    for (const model of models) {
+    // Every registered OpenAI image model, so one added without a price row fails here.
+    for (const model of OPENAI_IMAGE_MODELS) {
       describe(model, () => {
         it.each(['1024x1024', '1024x1536', '1536x1024'] as const)(
           'charges an omitted quality exactly what the pinned tier costs at %s',

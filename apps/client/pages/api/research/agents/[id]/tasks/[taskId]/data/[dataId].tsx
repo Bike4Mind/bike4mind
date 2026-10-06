@@ -8,7 +8,6 @@ import {
   FabFile,
   FabFileChunk,
   fabFileRepository,
-  organizationRepository,
   researchAgentRepository,
   researchDataRepository,
   Session,
@@ -61,7 +60,6 @@ const handler = baseApi({ auth: true }).delete(
               await userRepository.incrementCurrentStorage(userId, count);
             },
           },
-          organizations: organizationRepository,
           sessions: {
             update: async session => {
               return await sessionRepository.update(session);

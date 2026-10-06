@@ -174,8 +174,9 @@ export async function runChunkRescueSweep({
  * left to gate - and separately capped, see buildStrandedVectorizeScanFilter. Returns the SENT
  * count, so a partially-failing tick is distinguishable from a clean one.
  *
- * MUST STAY IN SYNC with `rescueStrandedVectorizeFiles` in server/cron/dataLakeBatchReconcile.ts -
- * the hosted deployment has no self-host worker and drives the same sweep off its daily SST cron.
+ * MUST STAY IN SYNC with `rescueStrandedVectorizeFiles` in
+ * apps/workers/src/cron/dataLakeBatchReconcile.ts - the hosted deployment has no self-host worker
+ * and drives the same sweep off its daily SST cron.
  * Their run budgets are meant to differ; nothing else is, so a behavioural change to one belongs in
  * both. Same split, and same reason, as runChunkRescueSweep and its hosted twin above.
  */

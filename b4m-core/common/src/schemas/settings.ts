@@ -128,6 +128,8 @@ SHARING A REACT ARTIFACT (publishing to a /p/ link): the in-chat preview is perm
 - File downloads are sandbox-blocked on the published page (no allow-downloads) - \`XLSX.writeFile\`/save-to-disk buttons won't fire; render results in the page (a table, inline preview) instead of offering a download.
 - Only the importable packages above publish; importing anything else fails the publish with a clear "not publishable yet" error.
 
+PYTHON ARTIFACTS: application/vnd.ant.python runs in the browser on Pyodide (Python 3.11, WebAssembly) with no network - packages cannot be installed from PyPI. Available: the Python standard library plus the packages bundled with Pyodide, including numpy, pandas, matplotlib, scipy (including scipy.optimize.milp for mixed-integer linear programs, HiGHS-backed, and scipy.optimize.linprog), scikit-learn, statsmodels, sympy and networkx; they load automatically from the imports. NOT available: seaborn (plot with matplotlib), and native/compiled solver packages such as highspy, gurobipy, cplex, ortools and pulp - for LP/MILP use scipy.optimize.milp or linprog. Output is what the script prints plus any open matplotlib figures, which are captured automatically; there is no input(), file system persistence or GUI.
+
 COMPLETENESS (artifact bodies only - see SCOPE): Deliver the full artifact - favor completeness over brevity; trim only genuine bloat (boilerplate, dead code, repetition), never requested scope. Only when a deliverable is genuinely too large for one response, build it incrementally: ship a complete first version, then expand under the SAME identifier rather than letting it get cut off mid-tag. Always emit the closing </artifact>.
 
 NEVER ABBREVIATE THE BODY - THIS IS THE MOST DAMAGING FAILURE YOU CAN PRODUCE HERE: every function the artifact needs must be written out in full, every time, even when you already wrote it in an earlier turn. An artifact whose logic is replaced by a summary comment still parses and still renders a complete-looking UI whose controls silently do nothing - the user cannot see the difference, ships it, and only finds out when a teammate clicks a dead button. That is far worse than an obviously unfinished artifact. Specifically FORBIDDEN as artifact body content, in any comment form: "same as above", "same as before", "identical to previous", "from the previous version", "for brevity" and any padded variant of it ("for the sake of brevity", "in the interest of brevity"), "omitted", "unchanged", "rest of the ...", "<rest of the code>", "code goes here", "implementation here", "[...]", or any comment that stands in for code you wrote previously or intend the reader to copy from elsewhere. Equally forbidden inside the artifact: anything addressed to the reader rather than to the runtime - asking them to reply "CONTINUE", pointing at a "next response", or promising in the first person what you are about to write ("I will include the remaining 84 entries"). The artifact is a standalone document; it has no next turn. Re-emitting the same 300 lines verbatim is CORRECT and expected; referring to them is not.
@@ -537,6 +539,9 @@ export const SettingKeySchema = z.enum([
 
   // AGENT ORCHESTRATION DEFAULTS
   'orchestrationDefaults',
+
+  // VIDEO GENERATION
+  'videoGeneration',
 
   // MODEL DISCOVERY (live model registry)
   'enableModelDiscovery',
@@ -1077,6 +1082,13 @@ export const RapidReplySettingsSchema = z.object({
 });
 
 export type RapidReplySettings = z.infer<typeof RapidReplySettingsSchema>;
+
+export const VideoGenerationSettingsSchema = z.object({
+  // Per-model override of VIDEO_MODEL_CATALOG[id].defaultEnabled; see isVideoModelEnabled in ../video/enablement.
+  enabledModels: z.record(z.string(), z.boolean()).prefault({}),
+});
+
+export type VideoGenerationSettings = z.infer<typeof VideoGenerationSettingsSchema>;
 
 /**
  * Canonical repository and branch the What's New generator reads from.
@@ -3228,7 +3240,7 @@ export const settingsMap = {
     name: 'Web Search Provider',
     defaultValue: 'auto',
     description:
-      'Which backend the web_search tool uses. "auto" prefers a configured local SearXNG instance, then falls back to the Serp Search API. "serpapi" or "searxng" force that provider.',
+      'Which backend leads the web_search tool. "auto" leads with the Serp Search API when a key is set, else a configured SearXNG instance; "serpapi" or "searxng" lead with that provider. When both are configured, the other one is started as a backup if the lead fails, comes back empty, or has not answered within a few seconds, and the first non-empty answer wins. To use one provider only, leave the other unconfigured.',
     options: ['auto', 'serpapi', 'searxng'],
     category: 'Tools',
     group: API_SERVICE_GROUPS.SEARCH.id,
@@ -4764,6 +4776,17 @@ export const settingsMap = {
     category: 'AI',
     order: 140,
     schema: OrchestrationDefaultsSchema,
+  }),
+  videoGeneration: makeObjectSetting({
+    key: 'videoGeneration',
+    userReadable: true,
+    name: 'Video Generation',
+    defaultValue: VideoGenerationSettingsSchema.parse({}),
+    description:
+      'Enable or disable individual video generation models. Models without an override use their built-in default.',
+    category: 'AI',
+    order: 145,
+    schema: VideoGenerationSettingsSchema,
   }),
   enableModelDiscovery: makeBooleanSetting({
     key: 'enableModelDiscovery',

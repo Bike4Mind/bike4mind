@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { GENERIC_MODAL_API_KEY_SCOPES, DEDICATED_FLOW_SCOPES } from '@client/app/constants/apiKeyScopes';
-import { API_REFERENCE_CONTENT, renderScopeTableRows } from './apiReferenceContent';
+import { getApiReferenceContent, renderScopeTableRows } from './apiReferenceContent';
+
+const API_REFERENCE_CONTENT = getApiReferenceContent('https://b4m.test');
 
 const scopesSection = (): string => {
   const start = API_REFERENCE_CONTENT.indexOf('### Scopes');
@@ -43,5 +45,13 @@ describe('API reference scopes table', () => {
     for (const row of renderScopeTableRows().split('\n')) {
       expect(row.replaceAll('\\|', '').split('|')).toHaveLength(4);
     }
+  });
+});
+
+describe('API reference base URL', () => {
+  it('uses the given origin in place of a placeholder host', () => {
+    expect(API_REFERENCE_CONTENT).toContain('served from `https://b4m.test`');
+    expect(API_REFERENCE_CONTENT).toContain('curl -i -X POST https://b4m.test/api/chat');
+    expect(API_REFERENCE_CONTENT).not.toContain('https://your-deployment.example.com');
   });
 });

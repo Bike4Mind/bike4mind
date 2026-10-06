@@ -627,4 +627,7 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * data-lake spend view.
    */
   lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
+
+  /** Lifetime USD COGS of research spend attributed to one data lake (feature: 'operations'). */
+  lakeResearchLifetimeUsd(dataLakeId: string): Promise<number>;
 }

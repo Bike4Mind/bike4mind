@@ -56,6 +56,13 @@ export function redactSessionForClient<T extends Partial<ISession>>(
   for (const field of SERVER_OWNED_SESSION_FIELDS) {
     delete clientSession[field];
   }
+  // origin.channel is display data the sidebar reads; origin.apiKeyId names the creating key and
+  // is stripped like a server-owned field. Copied, not mutated, for the same reason as above.
+  const origin = clientSession.origin as Record<string, unknown> | null | undefined;
+  if (origin && typeof origin === 'object' && 'apiKeyId' in origin) {
+    const { apiKeyId: _apiKeyId, ...publicOrigin } = origin;
+    clientSession.origin = publicOrigin;
+  }
   return clientSession as ClientSession<T>;
 }
 

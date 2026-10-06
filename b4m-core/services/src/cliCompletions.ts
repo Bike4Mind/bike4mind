@@ -62,6 +62,7 @@ export interface CompletionParams {
      * b4m-core/common/src/schemas/cliCompletions.ts.
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
+    reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
   };
   /**
    * Server-side executable tools (each carries a live toolFn). When present, the backend
@@ -314,6 +315,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       ? { _internal: { maxToolCalls: params.maxToolCalls } }
       : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+    ...(options?.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
   };
 

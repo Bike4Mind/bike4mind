@@ -53,6 +53,8 @@ export default function DataLakeWizardModal() {
   const deriveTagPrefixFromName = useDataLakeWizardStore(s => s.deriveTagPrefixFromName);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
   const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
+  const uploadStatus = useDataLakeWizardStore(s => s.uploadProgress.status);
+  const hideFooter = step === 'upload' && uploadStatus === 'complete';
 
   const batchUpload = useBatchUpload();
   const createLakeFromDrive = useCreateLakeFromDrive();
@@ -241,52 +243,55 @@ export default function DataLakeWizardModal() {
         <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>{renderStep()}</Box>
 
         {/* Footer */}
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          sx={{
-            px: 3,
-            py: 2,
-            borderTop: '1px solid',
-            borderColor: 'divider',
-          }}
-        >
-          <Button variant="plain" color="neutral" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Stack direction="row" gap={1}>
-            {canGoBack && (
-              <Button variant="outlined" color="neutral" onClick={handleBack}>
-                Back
-              </Button>
-            )}
-            {step === 'config' ? (
-              <Button
-                // One commit button, two labels: the testid is deliberately unchanged so every
-                // existing selector still finds the wizard's primary action.
-                data-testid="wizard-start-upload-btn"
-                variant="solid"
-                color="success"
-                disabled={!canGoNext || commit.isPending}
-                loading={commit.isPending}
-                onClick={handleCommit}
-              >
-                {/* Nothing is uploaded on the Drive-only path, so don't call it an upload. */}
-                {isDriveOnlyCommit ? 'Create and sync' : 'Start Upload'}
-              </Button>
-            ) : step !== 'upload' ? (
-              <Button
-                data-testid="wizard-next-btn"
-                variant="solid"
-                color="primary"
-                disabled={!canGoNext}
-                onClick={handleNext}
-              >
-                Next
-              </Button>
-            ) : null}
+        {!hideFooter && (
+          <Stack
+            data-testid="wizard-footer"
+            direction="row"
+            justifyContent="space-between"
+            sx={{
+              px: 3,
+              py: 2,
+              borderTop: '1px solid',
+              borderColor: 'divider',
+            }}
+          >
+            <Button variant="plain" color="neutral" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Stack direction="row" gap={1}>
+              {canGoBack && (
+                <Button variant="outlined" color="neutral" onClick={handleBack}>
+                  Back
+                </Button>
+              )}
+              {step === 'config' ? (
+                <Button
+                  // One commit button, two labels: the testid is deliberately unchanged so every
+                  // existing selector still finds the wizard's primary action.
+                  data-testid="wizard-start-upload-btn"
+                  variant="solid"
+                  color="success"
+                  disabled={!canGoNext || commit.isPending}
+                  loading={commit.isPending}
+                  onClick={handleCommit}
+                >
+                  {/* Nothing is uploaded on the Drive-only path, so don't call it an upload. */}
+                  {isDriveOnlyCommit ? 'Create and sync' : 'Start Upload'}
+                </Button>
+              ) : step !== 'upload' ? (
+                <Button
+                  data-testid="wizard-next-btn"
+                  variant="solid"
+                  color="primary"
+                  disabled={!canGoNext}
+                  onClick={handleNext}
+                >
+                  Next
+                </Button>
+              ) : null}
+            </Stack>
           </Stack>
-        </Stack>
+        )}
       </ModalDialog>
     </Modal>
   );

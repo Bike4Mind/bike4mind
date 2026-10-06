@@ -874,6 +874,37 @@ export class OpenAIBackend implements ICompletionBackend {
         releaseDate: '2026-04-21',
       },
       {
+        id: ImageModels.GPT_IMAGE_2_5_SUNBURST,
+        type: 'image',
+        name: 'GPT-Image-2.5 Sunburst',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 8 / 1000000, output: 30 / 1000000 }, // Same token rates as GPT-Image-2
+        },
+        description:
+          "OpenAI GPT-Image-2.5 Sunburst - OpenAI's most capable image generation and editing model, best where editing precision matters most.",
+        rank: 6,
+        releaseDate: '2026-09-08',
+      },
+      {
+        id: ImageModels.GPT_IMAGE_2_5_FLARE,
+        type: 'image',
+        name: 'GPT-Image-2.5 Flare',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 10000,
+        supportsImageVariation: true,
+        max_tokens: 10000,
+        pricing: {
+          1: { input: 8 / 1000000, output: 30 / 1000000 }, // Same token rates as GPT-Image-2
+        },
+        description: 'OpenAI GPT-Image-2.5 Flare - Fast, high-quality everyday image generation and editing.',
+        rank: 7,
+        releaseDate: '2026-09-08',
+      },
+      {
         id: ImageModels.GPT_IMAGE_1_MINI,
         type: 'image',
         name: 'GPT-Image-1 Mini',

@@ -5,11 +5,13 @@ import {
   ApiKeyScope,
   COMPLETION_SOURCES,
   CreditHolderType,
+  isApiKeyCompletionSource,
   type IPlatformEndpointUsage,
   type IPlatformUsageDashboardResponse,
   type NamedPlatformConsumerUsage,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
+import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -34,7 +36,8 @@ const QuerySchema = z.object({
  * view. Two intentionally distinct sections:
  *  - UsageEvent-derived (feature/COGS/credits/tokens), source- and
  *    ownerType-filterable, with API-key consumers resolved to key/owner labels.
- *  - ApiKeyUsageLog-derived endpoint/latency (request counts only, no credits).
+ *  - ApiKeyUsageLog-derived endpoint/latency (request counts only, no credits),
+ *    filtered by the source/ownerType stamped on each log row at request time.
  * Admin-only.
  *
  * requiredScopes gates the API-key path only: apiKeyAuth 403s an under-scoped key
@@ -55,13 +58,13 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   // ApiKeyUsageLog logs only api/cli (API-key) traffic; a web/agent/system filter
   // has no endpoint data by construction, so skip that section rather than imply
   // it's empty for a real reason. Window is clamped to the collection's TTL.
-  const endpointSourceApplies = !source || source === 'api' || source === 'cli';
+  const endpointSourceApplies = !source || isApiKeyCompletionSource(source);
   const endpointWindowDays = Math.min(days, ENDPOINT_TTL_DAYS);
 
   const [summary, endpoints] = await Promise.all([
     usageEventRepository.platformUsageSummary({ days, source, ownerType }),
     endpointSourceApplies
-      ? apiKeyUsageLogRepository.platformEndpointUsage({ days: endpointWindowDays })
+      ? apiKeyUsageLogRepository.platformEndpointUsage({ days: endpointWindowDays, source, ownerType })
       : Promise.resolve<IPlatformEndpointUsage | null>(null),
   ]);
 
@@ -72,7 +75,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req,
   const keyById = new Map(
     keys.map(k => {
       // Org-billed keys attribute to the org pool; personal keys to the user.
-      const billsOrg = k.billingOwnerType === CreditHolderType.Organization && !!k.organizationId;
+      const billsOrg = resolveApiKeyOwnerType(k) === CreditHolderType.Organization;
       return [
         String(k.id),
         {

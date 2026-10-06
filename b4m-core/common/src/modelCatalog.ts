@@ -188,6 +188,17 @@ function fromThinkingStyle(style: ModelInfo['thinkingStyle']): ReasoningStyle {
 /** Who makes the model, when the id namespace says so: [region.]<vendor>.<model>. */
 const BEDROCK_REGION_PREFIX = /^(us|eu|apac|global)\./;
 
+/**
+ * The foundation-model id behind a Bedrock inference-profile id, or null when the
+ * id carries no region prefix. `ListFoundationModels` lists bare foundation ids
+ * (`anthropic.claude-sonnet-4-6`) only; a cross-region inference profile
+ * (`us.`/`eu.`/`apac.`/`global.`) is a separate id that listing never mentions, so
+ * discovery has to sight a profile id through the foundation id it is built from.
+ */
+export function bedrockFoundationIdOf(modelId: string): string | null {
+  return BEDROCK_REGION_PREFIX.test(modelId) ? modelId.replace(BEDROCK_REGION_PREFIX, '') : null;
+}
+
 const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
   [ModelBackend.OpenAI]: 'openai',
   [ModelBackend.Anthropic]: 'anthropic',

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Logger } from '@bike4mind/observability';
 import type { AgentResult } from '../../types';
 import type { Charter, DriveVector } from '../schemas';
-import { agentResultToActResult, createReActRunAct } from './reactAct';
+import { agentResultToActResult, applyAgentToolPolicy, createReActRunAct } from './reactAct';
 import type { ActContext } from './types';
 import { resolveToolbeltProfile, DEFAULT_TOOLBELT_ROLE } from './toolbelts';
 
@@ -280,5 +280,40 @@ describe('createReActRunAct sandbox wiring', () => {
     await runAct();
 
     expect(mockSessionDispose).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAgentToolPolicy - data lake pairing', () => {
+  const SAVE = 'save_content_to_data_lake';
+
+  it('pairs only list with save: a mission act has no approval gate for create', () => {
+    const expected = ['web_search', SAVE, 'list_my_data_lakes'];
+    expect(applyAgentToolPolicy(['web_search', SAVE])).toEqual(expected);
+    expect(applyAgentToolPolicy(['web_search', SAVE], { deniedTools: ['bash_execute'] })).toEqual(expected);
+  });
+
+  it('keeps create when the profile names it itself', () => {
+    expect(applyAgentToolPolicy([SAVE, 'create_data_lake'])).toEqual([SAVE, 'create_data_lake', 'list_my_data_lakes']);
+  });
+
+  it('never pairs a companion past the linked agent whitelist', () => {
+    expect(applyAgentToolPolicy(['web_search', SAVE], { allowedTools: ['web_search', SAVE] })).toEqual([
+      'web_search',
+      SAVE,
+    ]);
+    expect(applyAgentToolPolicy([SAVE], { allowedTools: [SAVE, 'list_my_data_lakes', 'create_data_lake'] })).toEqual([
+      SAVE,
+      'list_my_data_lakes',
+    ]);
+  });
+
+  it('keeps a denied companion denied and pairs nothing when save is denied or not allowed', () => {
+    expect(applyAgentToolPolicy([SAVE], { deniedTools: ['list_my_data_lakes'] })).toEqual([SAVE]);
+    expect(applyAgentToolPolicy(['web_search', SAVE], { deniedTools: [SAVE] })).toEqual(['web_search']);
+    expect(applyAgentToolPolicy(['web_search', SAVE], { allowedTools: ['web_search'] })).toEqual(['web_search']);
+  });
+
+  it('leaves a profile without save unchanged', () => {
+    expect(applyAgentToolPolicy(['web_search', 'web_fetch'], {})).toEqual(['web_search', 'web_fetch']);
   });
 });

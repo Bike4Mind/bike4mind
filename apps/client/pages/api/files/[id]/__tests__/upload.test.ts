@@ -2,14 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsMap } from '@bike4mind/common';
 import type { Request, Response } from 'express';
 
-const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock } = vi.hoisted(() => ({
+const { findByIdMock, uploadMock, getSettingsValueMock, recomputeUploadedMock, scopeGate } = vi.hoisted(() => ({
   findByIdMock: vi.fn(),
   uploadMock: vi.fn(),
   getSettingsValueMock: vi.fn(),
   recomputeUploadedMock: vi.fn(),
+  scopeGate: { baseApiOptions: undefined as unknown },
 }));
 
-vi.mock('@server/middlewares/baseApi', () => ({ baseApi: () => ({ put: (h: unknown) => h }) }));
+vi.mock('@server/middlewares/baseApi', () => ({
+  baseApi: (options: unknown) => {
+    scopeGate.baseApiOptions = options;
+    return { put: (h: unknown) => h };
+  },
+}));
 vi.mock('@bike4mind/database', () => ({ FabFile: { findById: findByIdMock }, adminSettingsRepository: {} }));
 vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn(async () => ({})),
@@ -201,5 +207,9 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
 
     expect(fabFile.status).toBe('pending');
     expect(fabFile.save).not.toHaveBeenCalled();
+  });
+
+  it('requires files:write at the baseApi route gate', () => {
+    expect(scopeGate.baseApiOptions).toEqual(expect.objectContaining({ requiredScopes: ['files:write'] }));
   });
 });

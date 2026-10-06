@@ -49,6 +49,7 @@ import {
   usdToCredits as realUsdToCredits,
   PREFLIGHT_RESERVATION_OUTPUT_TOKENS,
   PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  REPLY_CHOICES_GUIDANCE,
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
@@ -254,7 +255,12 @@ describe('ChatCompletionProcess', () => {
         update: vi.fn(),
         attachAgent: vi.fn().mockResolvedValue(mockSession),
       },
-      organizations: { findById: vi.fn(), update: vi.fn(), findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      organizations: {
+        findById: vi.fn(),
+        update: vi.fn(),
+        findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+        findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+      },
       quests: {
         findById: vi.fn().mockResolvedValue(mockQuest),
         findByIdWithStatus: vi.fn().mockResolvedValue(mockQuest),
@@ -3075,7 +3081,10 @@ describe('ChatCompletionProcess', () => {
           replies: ['Hello from fallback'],
           status: 'done',
           type: 'message',
-          fallbackInfo: expect.objectContaining({ fallbackModel: 'claude-opus-4-8' }),
+          fallbackInfo: expect.objectContaining({
+            fallbackModel: 'claude-opus-4-8',
+            reason: 'ServiceUnavailableException: Bedrock is unable to process your request',
+          }),
         })
       );
 
@@ -3088,6 +3097,354 @@ describe('ChatCompletionProcess', () => {
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
       expect(tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+    });
+
+    it('saves a turn that switched models and still failed without claiming the fallback answered', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: primary down')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        complete: vi.fn().mockRejectedValue(new Error('ServiceUnavailableException: fallback down too')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback
+        .mockResolvedValueOnce({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any)
+        .mockResolvedValue(null);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger }).catch(() => {});
+
+      expect(fallbackBackend.complete).toHaveBeenCalled();
+      const errorSave = mockDb.quests.update.mock.calls.findLast(([arg]: [any]) => arg?.type === 'error');
+      expect(errorSave).toBeDefined();
+      expect(errorSave[0].fallbackInfo).toBeNull();
+    });
+
+    // An aborted backend resolves rather than throws, so a Stop pressed after the fallback
+    // hop was selected but before it streamed anything reaches the success path (not the
+    // error catch) with status 'stopped' and no visible reply. That path must clear
+    // fallbackInfo too, or the turn is saved claiming an answer it never gave.
+    it('clears fallbackInfo when the fallback attempt is stopped before it streams anything', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockRejectedValue(new Error('ServiceUnavailableException: Bedrock is unable to process your request')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        // Mirrors "keeps a user-stopped quest as stopped when the aborted backend resolves
+        // normally": the user Stop persists 'stopped', the cancellation watcher sees it and
+        // aborts, and the backend resolves (not throws) with nothing streamed.
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts) => {
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(fallbackBackend.complete).toHaveBeenCalled();
+      expect(mockQuest.status).toBe('stopped');
+      expect(mockQuest.fallbackInfo).toBeNull();
+    });
+
+    // A fallback hop can run to completion (status 'done', not 'stopped') and still answer
+    // nothing visible - an unterminated <think> block, or output cut by max_tokens before any
+    // prose. The stopped-only clear misses this: it must also clear on a 'done' turn that has
+    // no visible text and produced no non-text deliverable, or the turn is saved claiming an
+    // answer it never gave.
+    it('clears fallbackInfo when the fallback attempt ends done but streamed only hidden reasoning', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi
+          .fn()
+          .mockRejectedValue(new Error('ServiceUnavailableException: Bedrock is unable to process your request')),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        // Streams an unterminated thinking block only - chunks arrive but nothing renders,
+        // and the call resolves normally (a real 'done' turn, not an abort).
+        complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['<think>reasoning that never closes'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(fallbackBackend.complete).toHaveBeenCalled();
+      expect(mockQuest.status).toBe('done');
+      expect(mockQuest.fallbackInfo).toBeNull();
+    });
+
+    // The abort can also reject instead of resolve. Both paths share one rule: the badge
+    // survives only if the fallback hop left a visible answer behind.
+    describe.each([
+      { label: 'streamed nothing', streamed: undefined, expected: null },
+      { label: 'streamed visible prose', streamed: 'Partial fallback answer', expected: 'set' },
+    ])('when the fallback attempt rejects with an abort after a user Stop and $label', ({ streamed, expected }) => {
+      it(`ends stopped with fallbackInfo ${expected === null ? 'cleared' : 'kept'}`, async () => {
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedCalculateTotalTokenLength.mockResolvedValue(80);
+        mockTokenizer.countTokens.mockResolvedValue(40);
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi
+            .fn()
+            .mockRejectedValue(new Error('ServiceUnavailableException: Bedrock is unable to process your request')),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        const fallbackModel = {
+          id: 'claude-opus-4-8',
+          type: 'text' as const,
+          name: 'Claude Opus 4.8',
+          backend: ModelBackend.Anthropic,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: true,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        };
+        const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+        const fallbackBackend = {
+          complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            if (streamed) await cb([streamed], { inputTokens: 100, outputTokens: 50 });
+            mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+            throw abort;
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: 'claude-opus-4-8',
+        };
+        mockedGetLlmWithFallback.mockResolvedValue({
+          model: fallbackModel,
+          backend: fallbackBackend,
+          attempt: 1,
+        } as any);
+
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        await service.process({ body, logger: mockLogger });
+
+        expect(fallbackBackend.complete).toHaveBeenCalled();
+        expect(mockQuest.status).toBe('stopped');
+        if (expected === null) {
+          expect(mockQuest.fallbackInfo).toBeNull();
+        } else {
+          expect(mockQuest.fallbackInfo).toMatchObject({ fallbackModel: 'claude-opus-4-8' });
+        }
+      });
+    });
+
+    it('clears fallbackInfo when only the failed primary produced an image and the fallback streamed only hidden reasoning', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          mockQuest.images = ['generated-by-primary.png'];
+          throw new Error('ServiceUnavailableException: Bedrock is unable to process your request');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      const fallbackBackend = {
+        // Streams an unterminated thinking block only - chunks arrive but nothing renders,
+        // and the call resolves normally (a real 'done' turn, not an abort).
+        complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+          await cb(['<think>reasoning that never closes'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(fallbackBackend.complete).toHaveBeenCalled();
+      expect(mockQuest.status).toBe('done');
+      expect(mockQuest.fallbackInfo).toBeNull();
     });
 
     // The TTFVT pair is per-attempt, not per-turn. A failed primary that DID put visible text
@@ -3293,13 +3650,19 @@ describe('ChatCompletionProcess', () => {
       expect(excludeSnapshots[1].has('claude-opus-4-8')).toBe(true);
 
       // Only the final hop's reply survives; fallbackInfo contrasts the final model against the
-      // TRUE original (GPT4), not the intermediate hop.
+      // TRUE original (GPT4), not the intermediate hop. `reason` must hold the FIRST failure
+      // (the primary's), not the last hop's - flipping the `??=` that enforces this to `=`
+      // would otherwise pass unnoticed.
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
           replies: ['Hello from the second fallback'],
           status: 'done',
           type: 'message',
-          fallbackInfo: expect.objectContaining({ primaryModel: ChatModels.GPT4, fallbackModel: 'gpt-5' }),
+          fallbackInfo: expect.objectContaining({
+            primaryModel: ChatModels.GPT4,
+            fallbackModel: 'gpt-5',
+            reason: expect.stringContaining('primary outage'),
+          }),
         })
       );
 
@@ -4211,7 +4574,7 @@ describe('ChatCompletionProcess', () => {
         entitlementKeys: string[],
         organizationIds: string[] | undefined,
         userId: string | undefined,
-        opts?: { restrictToTags?: string[] }
+        opts?: { restrictToTags?: string[]; callerMaySeeAllLakes?: boolean }
       ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
@@ -4222,6 +4585,11 @@ describe('ChatCompletionProcess', () => {
       // widening), so a test can pin that the targeted exclusion measurement excludes exactly
       // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
       admittedPreauthorizedTags?: string[];
+      // Sets the turn's user admin flag, so a test can pin that it reaches the identity-scoped count.
+      userIsAdmin?: boolean;
+      // Wires mockDb.dataLakes.findByDatalakeTags, which the seed's not-serving (draft) count reads
+      // for the session-named lakes that did not make lakeScope.
+      lakesByTag?: Array<{ datalakeTag: string; status: string; createdByUserId: string }>;
       // Lakes the draft-inclusive ATTACHMENT scope reaches. Unset leaves that memo unseeded, so it
       // resolves no lake beyond the retrieval scope and the offer gate never re-reads.
       attachmentLakes?: unknown[];
@@ -4232,8 +4600,20 @@ describe('ChatCompletionProcess', () => {
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
-      if (opts.countGateExcludedLakesImpl) {
-        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      (service as any).user.isAdmin = opts.userIsAdmin;
+      if (opts.countGateExcludedLakesImpl || opts.lakesByTag) {
+        mockDb.dataLakes = {
+          ...(opts.countGateExcludedLakesImpl
+            ? { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) }
+            : {}),
+          ...(opts.lakesByTag
+            ? {
+                findByDatalakeTags: vi.fn(async (tags: string[]) =>
+                  opts.lakesByTag!.filter(lake => tags.includes(lake.datalakeTag))
+                ),
+              }
+            : {}),
+        };
       }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
@@ -4722,6 +5102,30 @@ describe('ChatCompletionProcess', () => {
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
 
+        it.each([
+          [true, true],
+          [false, false],
+          [undefined, false],
+        ])(
+          'forwards the turn user admin flag (%s) to the identity count as callerMaySeeAllLakes=%s',
+          async (userIsAdmin, expected) => {
+            const countGateExcludedLakesImpl = vi.fn().mockReturnValue(0);
+            await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              retrievalTags: ['datalake:a'],
+              countGateExcludedLakesImpl,
+              userIsAdmin,
+            });
+            expect(countGateExcludedLakesImpl).toHaveBeenCalledWith(
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.anything(),
+              expect.objectContaining({ restrictToTags: ['datalake:a'], callerMaySeeAllLakes: expected })
+            );
+          }
+        );
+
         // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
         // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and
         // ask the underlying gate query about a lake it has no notion was admitted. Both cases
@@ -4759,6 +5163,50 @@ describe('ChatCompletionProcess', () => {
             countGateExcludedLakesImpl: countExcludingEverythingNamed,
           });
           expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+
+        // A draft lake is not in any retrieval arm (active-only), so a session naming one narrows to
+        // an empty scope. notServingLakes is what lets the answer diagnosis say why.
+        describe('notServingLakes', () => {
+          const draftWorld = [
+            { datalakeTag: 'datalake:my-draft', status: 'draft', createdByUserId: 'user1' },
+            { datalakeTag: 'datalake:their-draft', status: 'draft', createdByUserId: 'someone-else' },
+          ];
+
+          it("records the caller's own draft that the session named", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:my-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 1, reason: 'draft' } });
+          });
+
+          it("does not count another user's draft", async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:their-draft'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('does not count an active lake that is missing for another reason (that is excludedLakes)', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:other'],
+              retrievalTags: ['datalake:gated'],
+              lakesByTag: [{ datalakeTag: 'datalake:gated', status: 'active', createdByUserId: 'user1' }],
+            });
+            expect(retrieval).toMatchObject({ lakeScope: [], notServingLakes: { count: 0, reason: 'draft' } });
+          });
+
+          it('stays absent when the session names no lake', async () => {
+            const { retrieval } = await runKnowledgeGatingCase({
+              dataLakeTags: ['datalake:a'],
+              lakesByTag: draftWorld,
+            });
+            expect(retrieval && 'notServingLakes' in retrieval).toBe(false);
+          });
         });
       });
 
@@ -5000,14 +5448,19 @@ describe('ChatCompletionProcess', () => {
     const imageTool = { toolSchema: { name: 'image_generation', description: 'gen', parameters: {} } };
     const navigateTool = { toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} } };
 
-    const runWithTools = async (tools: any[], disabledTools?: string[]) => {
+    const runWithTools = async (
+      tools: any[],
+      disabledTools?: string[],
+      extraBody: Record<string, unknown> = {},
+      reply = 'Hi!'
+    ) => {
       mockSession.disabledTools = disabledTools;
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
-          await cb(['Hi!']);
+          await cb([reply]);
         }),
         getModelInfo: vi.fn().mockResolvedValue([]),
         currentModel: ChatModels.GPT4,
@@ -5026,14 +5479,22 @@ describe('ChatCompletionProcess', () => {
         },
       ] as any);
       mockedBuildAndSortMessages.mockClear();
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any);
+      // Echoes the admitted system/context stack (argument 2) back into the returned messages, so
+      // systemPromptDetails' delivered-by-reference check (toPromptDetails in systemPromptSources.ts)
+      // reports every admitted source as delivered - matching production when nothing is evicted.
+      // The reply-choices eviction test below overrides this per-call via mockImplementationOnce.
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [...(contextAndSystemMessages ?? []), { role: 'user', content: 'Hello' }],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
-      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined, ...extraBody };
       await service.process({ body, logger: mockLogger });
 
       buildToolsSpy.mockRestore();
@@ -5074,6 +5535,85 @@ describe('ChatCompletionProcess', () => {
     // requested list still names it. Gating on the requested list described a tool the model lacked.
     it('omits the view registry when navigate_view never reached the built tool list', async () => {
       expect(await hasViewRegistry([])).toBe(false);
+    });
+
+    const hasReplyChoices = async (extraBody: Record<string, unknown>) =>
+      ((await runWithTools([], undefined, extraBody))?.[1] ?? ([] as any[])).some(
+        (m: any) => typeof m?.content === 'string' && m.content === REPLY_CHOICES_GUIDANCE
+      );
+
+    it('includes the reply-choices guidance on an in-app turn', async () => {
+      expect(await hasReplyChoices({})).toBe(true);
+    });
+
+    // Voice sets this: it speaks the raw reply stream and has no buttons to render.
+    it('omits the reply-choices guidance under skipReplyChoices', async () => {
+      expect(await hasReplyChoices({ skipReplyChoices: true })).toBe(false);
+    });
+
+    // History re-attaches stored choices only when the guidance ships, so it never demonstrates a
+    // format the model was not told about.
+    const historyIncludesReplyChoices = async (extraBody: Record<string, unknown>) => {
+      mockedFetchAndProcessPreviousMessages.mockClear();
+      await runWithTools([], undefined, extraBody);
+      return mockedFetchAndProcessPreviousMessages.mock.calls.map(call => call[2]?.includeReplyChoices);
+    };
+
+    it('asks history for stored choices when the guidance is offered', async () => {
+      expect(await historyIncludesReplyChoices({})).toEqual([true]);
+    });
+
+    it.each([{ skipReplyChoices: true }, { skipAutoOffers: true }, { promptMode: 'raw' }])(
+      'does not ask history for stored choices under %j',
+      async extraBody => {
+        expect(await historyIncludesReplyChoices(extraBody)).toEqual([false]);
+      }
+    );
+
+    it('records on promptMeta that choices were offered but absent', async () => {
+      await runWithTools([], undefined, {});
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'absent' });
+    });
+
+    it('records parsed choices on promptMeta', async () => {
+      const options = [
+        { label: 'One', description: 'Do the first thing.' },
+        { label: 'Two', description: 'Do the second thing.' },
+      ];
+      await runWithTools([], undefined, {}, 'Pick one.\n\n```choices\n' + JSON.stringify({ options }) + '\n```');
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: true, status: 'parsed' });
+      expect(mockQuest.suggestedChoices).toEqual({ options });
+    });
+
+    it('records and logs an invalid block with its reason', async () => {
+      const reply = 'Pick one.\n\n```choices\n{"options":[{"label":"Only","description":"One option."}]}\n```';
+      await runWithTools([], undefined, { skipReplyChoices: true }, reply);
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'invalid', reason: 'too_few' });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('[ReplyChoices]'),
+        expect.objectContaining({ reason: 'too_few', offered: false })
+      );
+    });
+
+    // The system-prompt budget can evict REPLY_CHOICES_GUIDANCE (lowest priority - see
+    // SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) even though it was requested,
+    // so `offered` must reflect delivery, not just the request-time decision.
+    it('records offered: false when the guidance was requested but evicted by the system-prompt budget', async () => {
+      mockedBuildAndSortMessages.mockImplementationOnce(
+        async (_previousMessages: any, contextAndSystemMessages: any) =>
+          ({
+            messages: [
+              ...(contextAndSystemMessages ?? []).filter((m: any) => m.content !== REPLY_CHOICES_GUIDANCE),
+              { role: 'user', content: 'Hello' },
+            ],
+            messageTruncation: null,
+            injectedBlocks: [],
+          }) as any
+      );
+
+      await runWithTools([], undefined, {});
+
+      expect(mockQuest.promptMeta.replyChoices).toEqual({ offered: false, status: 'absent' });
     });
   });
 
