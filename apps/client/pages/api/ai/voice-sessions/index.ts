@@ -8,7 +8,7 @@ import {
   userRepository,
   questRepository,
 } from '@bike4mind/database';
-import { AiEvents, ApiKeyType, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
+import { AiEvents, ApiKeyType, BadGatewayError, ISessionDocument, redactSessionForClient } from '@bike4mind/common';
 import { apiKeyService, sessionService } from '@bike4mind/services';
 import {
   buildVoiceInstructions,
@@ -21,6 +21,7 @@ import {
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { shouldReuseVoiceHold } from '@server/voice/voiceSessionLimits';
+import { VOICE_SESSION_ERROR, VOICE_SESSION_UNAVAILABLE_MESSAGE } from '@client/shared/voiceSessionErrors';
 import axios from 'axios';
 import { z } from 'zod';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
@@ -96,6 +97,10 @@ const handler = baseApi().post(async (req, res) => {
     { type: ApiKeyType.openai, nullIfMissing: true },
     { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
   );
+  if (!openaiApiKey) {
+    req.logger.error('[Voice Session] No OpenAI API key configured');
+    throw new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, { code: VOICE_SESSION_ERROR.unavailable });
+  }
 
   let session: ISessionDocument | null = null;
 
@@ -359,10 +364,11 @@ When you get the tool result back, summarize it conversationally for voice.`;
       const responseData = error.response?.data;
       const status = error.response?.status;
       console.error('[Voice Session] OpenAI Realtime API error:', status, JSON.stringify(responseData));
-      return res.status(status || 500).json({
-        error: 'OpenAI Realtime API error',
-        status,
-        details: responseData,
+      // Never relay OpenAI's status: a bare 401 reads to ApiContext as a dead login session and
+      // signs the user out. A coded 502 keeps the session and lets the client say voice is down.
+      throw new BadGatewayError(VOICE_SESSION_UNAVAILABLE_MESSAGE, {
+        code: VOICE_SESSION_ERROR.unavailable,
+        upstreamStatus: status,
       });
     }
     throw error;
