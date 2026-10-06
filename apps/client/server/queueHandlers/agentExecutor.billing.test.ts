@@ -638,6 +638,7 @@ describe('settleSubagentMediaUsage', () => {
       usdToCredits: vi.fn(usdToCredits),
       deductCredits: vi.fn().mockResolvedValue(undefined),
       recordAuditCredits: vi.fn().mockResolvedValue(undefined),
+      recordUsageEvent: vi.fn(),
     };
   }
 
@@ -650,6 +651,23 @@ describe('settleSubagentMediaUsage', () => {
     expect(effects.usdToCredits).toHaveBeenCalledWith(0.04);
     expect(effects.deductCredits).toHaveBeenCalledWith(4);
     expect(effects.recordAuditCredits).toHaveBeenCalledWith(4);
+  });
+
+  it('records a usage event carrying the media COGS and the credits charged', async () => {
+    const effects = makeEffects();
+    const pending = { costUsd: 0.04, inputTokens: 7, outputTokens: 3, cacheReadTokens: 2, cacheWriteTokens: 1 };
+
+    await settleSubagentMediaUsage(pending, effects);
+
+    expect(effects.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(effects.recordUsageEvent).toHaveBeenCalledWith({
+      inputTokens: 7,
+      outputTokens: 3,
+      cachedInputTokens: 2,
+      cacheWriteTokens: 1,
+      costUsd: 0.04,
+      creditsCharged: 4,
+    });
   });
 
   it('drains the accumulator so a second settlement charges nothing', async () => {
@@ -671,6 +689,7 @@ describe('settleSubagentMediaUsage', () => {
     expect(effects.usdToCredits).not.toHaveBeenCalled();
     expect(effects.deductCredits).not.toHaveBeenCalled();
     expect(effects.recordAuditCredits).not.toHaveBeenCalled();
+    expect(effects.recordUsageEvent).not.toHaveBeenCalled();
   });
 
   it('skips the deduction when the cost rounds to zero credits', async () => {
@@ -687,5 +706,6 @@ describe('settleSubagentMediaUsage', () => {
 
     await expect(settleSubagentMediaUsage(pendingWith(0.04), effects)).rejects.toThrow('db down');
     expect(effects.recordAuditCredits).not.toHaveBeenCalled();
+    expect(effects.recordUsageEvent).not.toHaveBeenCalled();
   });
 });

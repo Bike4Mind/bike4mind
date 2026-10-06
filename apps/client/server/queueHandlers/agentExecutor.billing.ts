@@ -418,6 +418,15 @@ export type SubagentMediaSettlementEffects = {
   deductCredits: (credits: number) => Promise<void>;
   /** Mirrors the charge onto the child's `totalCreditsUsed` audit counter. */
   recordAuditCredits: (credits: number) => Promise<void>;
+  /** Analytics dual-write, same shape as `billIteration`'s, so margin reporting sees this COGS. */
+  recordUsageEvent: (event: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteTokens: number;
+    costUsd: number;
+    creditsCharged: number;
+  }) => void;
 };
 
 /**
@@ -431,11 +440,19 @@ export async function settleSubagentMediaUsage(
   pending: PendingToolUsage,
   effects: SubagentMediaSettlementEffects
 ): Promise<number> {
-  const { costUsd } = takeToolUsage(pending);
-  if (costUsd <= 0) return 0;
-  const credits = effects.usdToCredits(costUsd);
+  const usage = takeToolUsage(pending);
+  if (usage.costUsd <= 0) return 0;
+  const credits = effects.usdToCredits(usage.costUsd);
   if (credits <= 0) return 0;
   await effects.deductCredits(credits);
+  effects.recordUsageEvent({
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    costUsd: usage.costUsd,
+    creditsCharged: credits,
+  });
   await effects.recordAuditCredits(credits);
   return credits;
 }

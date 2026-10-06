@@ -3170,10 +3170,11 @@ async function fireDagNodeTerminalOnRefusal(args: {
  * and injects the result into the parent's tool history.
  *
  * Credit billing: this updates the child's own `totalCreditsUsed` audit counter
- * via `incrementCreditsUsed`. No rollup to a parent (the parent reads the child
- * doc directly on resume). Generated-media cost IS deducted from the wallet (see
- * `settleSubagentMediaUsage`); the agent's own token spend is not yet (Phase 1
- * known gap - a future PR will add its `creditService.deductCreditsWithOrgSupport`).
+ * via `incrementCreditsUsed`. A DAG parent rolls this counter up when the DAG
+ * hook wakes it (see the DAG resume path in `processExecution`). Generated-media
+ * cost IS deducted from the wallet (see `settleSubagentMediaUsage`); the agent's
+ * own token spend is not yet (Phase 1 known gap - a future PR will add its
+ * `creditService.deductCreditsWithOrgSupport`).
  *
  * KNOWN LIMITATION - no per-iteration checkpointing or self-dispatch.
  * Unlike the top-level `processExecution`, this handler runs `agent.run()` to
@@ -3755,8 +3756,9 @@ async function processSubagentDispatch(
               organization,
               credits,
               sessionId: child.sessionId,
-              // The value the top-level run bills against (`execution.questId`), inherited
-              // unchanged, so these rows group with the parent's own ledger rows.
+              // Ledger grouping key, the value the top-level run bills against
+              // (`execution.questId`), inherited unchanged so these rows group with the
+              // parent's own. Not a Quest id: do not "fix" this to `child.linkedQuestId`.
               questId: child.questId,
               model: child.model,
               inputTokens: 0,
@@ -3772,6 +3774,24 @@ async function processSubagentDispatch(
           );
         },
         recordAuditCredits: credits => agentExecutionRepository.incrementCreditsUsed(childExecutionId, credits),
+        recordUsageEvent: event => {
+          // `provider` is required on a usage event; the wallet charge above stands either way.
+          if (!modelInfo) return;
+          usageEventRepository
+            .record({
+              requestId: child.questId || childExecutionId,
+              userId: child.userId,
+              ownerId: organization ? organization.id : (user as IUserDocument).id,
+              ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
+              sessionId: child.sessionId,
+              feature: 'agent_execution',
+              provider: modelInfo.backend,
+              model: child.model,
+              status: 'ok',
+              ...event,
+            })
+            .catch(err => logger.warn('[SubagentDispatch] failed to record media usage event', { err }));
+        },
       }).catch(err =>
         logger.error('[SubagentDispatch] failed to settle generated-media cost', {
           childExecutionId,
@@ -3787,6 +3807,9 @@ async function processSubagentDispatch(
         variables: child.subagentConfig.variables,
         attachedFiles: child.subagentConfig.attachedFiles,
       });
+      // Snapshot before settling: the abort poller is still live, and a tick landing during the
+      // settlement round trips would otherwise relabel a completed run as aborted/timed out.
+      const runAborted = abortController.signal.aborted;
       await settleMediaCost();
       const credits = result.completionInfo.totalCredits ?? 0;
 
@@ -3799,7 +3822,7 @@ async function processSubagentDispatch(
       // the user/parent aborted us (mark aborted). Otherwise the signal was
       // fired by our own deadline watchdog (mark failed with isTimeout). The
       // distinction matters for the WS event and downstream telemetry.
-      if (abortController.signal.aborted) {
+      if (runAborted) {
         const userAborted = await agentExecutionRepository.checkAbortFlag(childExecutionId).catch(() => false);
         if (userAborted) {
           await agentExecutionRepository.markAborted(childExecutionId, {
@@ -3890,6 +3913,8 @@ async function processSubagentDispatch(
         status: 'completed',
       });
     } catch (err) {
+      // Read before settling, for the same poller race as the success path above.
+      const signalAborted = abortController.signal.aborted;
       await settleMediaCost();
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
@@ -3903,7 +3928,7 @@ async function processSubagentDispatch(
       // rather than a fragile `errorMessage.includes('aborted')` heuristic,
       // which would misclassify any error containing the word "aborted".
       const isAbortError = err instanceof Error && err.name === 'AbortError';
-      const wasAborted = abortController.signal.aborted || isAbortError;
+      const wasAborted = signalAborted || isAbortError;
 
       if (wasAborted) {
         await agentExecutionRepository.markAborted(childExecutionId);
