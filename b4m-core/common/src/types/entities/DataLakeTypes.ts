@@ -56,7 +56,9 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
  * it by slug would let writes land on a lake the user deleted. By-id lookups are unaffected.
  * `deleting` stays resolvable: the lifecycle route re-runs a stuck delete by id OR slug (API keys
  * included), and hiding it would not 404 but fall through to the next same-slug lake the caller
- * manages. Writes are kept off a `deleting` lake by `isLakeIngestable`, not by slug status.
+ * manages. Slug status does not keep writes off a `deleting` lake. The ingest doors gate on
+ * `isLakeIngestable`; the tag-write doors (tag toggle, createFabFile, file PATCH, presigned upload)
+ * and the PDF ingest script do not check status.
  */
 export const DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES = ['deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
 

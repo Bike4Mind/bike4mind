@@ -236,9 +236,9 @@ const resolveGrantHeldLakeBySlug = async (
  * to the hardcoded DATA_LAKES configs (which have no backing document but are listed
  * by listDataLakes, so they must be openable). A slug-resolvable DB lake takes precedence and
  * its denial is final (no fallback retry); one in DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES is
- * invisible to the slug arms, so its slug falls through to the fallback (by id it still
- * resolves). Denies with a NOT-FOUND-style error so a user who can't
- * see a lake can't confirm it exists. Every single-lake read and every batch/file
+ * invisible to the slug arms, so its slug falls through to the next slug arm (org-less, then
+ * grant-held, then the registry fallback; by id it still resolves). Denies with a NOT-FOUND-style
+ * error so a user who can't see a lake can't confirm it exists. Every single-lake read and every batch/file
  * operation calls this first (most through the `assertLakeAccess` wrapper below).
  *
  * Returns the lake AND the grants the gate itself read, so a caller that goes on to make a manage
