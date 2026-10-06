@@ -174,6 +174,7 @@ export type IterationBillingEffects = {
   addIterationBilling: (billing: IIterationBilling) => Promise<void>;
   sendProgress: (creditsUsed: number, iterationIndex: number) => Promise<void>;
   logGuardTrip: (details: { inputTokensDelta: number; contextWindow: number }) => void;
+  logNegativeDelta: (details: { costDelta: number; cumulativeCost: number; previousCumulativeCost: number }) => void;
   usdToCredits: (usd: number) => number;
   now: () => number;
 };
@@ -216,7 +217,7 @@ function advanceCounters(counters: BillingCounters, checkpoint: BillingCheckpoin
 /**
  * Bill one completed iteration against the model's cumulative cost, advancing
  * `counters` in place. No-op unless the cost has grown since the last billed
- * iteration.
+ * iteration; a shrinking cost is skipped with a warn (`logNegativeDelta`).
  */
 export async function billIteration(params: BillIterationParams): Promise<void> {
   const { iterationIndex, checkpoint, counters, modelInfo, model, startTime, effects } = params;
@@ -236,7 +237,14 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
   // iteration with tool usage is always billable (never hits the no-op return below).
   const costDelta = cumulativeCost - counters.cumulativeCost + toolUsage.costUsd;
-  if (costDelta <= 0) return;
+  // Should be unreachable: the rate is fixed per invocation and resume re-prices `counters` at
+  // that same rate, so a negative delta means counters and checkpoint have diverged. Surface
+  // it rather than skip silently; counters deliberately stay put, as before.
+  if (costDelta < 0) {
+    effects.logNegativeDelta({ costDelta, cumulativeCost, previousCumulativeCost: counters.cumulativeCost });
+    return;
+  }
+  if (costDelta === 0) return;
 
   // Agent-only per-iteration token deltas (checkpoint totals are agent-loop only). These
   // are the resume-critical values summed to rebuild cumulative agent cost, so tool tokens

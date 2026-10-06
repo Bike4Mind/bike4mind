@@ -2194,6 +2194,14 @@ async function processExecution(
                 contextWindow,
               }
             ),
+          logNegativeDelta: details =>
+            logger.warn('[agentExecutor] negative iteration cost delta; skipping charge', {
+              executionId,
+              sessionId: execution.sessionId,
+              model: execution.model,
+              iterationIndex,
+              ...details,
+            }),
           deductCredits: async ({ credits, inputTokens, outputTokens }) => {
             await creditService.deductCreditsWithOrgSupport(
               {
