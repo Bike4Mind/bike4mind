@@ -9,6 +9,7 @@ import Typography from '@mui/joy/Typography';
 import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
+import { ReasoningRow } from './ReasoningRow';
 import { AttachmentRow } from './Attachments';
 import { ChevronIcon } from './icons';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
@@ -181,11 +182,17 @@ function AssistantTurn({
           on to run, then the next round's prose. A reply that touched six files across ten
           rounds is a narrative, and every row piled up after every word is not that narrative. */}
       {rounds.map((round, index) => {
-        const presented = presentReply(round.text, live && index === rounds.length - 1);
+        const streaming = live && index === rounds.length - 1;
+        const presented = presentReply(round.text, streaming);
         return (
           // The gap lives here rather than as a blank line inside the text, so a round that ran
           // tools and said nothing does not leave an empty paragraph behind.
           <Box key={index} sx={{ mt: index === 0 ? 0 : 1.5 }} data-testid="chat-message-round">
+            {/* Above the prose, because that is where it happened: the model thought, then
+                wrote. Never on the round still streaming - the status line is already speaking
+                for that one, and this would be its second copy. See ReasoningRow. */}
+            {!streaming && round.reasoning && <ReasoningRow reasoning={round.reasoning} />}
+
             {/* Per round rather than over the whole reply, which is also what keeps a code fence
                 from leaking: a block opened in one round cannot swallow the next round's prose,
                 because the next round is a parse of its own. */}

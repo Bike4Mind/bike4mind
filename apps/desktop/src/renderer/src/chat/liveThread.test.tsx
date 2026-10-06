@@ -168,6 +168,31 @@ describe('the live thread, driven by stream events', () => {
     );
   });
 
+  it('moves the reasoning from the line into the transcript when the turn ends', async () => {
+    await mount();
+    emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
+    emit({ type: 'reasoning', sessionId: SESSION, messageId: MESSAGE, text: 'the index is on userId' });
+    emit(text('It is indexed.'));
+    paint();
+
+    // One copy at a time: while the round streams the line holds the thought and the thread does
+    // not, which is the whole of why MessageThread skips the streaming round.
+    expect(container.querySelector('[data-testid="chat-reasoning-row"]')).toBeNull();
+
+    emit({
+      type: 'done',
+      sessionId: SESSION,
+      messageId: MESSAGE,
+      content: 'It is indexed.',
+      rounds: [{ text: 'It is indexed.', toolCallIds: [], reasoning: 'the index is on userId' }],
+    });
+    expect(container.querySelector('[data-testid="chat-turn-status"]')).toBeNull();
+    expect(container.querySelector('[data-testid="chat-reasoning-row-summary"]')?.textContent).toBe(
+      'Thinking: the index is on userId'
+    );
+    expect(container.querySelector('[data-testid="chat-reasoning-row-body"]')).toBeNull();
+  });
+
   it('does not remount tool rows while later events stream in', async () => {
     await mount();
     emit({ type: 'start', sessionId: SESSION, messageId: MESSAGE });
