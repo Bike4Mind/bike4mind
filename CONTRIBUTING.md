@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing! Bike4Mind is an **open-core** project: the source in this repository is publicly available under the [Business Source License 1.1](./LICENSE) so you can read it, run it, self-host it, and improve it — while Bike4Mind, Inc. operates the hosted service at [app.bike4mind.com](https://app.bike4mind.com).
 
-This document explains everyting you need to know to get a change from idea to merged PR. Please read it before opening your first pull request — PRs that follow this guide get reviewed and merged much faster.
+This document explains everything you need to know to get a change from idea to merged PR. Please read it before opening your first pull request — PRs that follow this guide get reviewed and merged much faster.
 
 ## Table of Contents
 
