@@ -49,6 +49,22 @@ describe('DevLogSink', () => {
     expect(serialized).toContain('[redacted]');
   });
 
+  it('flattens a multi-line message so one record stays one line', () => {
+    const sink = new DevLogSink();
+    watching(sink);
+    sink.publish(() => ({ tags: ['chat-stream'], message: 'downstream delta: one\ntwo\r\nthree\tfour' }));
+    const { message } = sink.snapshot().records[0];
+    expect(message).toBe('downstream delta: one\\ntwo\\nthree\\tfour');
+    expect(message).not.toMatch(/[\n\r\t]/);
+  });
+
+  it('flattens a multi-line field value too', () => {
+    const sink = new DevLogSink();
+    watching(sink);
+    sink.publish(() => ({ tags: ['chat-stream'], message: 'm', fields: { text: 'a\nb' } }));
+    expect(sink.snapshot().records[0].fields).toEqual({ text: 'a\\nb' });
+  });
+
   it('truncates a long message at capture', () => {
     const sink = new DevLogSink();
     watching(sink);

@@ -36,13 +36,25 @@ function clip(value: string, limit: number): string {
   return value.length <= limit ? value : `${value.slice(0, limit)}...`;
 }
 
+/**
+ * One record, one line.
+ *
+ * Streamed reply text arrives with its newlines in it, and the clipboard copy joins records
+ * with a newline - so a raw break would turn one record into several lines over there, with no
+ * way to tell which. Escaped rather than stripped because whether a delta ended a line is
+ * exactly the kind of thing this window is opened to see.
+ */
+function oneLine(value: string): string {
+  return value.replace(/\r\n|\r|\n/g, '\\n').replace(/\t/g, '\\t');
+}
+
 /** Primitives only, clipped and scrubbed. Anything else is dropped rather than stringified. */
 function safeFields(fields: Readonly<Record<string, unknown>> | undefined): DevLogRecord['fields'] {
   if (!fields) return undefined;
   const safe: Record<string, string | number | boolean> = {};
   let any = false;
   for (const [key, value] of Object.entries(fields)) {
-    if (typeof value === 'string') safe[key] = clip(redact(value), MAX_FIELD_CHARS);
+    if (typeof value === 'string') safe[key] = clip(oneLine(redact(value)), MAX_FIELD_CHARS);
     else if (typeof value === 'number' && Number.isFinite(value)) safe[key] = value;
     else if (typeof value === 'boolean') safe[key] = value;
     else continue;
@@ -101,7 +113,7 @@ export class DevLogSink {
       id: this.nextId++,
       at: Date.now(),
       tags: [...draft.tags],
-      message: clip(redact(draft.message), MAX_MESSAGE_CHARS),
+      message: clip(oneLine(redact(draft.message)), MAX_MESSAGE_CHARS),
       ...(fields ? { fields } : {}),
     };
     this.retain(record);

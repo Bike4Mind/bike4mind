@@ -143,24 +143,27 @@ interface StreamContext {
  * Publish one decoded SSE frame to the developer log.
  *
  * Every field is named explicitly rather than spread off the event: that allowlist, not the
- * sink's scrubbing, is what keeps a credential out of the buffer. The frame's text is reported
- * as a LENGTH - the sink would truncate it, and a reply's prose is not what anyone opens this
- * window for.
+ * sink's scrubbing, is what keeps a credential out of the buffer. The frame's own text IS the
+ * line - a stream log that reported only a length could not answer the question it is opened
+ * for - and the sink truncates it, scrubs it and flattens it to one line on the way in. The
+ * `chars` field carries the true length, which is the only way to tell a short frame from a
+ * truncated one.
  */
 function logUpstream(event: CompletionStreamEvent, context: StreamContext): void {
   devLog.publish(() => {
-    const textChars = 'text' in event ? (event.text?.length ?? 0) : 0;
+    const text = 'text' in event ? (event.text ?? '') : '';
     const detail =
       event.type === 'tool_use'
-        ? (event.tools ?? []).map(tool => tool.name).join(', ') || '(no tools)'
+        ? `${(event.tools ?? []).map(tool => tool.name).join(', ') || '(no tools)'}${text ? ` ${text}` : ''}`
         : event.type === 'error'
           ? (event.message ?? 'no message')
-          : `${textChars} chars`;
+          : text;
     return {
       tags: [CHAT_STREAM_TAG],
-      message: `upstream ${event.type} ${detail}`,
+      message: `upstream ${event.type}${detail ? `: ${detail}` : ''}`,
       fields: {
         model: context.model,
+        ...(text ? { chars: text.length } : {}),
         ...(context.sessionId ? { session: context.sessionId } : {}),
         ...('stopReason' in event && event.stopReason ? { stopReason: event.stopReason } : {}),
         ...('usage' in event && event.usage?.outputTokens !== undefined
