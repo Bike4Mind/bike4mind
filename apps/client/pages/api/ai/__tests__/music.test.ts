@@ -189,6 +189,7 @@ describe('POST /api/ai/music', () => {
     expect(params).toMatchObject({
       type: 'music_generation_usage',
       credits: 150,
+      source: 'api',
       organization: null,
       model: 'music_v1',
     });
@@ -226,6 +227,7 @@ describe('POST /api/ai/music', () => {
     expect(deductCredits.mock.calls[0][0]).toMatchObject({ source: 'cli' });
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', creditsCharged: 150 }));
   });
+
   it('forwards caller-supplied forceInstrumental and format to the provider and to persistence', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateMusicCredits.mockReturnValue({ requiredCredits: 0, usdCost: 0, billedSeconds: 30 });

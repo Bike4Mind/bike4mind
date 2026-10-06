@@ -170,7 +170,9 @@ describe('POST /api/v1/embeddings', () => {
       0,
       expect.objectContaining({ type: 'text_generation_usage', inputTokens: 5, outputTokens: 0, source: 'api' })
     );
-    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'embedding', status: 'ok' }));
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'embedding', source: 'api', status: 'ok' })
+    );
   });
 
   it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {

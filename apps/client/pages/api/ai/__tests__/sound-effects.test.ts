@@ -177,13 +177,14 @@ describe('POST /api/ai/sound-effects', () => {
     expect(deductCredits).toHaveBeenCalledTimes(1);
     const [params, , options] = deductCredits.mock.calls[0];
     // No API key -> personal billing: user pool, no organization.
-    expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 12, organization: null });
+    expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 12, organization: null, source: 'api' });
     expect(params.user).toMatchObject({ id: 'u1' });
     // Balance already moved at reservation -> settlement only writes the ledger row.
     expect(options).toMatchObject({ skipBalanceUpdate: true });
     expect(recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: 'sound_effects',
+        source: 'api',
         ownerId: 'u1',
         ownerType: CreditHolderType.User,
         creditsCharged: 12,
@@ -208,6 +209,7 @@ describe('POST /api/ai/sound-effects', () => {
     expect(deductCredits.mock.calls[0][0]).toMatchObject({ source: 'cli' });
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', creditsCharged: 12 }));
   });
+
   it('does NOT reserve or charge when enforceCredits is off, but still records analytics (COGS, 0 credits)', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });

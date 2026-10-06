@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
-import { CreditHolderType } from '@bike4mind/common';
+import { BadRequestError, CreditHolderType } from '@bike4mind/common';
 
 const {
   mockSemanticSearch,
@@ -211,7 +211,11 @@ describe('runLakeSemanticSearch billing owner and source', () => {
         apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
         input()
       )
-    ).rejects.toThrow(/no longer a member/);
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof BadRequestError && err.statusCode === 400 && /no longer a member/.test(err.message)
+    );
+    expect(mockIsCurrentOrgMember).toHaveBeenCalledWith(KEY_ORG, 'u1');
     expect(mockSemanticSearch).not.toHaveBeenCalled();
   });
 
@@ -237,6 +241,40 @@ describe('runLakeSemanticSearch billing owner and source', () => {
         apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
         input()
       )
-    ).rejects.toThrow(/Billing organization not found/);
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof BadRequestError && err.statusCode === 400 && /Billing organization not found/.test(err.message)
+    );
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('searches without recording usage when billing is off and the key org no longer exists', async () => {
+    mockOrgFindById.mockResolvedValue(null);
+
+    await expect(
+      runLakeSemanticSearch(
+        apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+        input()
+      )
+    ).resolves.toMatchObject({ kind: 'ok' });
+    expect(mockSemanticSearch).toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[semantic-search] failed to resolve user/organization for billing',
+      expect.any(BadRequestError)
+    );
+  });
+
+  it("does not refuse a departed holder's org-billed key when billing is off, and records against the key org", async () => {
+    mockIsCurrentOrgMember.mockReturnValue(false);
+
+    await expect(
+      runLakeSemanticSearch(
+        apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+        input()
+      )
+    ).resolves.toMatchObject({ kind: 'ok' });
+    expect(mockSemanticSearch).toHaveBeenCalled();
+    expect(recorded().organization).toBe(KEY_ORG);
   });
 });

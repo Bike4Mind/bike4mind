@@ -16,7 +16,6 @@ import {
   creditService,
   dataLakeService,
   isOperationalBillingEnabled,
-  organizationService,
   recordOperationalUsage,
   scopedSettingsService,
 } from '@bike4mind/services';
@@ -45,6 +44,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { RetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { getRequestMembershipOrgIds } from '@server/dataLakes/requestMembership';
+import { assertApiKeyOrgMembership } from '@server/billing/assertApiKeyOrgMembership';
 import { BadRequestError } from '@server/utils/errors';
 import { resolveApiKeyOwnerType } from '@server/utils/resolveApiKeyOwnerType';
 import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
@@ -247,20 +247,11 @@ export async function runLakeSemanticSearch(
     req.logger?.warn('[semantic-search] failed to resolve user/organization for billing', billingErr);
   }
 
-  // Mint-time trust is not use-time trust: an org-billed key whose owner has since left the org
-  // must not keep drawing on its pool. Same fail-closed check, and the same platform-admin arm, as
-  // reserveRequestCredits.
-  if (
-    shouldBill &&
-    req.apiKeyInfo &&
-    billingOrg &&
-    billingUser &&
-    !billingUser.isAdmin &&
-    !organizationService.isCurrentOrgMember(billingOrg, req.user.id)
-  ) {
-    throw new BadRequestError(
-      'This API key bills an organization you are no longer a member of. Re-mint the key to continue.'
-    );
+  // Gated on billing alone, not on the query having a price: unlike reserveRequestCredits, which
+  // skips the check for a free request, a departed holder is refused here even on a zero-cost
+  // embedder. Deliberate - the key no longer speaks for that org, whatever the search costs.
+  if (shouldBill && billingUser) {
+    assertApiKeyOrgMembership({ billingOrg, billingUser, isApiKeyCaller: Boolean(req.apiKeyInfo) });
   }
 
   // --- Get the embedding-provider API keys, for every provider we have one, not just the
