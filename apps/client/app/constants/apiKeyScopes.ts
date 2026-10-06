@@ -141,7 +141,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     value: ApiKeyScope.DATALAKE_READ,
     label: 'Data Lakes: Read',
     description: 'List and browse data lakes the key owner can already reach',
-    endpoints: ['GET /api/data-lakes', 'GET /api/data-lakes/:id'],
+    endpoints: [
+      'GET /api/v1/data-lakes',
+      'GET /api/v1/data-lakes/:id',
+      'GET /api/v1/data-lakes/:id/files/:file_id',
+      'GET /api/data-lakes',
+      'GET /api/data-lakes/:id',
+    ],
   },
   {
     value: ApiKeyScope.DATALAKE_QUERY,
