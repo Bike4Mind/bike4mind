@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { createHash } from 'crypto';
 import { createUserApiKey } from '../create';
 import { rotateUserApiKey } from '../rotate';
 import { validateUserApiKey } from '../validate';
@@ -102,6 +103,23 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
     expect(getStored()!.usage.totalSpendCredits).toBe(4200);
   });
 
+  it('rotation stores the SHA-256 digest of the new key and never returns it', async () => {
+    const { repo, getStored } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any, organizations: {} as any } };
+
+    await createUserApiKey('sys-1', mintParams, { ...adapters, systemUserId: 'sys-1' });
+    delete getStored()!.keyDigest; // a key minted before the digest existed
+
+    const result = await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+    const digest = createHash('sha256').update(result.key).digest('hex');
+
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'key-1', keyDigest: digest }));
+    expect(getStored()!.keyDigest).toBe(digest);
+    expect(result).not.toHaveProperty('keyDigest');
+    expect(result).not.toHaveProperty('keyHash');
+  });
+
   it('original key is invalid after rotation', async () => {
     const { repo } = makeSyncedRepo();
     const adapters = {
@@ -154,6 +172,7 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(repo.update).toHaveBeenCalledWith({
         id: 'key-1',
         keyHash: expect.any(String),
+        keyDigest: expect.any(String),
         keyPrefix: expect.any(String),
         userId: 'admin-user',
       });
@@ -192,6 +211,7 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
       expect(repo.update).toHaveBeenCalledWith({
         id: 'key-1',
         keyHash: expect.any(String),
+        keyDigest: expect.any(String),
         keyPrefix: expect.any(String),
       });
       // The owner's receivers keep verifying: their own rotation leaves the signing secret alone.
