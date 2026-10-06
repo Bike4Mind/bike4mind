@@ -59,6 +59,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: { findByIds: vi.fn().mockResolvedValue([]) },
   adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   fallbackLakeSettingsRepository: { findByLakeIds: vi.fn().mockResolvedValue([]) },
+  orgGitHubLakeConnectionRepository: { findBoundDataLakeIds: vi.fn().mockResolvedValue([]) },
 }));
 
 import '../index';

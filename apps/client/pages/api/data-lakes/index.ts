@@ -10,6 +10,7 @@ import {
   userRepository,
   adminSettingsRepository,
   fallbackLakeSettingsRepository,
+  orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
 import { CreateDataLakeRequestInput, BadRequestError, ForbiddenError } from '@bike4mind/common';
 import { Request } from 'express';
@@ -46,6 +47,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // the queue's only discovery surface - without it a reviewer has to open a lake's settings to
       // learn whether anything is waiting, which nobody does unprompted.
       dataLakeProposals: dataLakeProposalRepository,
+      // GitHub binding per pending-connect lake, flag-free, so the finish-connect banner can rule a
+      // bound repository out while EnableDataLakeGitHub is off.
+      gitHubLakeConnections: orgGitHubLakeConnectionRepository,
       // Org repo: resolves the org-admin rung of `canPreauthorize` for an admin caller, whose
       // ctx.administeredOrgIds is deliberately zeroed. Without it that rung goes dark on this list.
       organizations: organizationRepository,

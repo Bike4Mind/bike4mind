@@ -548,6 +548,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   pendingConnector?: DataLakePendingConnector;
   /**
+   * Whether a GitHub lake connection row (enabled or not) is bound to this lake, read flag-free as
+   * apps/client/server/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
+   * `pendingConnector`, and only when the list route wires the lookup; absent means unknown.
+   */
+  hasGitHubConnection?: boolean;
+  /**
    * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
    * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
    * (defaulted to 0, never omitted) when the caller can manage this lake, even with zero spend -

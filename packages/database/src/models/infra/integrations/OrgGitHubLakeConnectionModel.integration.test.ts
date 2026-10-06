@@ -118,6 +118,22 @@ describe('OrgGitHubLakeConnectionModel - accessors', () => {
   });
 });
 
+describe('OrgGitHubLakeConnectionModel - findBoundDataLakeIds', () => {
+  it('returns the given lakes that have a row, disabled rows included, like findByDataLakeIdAny', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-2', repositoryId: 2, enabled: false });
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-other', repositoryId: 3 });
+
+    const bound = await orgGitHubLakeConnectionRepository.findBoundDataLakeIds(['lake-1', 'lake-2', 'lake-3']);
+    expect(bound.sort()).toEqual(['lake-1', 'lake-2']);
+  });
+
+  it('returns an empty array for an empty input', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findBoundDataLakeIds([])).toEqual([]);
+  });
+});
+
 describe('OrgGitHubLakeConnectionModel - release', () => {
   it('is org-scoped: the wrong org cannot release, and the row is kept', async () => {
     const created = await OrgGitHubLakeConnection.create(base);

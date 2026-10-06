@@ -128,15 +128,29 @@ describe('FinishSourceConnectBanner', () => {
     expect(h.begin).not.toHaveBeenCalled();
   });
 
-  it('hides the Drive banner while EnableDataLakeGitHub is off, without reading the GitHub connection', () => {
-    // A bound repository still owns the lake with the flag off, and its read 403s, so "no source" is unknowable.
-    h.gitHubFlag = false;
-    h.gitHub = { isSuccess: false, data: undefined };
-    wrap(<FinishSourceConnectBanner lake={DRIVE_LAKE} fileCount={0} />);
+  it.each([
+    ['no GitHub binding', false, true],
+    ['a GitHub binding', true, false],
+    ['an unknown GitHub binding', undefined, false],
+  ])(
+    'with EnableDataLakeGitHub off, decides the Drive banner from the list signal: %s',
+    (_label, hasGitHubConnection, shown) => {
+      // The GitHub read route 403s with the flag off, so the list's flag-free signal stands in for it.
+      h.gitHubFlag = false;
+      h.gitHub = { isSuccess: false, data: undefined };
+      wrap(<FinishSourceConnectBanner lake={{ ...DRIVE_LAKE, hasGitHubConnection }} fileCount={0} />);
+
+      expect(screen.queryByTestId(DRIVE_BANNER) !== null).toBe(shown);
+      expect(h.gitHubEnabledArg).toBe(false);
+      expect(h.driveEnabledArg).toBe(true);
+    }
+  );
+
+  it('with EnableDataLakeGitHub on, trusts the live GitHub read over the list signal', () => {
+    h.gitHub = { isSuccess: true, data: { id: 'conn1' } };
+    wrap(<FinishSourceConnectBanner lake={{ ...DRIVE_LAKE, hasGitHubConnection: false }} fileCount={0} />);
 
     expect(screen.queryByTestId(DRIVE_BANNER)).toBeNull();
-    expect(h.gitHubEnabledArg).toBe(false);
-    expect(h.driveEnabledArg).toBe(true);
   });
 
   it.each([

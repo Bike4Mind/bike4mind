@@ -109,6 +109,13 @@ class OrgGitHubLakeConnectionRepository
     return this.findOne({ targetDataLakeId });
   }
 
+  /** Batch form of findByDataLakeIdAny: which of these lakes have a row, enabled or not. */
+  async findBoundDataLakeIds(targetDataLakeIds: readonly string[]): Promise<string[]> {
+    if (targetDataLakeIds.length === 0) return [];
+    const rows = await this.find({ targetDataLakeId: { $in: [...targetDataLakeIds] } });
+    return rows.map(row => row.targetDataLakeId);
+  }
+
   async findByInstallationId(installationId: number): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
     return this.find({ installationId });
   }
