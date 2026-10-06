@@ -70,6 +70,9 @@ vi.mock('@server/utils/logCompletionAnalytics', () => ({
 
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
+const mockEmitProcessingFailed = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('../processingFailedMetric', () => ({ emitProcessingFailed: mockEmitProcessingFailed }));
+
 import { registerExternalRoutes } from './sseRoute';
 import { CompletionStreamEventSchema, spendCapExceededError } from '@bike4mind/common';
 
@@ -155,6 +158,8 @@ describe('POST /api/ai/v1/completions', () => {
     // Never prose in a content event: a caller reading only `text` would render the
     // billing failure as part of the assistant's reply.
     expect(frames(text).some(f => f.type === 'content' && String(f.text).includes('credits'))).toBe(false);
+    // The caller's balance, not a service fault: kept off the operator alarm.
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 
   // The case the classifier exists for: tokens already streamed, so neither a status
@@ -192,6 +197,10 @@ describe('POST /api/ai/v1/completions', () => {
     const text = await res.text();
     expect(errorFrame(text).code).toBeUndefined();
     expect(text).not.toContain('"code"');
+    expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+      'cli-sse',
+      expect.objectContaining({ message: 'model backend blew up' })
+    );
   });
 
   it('reports an unclassified auth failure in-band with no classifier', async () => {
@@ -200,5 +209,7 @@ describe('POST /api/ai/v1/completions', () => {
     expect(res.status).toBe(200);
     expect(errorFrame(await res.text()).code).toBeUndefined();
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    // A caller's auth failure is handled in-band before the catch; it is not a processing failure.
+    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 });

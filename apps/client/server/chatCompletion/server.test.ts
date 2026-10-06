@@ -32,9 +32,11 @@ vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProce
 // route (executeCompletion + credit attribution); stubbed so importing the route doesn't drag
 // in real DB models.
 const mockQuestSettleIfUnfinished = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockMongoose = vi.hoisted(() => ({ connection: { readyState: 1 } }));
 vi.mock('@bike4mind/database', () => ({
-  connectDB: vi.fn().mockResolvedValue(undefined),
-  mongoose: { connection: { readyState: 1 } },
+  connectDB: mockConnectDB,
+  mongoose: mockMongoose,
   questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished },
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key1', name: 'Test Key' }) },
   adminSettingsRepository: {},
@@ -69,6 +71,7 @@ vi.mock('@bike4mind/services/llm', async () => {
       userId: z.string(),
       message: z.string().min(1),
     }),
+    resolveQuestErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
   };
 });
 
@@ -212,6 +215,12 @@ describe('ChatCompletion /process', () => {
         value: 1,
         unit: StandardUnit.Count,
         dimensions: { Stage: 'test', ErrorClass: 'internal_error' },
+      }),
+      expect.objectContaining({
+        name: 'ProcessingFailed',
+        value: 1,
+        unit: StandardUnit.Count,
+        dimensions: { Stage: 'test', Surface: '/process' },
       }),
     ]);
   });
@@ -412,6 +421,7 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
     const res = await postWsCompletion(VALID_WS_COMPLETION);
     expect(res.status).toBe(401);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
   });
 
   it('returns 400 on an invalid body (missing requestId)', async () => {
@@ -477,5 +487,40 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
     const sent = await waitForAction('cli_completion_error');
     const errorMsg = sent.find(msg => msg.action === 'cli_completion_error');
     expect(errorMsg).toMatchObject({ requestId: REQUEST_ID });
+
+    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    expect(mockCategorizeToolError).toHaveBeenCalledWith('model exploded');
+    expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
+      expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
+    );
+  });
+
+  it('does not count a billing rejection on the cli-ws surface', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
+    mockExecuteCompletion.mockRejectedValue(
+      Object.assign(new Error('out of credits'), { code: 'insufficient_credits' })
+    );
+
+    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    await waitForAction('cli_completion_error');
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('counts a pre-completion failure on the cli-ws surface', async () => {
+    mockMongoose.connection.readyState = 0;
+    mockConnectDB.mockRejectedValueOnce(new Error('mongo unreachable'));
+    try {
+      const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+      expect(res.status).toBe(500);
+    } finally {
+      mockMongoose.connection.readyState = 1;
+    }
+
+    await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
+    expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
+      expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
+    );
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 });

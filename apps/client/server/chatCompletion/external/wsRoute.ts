@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { executeCompletion } from '@bike4mind/services/cliCompletions';
+import { resolveQuestErrorCode } from '@bike4mind/services/llm';
 import {
   connectDB,
   mongoose,
@@ -31,6 +32,7 @@ import { logCompletionAnalytics } from '@server/utils/logCompletionAnalytics';
 import { sendToConnection } from '@server/websocket/utils';
 import { Config } from '@server/utils/config';
 import { sanitizeErrorMessage } from '@server/utils/errorSanitization';
+import { emitProcessingFailed } from '../processingFailedMetric';
 import { Resource } from 'sst';
 import { z } from 'zod';
 
@@ -139,6 +141,7 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
       logger.error('[CLI_WS_HTTP] Pre-completion error', {
         error: error instanceof Error ? error.message : String(error),
       });
+      track(emitProcessingFailed('cli-ws', error));
       res.status(500).json({ error: sanitizeErrorMessage(error) });
       return;
     }
@@ -246,6 +249,8 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           });
         } catch (error) {
           logger.error('[CLI_WS_HTTP] Completion error:', error);
+          // A billing rejection (out of credits, spend cap) is the caller's state, not a service fault.
+          if (!resolveQuestErrorCode(error)) track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.
           try {
