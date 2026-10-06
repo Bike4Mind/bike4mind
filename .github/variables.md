@@ -21,7 +21,7 @@ For each variable, the system tries environment-specific variables first, then f
 ### Supported Variables
 
 #### Application Configuration
-- `SEED_APP_NAME`: Application name for SST (defaults to `'bike4mind'` if not set)
+- `SEED_APP_NAME`: Application name for SST (defaults to `'b4m'` if not set)
 
 #### Function Configuration
 - `FUNCTION_VPC`: VPC configuration for Lambda functions (defaults to empty string if not set)
