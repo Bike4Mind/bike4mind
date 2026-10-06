@@ -1,4 +1,4 @@
-import { userApiKeyService } from '@bike4mind/services';
+import { userApiKeyService, userService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { User } from '@bike4mind/database';
 import { ApiKeyScope, resolveApiCompletionSource, type ScopeForbiddenErrorSchema } from '@bike4mind/common';
@@ -146,6 +146,16 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       }
 
       const user = await User.findById(validation.userId);
+      const blockReasons = user ? userService.accountBlockReasons(user) : ['ownerNotFound'];
+      if (blockReasons.length > 0) {
+        req.logger?.warn('API key rejected: owner account blocked', {
+          keyHash: hashApiKeyForLogging(apiKey),
+          keyId: validation.keyId,
+          userId: validation.userId,
+          endpoint: req.originalUrl,
+          blockReasons,
+        });
+      }
       if (!user) {
         throw new UnauthorizedError('User not found or banned');
       }

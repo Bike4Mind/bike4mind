@@ -264,3 +264,48 @@ describe('apiKeyAuth usage log stamping', () => {
     ).toBe(CreditHolderType.User);
   });
 });
+
+describe('apiKeyAuth blocked owner log', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+  });
+
+  it.each([
+    ['banned', { id: 'user-1', isBanned: true }, 'User not found or banned'],
+    [
+      'suspended',
+      { id: 'user-1', moderation: { status: 'suspended' } },
+      /suspended for repeated content-policy violations/,
+    ],
+    ['disputePending', { id: 'user-1', disputePending: true }, /pending dispute resolution/],
+    ['ownerNotFound', null, 'User not found or banned'],
+  ])('logs and rejects a %s owner', async (reason, owner, message) => {
+    findByIdMock.mockResolvedValue(owner);
+    const req = makeReq();
+    const { passed, error } = await run(undefined, req);
+    expect(passed).toBe(false);
+    expect(error?.message).toMatch(message);
+    const call = req.logger.warn.mock.calls.find(([msg]) => msg === 'API key rejected: owner account blocked');
+    expect(call?.[1]).toMatchObject({
+      keyId: 'key-1',
+      userId: 'user-1',
+      endpoint: req.originalUrl,
+      blockReasons: [reason],
+    });
+    expect(JSON.stringify(call)).not.toContain(KEY);
+  });
+
+  it('does not log for an active owner', async () => {
+    findByIdMock.mockResolvedValue({ id: 'user-1', isBanned: false });
+    const req = makeReq();
+    expect((await run(undefined, req)).passed).toBe(true);
+    expect(req.logger.warn).not.toHaveBeenCalledWith('API key rejected: owner account blocked', expect.anything());
+  });
+});
