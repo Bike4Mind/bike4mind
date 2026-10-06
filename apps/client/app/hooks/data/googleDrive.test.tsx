@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
   useLakeDriveConnection,
+  useLakeDriveCanManage,
   useDisconnectLakeDrive,
   driveConnectionPollInterval,
   startGoogleDriveConnect,
@@ -109,6 +110,43 @@ describe('useLakeDriveConnection', () => {
 // The DELETE route purges every FabFile the connection ingested (see drive-connection.ts) - a
 // disconnect used to delete nothing, so before this fix the mutation only invalidated the
 // connection-status query, leaving the lake's own file list/counts stale until a full reload.
+describe('useLakeDriveCanManage', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const renderBoth = (lakeId: string) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    return renderHook(
+      () => ({ connection: useLakeDriveConnection(lakeId), canManage: useLakeDriveCanManage(lakeId) }),
+      {
+        wrapper,
+      }
+    );
+  };
+
+  it('reads false for an appointed admin, and shares one request with the connection hook', async () => {
+    get.mockResolvedValue({ data: { connection: { id: 'conn1' }, canManage: false } });
+    const { result } = renderBoth('lake1');
+
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
+    expect(result.current.connection.data).toEqual({ id: 'conn1' });
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads true for a manager, and when the payload carries no flag', async () => {
+    get.mockResolvedValue({ data: { connection: null, canManage: true } });
+    const { result, unmount } = renderBoth('lake1');
+    await waitFor(() => expect(result.current.canManage.data).toBe(true));
+    unmount();
+
+    get.mockResolvedValue({ data: { connection: null } });
+    const second = renderBoth('lake2');
+    await waitFor(() => expect(second.result.current.canManage.data).toBe(true));
+  });
+});
+
 describe('useDisconnectLakeDrive', () => {
   it('invalidates the lake file list and tag counts alongside the connection status', async () => {
     del.mockResolvedValue({ data: undefined });
