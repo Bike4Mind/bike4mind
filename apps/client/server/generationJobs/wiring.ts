@@ -245,7 +245,7 @@ const getSettings: VideoJobDeps['getSettings'] = async () => {
   };
 };
 
-const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, durationSeconds }) => {
+const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, costUsd, durationSeconds, status }) => {
   try {
     await usageEventRepository.record({
       requestId: job.questId ?? job.id,
@@ -262,7 +262,7 @@ const recordUsage: VideoJobDeps['recordUsage'] = async ({ job, creditsCharged, c
       units: durationSeconds,
       costUsd,
       creditsCharged,
-      status: 'ok',
+      status,
       latencyMs: Date.now() - (job.createdAt?.getTime() ?? Date.now()),
     });
   } catch (error) {

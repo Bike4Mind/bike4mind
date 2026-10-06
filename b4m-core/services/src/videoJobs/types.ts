@@ -2,6 +2,7 @@ import type {
   GenerationJobSource,
   IGenerationJobDocument,
   IGenerationJobRepository,
+  UsageEventStatus,
   VideoGenerationSettings,
   VideoProviderId,
   VideoValidationErrorCode,
@@ -53,6 +54,8 @@ export type VideoJobDeps = {
     creditsCharged: number;
     costUsd: number;
     durationSeconds: number;
+    /** `refusal` for a block the provider billed: spend with no video delivered. */
+    status: Extract<UsageEventStatus, 'ok' | 'refusal'>;
   }): Promise<void>;
   now(): Date;
   logger: Logger;

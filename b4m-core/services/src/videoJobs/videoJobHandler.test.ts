@@ -156,7 +156,7 @@ describe('video job end to end with the test provider', () => {
     });
     expect(job.settledCredits).toBe(charged);
     expect(t.deps.recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4 })
+      expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4, status: 'ok' })
     );
   });
 
@@ -336,8 +336,9 @@ describe('video job end to end with the test provider', () => {
       expect(charged).toBe(hold.reservedCredits);
       expect(job.settledCredits).toBe(charged);
       expect(releaseCreditHold).not.toHaveBeenCalled();
+      // The spend is real, but no video was delivered: the row must not read as an ordinary success.
       expect(t.deps.recordUsage).toHaveBeenCalledWith(
-        expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4 })
+        expect.objectContaining({ creditsCharged: charged, costUsd: 0.04, durationSeconds: 4, status: 'refusal' })
       );
     });
 

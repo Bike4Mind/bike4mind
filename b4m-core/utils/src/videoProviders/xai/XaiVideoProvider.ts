@@ -42,6 +42,16 @@ type ErrorInfo = { code?: string; message?: string };
 
 const SubmitResponseSchema = z.looseObject({ request_id: z.string().min(1) });
 
+// The live moderated 400 carries `usage.cost_in_usd_ticks` (1600000000 for a 2s clip).
+const UsageSchema = z.looseObject({ usage: z.looseObject({ cost_in_usd_ticks: z.number() }) });
+
+// A moderated output was generated before it was withheld; without usage to read, assume xAI billed it, as it did
+// the one observed live.
+const billedFor = (raw: unknown): boolean => {
+  const parsed = UsageSchema.safeParse(raw);
+  return parsed.success ? parsed.data.usage.cost_in_usd_ticks > 0 : true;
+};
+
 const PollSchema = z.looseObject({
   status: z.string(),
   // 0-100 or null.
@@ -115,7 +125,7 @@ const toPollResult = (body: PollBody, ctx: VideoProviderContext): ProviderPollRe
     case 'done': {
       // Done means generated, and xAI bills a generated clip even when moderation then withholds it.
       if (body.video?.respect_moderation === false) {
-        return { status: 'blocked', reason: MODERATION_REASON, billed: true, raw: body };
+        return { status: 'blocked', reason: MODERATION_REASON, billed: billedFor(body), raw: body };
       }
       if (body.video?.url) {
         return {
@@ -202,7 +212,7 @@ export class XaiVideoProvider implements VideoProvider {
     // Seen live: a moderated output is a poll 400 (code "imagine:content-moderated"), not a done or failed status,
     // and xAI still bills it. Throwing would retry it to exhaustion, so it is a blocked verdict.
     if (!response.ok && isModeration(errorInfoOf(raw))) {
-      return { status: 'blocked', reason: MODERATION_REASON, billed: true, raw };
+      return { status: 'blocked', reason: MODERATION_REASON, billed: billedFor(raw), raw };
     }
     // A malformed or unknown request id never recovers on retry.
     if (

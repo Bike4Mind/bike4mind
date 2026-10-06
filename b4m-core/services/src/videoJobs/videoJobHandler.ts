@@ -125,6 +125,8 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         creditsCharged: charged,
         costUsd: usd,
         durationSeconds: billed.durationSeconds,
+        // A billed block spent real money but delivered nothing; 'refusal' keeps it out of the successes.
+        status: job.state === 'blocked' ? 'refusal' : 'ok',
       });
     } catch (error) {
       deps.logger.error('video_job_record_usage_failed', { jobId: job.id, creditsCharged: charged, error });

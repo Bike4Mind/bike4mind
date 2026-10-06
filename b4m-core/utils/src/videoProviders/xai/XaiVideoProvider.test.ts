@@ -346,6 +346,25 @@ describe('XaiVideoProvider specifics', () => {
     });
   });
 
+  it('reads billed from the usage the live moderated 400 carries', async () => {
+    const { status, body } = exchange(FIXTURES.blockedOutput, 'poll_terminal').response;
+    expect(body).toMatchObject({ usage: { cost_in_usd_ticks: 1600000000 } });
+    const zeroCost = { ...(body as Record<string, unknown>), usage: { cost_in_usd_ticks: 0 } };
+    expect(await pollWith(zeroCost, status)).toMatchObject({ status: 'blocked', billed: false });
+  });
+
+  it('treats a moderated poll 400 without usage as billed, as the observed one was', async () => {
+    expect(
+      await pollWith({ code: 'imagine:content-moderated', error: 'Rejected by content moderation' }, 400)
+    ).toMatchObject({ status: 'blocked', billed: true });
+  });
+
+  it('reads billed from usage on a done job withheld by moderation', async () => {
+    const withheld = { status: 'done', video: { url: VIDEO_URL, duration: 2, respect_moderation: false } };
+    expect(await pollWith({ ...withheld, usage: { cost_in_usd_ticks: 0 } })).toMatchObject({ billed: false });
+    expect(await pollWith({ ...withheld, usage: { cost_in_usd_ticks: 5 } })).toMatchObject({ billed: true });
+  });
+
   it('carries the blocked-output fixture through submit, pending poll and a blocked poll', async () => {
     active = FIXTURES.blockedOutput;
     const provider = new XaiVideoProvider();
