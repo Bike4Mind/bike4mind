@@ -130,30 +130,34 @@ interface LakeGroup {
  * list leaves the per-row owner icon as the only thing separating them from the caller's own.
  * Own first because that is what a user scopes to most; other owners alphabetical, with lakes whose
  * owner is unresolved (built-in fallbacks, deleted accounts) last. List order is kept within a group.
- *
- * Known limit: buckets key on `ownerDisplayName`, the only owner field ManageableDataLakeConfig
- * carries, so two owners sharing a display name share a header. A stable owner key on the list
- * projection (listDataLakes.ts toManageableConfig) is what would separate them.
+ * Owner groups key on `ownerUserId` (falling back to the name for payloads without it), so two
+ * owners sharing a display name get separate headers, told apart by username.
  */
 const groupLakesByOwner = (lakes: RetrievabilityLabeledDataLake[]): LakeGroup[] => {
   const own: RetrievabilityLabeledDataLake[] = [];
-  const byOwner = new Map<string, RetrievabilityLabeledDataLake[]>();
+  const byOwner = new Map<string, { name: string; username?: string; lakes: RetrievabilityLabeledDataLake[] }>();
   const unknownOwner: RetrievabilityLabeledDataLake[] = [];
   for (const lake of lakes) {
     if (lake.isOwn !== false) own.push(lake);
     else if (lake.ownerDisplayName) {
-      const bucket = byOwner.get(lake.ownerDisplayName);
-      if (bucket) bucket.push(lake);
-      else byOwner.set(lake.ownerDisplayName, [lake]);
+      const key = lake.ownerUserId ?? lake.ownerDisplayName;
+      const bucket = byOwner.get(key);
+      if (bucket) bucket.lakes.push(lake);
+      else byOwner.set(key, { name: lake.ownerDisplayName, username: lake.ownerUsername, lakes: [lake] });
     } else unknownOwner.push(lake);
   }
+  const nameCounts = new Map<string, number>();
+  for (const { name } of byOwner.values()) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
   const groups: LakeGroup[] = [];
   if (own.length) groups.push({ key: 'own', label: 'Your lakes', lakes: own });
-  [...byOwner.keys()]
-    .sort((a, b) => a.localeCompare(b))
-    .forEach(owner =>
-      groups.push({ key: `owner:${owner}`, label: `Owned by ${owner}`, lakes: byOwner.get(owner) ?? [] })
-    );
+  [...byOwner]
+    .map(([key, { name, username, lakes: ownerLakes }]) => ({
+      key: `owner:${key}`,
+      label: (nameCounts.get(name) ?? 0) > 1 && username ? `Owned by ${name} (${username})` : `Owned by ${name}`,
+      lakes: ownerLakes,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key))
+    .forEach(group => groups.push(group));
   if (unknownOwner.length) groups.push({ key: 'unknown', label: 'Other lakes', lakes: unknownOwner });
   return groups;
 };

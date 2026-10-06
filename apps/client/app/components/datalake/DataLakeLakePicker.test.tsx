@@ -258,10 +258,10 @@ describe('DataLakeLakePicker', () => {
     renderPicker({
       lakes: [
         lake({ id: 'z', name: 'Fallback', isOwn: false }),
-        lake({ id: 'b', name: 'Zed test lake', isOwn: false, ownerDisplayName: 'Zed' }),
+        lake({ id: 'b', name: 'Zed test lake', isOwn: false, ownerDisplayName: 'Zed', ownerUserId: 'u-zed' }),
         lake({ id: 'a', name: 'Mine' }),
-        lake({ id: 'c', name: 'Dana corpus', isOwn: false, ownerDisplayName: 'Dana' }),
-        lake({ id: 'd', name: 'Dana notes', isOwn: false, ownerDisplayName: 'Dana' }),
+        lake({ id: 'c', name: 'Dana corpus', isOwn: false, ownerDisplayName: 'Dana', ownerUserId: 'u-dana' }),
+        lake({ id: 'd', name: 'Dana notes', isOwn: false, ownerDisplayName: 'Dana', ownerUserId: 'u-dana' }),
       ],
     });
     openMenu();
@@ -272,16 +272,49 @@ describe('DataLakeLakePicker', () => {
     expect(order).toEqual([
       'group-own',
       'lake-a',
-      'group-owner:Dana',
+      'group-owner:u-dana',
       'lake-c',
       'lake-d',
-      'group-owner:Zed',
+      'group-owner:u-zed',
       'lake-b',
       'group-unknown',
       'lake-z',
     ]);
     // Headers stay out of the menu's arrow-key order.
     expect(screen.getByTestId('datalake-lake-picker-group-own')).toHaveAttribute('role', 'none');
+    // A display name only one owner holds gets no username suffix.
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:u-dana')).not.toHaveTextContent('(');
+  });
+
+  it('separates two owners who share a display name, telling them apart by username', () => {
+    renderPicker({
+      lakes: [
+        lake({
+          id: 'c',
+          name: 'Corpus',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-1',
+          ownerUsername: 'dana7',
+        }),
+        lake({
+          id: 'd',
+          name: 'Notes',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-2',
+          ownerUsername: 'dana42',
+        }),
+      ],
+    });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:u-1')).toHaveTextContent('Owned by Dana (dana7)');
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:u-2')).toHaveTextContent('Owned by Dana (dana42)');
+    const order = screen
+      .getAllByTestId(/^datalake-lake-picker-(group-.+|lake-[a-z])$/)
+      .map(el => el.getAttribute('data-testid')?.replace('datalake-lake-picker-', ''));
+    expect(order).toEqual(['group-owner:u-2', 'lake-d', 'group-owner:u-1', 'lake-c']);
   });
 
   it('drops a group whose lakes the filter hides', () => {
