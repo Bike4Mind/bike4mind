@@ -429,7 +429,9 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
             // A reconnect's caller owns the retry/backoff, so it must still see the rejection.
             if (isReconnect) throw error;
             const serverMessage = (error as { response?: { data?: { error?: unknown } } }).response?.data?.error;
-            toast.error(typeof serverMessage === 'string' ? serverMessage : 'Failed to start voice session.');
+            toast.error(typeof serverMessage === 'string' ? serverMessage : 'Failed to start voice session.', {
+              id: 'voice-session-start-error',
+            });
             setConnectionStatus('disconnected');
             return null;
           });
@@ -827,7 +829,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   useEffect(() => {
     if (!isActive || !enforceCredits) return;
     if ((currentUser?.currentCredits ?? 0) <= 0) {
-      toast.error('Out of Credits! Voice session ended.');
+      toast.error('Out of Credits! Voice session ended.', { id: 'voice-session-start-error' });
       endSession();
     }
   }, [isActive, enforceCredits, currentUser?.currentCredits, endSession]);

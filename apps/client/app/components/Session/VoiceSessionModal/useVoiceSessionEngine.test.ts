@@ -249,7 +249,9 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
       await view.result.current.connect();
     });
 
-    expect(toast.error).toHaveBeenCalledWith('Voice sessions are unavailable right now.');
+    expect(toast.error).toHaveBeenCalledWith('Voice sessions are unavailable right now.', {
+      id: 'voice-session-start-error',
+    });
     expect(view.result.current.connectionStatus).toBe('disconnected');
     expect(setupRealtimeConnection).not.toHaveBeenCalled();
   });
@@ -262,7 +264,9 @@ describe('useVoiceSessionEngine — WebRTC auto-reconnect', () => {
       await view.result.current.connect();
     });
 
-    expect(toast.error).toHaveBeenCalledWith('Failed to start voice session.');
+    expect(toast.error).toHaveBeenCalledWith('Failed to start voice session.', {
+      id: 'voice-session-start-error',
+    });
     expect(view.result.current.connectionStatus).toBe('disconnected');
   });
 
