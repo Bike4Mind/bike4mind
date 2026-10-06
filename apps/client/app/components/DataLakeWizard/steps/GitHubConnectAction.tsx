@@ -40,13 +40,17 @@ function resyncBlockedReason(connection: LakeGitHubConnection): string | undefin
  */
 export default function GitHubConnectAction({ lake }: { lake: { id: string; origin?: DataLakeOrigin } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  const [confirmingSwitch, setConfirmingSwitch] = useState(false);
+  // Keyed by lake: the header reuses this instance across lake selections, so a prompt opened on one
+  // lake must not stay open (and confirm) on the next.
+  const [switchPromptLakeId, setSwitchPromptLakeId] = useState<string | null>(null);
+  const confirmingSwitch = switchPromptLakeId === lake.id;
 
   const { data: connection, isLoading, isError } = useLakeGitHubConnection(lake.id);
   const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
   const updateLake = useUpdateDataLake();
+  const revertOrigin = useUpdateDataLake({ notifySuccess: false });
   const needsSwitch = !acceptsConnectorContent(lake.origin);
 
   if (isLoading) {
@@ -82,7 +86,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
           startDecorator={<GitHubIcon />}
           loading={connecting && !confirmingSwitch}
           disabled={confirmingSwitch}
-          onClick={() => (needsSwitch ? setConfirmingSwitch(true) : beginConnect())}
+          onClick={() => (needsSwitch ? setSwitchPromptLakeId(lake.id) : beginConnect())}
           sx={{ alignSelf: 'flex-start' }}
         >
           Connect GitHub
@@ -90,6 +94,10 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
         {confirmingSwitch && (
           <Stack gap={0.5} data-testid="github-switch-origin-prompt">
             <Typography level="body-sm">Switch this lake to connector-fed to connect a repository?</Typography>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              This applies to the whole lake: any connector or scheduled import can then add files to it, not just
+              GitHub.
+            </Typography>
             <Stack direction="row" gap={1}>
               <Button
                 data-testid="github-switch-origin-confirm-btn"
@@ -97,18 +105,22 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
                 variant="soft"
                 color="primary"
                 loading={updateLake.isPending || connecting}
-                onClick={() =>
+                onClick={() => {
+                  const lakeId = lake.id;
                   // The update hook toasts its own failure; the connect only starts once the origin is written.
                   updateLake.mutate(
-                    { id: lake.id, origin: 'connector-fed' },
+                    { id: lakeId, origin: 'connector-fed' },
                     {
                       onSuccess: () => {
-                        setConfirmingSwitch(false);
-                        beginConnect();
+                        setSwitchPromptLakeId(null);
+                        // Undo the switch if the start is refused, so a failed connect does not leave the
+                        // lake connector-fed with nothing connected. Abandoning GitHub's page keeps it: the
+                        // user confirmed the switch, and the lake's origin chip shows it.
+                        beginConnect({ onFailed: () => revertOrigin.mutate({ id: lakeId, origin: 'curated' }) });
                       },
                     }
-                  )
-                }
+                  );
+                }}
               >
                 Switch and connect
               </Button>
@@ -118,7 +130,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
                 variant="plain"
                 color="neutral"
                 disabled={updateLake.isPending || connecting}
-                onClick={() => setConfirmingSwitch(false)}
+                onClick={() => setSwitchPromptLakeId(null)}
               >
                 Cancel
               </Button>

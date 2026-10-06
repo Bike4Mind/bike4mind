@@ -636,9 +636,10 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
 }
 
 /**
- * Updates an existing data lake configuration.
+ * Updates an existing data lake configuration. `notifySuccess: false` drops the success toast for a
+ * write the user did not ask for directly (e.g. GitHubConnectAction undoing its own origin switch).
  */
-export function useUpdateDataLake() {
+export function useUpdateDataLake({ notifySuccess = true }: { notifySuccess?: boolean } = {}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -658,7 +659,7 @@ export function useUpdateDataLake() {
       // so without this they keep rendering the pre-change verdict against the new policy.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.convergencePlan(id) });
-      toast.success('Data lake updated');
+      if (notifySuccess) toast.success('Data lake updated');
     },
     onError: (error: Error) => {
       toast.error(serverRefusalMessage(error) || error.message || 'Failed to update data lake');

@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   resyncMutate: vi.fn(),
   disconnectMutate: vi.fn(),
   updateLakeMutate: vi.fn(),
+  updatePending: { current: false },
+  revertOriginMutate: vi.fn(),
   saveHandoff: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -24,7 +26,10 @@ vi.mock('@client/app/hooks/data/githubLake', () => ({
   useDisconnectLakeGitHub: () => ({ mutate: h.disconnectMutate, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useUpdateDataLake: () => ({ mutate: h.updateLakeMutate, isPending: false }),
+  useUpdateDataLake: (opts?: { notifySuccess?: boolean }) =>
+    opts?.notifySuccess === false
+      ? { mutate: h.revertOriginMutate, isPending: false }
+      : { mutate: h.updateLakeMutate, isPending: h.updatePending.current },
 }));
 vi.mock('@client/app/utils/githubLakeConnectHandoff', () => ({ saveGitHubLakeConnectHandoff: h.saveHandoff }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
@@ -65,6 +70,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.connection.current = null;
   h.isError.current = false;
+  h.updatePending.current = false;
   vi.stubGlobal('location', { ...window.location, assign });
 });
 afterEach(() => {
@@ -295,11 +301,11 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
     fireEvent.click(screen.getByTestId('github-connect-btn'));
   };
 
-  it('asks to switch a curated lake before starting the connect', () => {
+  it('asks to switch a curated lake before starting the connect, saying the switch is lake-wide', () => {
     openPrompt({ id: 'lake1', origin: 'curated' });
-    expect(screen.getByTestId('github-switch-origin-prompt')).toHaveTextContent(
-      'Switch this lake to connector-fed to connect a repository?'
-    );
+    const prompt = screen.getByTestId('github-switch-origin-prompt');
+    expect(prompt).toHaveTextContent('Switch this lake to connector-fed to connect a repository?');
+    expect(prompt).toHaveTextContent(/whole lake: any connector or scheduled import can then add files/);
     expect(h.startMutate).not.toHaveBeenCalled();
     expect(h.updateLakeMutate).not.toHaveBeenCalled();
   });
@@ -325,10 +331,52 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
   it('does not start the connect when the origin update fails', () => {
     openPrompt({ id: 'lake1', origin: 'curated' });
     fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    // react-query settles a failed mutate through onError/onSettled only, never onSuccess.
     const [, options] = h.updateLakeMutate.mock.calls[0];
-    expect(options.onError).toBeUndefined();
+    act(() => {
+      options.onError?.(new Error('refused'));
+      options.onSettled?.();
+    });
     expect(h.startMutate).not.toHaveBeenCalled();
+    expect(h.revertOriginMutate).not.toHaveBeenCalled();
     expect(screen.getByTestId('github-switch-origin-prompt')).toBeInTheDocument();
+  });
+
+  it('shows the confirm as loading and locks cancel while the origin write is pending', () => {
+    h.updatePending.current = true;
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    expect(screen.getByTestId('github-switch-origin-confirm-btn')).toBeDisabled();
+    expect(screen.getByTestId('github-switch-origin-cancel-btn')).toBeDisabled();
+  });
+
+  it('switches the lake back to curated when the connect is refused after the switch', () => {
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
+    const [, startOptions] = h.startMutate.mock.calls[0];
+    act(() => startOptions.onError({ isAxiosError: true, response: { data: { error: 'already connected' } } }));
+    expect(h.revertOriginMutate).toHaveBeenCalledWith({ id: 'lake1', origin: 'curated' });
+  });
+
+  it('keeps the switch once the connect leaves for GitHub', () => {
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
+    act(() => resolveStart());
+    expect(assign).toHaveBeenCalledWith(URLS.authorizeUrl);
+    expect(h.revertOriginMutate).not.toHaveBeenCalled();
+  });
+
+  it('closes a prompt opened on one lake when another lake is selected', () => {
+    const { rerender } = wrap(<GitHubConnectAction lake={{ id: 'lake1', origin: 'curated' }} />);
+    fireEvent.click(screen.getByTestId('github-connect-btn'));
+    expect(screen.getByTestId('github-switch-origin-prompt')).toBeInTheDocument();
+    rerender(
+      <CssVarsProvider theme={appTheme}>
+        <GitHubConnectAction lake={{ id: 'lake2', origin: 'curated' }} />
+      </CssVarsProvider>
+    );
+    expect(screen.queryByTestId('github-switch-origin-prompt')).not.toBeInTheDocument();
   });
 
   it('cancels without updating the lake or starting the connect', () => {

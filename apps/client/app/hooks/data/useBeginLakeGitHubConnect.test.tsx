@@ -33,9 +33,11 @@ describe('useBeginLakeGitHubConnect', () => {
   it('saves the handoff and leaves for the authorize URL on success', async () => {
     vi.mocked(api.post).mockResolvedValue({ data: { authorizeUrl: AUTHORIZE_URL } });
     const { result } = renderHook(() => useBeginLakeGitHubConnect('lake1'), { wrapper });
+    const onFailed = vi.fn();
 
-    await act(async () => result.current.begin());
+    await act(async () => result.current.begin({ onFailed }));
 
+    expect(onFailed).not.toHaveBeenCalled();
     expect(api.post).toHaveBeenCalledWith('/api/data-lakes/lake1/github-connection');
     expect(readGitHubLakeConnectHandoff()).toEqual({ dataLakeId: 'lake1' });
     expect(assign).toHaveBeenCalledWith(AUTHORIZE_URL);
@@ -48,10 +50,12 @@ describe('useBeginLakeGitHubConnect', () => {
     });
 
     const { result } = renderHook(() => useBeginLakeGitHubConnect('lake1'), { wrapper });
-    await act(async () => result.current.begin());
+    const onFailed = vi.fn();
+    await act(async () => result.current.begin({ onFailed }));
 
     expect(assign).not.toHaveBeenCalled();
     expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/session storage/));
+    expect(onFailed).toHaveBeenCalledTimes(1);
     setItemSpy.mockRestore();
   });
 
@@ -61,10 +65,12 @@ describe('useBeginLakeGitHubConnect', () => {
       response: { data: { error: '"Lake" is curated.' } },
     });
     const { result } = renderHook(() => useBeginLakeGitHubConnect('lake1'), { wrapper });
+    const onFailed = vi.fn();
 
-    await act(async () => result.current.begin());
+    await act(async () => result.current.begin({ onFailed }));
 
     expect(h.toastError).toHaveBeenCalledWith('"Lake" is curated.');
     expect(assign).not.toHaveBeenCalled();
+    expect(onFailed).toHaveBeenCalledTimes(1);
   });
 });
