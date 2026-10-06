@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import {
   ProviderSubmitError,
+  ProviderOutputUnavailableError,
   VideoOutputTooLargeError,
   type ProviderJobHandle,
   type ProviderOutput,
@@ -239,6 +240,10 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         bytes = await providerFor(job).fetchOutput(payload.providerOutput, ctx);
       } catch (error) {
         if (error instanceof VideoOutputTooLargeError) return fail('output_too_large', error.message);
+        // Retention ran out (or the file was purged): another attempt cannot fetch it.
+        if (error instanceof ProviderOutputUnavailableError) {
+          return fail('provider_error', 'The provider no longer has the generated video', { status: error.status });
+        }
         throw error;
       }
       const contentType = payload.providerOutput.contentType ?? 'video/mp4';
@@ -254,6 +259,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         bytes,
         contentType,
         prompt: payload.request.prompt,
+        signal: context.signal,
       });
       let output: VideoJobOutput;
       if (files.saved) {
@@ -261,7 +267,12 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       } else {
         deps.logger.warn('video saved outside Files', { jobId: job.id, reason: files.reason });
         const key = `generated-video/${job.ownerId}/${job.id}.${extensionFor(contentType)}`;
-        const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType });
+        const { s3Key } = await deps.saveToGeneratedBucket({
+          key,
+          bytes,
+          contentType,
+          signal: context.signal,
+        });
         output = { location: 'generated', s3Key, ...common };
       }
       return { next: 'succeeded', payload: { ...withoutProviderOutput(payload), output } };

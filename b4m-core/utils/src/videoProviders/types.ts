@@ -62,6 +62,14 @@ export class VideoOutputTooLargeError extends Error {
   }
 }
 
+/** The provider no longer has the output (expired or purged); retrying the download cannot succeed. */
+export class ProviderOutputUnavailableError extends Error {
+  constructor(readonly status: number) {
+    super(`provider output is no longer available (HTTP ${status})`);
+    this.name = 'ProviderOutputUnavailableError';
+  }
+}
+
 // Shared by URL-delivering adapters so the size cap is enforced while streaming, not after buffering everything.
 export async function readBoundedResponse(response: Response, maxBytes = MAX_VIDEO_OUTPUT_BYTES): Promise<Buffer> {
   const declared = Number(response.headers.get('content-length') ?? '0');

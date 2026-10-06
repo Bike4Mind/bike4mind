@@ -148,7 +148,7 @@ export const loadInputImage: VideoJobDeps['loadInputImage'] = async (userId, fil
   return { bytes, mimeType: fabFile.mimeType };
 };
 
-export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType }) => {
+export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, bytes, contentType, signal }) => {
   const jobTag = `job:${jobId}`;
   // A re-run after a lost commit must not store a second copy.
   const existing = await fabFileRepository.findOne({
@@ -191,7 +191,7 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
         },
         storage: {
           upload: (path, content, options) =>
-            getFilesStorage().upload(content, path, { ContentType: options?.ContentType || contentType }),
+            getFilesStorage().upload(content, path, { ContentType: options?.ContentType || contentType }, signal),
           generateSignedUrl: (path, expireInSeconds, type) =>
             getFilesStorage().getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
         },
@@ -206,6 +206,8 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
     }
     return { saved: true, fileId: created.id, s3Key: created.filePath };
   } catch (error) {
+    // An aborted step must fail the step (and be retried), not fall back to the generated bucket.
+    if (signal.aborted) throw error;
     const message = error instanceof Error ? error.message : '';
     if (SAVE_FAILURE_PATTERNS.storage_limit.test(message)) return { saved: false, reason: 'storage_limit' };
     if (SAVE_FAILURE_PATTERNS.file_too_large.test(message)) return { saved: false, reason: 'file_too_large' };
@@ -214,8 +216,8 @@ export const saveToFiles: VideoJobDeps['saveToFiles'] = async ({ userId, jobId, 
   }
 };
 
-const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType }) => {
-  await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType });
+const saveToGeneratedBucket: VideoJobDeps['saveToGeneratedBucket'] = async ({ key, bytes, contentType, signal }) => {
+  await getGeneratedImageStorage().upload(bytes, key, { ContentType: contentType }, signal);
   return { s3Key: key };
 };
 

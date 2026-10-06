@@ -4,6 +4,7 @@ import {
   createVideoProviderRegistry,
   ProviderSubmitError,
   TestVideoProvider,
+  ProviderOutputUnavailableError,
   VideoOutputTooLargeError,
   type VideoProvider,
 } from '@bike4mind/utils/videoProviders';
@@ -435,6 +436,33 @@ describe('video job end to end with the test provider', () => {
     await t.runToCompletion();
     expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'output_too_large' } });
     expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+  });
+
+  it('fails once with provider_error and releases the hold when the output is gone', async () => {
+    const fetchOutput = vi.fn<VideoProvider['fetchOutput']>(async () => {
+      throw new ProviderOutputUnavailableError(404);
+    });
+    const t = setup({ providers: createVideoProviderRegistry([stubProvider({ fetchOutput })]) });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'failed', error: { code: 'provider_error' } });
+    expect(fetchOutput).toHaveBeenCalledTimes(1);
+    expect(t.deps.saveToFiles).not.toHaveBeenCalled();
+    expect(releaseCreditHold).toHaveBeenCalledTimes(1);
+    expect(settleCreditHold).not.toHaveBeenCalled();
+  });
+
+  it('passes the step signal to both saves', async () => {
+    const t = setup({
+      saveToFiles: vi.fn(async () => ({ saved: false as const, reason: 'storage_limit' as const })),
+    });
+    const created = await createVideoJob({ user, request: request(), source: 'studio' }, t.deps);
+    await t.runToCompletion();
+    expect(t.jobOf(created)).toMatchObject({ state: 'succeeded', payload: { output: { location: 'generated' } } });
+    expect(t.deps.saveToFiles).toHaveBeenCalledWith(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(t.deps.saveToGeneratedBucket).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
   });
 
   it('fails cleanly when no API key resolves for the provider', async () => {

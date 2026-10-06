@@ -30,11 +30,18 @@ export type VideoJobDeps = {
     bytes: Buffer;
     contentType: string;
     prompt: string;
+    /** The step's lease-bounded signal; an abort must reject, never report an ordinary save failure. */
+    signal: AbortSignal;
   }): Promise<
     | { saved: true; fileId: string; s3Key: string }
     | { saved: false; reason: 'storage_limit' | 'file_too_large' | 'error' }
   >;
-  saveToGeneratedBucket(params: { key: string; bytes: Buffer; contentType: string }): Promise<{ s3Key: string }>;
+  saveToGeneratedBucket(params: {
+    key: string;
+    bytes: Buffer;
+    contentType: string;
+    signal: AbortSignal;
+  }): Promise<{ s3Key: string }>;
   credits: CreditHoldAdapters;
   enqueue(jobId: string, delaySeconds: number): Promise<void>;
   recordUsage(event: {
