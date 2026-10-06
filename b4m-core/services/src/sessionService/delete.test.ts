@@ -187,7 +187,8 @@ describe('sessionService - delete', () => {
           { userId: ownerId, permissions: ['read'], projectId: 'project-a' },
           { userId: 'third-party', permissions: ['read'] },
         ],
-      })
+      }),
+      { includeDeleted: true }
     );
   });
 
@@ -211,7 +212,8 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] })
+      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] }),
+      { includeDeleted: true }
     );
   });
 
@@ -255,7 +257,8 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-elsewhere', users: [] })
+      expect.objectContaining({ id: 'file-elsewhere', users: [] }),
+      { includeDeleted: true }
     );
   });
 
@@ -301,7 +304,8 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
     // ...only the grant this session minted on it is dropped.
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-shared-in', users: [] })
+      expect.objectContaining({ id: 'file-shared-in', users: [] }),
+      { includeDeleted: true }
     );
   });
 });
