@@ -85,7 +85,11 @@ async function findReusablePendingLake(req: Request, organizationId: string): Pr
     await resolveConnectableLake(req.user, lake.id);
     return lake;
   } catch (error) {
-    if (error instanceof HTTPError) return null;
+    if (error instanceof HTTPError) {
+      // Unmark it so the finder can move on to a lake that can still connect instead of every retry inserting.
+      await dataLakeRepository.clearPendingConnector(lake.id);
+      return null;
+    }
     throw error;
   }
 }

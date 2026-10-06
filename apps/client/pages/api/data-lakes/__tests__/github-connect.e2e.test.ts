@@ -311,6 +311,20 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(audits.map(a => a.action)).toEqual(['create', 'delete']);
   });
 
+  it('stops offering a placeholder lake that can no longer connect so retries reuse one new lake', async () => {
+    const first = makeRes();
+    await run(makeReq({ organizationId: ORG }), first.res);
+    await DataLakeModel.updateOne({ _id: lakeIdOf(first.json) }, { $set: { origin: 'curated' } });
+    const second = makeRes();
+    const third = makeRes();
+    await run(makeReq({ organizationId: ORG }), second.res);
+    await run(makeReq({ organizationId: ORG }), third.res);
+    expect(lakeIdOf(second.json)).not.toBe(lakeIdOf(first.json));
+    expect(lakeIdOf(third.json)).toBe(lakeIdOf(second.json));
+    const stale = await DataLakeModel.findById(lakeIdOf(first.json)).lean();
+    expect(stale?.pendingConnector).toBeUndefined();
+  });
+
   it('creates a lake the bind-time rename renames, stamps and audits', async () => {
     const { res, json } = makeRes();
     await run(makeReq({ organizationId: ORG }), res);
