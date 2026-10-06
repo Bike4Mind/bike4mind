@@ -3,6 +3,8 @@ export * from './defineEndpoint';
 export { chatContract } from './contracts/chat.contract';
 export { startAgentExecutionContract, getAgentExecutionContract } from './contracts/agentExecutions.contract';
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
+export { sessionGetContract } from './contracts/sessionGet.contract';
+export { sessionDeleteContract } from './contracts/sessionDelete.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
