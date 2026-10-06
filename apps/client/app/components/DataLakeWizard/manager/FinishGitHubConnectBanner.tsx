@@ -64,7 +64,7 @@ export default function FinishGitHubConnectBanner({
           data-testid={`github-finish-connect-btn-${lake.id}`}
           startDecorator={<GitHubIcon />}
           loading={isPending}
-          onClick={begin}
+          onClick={() => begin()}
         >
           Finish connecting GitHub
         </Button>
