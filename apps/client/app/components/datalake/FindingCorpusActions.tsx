@@ -122,8 +122,10 @@ function MergeDialog({
   // Default: every other document retires. The curator can uncheck the ones to leave in place.
   const [retireIds, setRetireIds] = useState<string[]>(() => finding.sources.slice(1).map(source => source.fabFileId));
   const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   const chooseKeep = (id: string) => {
+    setError(null);
     setRetireIds(current => {
       const withoutNewKeep = current.filter(retireId => retireId !== id);
       // The document kept a moment ago now belongs in the retire set, so switching the winner
@@ -132,8 +134,10 @@ function MergeDialog({
     });
     setKeepId(id);
   };
-  const toggleRetire = (id: string) =>
+  const toggleRetire = (id: string) => {
+    setError(null);
     setRetireIds(current => (current.includes(id) ? current.filter(x => x !== id) : [...current, id]));
+  };
 
   const kept = finding.sources.find(source => source.fabFileId === keepId) ?? null;
   const retired = finding.sources.filter(source => source.fabFileId !== keepId && retireIds.includes(source.fabFileId));
@@ -141,6 +145,7 @@ function MergeDialog({
 
   const submit = () => {
     if (!kept) return;
+    setError(null);
     apply.mutate(
       {
         dataLakeId,
@@ -152,7 +157,11 @@ function MergeDialog({
           note: note.trim() || undefined,
         },
       },
-      { onSuccess: onClose }
+      {
+        onSuccess: onClose,
+        // The dialog stays open on a refusal, so the reason is shown here rather than only in a toast.
+        onError: (err: Error) => setError(serverRefusalMessage(err) || err.message || 'Could not merge'),
+      }
     );
   };
 
@@ -191,6 +200,11 @@ function MergeDialog({
       </FormControl>
       <ConfirmList kept={kept} retired={retired} />
       <NoteField value={note} onChange={setNote} />
+      {error && (
+        <Alert color="danger" size="sm" data-testid="finding-corpus-merge-error">
+          <Typography level="body-xs">{error}</Typography>
+        </Alert>
+      )}
       <CorpusDialogActions
         pending={apply.isPending}
         disabled={!canSubmit}
@@ -331,6 +345,9 @@ function RetagDialog({
   const [names, setNames] = useState<string[] | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Separate from `error` (tag-input validation): the `[tags]` effect resets `error` on every load,
+  // which would swallow a server refusal, and the two messages are different things.
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [note, setNote] = useState('');
 
   useEffect(() => {
@@ -354,20 +371,29 @@ function RetagDialog({
     if ((names?.length ?? 0) >= MAX_TAXONOMY_TAGS) return setError('This document is at its tag limit');
     if (names?.includes(name)) return setError('That tag is already here');
     setError(null);
+    setRefusal(null);
     setNames(current => [...(current ?? []), name]);
     setDraft('');
   };
-  const removeTag = (name: string) => setNames(current => (current ?? []).filter(tag => tag !== name));
+  const removeTag = (name: string) => {
+    setRefusal(null);
+    setNames(current => (current ?? []).filter(tag => tag !== name));
+  };
 
   const submit = () => {
     if (!selected || names === null) return;
+    setRefusal(null);
     apply.mutate(
       {
         dataLakeId,
         findingId: finding.id,
         body: { action: 'retag', fabFileId: selected.fabFileId, tags: names, note: note.trim() || undefined },
       },
-      { onSuccess: onClose }
+      {
+        onSuccess: onClose,
+        // The dialog stays open on a refusal, so the reason is shown here rather than only in a toast.
+        onError: (err: Error) => setRefusal(serverRefusalMessage(err) || err.message || 'Could not retag'),
+      }
     );
   };
 
@@ -379,7 +405,13 @@ function RetagDialog({
       </Typography>
       <FormControl>
         <FormLabel>Document</FormLabel>
-        <RadioGroup value={fileId} onChange={event => setFileId(event.target.value)}>
+        <RadioGroup
+          value={fileId}
+          onChange={event => {
+            setRefusal(null);
+            setFileId(event.target.value);
+          }}
+        >
           {finding.sources.map(source => (
             <Box key={source.fabFileId} data-testid={`finding-corpus-retag-file-${source.fabFileId}`}>
               <Radio value={source.fabFileId} label={sourceName(source)} />
@@ -463,6 +495,11 @@ function RetagDialog({
         </Box>
       )}
       <NoteField value={note} onChange={setNote} />
+      {refusal && (
+        <Alert color="danger" size="sm" data-testid="finding-corpus-retag-refusal">
+          <Typography level="body-xs">{refusal}</Typography>
+        </Alert>
+      )}
       <CorpusDialogActions
         pending={apply.isPending}
         disabled={!canSubmit}
