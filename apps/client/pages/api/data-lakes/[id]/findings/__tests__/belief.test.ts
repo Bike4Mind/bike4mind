@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   assertDataLakeWriteScope: vi.fn(),
   findById: vi.fn(),
@@ -42,7 +45,15 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess: h.assertLakeWriteAccess },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: { findById: h.findById },
 }));
@@ -79,9 +90,11 @@ const invoke = (findingId = 'f1') => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.assertLakeWriteAccess.mockResolvedValue(lake);
+  h.tx.length = 0;
+  h.assertLakeWriteAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
   h.findById.mockResolvedValue(resolvedFinding);
-  h.recordFindingResolutionBelief.mockResolvedValue({ recorded: true });
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
+  h.recordFindingResolutionBelief.mockImplementation(async () => (h.tx.push('belief'), { recorded: true }));
 });
 
 describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => {
@@ -93,6 +106,22 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     // dataLakeApiKeyScopeCoverage.test.ts can see it) and `loadFindingForLake` asserts it again for
     // any future caller. Both land on this spy; what matters is that the gate ran, not how often.
     expect(h.assertDataLakeWriteScope).toHaveBeenCalled();
+  });
+
+  it('gates and touches the lake inside the transaction; the belief write runs after commit', async () => {
+    await invoke().done;
+
+    expect(h.tx).toEqual(['enter', 'gate', 'touch', 'exit', 'belief']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+  });
+
+  it('does not touch the lake or write a belief when the in-transaction gate refuses', async () => {
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('forbidden'));
+
+    await expect(invoke().done).rejects.toThrow('forbidden');
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.recordFindingResolutionBelief).not.toHaveBeenCalled();
   });
 
   it("refuses another lake's finding, so a manager cannot project a foreign ruling into their lake", async () => {

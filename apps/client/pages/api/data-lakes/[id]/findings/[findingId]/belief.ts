@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { dataLakeRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
@@ -54,7 +55,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const startedAt = req.receivedAt;
     const { id, findingId } = req.query as { id: string; findingId: string };
 
-    const { lake, finding } = await loadFindingForLake(req, { lakeId: id, findingId });
+    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
+    // on the lake doc and the retry re-reads live grants. The belief write is external to it and runs
+    // after commit, because the callback re-runs on retry.
+    const { lake, finding } = await withTransaction(async () => {
+      const loaded = await loadFindingForLake(req, { lakeId: id, findingId });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(loaded.lake.id);
+      return loaded;
+    });
 
     // An open finding has no ruling to record. 400 rather than a quiet `{ recorded: false }`: the
     // other non-recording outcomes are the system's state (memory is off), whereas this one is the

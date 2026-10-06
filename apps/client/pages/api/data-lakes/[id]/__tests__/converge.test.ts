@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   planLakeConvergenceRun: vi.fn(),
@@ -39,7 +42,15 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@server/queueHandlers/convergenceKillSwitch', () => ({ isConvergenceHalted: h.isConvergenceHalted }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   fabFileRepository: { resetChunkStateByIds: h.resetChunkStateByIds },
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
@@ -92,8 +103,12 @@ const invoke = async (method: 'GET' | 'POST', body: unknown = {}) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
+  h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
+  h.resetChunkStateByIds.mockImplementation(async () => (h.tx.push('reset'), ['f1', 'f2']));
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
+  h.sendToQueue.mockImplementation(async () => void h.tx.push('send'));
   h.assertLakeAccess.mockResolvedValue(lake);
-  h.assertLakeRebuildAccess.mockResolvedValue(lake);
   h.getSettingsValue.mockResolvedValue('text-embedding-3-small');
   h.planLakeConvergenceRun.mockResolvedValue({
     report: report(),
@@ -102,8 +117,6 @@ beforeEach(() => {
       { fabFileId: 'f2', userId: 'u2', overshootChars: 100 },
     ],
   });
-  h.resetChunkStateByIds.mockResolvedValue(['f1', 'f2']);
-  h.sendToQueue.mockResolvedValue(undefined);
   h.isConvergenceHalted.mockResolvedValue(false);
   h.redactCrossLakeIdentities.mockImplementation((r: unknown) => r);
 });
@@ -131,6 +144,24 @@ describe('GET /api/data-lakes/:id/converge', () => {
 });
 
 describe('POST /api/data-lakes/:id/converge', () => {
+  it('re-gates and resets inside the transaction, touches the lake last, and sends after commit', async () => {
+    await invoke('POST');
+
+    // Early gate (outside), then the in-txn re-gate, the reset, the touch, and only then the sends.
+    expect(h.tx).toEqual(['gate', 'enter', 'gate', 'reset', 'touch', 'exit', 'send', 'send']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake1');
+  });
+
+  it('touches nothing and sends nothing when the in-transaction re-gate refuses', async () => {
+    h.assertLakeRebuildAccess.mockResolvedValueOnce(lake).mockRejectedValueOnce(new Error('forbidden'));
+
+    await expect(invoke('POST')).rejects.toThrow('forbidden');
+
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('gates on rebuild access', async () => {
     await invoke('POST');
     expect(h.assertLakeRebuildAccess).toHaveBeenCalled();

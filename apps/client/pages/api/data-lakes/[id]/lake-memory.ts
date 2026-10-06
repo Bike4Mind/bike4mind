@@ -9,6 +9,7 @@ import {
   adminSettingsRepository,
   cacheRepository,
   memoryLedgerRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { isLeaseHeld, ConflictError, UnprocessableEntityError, TooManyRequestsError } from '@bike4mind/common';
 import { Request } from 'express';
@@ -92,7 +93,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query;
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
+    // on the lake doc and the retry re-reads live grants. Everything below (cap, enqueue, audit) is
+    // external and runs after commit, because the callback re-runs on retry.
+    const lake = await withTransaction(async () => {
+      const gated = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(gated.id);
+      return gated;
+    });
 
     const platformEnabled = await adminSettingsRepository.getSettingsValue('EnableLakeMemory').catch(() => false);
     if (!platformEnabled) {

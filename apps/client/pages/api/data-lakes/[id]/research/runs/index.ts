@@ -2,7 +2,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeResearchService } from '@bike4mind/services';
-import { dataLakeResearchConfigRepository, dataLakeResearchRunRepository } from '@bike4mind/database';
+import {
+  dataLakeRepository,
+  dataLakeResearchConfigRepository,
+  dataLakeResearchRunRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { InternalServerError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { Resource } from 'sst';
@@ -43,11 +48,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
-    // Gated before the body is parsed, matching the config routes: a caller who may not manage this
-    // lake should not be able to probe the request schema by reading which field it complains about.
-    const { lake, actor, grants } = await assertLakeResearchManage(req, id);
-    const { configId } = StartInput.parse(req.body);
-
     // Checked BEFORE the row is written. Without the queue there is no executor, so a run started
     // here would sit `queued` forever and then block every later run behind the one-at-a-time
     // guard - a self-host install that never wired the queue would look permanently busy.
@@ -56,19 +56,32 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new InternalServerError('Research runs are not available on this deployment');
     }
 
-    const run = await dataLakeResearchService.startResearchRun(
-      configId,
-      lake,
-      { trigger: 'on_demand', actor, grants },
-      {
-        db: {
-          dataLakeResearchConfigs: dataLakeResearchConfigRepository,
-          dataLakeResearchRuns: dataLakeResearchRunRepository,
-          ...lakeConfigAuditDb,
-        },
-        logger: req.logger,
-      }
-    );
+    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
+    // on the lake doc and the retry re-reads live grants. Only the run row is written in it: the
+    // enqueue below is an external side effect, and the callback re-runs on retry.
+    const { run, lake } = await withTransaction(async () => {
+      // Gated before the body is parsed, matching the config routes: a caller who may not manage this
+      // lake should not be able to probe the request schema by reading which field it complains about.
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id);
+      const { configId } = StartInput.parse(req.body);
+
+      const started = await dataLakeResearchService.startResearchRun(
+        configId,
+        lake,
+        { trigger: 'on_demand', actor, grants },
+        {
+          db: {
+            dataLakeResearchConfigs: dataLakeResearchConfigRepository,
+            dataLakeResearchRuns: dataLakeResearchRunRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        }
+      );
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return { run: started, lake };
+    });
 
     await queueResearchRun(run, lake, queueUrl, req.logger);
 

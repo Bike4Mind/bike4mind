@@ -2,6 +2,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   computeLakeMemoryHealth: vi.fn(),
@@ -57,7 +60,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: { setLakeMemoryCursor: h.setLakeMemoryCursor },
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { setLakeMemoryCursor: h.setLakeMemoryCursor, touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
@@ -121,13 +132,15 @@ const health = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
   h.assertLakeAccess.mockResolvedValue(lake);
-  h.assertLakeRebuildAccess.mockResolvedValue(lake);
+  h.assertLakeRebuildAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
   h.computeLakeMemoryHealth.mockResolvedValue(health);
   h.getSettingsValue.mockResolvedValue(true);
   h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 1000) });
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
-  h.sendToQueue.mockResolvedValue(undefined);
+  h.sendToQueue.mockImplementation(async () => void h.tx.push('send'));
   h.logAuditEvent.mockResolvedValue(undefined);
 });
 
@@ -235,6 +248,30 @@ describe('POST /api/data-lakes/[id]/lake-memory', () => {
     expect(h.assertLakeRebuildAccess).not.toHaveBeenCalled();
     expect(capCalls(LAKE_CAP_KEY)).toHaveLength(0);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('gates and touches the lake inside the transaction; cap, send and audit run after commit', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockImplementation(async (key: string) => {
+      if (key === LAKE_CAP_KEY) h.tx.push('cap');
+      return { success: true, expiresAt: new Date(Date.now() + 1000) };
+    });
+    h.logAuditEvent.mockImplementation(async () => void h.tx.push('audit'));
+
+    await invoke('POST');
+
+    expect(h.tx).toEqual(['enter', 'gate', 'touch', 'exit', 'cap', 'send', 'audit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+  });
+
+  it('does not touch the lake or run any side effect when the in-transaction gate refuses', async () => {
+    h.assertLakeRebuildAccess.mockRejectedValue(new Error('forbidden'));
+
+    await expect(invoke('POST')).rejects.toThrow('forbidden');
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(capCalls(LAKE_CAP_KEY)).toHaveLength(0);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.logAuditEvent).not.toHaveBeenCalled();
   });
 
   it('gates on rebuild access - a rejected assert never checks preconditions or enqueues', async () => {
