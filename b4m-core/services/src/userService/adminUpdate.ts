@@ -195,9 +195,8 @@ export async function adminUpdateUser(
     }
   }
 
-  // Audited credit adjustment: runs before every other write (org membership, the
-  // user-doc write, the moderation transition). Records the actor, delta, resulting
-  // balance, and reason as a generic_add / generic_deduct CreditTransaction.
+  // Records the actor, delta, resulting balance, and reason as a generic_add /
+  // generic_deduct CreditTransaction (ordering and failure modes: see above).
   if (auditCreditChange && db.creditTransactions) {
     const note = creditReason?.trim() || undefined;
     // Best-effort resulting balance predicted from the read snapshot. The atomic $inc

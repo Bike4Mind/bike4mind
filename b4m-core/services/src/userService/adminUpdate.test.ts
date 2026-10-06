@@ -169,6 +169,24 @@ describe('adminUpdateUser — audited credit adjustments', () => {
     expect(target.currentCredits).toBe(100);
   });
 
+  it('rejects an unknown current organization before the ledger commits any balance', async () => {
+    const { adapters, createTransaction, incrementCredits, update, target } = makeAdapters(100);
+    target.organizationId = 'org-gone';
+    adapters.db.organizations.findById.mockImplementation(async (id: string) =>
+      id === 'org-new' ? { id, users: [] } : null
+    );
+
+    await expect(
+      adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 150, organizationId: 'org-new' }, adapters)
+    ).rejects.toThrow('Organization not found');
+
+    expect(createTransaction).not.toHaveBeenCalled();
+    expect(incrementCredits).not.toHaveBeenCalled();
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(target.currentCredits).toBe(100);
+  });
+
   it('keeps the committed ledger change when the later doc write fails', async () => {
     const { adapters, incrementCredits, update } = makeAdapters(100);
     update.mockRejectedValueOnce(new Error('doc write failed'));
