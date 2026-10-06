@@ -209,3 +209,66 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ durationSeconds: 6 });
   });
 });
+
+describe('GET /api/v1/video-generations', () => {
+  beforeEach(resetHarness);
+  const id = (n: number) => `664f1c2b9a1e4d0012ab34${n.toString(16).padStart(2, '0')}`;
+  const list = (query: Record<string, string> = {}) => fire({ url: '/api/v1/video-generations', query });
+  const forgeCursor = (after: string) =>
+    Buffer.from(JSON.stringify({ v: 1, s: 'v1.video-generations', after }), 'utf8').toString('base64url');
+
+  it('pages newest first across two pages with an opaque cursor', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.listByRequester
+      .mockResolvedValueOnce([videoJob({ id: id(3) }), videoJob({ id: id(2) }), videoJob({ id: id(1) })])
+      .mockResolvedValueOnce([videoJob({ id: id(1) })]);
+
+    const first = list({ limit: '2' });
+    await handler(first.req, first.res);
+    const page1 = first.res._getJSONData();
+    expect(page1.data.map((job: { id: string }) => job.id)).toEqual([id(3), id(2)]);
+    expect(page1.next_cursor).toEqual(expect.any(String));
+    expect(h.listByRequester).toHaveBeenLastCalledWith({
+      requestedBy: 'user-1',
+      kind: 'video',
+      state: undefined,
+      source: undefined,
+      beforeId: undefined,
+      limit: 3,
+    });
+
+    const second = list({ limit: '2', cursor: page1.next_cursor });
+    await handler(second.req, second.res);
+    expect(second.res._getJSONData()).toEqual({ data: [expect.objectContaining({ id: id(1) })], next_cursor: null });
+    expect(h.listByRequester).toHaveBeenLastCalledWith(expect.objectContaining({ beforeId: id(2), limit: 3 }));
+  });
+
+  it('passes the state and source filters through', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.listByRequester.mockResolvedValue([]);
+    const { req, res } = list({ state: 'succeeded', source: 'api' });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ state: 'succeeded', source: 'api' }));
+  });
+
+  it('422s a malformed cursor, a cursor carrying a non-ObjectId, and an unknown state', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    for (const query of [{ cursor: 'garbage' }, { cursor: forgeCursor('not-an-object-id') }, { state: 'done' }]) {
+      const { req, res } = list(query);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+    }
+    expect(h.listByRequester).not.toHaveBeenCalled();
+  });
+
+  it("never returns another member's jobs", async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE], 'member-a');
+    asUser('member-a', 'org-1');
+    h.listByRequester.mockResolvedValue([]);
+    const { req, res } = list();
+    await handler(req, res);
+    expect(h.listByRequester).toHaveBeenCalledWith(expect.objectContaining({ requestedBy: 'member-a' }));
+    expect(h.listByRequester.mock.calls[0][0]).not.toHaveProperty('ownerId');
+  });
+});
