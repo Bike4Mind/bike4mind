@@ -64,7 +64,7 @@
     "@google/genai": "^1.46.0",
     "@joplin/turndown-plugin-gfm": "^1.0.67",
     "@mendable/firecrawl-js": "^1.29.3",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
     "@opensearch-project/opensearch": "2.11.0",
     "@smithy/node-http-handler": "^4.9.3",
