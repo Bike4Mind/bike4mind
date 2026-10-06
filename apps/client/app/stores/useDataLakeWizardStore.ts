@@ -232,6 +232,11 @@ export interface RecoverableLake {
   id: string;
   tagPrefix: string;
   /**
+   * The slug the lake was created with. A reuse keeps it, so ConfigStep shows it instead of the
+   * server preview, which counts this archived lake as taken and would say "-1".
+   */
+  slug: string;
+  /**
    * The account scope the lake was created under (undefined = personal), since the account
    * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner
    * (findCollidingPrefixLakes), so a retry from a DIFFERENT scope must not reuse this lake -
