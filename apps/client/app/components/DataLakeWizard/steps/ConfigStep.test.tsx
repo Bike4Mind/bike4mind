@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -399,6 +399,18 @@ describe('ConfigStep - a prefix held by a lake the form cannot see', () => {
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('legal:');
     expect(help()).toHaveTextContent('This prefix is held by another lake');
     expect(help()).toHaveTextContent('Try "legal-1:"');
+  });
+
+  it('drops the flag as soon as the typed prefix changes, before the debounced answer lands', () => {
+    prefixPreview.current = 'legal-1:';
+    seedConfig({ name: 'Acme', tagPrefix: 'legal:' });
+    renderStep();
+    expect(help()).toHaveTextContent('This prefix is held by another lake');
+
+    // The mock still answers "legal-1:" for the stale `legal:` key; that answer is not about this value.
+    act(() => useDataLakeWizardStore.getState().setTagPrefix('legal-new:'));
+
+    expect(help()).not.toHaveTextContent('held by another lake');
   });
 
   it('flags nothing while the preview has no answer', () => {

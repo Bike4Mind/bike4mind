@@ -66,7 +66,7 @@ export default function ConfigStep() {
   const derivedTagPrefix = deriveTagPrefixFromLakeName(config.name);
   const autoPickNote =
     isAutoPrefix && !reusedLake && derivedTagPrefix && config.tagPrefix !== derivedTagPrefix
-      ? `"${derivedTagPrefix}" is held by another lake (archived and deleted lakes keep their prefix until purged), so this one uses "${config.tagPrefix}". To bring the old lake back, restore or unarchive it instead.`
+      ? `"${derivedTagPrefix}" is held by another lake (archived and deleted lakes keep their prefix until purged), so this one uses "${config.tagPrefix}". If you meant an archived or deleted lake, restore or unarchive it instead.`
       : null;
 
   // The Tag Prefix's only editable home is here (the taxonomy step, its former competing
