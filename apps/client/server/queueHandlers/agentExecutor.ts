@@ -164,7 +164,9 @@ import {
   addToolUsage,
   takeToolUsage,
   foldGeneratedMediaUsd,
+  settleSubagentMediaUsage,
   type BillingCounters,
+  type MediaCostPhase,
   type PendingToolUsage,
 } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
@@ -1738,8 +1740,7 @@ async function processExecution(
         // at start (mirrors classic reserve-on-start); music/audio settle at finish (see
         // onToolFinish). The phase->tool routing + `usd > 0` guard live in the billing
         // module so they are covered by agentExecutor.billing.test.ts.
-        // Subagent-dispatch tool cost stays unbilled until its Phase-1 credit deduction
-        // lands (see processSubagentDispatch) - tracked as a follow-up.
+        // processSubagentDispatch folds the same way but settles once per run.
         foldGeneratedMediaUsd({
           phase: 'start',
           toolName,
@@ -3170,8 +3171,9 @@ async function fireDagNodeTerminalOnRefusal(args: {
  *
  * Credit billing: this updates the child's own `totalCreditsUsed` audit counter
  * via `incrementCreditsUsed`. No rollup to a parent (the parent reads the child
- * doc directly on resume) and no wallet deduction yet (Phase 1 known gap - a
- * future PR will add `creditService.deductCreditsWithOrgSupport`).
+ * doc directly on resume). Generated-media cost IS deducted from the wallet (see
+ * `settleSubagentMediaUsage`); the agent's own token spend is not yet (Phase 1
+ * known gap - a future PR will add its `creditService.deductCreditsWithOrgSupport`).
  *
  * KNOWN LIMITATION - no per-iteration checkpointing or self-dispatch.
  * Unlike the top-level `processExecution`, this handler runs `agent.run()` to
@@ -3491,6 +3493,24 @@ async function processSubagentDispatch(
       // the `organization` snapshot captured above.
       checkMemberCreditCap: buildInProcessCreditCapCheck(organizationRepository, child.organizationId, child.userId),
     };
+    const pendingMediaUsage: PendingToolUsage = {
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    const foldSubagentMediaUsd = (phase: MediaCostPhase, toolName: string, data: unknown) =>
+      foldGeneratedMediaUsd({
+        phase,
+        toolName,
+        data,
+        models,
+        pending: pendingMediaUsage,
+        estimateUsd: estimateGeneratedMediaUsd,
+        onError: err =>
+          logger.warn(`[SubagentDispatch] failed to estimate ${toolName} media cost; not billed`, { err }),
+      });
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async changes => {
         // KNOWN GAP (#1867): a dispatched subagent's retrieval calls are not accumulated here.
@@ -3518,8 +3538,10 @@ async function processSubagentDispatch(
           );
         }
       },
-      onToolStart: async () => {},
-      onToolFinish: async () => {},
+      // Same phase routing as the top-level run's callbacks; settled once the run ends (see
+      // `settleMediaCost`).
+      onToolStart: async (toolName, data) => foldSubagentMediaUsd('start', toolName, data),
+      onToolFinish: async (toolName, data) => foldSubagentMediaUsd('finish', toolName, data),
       sessionId: child.sessionId,
       // Inherited from the parent at create time (see baseFields / nodeDefaults). Inert today -
       // this dispatch passes no `enabledTools`, so no knowledge tool can fire and nothing writes
@@ -3717,6 +3739,46 @@ async function processSubagentDispatch(
       ...(childArtifactEmissionPrompt && { artifactEmissionPrompt: childArtifactEmissionPrompt }),
     });
 
+    // Media generated before ANY exit (completed, aborted, timed out, threw) was already paid
+    // for upstream, so both exits below settle it - first, before the terminal writes and DAG
+    // hook, so a parent woken by that hook rolls up this child's `totalCreditsUsed` with the
+    // media included. A settlement failure is logged rather than thrown so it cannot replace
+    // the run's terminal status. Draining makes a repeat call a no-op.
+    const settleMediaCost = () =>
+      settleSubagentMediaUsage(pendingMediaUsage, {
+        usdToCredits: usdToCreditsStochastic,
+        deductCredits: async credits => {
+          await creditService.deductCreditsWithOrgSupport(
+            {
+              type: 'text_generation_usage',
+              user: user as IUserDocument,
+              organization,
+              credits,
+              sessionId: child.sessionId,
+              // The value the top-level run bills against (`execution.questId`), inherited
+              // unchanged, so these rows group with the parent's own ledger rows.
+              questId: child.questId,
+              model: child.model,
+              inputTokens: 0,
+              outputTokens: 0,
+            },
+            {
+              db: {
+                creditTransactions: creditTransactionRepository,
+                users: userRepository,
+                organizations: organizationRepository,
+              },
+            }
+          );
+        },
+        recordAuditCredits: credits => agentExecutionRepository.incrementCreditsUsed(childExecutionId, credits),
+      }).catch(err =>
+        logger.error('[SubagentDispatch] failed to settle generated-media cost', {
+          childExecutionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+
     try {
       const result = await orchestrator.delegateToAgent({
         task: child.query,
@@ -3725,6 +3787,7 @@ async function processSubagentDispatch(
         variables: child.subagentConfig.variables,
         attachedFiles: child.subagentConfig.attachedFiles,
       });
+      await settleMediaCost();
       const credits = result.completionInfo.totalCredits ?? 0;
 
       // If the abort signal fired during the run, treat the result as terminal.
@@ -3794,7 +3857,8 @@ async function processSubagentDispatch(
       //
       // KNOWN GAP (Phase 1): no `creditService.deductCreditsWithOrgSupport`
       // call here - dispatched-subagent tokens are audited only, not deducted
-      // from the user/org wallet. Tracked as a Phase 2 follow-up.
+      // from the user/org wallet. Tracked as a Phase 2 follow-up. Generated
+      // media is deducted separately (`settleMediaCost` above).
       if (credits > 0) {
         await agentExecutionRepository.incrementCreditsUsed(childExecutionId, credits);
       }
@@ -3826,6 +3890,7 @@ async function processSubagentDispatch(
         status: 'completed',
       });
     } catch (err) {
+      await settleMediaCost();
       const errorMessage = err instanceof Error ? err.message : String(err);
       // Three failure shapes can reach this catch:
       //   1. Our own abort fired during the run and the orchestrator threw
