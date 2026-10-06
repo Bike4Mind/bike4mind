@@ -411,19 +411,30 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         }
         addDebugLog('[RT] Resuming voice connect after navigation');
       } else {
-        const { data } = await api.post<{
-          session: ISessionDocument;
-          model: string;
-          voice: string;
-          ephemeralKey: string;
-        }>('/api/ai/voice-sessions', {
-          // On reconnect, force the already-resolved session so we re-attach to it
-          // (and don't create a second empty session) rather than the prop.
-          sessionId: isReconnect ? connectedSessionIdRef.current : sessionId,
-          // Tell the server to reuse the existing credit hold rather than reserving
-          // (and charging) a second time for the same call.
-          isReconnect,
-        });
+        const response = await api
+          .post<{
+            session: ISessionDocument;
+            model: string;
+            voice: string;
+            ephemeralKey: string;
+          }>('/api/ai/voice-sessions', {
+            // On reconnect, force the already-resolved session so we re-attach to it
+            // (and don't create a second empty session) rather than the prop.
+            sessionId: isReconnect ? connectedSessionIdRef.current : sessionId,
+            // Tell the server to reuse the existing credit hold rather than reserving
+            // (and charging) a second time for the same call.
+            isReconnect,
+          })
+          .catch((error: unknown) => {
+            // A reconnect's caller owns the retry/backoff, so it must still see the rejection.
+            if (isReconnect) throw error;
+            const serverMessage = (error as { response?: { data?: { error?: unknown } } }).response?.data?.error;
+            toast.error(typeof serverMessage === 'string' ? serverMessage : 'Failed to start voice session.');
+            setConnectionStatus('disconnected');
+            return null;
+          });
+        if (!response) return;
+        const { data } = response;
 
         resolvedSessionId = data.session.id;
         connectedSessionIdRef.current = resolvedSessionId;
