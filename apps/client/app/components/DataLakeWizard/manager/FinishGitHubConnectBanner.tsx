@@ -1,7 +1,7 @@
 import { Alert, Button, Stack, Typography } from '@mui/joy';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
+import { useLakeGitHubCanManage, useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
 import { useLakeDriveConnection } from '@client/app/hooks/data/googleDrive';
 import { useBeginLakeGitHubConnect } from '@client/app/hooks/data/useBeginLakeGitHubConnect';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
@@ -22,8 +22,9 @@ type FinishGitHubConnectLake = {
  * picker could simply reopen is not knowable here, and a re-authorize is a pass-through once the
  * App is approved.
  *
- * Shown only once both connection reads have resolved to "none": a failed or in-flight read, a Drive
- * folder, or any file in the lake hides it. It does not read the lake's `pendingConnector` yet, so an
+ * Shown only once both connection reads have resolved to "none" and the caller may connect (an
+ * appointed org admin can read the status but the connect route is owner/manager only): a failed or
+ * in-flight read, a Drive folder, or any file in the lake hides it. It does not read the lake's `pendingConnector` yet, so an
  * empty connector-fed lake still waiting on a Drive connect shows it too.
  */
 export default function FinishGitHubConnectBanner({
@@ -42,10 +43,11 @@ export default function FinishGitHubConnectBanner({
 
   const gitHub = useLakeGitHubConnection(lake.id, eligible);
   const drive = useLakeDriveConnection(lake.id, eligible);
+  const canConnect = useLakeGitHubCanManage(lake.id, eligible).data === true;
   const { begin, isPending } = useBeginLakeGitHubConnect(lake.id);
 
   const hasNoSource = gitHub.isSuccess && gitHub.data === null && drive.isSuccess && drive.data === null;
-  if (!eligible || !hasNoSource || fileCount !== 0) return null;
+  if (!eligible || !canConnect || !hasNoSource || fileCount !== 0) return null;
 
   return (
     <Alert
