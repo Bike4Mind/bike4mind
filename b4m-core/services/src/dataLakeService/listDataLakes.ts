@@ -330,7 +330,7 @@ const toManageableConfig = (
   isOwn: boolean,
   isCreator: boolean,
   canPreauthorize: boolean,
-  owner?: { id: string; name: string; username?: string },
+  owner?: { id: string } & ResolvedOwner,
   pendingProposalCount?: number
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
