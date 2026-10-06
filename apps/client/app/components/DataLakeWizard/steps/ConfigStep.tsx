@@ -56,7 +56,7 @@ export default function ConfigStep() {
     if (isAutoPrefix && suggestedTagPrefix && suggestedTagPrefix !== config.tagPrefix) {
       adoptAutoTagPrefix(suggestedTagPrefix);
     }
-  }, [isAutoPrefix, suggestedTagPrefix, config.tagPrefix]);
+  }, [isAutoPrefix, suggestedTagPrefix, config.tagPrefix, adoptAutoTagPrefix]);
 
   const prefixIssue =
     tagPrefixIssue(config.tagPrefix, duplicatePrefixLake) ??
