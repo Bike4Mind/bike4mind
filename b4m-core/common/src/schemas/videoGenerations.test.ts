@@ -14,6 +14,7 @@ import {
   ListVideoGenerationsQuerySchema,
   VIDEO_GENERATION_API_ERROR_CODES,
   VIDEO_JOB_PUBLIC_ERROR_CODES,
+  VIDEO_OUTPUT_AVAILABILITIES,
   VideoGenerationSchema,
   toPublicVideoJobErrorCode,
 } from './videoGenerations';
@@ -102,6 +103,34 @@ describe('video generation wire schemas', () => {
     expect(VideoGenerationSchema.safeParse(job).success).toBe(false);
     expect(VideoGenerationSchema.safeParse({ ...job, error: { code: 'provider_error', message: 'm' } }).success).toBe(
       true
+    );
+  });
+
+  it('requires a known availability on a succeeded output', () => {
+    const job = {
+      id: 'x',
+      object: 'video_generation',
+      state: 'succeeded',
+      model: 'm',
+      mode: 'text_to_video',
+      prompt: 'p',
+      duration_seconds: 5,
+      aspect_ratio: '16:9',
+      resolution: '720p',
+      source: 'api',
+      progress: 1,
+      error: null,
+      credits: { reserved: 1, settled: 1 },
+      created_at: 'a',
+      updated_at: 'b',
+    };
+    const output = { url: null, expires_at: null, content_type: 'video/mp4', duration_seconds: 5, file_id: 'f' };
+    for (const availability of VIDEO_OUTPUT_AVAILABILITIES) {
+      expect(VideoGenerationSchema.safeParse({ ...job, output: { ...output, availability } }).success).toBe(true);
+    }
+    expect(VideoGenerationSchema.safeParse({ ...job, output }).success).toBe(false);
+    expect(VideoGenerationSchema.safeParse({ ...job, output: { ...output, availability: 'later' } }).success).toBe(
+      false
     );
   });
 });

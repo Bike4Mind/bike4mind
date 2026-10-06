@@ -80,7 +80,7 @@ describe('toPublicVideoGeneration', () => {
 
   it('mints a fresh 900s URL on every read and reports expires_at', async () => {
     let n = 0;
-    const sign = vi.fn(async () => `https://signed.example/${++n}`);
+    const sign = vi.fn(async () => ({ availability: 'ready' as const, url: `https://signed.example/${++n}` }));
     const first = await toPublicVideoGeneration(succeeded('files'), { sign, now });
     const second = await toPublicVideoGeneration(succeeded('files'), { sign, now });
     expect(sign).toHaveBeenCalledWith(
@@ -90,6 +90,7 @@ describe('toPublicVideoGeneration', () => {
     expect(OUTPUT_URL_TTL_SECONDS).toBe(900);
     expect(first.output?.url).not.toBe(second.output?.url);
     expect(first.output).toMatchObject({
+      availability: 'ready',
       expires_at: '2026-10-06T00:17:00.000Z',
       file_id: 'f1',
       content_type: 'video/mp4',
@@ -97,18 +98,29 @@ describe('toPublicVideoGeneration', () => {
   });
 
   it('signs generated-bucket output with a null file_id', async () => {
-    const sign = vi.fn(async () => 'https://signed.example/g');
+    const sign = vi.fn(async () => ({ availability: 'ready' as const, url: 'https://signed.example/g' }));
     const resource = await toPublicVideoGeneration(succeeded('generated'), { sign, now });
     expect(sign).toHaveBeenCalledWith(expect.objectContaining({ location: 'generated' }), 900);
-    expect(resource.output?.file_id).toBeNull();
-  });
-
-  it('reports a null url and expires_at while the output is not yet serveable', async () => {
-    const sign = vi.fn(async () => null);
-    const resource = await toPublicVideoGeneration(succeeded('files'), { sign, now });
-    expect(resource.output).toMatchObject({ url: null, expires_at: null, file_id: 'f1', content_type: 'video/mp4' });
+    expect(resource.output).toMatchObject({ availability: 'ready', url: 'https://signed.example/g', file_id: null });
     expect(VideoGenerationSchema.parse(resource)).toEqual(resource);
   });
+
+  it.each(['pending_scan', 'unavailable'] as const)(
+    'reports %s with a null url and expires_at when the output is not serveable',
+    async availability => {
+      const sign = vi.fn(async () => ({ availability }));
+      const resource = await toPublicVideoGeneration(succeeded('files'), { sign, now });
+      expect(resource.output).toEqual({
+        availability,
+        url: null,
+        expires_at: null,
+        file_id: 'f1',
+        content_type: 'video/mp4',
+        duration_seconds: 6,
+      });
+      expect(VideoGenerationSchema.parse(resource)).toEqual(resource);
+    }
+  );
 
   it('never echoes the stored error message', async () => {
     const resource = await toPublicVideoGeneration(

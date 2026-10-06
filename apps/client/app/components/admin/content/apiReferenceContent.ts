@@ -737,7 +737,10 @@ POST /api/v1/video-generations/{id}/cancel
 > Generated from their contracts: see \`listVideoModels\`, \`createVideoGeneration\`,
 > \`getVideoGeneration\`, \`listVideoGenerations\` and \`cancelVideoGeneration\` in the
 > [generated API docs](/api/v1/docs). Create returns \`202\` with a job; poll the job until \`state\` is
-> terminal, then download \`output.url\` (signed, valid 15 minutes; re-read the job for a fresh URL).
+> terminal. On success, check \`output.availability\`: \`ready\` means download \`output.url\` (signed, valid
+> 15 minutes; re-read the job for a fresh URL); \`pending_scan\` means the saved file is still being scanned,
+> so keep re-reading the job (self-hosted installs can stay there for up to ~30 minutes); \`unavailable\`
+> means the file was blocked or deleted and \`output.url\` stays \`null\`, so stop polling.
 > Send \`Idempotency-Key\` to make retries safe. \`POST /api/ai/generate-video\` was removed and answers \`410\`.
 
 #### Voice Sessions

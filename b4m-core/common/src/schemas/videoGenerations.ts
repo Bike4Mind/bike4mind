@@ -76,6 +76,11 @@ export const CreateVideoGenerationBodySchema = z.object({
 });
 export type CreateVideoGenerationBody = z.infer<typeof CreateVideoGenerationBodySchema>;
 
+// Whether a succeeded job's output can be downloaded now, later, or never: the one field that tells a client
+// whether to keep re-reading the job for a url. Must stay in sync with signOutputUrl in apps/client.
+export const VIDEO_OUTPUT_AVAILABILITIES = ['ready', 'pending_scan', 'unavailable'] as const;
+export type VideoOutputAvailability = (typeof VIDEO_OUTPUT_AVAILABILITIES)[number];
+
 export const VideoGenerationSchema = z.object({
   id: z.string(),
   object: z.literal('video_generation'),
@@ -91,12 +96,19 @@ export const VideoGenerationSchema = z.object({
   error: z.object({ code: z.enum(VIDEO_JOB_PUBLIC_ERROR_CODES), message: z.string() }).nullable(),
   output: z
     .object({
+      availability: z
+        .enum(VIDEO_OUTPUT_AVAILABILITIES)
+        .describe(
+          '`ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until ' +
+            'it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file ' +
+            'was blocked by the scan or deleted and url will never be set; stop polling.'
+        ),
       url: z
         .string()
         .nullable()
         .describe(
-          'Signed download URL, valid until expires_at. Re-fetch the job for a fresh one. Null while the saved ' +
-            'file is still being scanned (or if the scan blocked it); re-fetch until it is set.'
+          'Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when ' +
+            'availability is `ready`, otherwise null.'
         ),
       expires_at: z.string().nullable().describe('ISO 8601. When url stops working; null whenever url is.'),
       content_type: z.string(),

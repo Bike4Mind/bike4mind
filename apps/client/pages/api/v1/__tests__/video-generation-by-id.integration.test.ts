@@ -101,13 +101,37 @@ describe('GET /api/v1/video-generations/{id}', () => {
     });
     h.findById.mockResolvedValue(done);
     let signCount = 0;
-    h.sign.mockImplementation(async () => `https://signed.example/${++signCount}`);
+    h.sign.mockImplementation(async () => ({ availability: 'ready', url: `https://signed.example/${++signCount}` }));
     const first = get(JOB_ID);
     await getHandler(first.req, first.res);
     const second = get(JOB_ID);
     await getHandler(second.req, second.res);
     expect(first.res._getJSONData().output.url).not.toBe(second.res._getJSONData().output.url);
     expect(h.sign).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells the client to stop polling once the output can never be served', async () => {
+    h.findById.mockResolvedValue(
+      videoJob({
+        state: 'succeeded',
+        payload: {
+          ...videoJob().payload,
+          output: {
+            location: 'files',
+            s3Key: 'k.mp4',
+            fileId: 'f1',
+            contentType: 'video/mp4',
+            bytes: 1,
+            durationSeconds: 6,
+          },
+        },
+      })
+    );
+    h.sign.mockResolvedValue({ availability: 'unavailable' });
+    const { req, res } = get(JOB_ID);
+    await getHandler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().output).toMatchObject({ availability: 'unavailable', url: null, expires_at: null });
   });
 
   it('403s a key without ai:generate', async () => {

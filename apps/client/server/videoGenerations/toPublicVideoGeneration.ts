@@ -4,16 +4,20 @@ import {
   type VideoGeneration,
   type VideoJobOutput,
   type VideoJobPublicErrorCode,
+  type VideoOutputAvailability,
 } from '@bike4mind/common';
 
 // Short enough that a leaked URL dies quickly; clients re-read the job (which re-signs) for a fresh one.
 export const OUTPUT_URL_TTL_SECONDS = 900;
 
-/** Resolves to null when the output must not be served yet (see signOutputUrl's moderation gate). */
+/** A url only when the output is serveable; otherwise why not (see signOutputUrl's moderation gate). */
+export type SignedOutput =
+  { availability: 'ready'; url: string } | { availability: Exclude<VideoOutputAvailability, 'ready'> };
+
 export type SignOutputUrl = (
   output: Pick<VideoJobOutput, 'location' | 's3Key' | 'fileId'>,
   expiresInSeconds: number
-) => Promise<string | null>;
+) => Promise<SignedOutput>;
 
 // Fixed text per public code: a stored job.error.message can carry provider wording, which never leaves the server.
 const PUBLIC_ERROR_MESSAGES: Record<VideoJobPublicErrorCode, string> = {
@@ -43,7 +47,7 @@ export async function toPublicVideoGeneration(
   deps: { sign: SignOutputUrl; now: () => Date }
 ): Promise<VideoGeneration> {
   const { request, output } = job.payload;
-  const url = job.state === 'succeeded' && output ? await deps.sign(output, OUTPUT_URL_TTL_SECONDS) : null;
+  const signed = job.state === 'succeeded' && output ? await deps.sign(output, OUTPUT_URL_TTL_SECONDS) : null;
   return {
     id: job.id,
     object: 'video_generation',
@@ -58,11 +62,14 @@ export async function toPublicVideoGeneration(
     progress: job.progress ?? null,
     error: toPublicError(job.error),
     output:
-      job.state === 'succeeded' && output
+      signed && output
         ? {
-            url,
+            availability: signed.availability,
+            url: signed.availability === 'ready' ? signed.url : null,
             expires_at:
-              url === null ? null : new Date(deps.now().getTime() + OUTPUT_URL_TTL_SECONDS * 1000).toISOString(),
+              signed.availability === 'ready'
+                ? new Date(deps.now().getTime() + OUTPUT_URL_TTL_SECONDS * 1000).toISOString()
+                : null,
             content_type: output.contentType,
             duration_seconds: output.durationSeconds,
             file_id: output.fileId ?? null,
