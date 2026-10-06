@@ -1255,13 +1255,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     placeholder: string
   ): Promise<IDataLakeDocument | null> {
     if (!userId || !organizationId) return null;
-    return this.dataLakeModel.findOne({
-      createdByUserId: userId,
-      organizationId,
-      pendingConnector: connector,
-      name: placeholder,
-      status: 'draft',
-    });
+    return this.dataLakeModel
+      .findOne({
+        createdByUserId: userId,
+        organizationId,
+        pendingConnector: connector,
+        name: placeholder,
+        status: 'draft',
+      })
+      .sort({ _id: 1 });
   }
 
   async renameIfPlaceholderAndClearPending(

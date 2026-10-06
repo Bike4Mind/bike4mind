@@ -6,7 +6,12 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { DataLakeModel, DataLakeAccessGrantModel, LakeConfigChangeEventModel } from '@bike4mind/database';
+import {
+  DataLakeModel,
+  DataLakeAccessGrantModel,
+  LakeConfigChangeEventModel,
+  dataLakeAccessGrantRepository,
+} from '@bike4mind/database';
 import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
 import { nameLakeAfterRepository } from '@server/integrations/github/dataLake/githubLakeConnection';
 
@@ -273,6 +278,37 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(lakes).toHaveLength(2);
     expect(new Set(lakes.map(l => l.slug)).size).toBe(2);
     expect(new Set(lakes.map(l => l.datalakeTag)).size).toBe(2);
+  });
+
+  it('converges two concurrent connects by one caller on a single lake', async () => {
+    const a = makeRes();
+    const b = makeRes();
+    await Promise.all([run(makeReq({ organizationId: ORG }), a.res), run(makeReq({ organizationId: ORG }), b.res)]);
+    expect(lakeIdOf(a.json)).toBe(lakeIdOf(b.json));
+    expect(await DataLakeModel.countDocuments({})).toBe(1);
+    expect(await DataLakeAccessGrantModel.countDocuments({ dataLakeId: { $ne: lakeIdOf(a.json) } })).toBe(0);
+  });
+
+  it('still deletes the lake and records the delete when the grant cleanup rejects', async () => {
+    const spy = vi
+      .spyOn(dataLakeAccessGrantRepository, 'removeAllForLake')
+      .mockRejectedValueOnce(new Error('grant delete failed'));
+    h.createStateToken.mockImplementation(() => {
+      throw new Error('JWT secret missing');
+    });
+    const req = makeReq({ organizationId: ORG }) as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
+    try {
+      await expect(run(req, makeRes().res)).rejects.toThrow('JWT secret missing');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await DataLakeModel.countDocuments({})).toBe(0);
+    expect(req.logger.error).toHaveBeenCalledWith(
+      'GitHub lake connect: could not roll back the pending lake',
+      expect.objectContaining({ error: expect.objectContaining({ message: 'grant delete failed' }) })
+    );
+    const audits = await LakeConfigChangeEventModel.find({}).sort({ createdAt: 1, _id: 1 }).lean();
+    expect(audits.map(a => a.action)).toEqual(['create', 'delete']);
   });
 
   it('creates a lake the bind-time rename renames, stamps and audits', async () => {

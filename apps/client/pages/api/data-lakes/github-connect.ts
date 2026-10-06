@@ -5,7 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_WRITE_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeAccessGrantRepository, dataLakeRepository } from '@bike4mind/database';
+import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import {
   BadRequestError,
   ForbiddenError,
@@ -109,12 +109,22 @@ async function rollBackPendingLake(req: Request, lake: IDataLakeDocument): Promi
     }
   }
   if (lakeResult.status !== 'fulfilled') return;
+  // Same admin-org set the bind-time rename resolves, so the audit rung matches the caller's real rights.
+  const administeredOrgIds = req.user.isAdmin
+    ? []
+    : await organizationRepository.findIdsWithAdminRights(req.user.id).catch((error: unknown) => {
+        req.logger.warn('GitHub lake connect: could not load admin orgs for the rollback audit', {
+          dataLakeId: lake.id,
+          error: serializeError(error),
+        });
+        return [];
+      });
   await dataLakeService.recordLakeConfigChange(
     {
       actor: {
         userId: req.user.id,
-        isAdmin: false,
-        administeredOrgIds: [],
+        isAdmin: !!req.user.isAdmin,
+        administeredOrgIds,
         auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
       },
       lake,
@@ -152,8 +162,17 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
       await verifyOrgAccess(req.user, organizationId);
       const config = requireGitHubLakeAppConfig(getGitHubLakeAppConfig());
 
-      const reused = await findReusablePendingLake(req, organizationId);
-      const lake = reused ?? (await createPendingGitHubLake(req, organizationId, suffix));
+      let reused = await findReusablePendingLake(req, organizationId);
+      let lake = reused ?? (await createPendingGitHubLake(req, organizationId, suffix));
+      if (!reused) {
+        // Two concurrent connects by one caller (a double-click) can both miss the finder and both insert.
+        // Re-reading after the insert lets the newer one yield to the older lake; there is no unique index.
+        const oldest = await findReusablePendingLake(req, organizationId);
+        if (oldest && oldest.id !== lake.id) {
+          await rollBackPendingLake(req, lake);
+          lake = reused = oldest;
+        }
+      }
       let authorizeUrl: string;
       try {
         authorizeUrl = buildGitHubLakeAuthorizeUrl(res, config, { userId: req.user.id, dataLakeId: lake.id });
