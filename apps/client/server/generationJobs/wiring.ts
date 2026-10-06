@@ -59,11 +59,13 @@ export const usableApiKey = (raw: string | null | undefined): string | null => {
 /** Each provider adapter adds its case here; the exhaustive switch makes the compiler demand it. */
 export const selectProviderKey = (
   providerId: VideoProviderId,
-  _keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
+  keys: Awaited<ReturnType<typeof apiKeyService.getEffectiveLLMApiKeys>>
 ): string | null | undefined => {
   switch (providerId) {
     case 'test':
       return 'test-key';
+    case 'gemini-omni':
+      return keys.gemini;
     default: {
       const unhandled: never = providerId;
       throw new Error(`no API key mapping for video provider '${String(unhandled)}'`);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { VIDEO_MODEL_CATALOG, VIDEO_MODEL_IDS } from './catalog';
+import type { VideoGenerationRequest } from './request';
 import type { DurationCapability } from './types';
 import { validateAgainstCapabilities } from './validate';
 import { estimateVideoCostUsd } from './estimateCost';
@@ -37,5 +38,53 @@ describe.each(VIDEO_MODEL_IDS)('catalog entry %s', id => {
         expect(usd, `${durationSeconds}s at ${resolution}`).toBeGreaterThan(0);
       }
     }
+  });
+});
+
+describe('gemini-omni-1.1-flash', () => {
+  const caps = VIDEO_MODEL_CATALOG['gemini-omni-1.1-flash'];
+  const request = (overrides: Partial<VideoGenerationRequest> = {}): VideoGenerationRequest => ({
+    model: 'gemini-omni-1.1-flash',
+    mode: 'text_to_video',
+    prompt: 'a lighthouse at dusk',
+    durationSeconds: 6,
+    aspectRatio: '16:9',
+    resolution: '720p',
+    ...overrides,
+  });
+
+  it('declares the Omni Flash capabilities', () => {
+    expect(caps).toEqual({
+      provider: 'gemini-omni',
+      displayName: 'Gemini Omni Flash',
+      modes: ['text_to_video', 'image_to_video'],
+      duration: { kind: 'range', min: 3, max: 10, step: 1 },
+      aspectRatios: ['16:9', '9:16'],
+      resolutions: ['720p'],
+      defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '720p' },
+      audio: 'always',
+      pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1014 } },
+      defaultEnabled: true,
+    });
+  });
+
+  it('prices a 6s clip at the per-second rate', () => {
+    expect(estimateVideoCostUsd(caps, request())).toBeCloseTo(0.6084, 6);
+  });
+
+  it.each([2, 11])('rejects %ss', seconds => {
+    const result = validateAgainstCapabilities(request({ durationSeconds: seconds }), caps);
+    expect(result).toMatchObject({ ok: false, code: 'unsupported_duration' });
+  });
+
+  it('rejects 1080p and 1:1', () => {
+    expect(validateAgainstCapabilities(request({ resolution: '1080p' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_resolution',
+    });
+    expect(validateAgainstCapabilities(request({ aspectRatio: '1:1' }), caps)).toMatchObject({
+      ok: false,
+      code: 'unsupported_aspect_ratio',
+    });
   });
 });

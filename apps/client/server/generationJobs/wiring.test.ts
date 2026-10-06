@@ -63,6 +63,11 @@ describe('provider key selection', () => {
     expect(selectProviderKey('test', {} as never)).toBe('test-key');
   });
 
+  it('maps gemini-omni to the Gemini key', () => {
+    expect(selectProviderKey('gemini-omni', { gemini: 'g-key' } as never)).toBe('g-key');
+    expect(usableApiKey(selectProviderKey('gemini-omni', { gemini: null } as never))).toBeNull();
+  });
+
   it('throws for a provider id with no mapping', () => {
     expect(() => selectProviderKey('unmapped' as VideoProviderId, {} as never)).toThrow(/no API key mapping/);
   });
