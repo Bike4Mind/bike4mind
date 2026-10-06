@@ -342,6 +342,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       user,
       resumeBatchId,
       remainingMs,
+      recordTreeCounts: async counts => {
+        if (claimToken) await orgGitHubLakeConnectionRepository.recordTreeCounts(id, claimToken, counts);
+      },
       logger,
     });
 

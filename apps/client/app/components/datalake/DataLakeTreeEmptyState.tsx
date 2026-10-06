@@ -4,10 +4,23 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { useState } from 'react';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
-import type { LakeSourceKind, LakeSourceLake } from '@client/app/components/datalake/lakeSources';
+import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { useLakeGitHubConnection } from '@client/app/hooks/data/githubLake';
+import GitHubLakeSyncProgress from './GitHubLakeSyncProgress';
+import type { LakeSourceKind, LakeSourcePanelLake } from '@client/app/components/datalake/lakeSources';
 import ConnectSourceMenu from './ConnectSourceMenu';
 import LakeSourceConnectModal from './LakeSourceConnectModal';
 import type { DataLakeEmptyVariant } from './resolveEmptyVariant';
+
+const EMPTY_STATE_SX = {
+  px: 2,
+  py: 3,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 1,
+  textAlign: 'center',
+} as const;
 
 interface DataLakeTreeEmptyStateProps {
   variant: Exclude<DataLakeEmptyVariant, 'no-selection'>;
@@ -18,7 +31,7 @@ interface DataLakeTreeEmptyStateProps {
   /** Add files to the scoped lake - offered only in `lake-empty`. */
   onAddFiles?: () => void;
   /** The scoped lake, which decides the sources it can take. Offered only with `onAddFiles`. */
-  sourceLake?: LakeSourceLake & { id: string };
+  sourceLake?: LakeSourcePanelLake;
 }
 
 /**
@@ -45,6 +58,15 @@ export default function DataLakeTreeEmptyState({
 }: DataLakeTreeEmptyStateProps) {
   const { copy } = useDataLakeSurface();
   const [connectingKind, setConnectingKind] = useState<LakeSourceKind | null>(null);
+  const { isAdminFeatureEnabled } = useFeatureEnabled();
+  // Same gate as the lake's GitHub source (lakeSources.ts): the connection read 403s with the flag
+  // off and refuses a caller who cannot manage an org lake. Shares the source card's poll.
+  const watchGitHub =
+    variant === 'lake-empty' &&
+    !!sourceLake?.organizationId &&
+    !!sourceLake.canManage &&
+    isAdminFeatureEnabled('EnableDataLakeGitHub');
+  const { data: gitHubConnection } = useLakeGitHubConnection(sourceLake?.id, watchGitHub);
 
   // Drive connects from the wizard's source step, beside its what-it-can-read disclosure, so it
   // routes through the same wizard Add files opens. Every other source opens its own panel directly.
@@ -61,12 +83,21 @@ export default function DataLakeTreeEmptyState({
     'all-lakes-empty': { title: copy.allLakesEmptyTitle, hint: copy.allLakesEmptyHint },
   }[variant];
 
+  // A connected repo's first files are still on their way: say so instead of offering to add files.
+  if (watchGitHub && gitHubConnection?.status === 'syncing' && !gitHubConnection.syncStale) {
+    return (
+      <Box data-testid="datalake-tree-empty" data-variant="github-syncing" sx={EMPTY_STATE_SX}>
+        <Typography level="title-sm" sx={{ overflowWrap: 'anywhere' }} data-testid="datalake-tree-empty-github-syncing">
+          Syncing {gitHubConnection.repositoryFullName}
+          {gitHubConnection.defaultBranch && ` (${gitHubConnection.defaultBranch})`}
+        </Typography>
+        <GitHubLakeSyncProgress connection={gitHubConnection} />
+      </Box>
+    );
+  }
+
   return (
-    <Box
-      data-testid="datalake-tree-empty"
-      data-variant={variant}
-      sx={{ px: 2, py: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, textAlign: 'center' }}
-    >
+    <Box data-testid="datalake-tree-empty" data-variant={variant} sx={EMPTY_STATE_SX}>
       <Typography level="title-sm">{title}</Typography>
       <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
         {hint}
