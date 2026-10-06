@@ -6,6 +6,7 @@ import {
   type ToolTelemetry,
 } from '@bike4mind/common';
 import { categorizeToolError, TelemetryBuilder } from './TelemetryBuilder';
+import { performanceFromPromptMeta } from './performanceFromPromptMeta';
 
 const sessionId = { hash: 'test-hash', dateKey: '2026-01-01' };
 
@@ -253,6 +254,20 @@ describe('TelemetryBuilder slow-first-token (TTFVT)', () => {
 
     expect(performance.firstTokenTimeMs).toBe(1_200);
     expect(performance.firstChunkTimeMs).toBe(800);
+  });
+
+  // The seam the bug lived in: a promptMeta-shaped object mapped through the helper and into the
+  // builder must still trip the flag. Only firstTokenTime is set, so a regression that drops that
+  // field from the mapping lands on 'unknown' (quiet) rather than silently degrading to the
+  // never-rendered branch - which is what makes this catch the dropped-wiring class.
+  it('fires end to end from a promptMeta-shaped object via the helper', () => {
+    const builder = new TelemetryBuilder(sessionId);
+    builder.setPerformance(performanceFromPromptMeta({ firstTokenTime: 12_000, modelInferenceTime: 9_000 }, 13_000));
+
+    const anomalies = builder.build().anomalies;
+
+    expect(anomalies.slowFirstToken).toBe(true);
+    expect(anomalies.primaryAnomaly).toBe('slow_response');
   });
 });
 
