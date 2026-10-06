@@ -3,10 +3,11 @@ import type { ValidatedVideoRequest, VideoModelId, VideoProviderId } from '@bike
 import { Logger } from '@bike4mind/observability';
 import { describeVideoProviderConformance } from '../conformance';
 import { createVideoProviderRegistry } from '../registry';
-import { ProviderSubmitError, readBoundedResponse, VideoOutputTooLargeError, type VideoProvider } from '../types';
+import { readBoundedResponse, VideoOutputTooLargeError, type VideoProvider } from '../types';
 import { TestVideoProvider } from './TestVideoProvider';
 
-let clock = new Date('2026-10-06T00:00:00Z');
+const START = new Date('2026-10-06T00:00:00Z');
+let clock = START;
 const request = (prompt: string) =>
   ({
     model: 'test-video',
@@ -20,7 +21,19 @@ const request = (prompt: string) =>
 describeVideoProviderConformance('TestVideoProvider', {
   provider: () => new TestVideoProvider(),
   context: { now: () => clock },
-  scenario: name => request(name === 'blocked' ? 'a cat [blocked]' : name === 'fails' ? 'a cat [fail]' : 'a cat'),
+  beforeEach: () => {
+    clock = START;
+  },
+  scenario: name =>
+    request(
+      name === 'blocked'
+        ? 'a cat [blocked]'
+        : name === 'fails'
+          ? 'a cat [fail]'
+          : name === 'rejects'
+            ? 'a cat [reject]'
+            : 'a cat'
+    ),
   settle: () => {
     clock = new Date(clock.getTime() + 5_000);
   },
@@ -34,24 +47,6 @@ const makeContext = (now: () => Date, signal: AbortSignal = new AbortController(
 });
 
 describe('TestVideoProvider specifics', () => {
-  it('stays running until its ready time so the engine re-poll path is exercised', async () => {
-    const provider = new TestVideoProvider();
-    const ctx = makeContext(() => new Date('2026-10-06T00:00:00Z'));
-    const handle = await provider.submit(request('a cat'), {}, ctx);
-    expect((await provider.poll(handle, ctx)).status).toBe('running');
-  });
-
-  it('rejects submit with a definitive error for a "[reject]" prompt', async () => {
-    const provider = new TestVideoProvider();
-    const submission = provider.submit(
-      request('x [reject]'),
-      {},
-      makeContext(() => new Date())
-    );
-    await expect(submission).rejects.toBeInstanceOf(ProviderSubmitError);
-    await expect(submission).rejects.toMatchObject({ name: 'ProviderSubmitError', definitive: true });
-  });
-
   it('honours an aborted signal on every call, like a real adapter whose request was cancelled', async () => {
     const provider = new TestVideoProvider();
     const live = makeContext(() => new Date());
