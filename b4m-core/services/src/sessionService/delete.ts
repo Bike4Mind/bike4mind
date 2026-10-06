@@ -52,7 +52,12 @@ export const deleteSession = async (
   // the session owner's. Deleting the session destroys only the owner's own files, mirroring the
   // owned-vs-shared-in split in DELETE /api/files; anything else just loses the grants this session
   // minted on it.
-  const fabFiles = await db.fabFiles.find({ sessionId: session.id });
+  // Tool-generated files link to their notebook through provenance, not `sessionId` (see
+  // persistGeneratedFileAsFabFile), so they need their own lookup to go with the notebook.
+  const fabFiles = [
+    ...(await db.fabFiles.find({ sessionId: session.id })),
+    ...(await db.fabFiles.findToolGeneratedBySessionId(session.id)),
+  ];
   const ownedFiles = fabFiles.filter(file => file.userId === userId);
 
   // Both sets, because a grant this session minted and a file this session holds are not the same
