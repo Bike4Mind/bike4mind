@@ -18,7 +18,7 @@ import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { ISessionDocument } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
 import type { TranscriptItem } from './types';
 import { useVoiceKeepAlive } from './useVoiceKeepAlive';
 
