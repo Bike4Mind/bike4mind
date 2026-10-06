@@ -260,8 +260,22 @@ describe('DataLakeLakePicker', () => {
         lake({ id: 'z', name: 'Fallback', isOwn: false }),
         lake({ id: 'b', name: 'Zed test lake', isOwn: false, ownerDisplayName: 'Zed', ownerUserId: 'u-zed' }),
         lake({ id: 'a', name: 'Mine' }),
-        lake({ id: 'c', name: 'Dana corpus', isOwn: false, ownerDisplayName: 'Dana', ownerUserId: 'u-dana' }),
-        lake({ id: 'd', name: 'Dana notes', isOwn: false, ownerDisplayName: 'Dana', ownerUserId: 'u-dana' }),
+        lake({
+          id: 'c',
+          name: 'Dana corpus',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-dana',
+          ownerUsername: 'dana',
+        }),
+        lake({
+          id: 'd',
+          name: 'Dana notes',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-dana',
+          ownerUsername: 'dana',
+        }),
       ],
     });
     openMenu();
