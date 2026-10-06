@@ -70,4 +70,21 @@ describe('VideoGallery', () => {
     renderGallery();
     expect(screen.getByTestId('video-gallery-error')).toBeInTheDocument();
   });
+
+  it('keeps rendering cards when a background refetch failed', () => {
+    loaded(listOf([videoJob({ id: 'a' })]));
+    h.query = { ...h.query, isError: true };
+    renderGallery();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    expect(screen.queryByTestId('video-gallery-error')).not.toBeInTheDocument();
+  });
+
+  it('keeps the cards and shows an inline error when loading the next page failed', () => {
+    loaded(listOf([videoJob({ id: 'a' })]), true);
+    h.query = { ...h.query, isError: true, isFetchNextPageError: true };
+    renderGallery();
+    expect(screen.getAllByTestId('gallery-card')).toHaveLength(1);
+    expect(screen.getByTestId('video-gallery-load-more-error')).toBeInTheDocument();
+    expect(screen.getByTestId('video-gallery-load-more-btn')).toBeInTheDocument();
+  });
 });

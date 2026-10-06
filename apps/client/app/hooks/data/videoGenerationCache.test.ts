@@ -82,6 +82,15 @@ describe('prependVideoGeneration', () => {
     expect(listIds()).toEqual([['b', 'a']]);
   });
 
+  it('does not overwrite a newer detail with a stale create response', () => {
+    queryClient.setQueryData(
+      videoGenerationKeys.detail('new'),
+      videoJob({ id: 'new', state: 'running', updated_at: LATER })
+    );
+    prependVideoGeneration(queryClient, videoJob({ id: 'new', state: 'pending' }));
+    expect(detail('new')?.state).toBe('running');
+  });
+
   it('leaves an unloaded list alone', () => {
     prependVideoGeneration(queryClient, videoJob({ id: 'new' }));
     expect(queryClient.getQueryData(videoGenerationKeys.list)).toBeUndefined();

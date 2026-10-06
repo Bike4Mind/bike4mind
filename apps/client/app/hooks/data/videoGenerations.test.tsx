@@ -30,6 +30,7 @@ import {
   SOCKET_DOWN_POLL_MS,
   URL_REFRESH_FLOOR_MS,
   useCreateVideoGeneration,
+  useVideoGeneration,
   useVideoGenerations,
   videoGenerationPollInterval,
   videoListRefreshInterval,
@@ -50,11 +51,23 @@ beforeEach(() => {
 });
 
 describe('videoGenerationPollInterval', () => {
-  it('polls every 5s while the socket is down and stops when it is open', () => {
+  it('polls every 15s while the socket is down and stops when it is open', () => {
     for (const state of ['pending', 'running', 'storing'] as const) {
       expect(videoGenerationPollInterval(videoJob({ state }), false, NOW)).toBe(SOCKET_DOWN_POLL_MS);
       expect(videoGenerationPollInterval(videoJob({ state }), true, NOW)).toBe(false);
     }
+  });
+
+  it('keeps the socket-down poll under the 10/min per-user detail bucket', () => {
+    expect(SOCKET_DOWN_POLL_MS).toBe(15_000);
+  });
+
+  it('treats a succeeded job without output as still running until the output arrives', () => {
+    const noOutput = videoJob({ state: 'succeeded', output: null });
+    expect(videoGenerationPollInterval(noOutput, false, NOW)).toBe(SOCKET_DOWN_POLL_MS);
+    expect(videoGenerationPollInterval(noOutput, true, NOW)).toBe(false);
+    const withOutput = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    expect(videoGenerationPollInterval(withOutput, false, NOW)).not.toBe(SOCKET_DOWN_POLL_MS);
   });
 
   it('re-reads a succeeded job every 30s while its file is being scanned', () => {
@@ -134,6 +147,33 @@ describe('useVideoGenerations', () => {
     });
     expect(h.get).toHaveBeenLastCalledWith('/api/v1/video-generations', { params: { limit: 12, cursor: 'c1' } });
     await waitFor(() => expect(result.current.hasNextPage).toBe(false));
+  });
+});
+
+describe('useVideoGeneration', () => {
+  const httpError = (status: number) =>
+    new AxiosError('failed', 'ERR_BAD_RESPONSE', undefined, undefined, {
+      status,
+      data: {},
+      statusText: '',
+      headers: {},
+      config: { headers: {} } as never,
+    });
+
+  it('does not retry a rate-limited (429) read', async () => {
+    h.get.mockRejectedValue(httpError(429));
+    const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(h.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not refetch on mount when the detail is already cached', async () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1' }), {
+      updatedAt: Date.now() - 120_000,
+    });
+    renderHook(() => useVideoGeneration('job-1'), { wrapper });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(h.get).not.toHaveBeenCalled();
   });
 });
 

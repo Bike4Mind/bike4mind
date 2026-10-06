@@ -45,6 +45,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('VideoJobCard states', () => {
+  it('keeps rendering the cached job when a refetch failed', () => {
+    h.query = { data: videoJob({ state: 'running' }), isPending: false, isError: true, refetch: vi.fn() };
+    render(card());
+    expect(screen.getByTestId('video-job-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('video-job-card-missing')).not.toBeInTheDocument();
+  });
+
+  it('shows the missing note only when there is no data', () => {
+    h.query = { data: undefined, isPending: false, isError: true, refetch: vi.fn() };
+    render(card());
+    expect(screen.getByTestId('video-job-card-missing')).toBeInTheDocument();
+  });
+
+  it('shows Finishing while a succeeded frame has no output yet', () => {
+    showJob(succeeded(null));
+    render(card());
+    expect(screen.getByTestId('video-job-card-finishing-note')).toHaveTextContent('Finishing...');
+    expect(screen.queryByTestId('video-job-card-unavailable-note')).not.toBeInTheDocument();
+  });
+
   it('shows a queued job with Cancel', () => {
     showJob(videoJob({ state: 'pending' }));
     render(card());

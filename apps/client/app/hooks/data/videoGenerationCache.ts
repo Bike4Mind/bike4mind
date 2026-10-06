@@ -41,7 +41,7 @@ export function seedVideoGeneration(queryClient: QueryClient, job: VideoGenerati
 
 /** Puts a just-created job at the top of the gallery. A replayed create (same Idempotency-Key) moves, not doubles. */
 export function prependVideoGeneration(queryClient: QueryClient, job: VideoGeneration): void {
-  queryClient.setQueryData(videoGenerationKeys.detail(job.id), job);
+  seedVideoGeneration(queryClient, job);
   queryClient.setQueryData<VideoGenerationList>(videoGenerationKeys.list, list => {
     if (!list || list.pages.length === 0) return list;
     const [first, ...rest] = list.pages;

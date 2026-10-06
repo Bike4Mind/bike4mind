@@ -17,7 +17,8 @@ import { describeVideoGenerationError } from './videoGenerationErrors';
 import { videoGenerationKeys } from './videoGenerationKeys';
 
 export const VIDEO_GALLERY_PAGE_SIZE = 12;
-export const SOCKET_DOWN_POLL_MS = 5_000;
+// Detail reads share the per-user 10/min bucket with every other video route, so the fallback poll stays well under it.
+export const SOCKET_DOWN_POLL_MS = 15_000;
 export const PENDING_SCAN_POLL_MS = 30_000;
 // Signed URLs live 15 minutes (OUTPUT_URL_TTL_SECONDS on the server). The gallery list re-signs a whole page
 // first (longer lead) so a page of cards sharing one expiry does not fire one request each: every video route is
@@ -38,7 +39,9 @@ export function videoGenerationPollInterval(
   now: number
 ): number | false {
   if (!job) return false;
-  if (!isTerminalVideoState(job.state)) return socketOpen ? false : SOCKET_DOWN_POLL_MS;
+  // The websocket frame writes 'succeeded' before the output exists; keep reading until it arrives.
+  const awaitingOutput = job.state === 'succeeded' && !job.output;
+  if (!isTerminalVideoState(job.state) || awaitingOutput) return socketOpen ? false : SOCKET_DOWN_POLL_MS;
   if (job.state !== 'succeeded' || !job.output) return false;
   if (job.output.availability === 'pending_scan') return PENDING_SCAN_POLL_MS;
   if (job.output.availability === 'ready' && job.output.expires_at) {
@@ -91,8 +94,13 @@ export function useVideoGeneration(jobId: string) {
     enabled: jobId.length > 0,
     // List seeds and websocket patches keep this fresh; a mount right after a seed must not refetch.
     staleTime: 30_000,
+    // The list refetch re-seeds detail entries; an uncached card has no data and still fetches on mount.
+    refetchOnMount: false,
     refetchInterval: query => videoGenerationPollInterval(query.state.data, socketOpen, Date.now()),
-    retry: (failureCount, error) => !(isAxiosError(error) && error.response?.status === 404) && failureCount < 3,
+    retry: (failureCount, error) => {
+      const status = isAxiosError(error) ? error.response?.status : undefined;
+      return status !== 404 && status !== 429 && failureCount < 3;
+    },
   });
 }
 

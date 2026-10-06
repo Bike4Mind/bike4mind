@@ -10,7 +10,7 @@ const VideoStudioPage = () => {
 
   const renderForm = () => {
     if (models.isPending) return <CircularProgress size="sm" data-testid="video-studio-loading" />;
-    if (models.isError) {
+    if (!models.data) {
       return (
         <Typography level="body-sm" color="danger" data-testid="video-studio-error">
           Could not load the video models. Refresh to try again.

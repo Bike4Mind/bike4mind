@@ -61,4 +61,11 @@ describe('VideoStudioPage', () => {
     renderPage();
     expect(screen.getByTestId('video-studio-error')).toBeInTheDocument();
   });
+
+  it('keeps the form when a background models refetch failed', () => {
+    h.models = { data: [rangeModel], isPending: false, isError: true };
+    renderPage();
+    expect(screen.getByTestId('video-form-stub')).toBeInTheDocument();
+    expect(screen.queryByTestId('video-studio-error')).not.toBeInTheDocument();
+  });
 });

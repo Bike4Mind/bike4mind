@@ -82,7 +82,7 @@ const videoFileName = (jobId: string, contentType: string | undefined): string =
   `video-${jobId}.${contentType === 'video/webm' ? 'webm' : 'mp4'}`;
 
 const VideoJobCard = ({ jobId }: { jobId: string }) => {
-  const { data: job, isPending, isError, refetch } = useVideoGeneration(jobId);
+  const { data: job, isPending, refetch } = useVideoGeneration(jobId);
   const cancel = useCancelVideoGeneration();
   const openFiles = useFileBrowser(state => state.setOpen);
   const refresh = useCallback(() => void refetch(), [refetch]);
@@ -116,7 +116,7 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
       </Card>
     );
   }
-  if (isError || !job) {
+  if (!job) {
     return (
       <Card variant="outlined" data-testid="video-job-card-missing">
         <Typography level="body-sm">This video could not be loaded.</Typography>
@@ -176,7 +176,12 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
           Your video is being checked and will play here shortly.
         </Typography>
       )}
-      {job.state === 'succeeded' && (!output || output.availability === 'unavailable') && (
+      {job.state === 'succeeded' && !job.output && (
+        <Typography level="body-sm" data-testid="video-job-card-finishing-note">
+          Finishing...
+        </Typography>
+      )}
+      {job.state === 'succeeded' && job.output?.availability === 'unavailable' && (
         <Typography level="body-sm" data-testid="video-job-card-unavailable-note">
           This video is no longer available.
         </Typography>

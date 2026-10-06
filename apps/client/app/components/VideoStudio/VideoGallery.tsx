@@ -3,10 +3,11 @@ import { useVideoGenerations } from '@client/app/hooks/data/videoGenerations';
 import VideoJobCard from './VideoJobCard';
 
 const VideoGallery = () => {
-  const { data, isPending, isError, hasNextPage, isFetchingNextPage, fetchNextPage } = useVideoGenerations();
+  const { data, isPending, isFetchNextPageError, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    useVideoGenerations();
 
   if (isPending) return <CircularProgress size="sm" data-testid="video-gallery-loading" />;
-  if (isError || !data) {
+  if (!data) {
     return (
       <Typography level="body-sm" color="danger" data-testid="video-gallery-error">
         Could not load your videos. Refresh to try again.
@@ -31,6 +32,11 @@ const VideoGallery = () => {
           <VideoJobCard key={jobId} jobId={jobId} />
         ))}
       </Box>
+      {isFetchNextPageError && (
+        <Typography level="body-sm" color="danger" textAlign="center" data-testid="video-gallery-load-more-error">
+          Could not load more videos. Try again.
+        </Typography>
+      )}
       {hasNextPage && (
         <Button
           variant="outlined"
