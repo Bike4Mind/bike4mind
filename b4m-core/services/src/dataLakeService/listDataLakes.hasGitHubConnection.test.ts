@@ -76,10 +76,29 @@ describe('hasGitHubConnection on the manager list', () => {
 
   it('omits the field when the lookup fails, so the client treats the binding as unknown', async () => {
     const { db } = repos([lake()], new Error('boom'));
-    const result = await listDataLakes(ctx(), { db });
+    const logger = { warn: vi.fn() };
+    const result = await listDataLakes(ctx(), { db, logger });
 
     expect(byId(result, 'lake1')).toHaveProperty('pendingConnector', 'googleDrive');
     expect(byId(result, 'lake1')).not.toHaveProperty('hasGitHubConnection');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('GitHub binding read failed'), expect.any(Error));
+  });
+
+  it('logs a failed lookup on the admin list too', async () => {
+    const { db } = repos([lake({ createdByUserId: 'bob' })], new Error('boom'));
+    const logger = { warn: vi.fn() };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db, logger });
+
+    expect(byId(result, 'lake1')).not.toHaveProperty('hasGitHubConnection');
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('GitHub binding read failed'), expect.any(Error));
+  });
+
+  it('stays silent when the lookup succeeds', async () => {
+    const { db } = repos([lake()], []);
+    const logger = { warn: vi.fn() };
+    await listDataLakes(ctx(), { db, logger });
+
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('reports it on the admin list too', async () => {

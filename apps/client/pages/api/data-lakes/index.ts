@@ -83,7 +83,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const [dataLakes, retrievalScope] = await Promise.all([
       ctx.isAdmin
         ? dataLakeService.listAllDataLakes(ctx, { db, logger: req.logger, preauthorizeForUserId })
-        : dataLakeService.listDataLakes(ctx, { db }),
+        : dataLakeService.listDataLakes(ctx, { db, logger: req.logger }),
       includeRetrievability
         ? resolveLakeListRetrievalScope(req, req.query.sessionId).catch((err: unknown) => {
             req.logger.warn('data-lakes list: retrieval scope unavailable, rows left unlabeled', { err });

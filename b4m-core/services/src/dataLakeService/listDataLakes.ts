@@ -152,9 +152,9 @@ interface ListDataLakesAdapters {
     gitHubLakeConnections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> };
   };
   /**
-   * Optional, and only `listAllDataLakes` reads it: the fallback-overlay batch degrades silently on
-   * a transient failure, and without a logger that degrade is indistinguishable from "no overlay
-   * set" - see resolveFallbackSettings for why silence there is not harmless.
+   * Optional. The fallback-overlay batch (`listAllDataLakes` only) and the GitHub-binding batch
+   * (both lists) degrade silently on a transient failure, and without a logger that degrade is
+   * indistinguishable from "nothing set" - see resolveFallbackSettings and gitHubBindingsFor.
    */
   logger?: LakeAccessLogger;
 }
@@ -293,17 +293,20 @@ const pendingCountsFor = async (
 /**
  * `hasGitHubConnection` per lake for the lakes that carry `pendingConnector` to a manager. Absent
  * (field omitted) for every other lake, when no lookup is wired, or when the read fails - the client
- * reads absent as "cannot rule a binding out".
+ * reads absent as "cannot rule a binding out", which hides the flag-off Drive banner, so a failed
+ * read is logged rather than vanishing the banner without a trace.
  */
 const gitHubBindingsFor = async (
   lakes: Pick<IDataLakeDocument, 'id'>[],
-  connections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> }
+  connections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> },
+  logger?: LakeAccessLogger
 ): Promise<Map<string, boolean>> => {
   if (!connections || lakes.length === 0) return new Map();
   try {
     const bound = new Set(await connections.findBoundDataLakeIds(lakes.map(l => l.id)));
     return new Map(lakes.map(l => [l.id, bound.has(l.id)]));
-  } catch {
+  } catch (err) {
+    logger?.warn?.('[dataLakes] GitHub binding read failed; listing without hasGitHubConnection', err);
     return new Map();
   }
 };
@@ -462,7 +465,7 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
+  { db, logger, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
   // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
   // a caller that also threads `settings` could get includeReaders=true below, silently
@@ -528,7 +531,8 @@ export const listDataLakes = async (
   );
   const gitHubBindings = await gitHubBindingsFor(
     dynamicLakes.filter(dl => manageableById.get(dl.id) && dl.pendingConnector),
-    db.gitHubLakeConnections
+    db.gitHubLakeConnections,
+    logger
   );
   const dynamicConfigs = dynamicLakes.map(dl =>
     toManageableConfig(
@@ -584,7 +588,8 @@ export const listAllDataLakes = async (
   const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
   const gitHubBindings = await gitHubBindingsFor(
     dynamicLakes.filter(dl => dl.pendingConnector),
-    db.gitHubLakeConnections
+    db.gitHubLakeConnections,
+    logger
   );
   // This is the branch where canManage and canPreauthorize genuinely diverge: the admin manages every
   // DB lake, but may only ADMIT the ones they hold a real rung on (owner/curator/org-admin/org-grant).
