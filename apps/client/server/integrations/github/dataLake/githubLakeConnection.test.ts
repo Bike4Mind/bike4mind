@@ -19,7 +19,8 @@ const h = vi.hoisted(() => ({
   getGitHubLakeAppConfig: vi.fn(),
   verifyOrgAccess: vi.fn(),
   dlFindById: vi.fn(),
-  dlClearPendingConnector: vi.fn(),
+  dlRenameIfPlaceholder: vi.fn(),
+  recordLakeConfigChange: vi.fn(),
   ghConnFindByDataLakeIdAny: vi.fn(),
   ghConnFindByInstallationId: vi.fn(),
   ghConnFindById: vi.fn(),
@@ -69,6 +70,10 @@ vi.mock('./githubLakeAuthGrant', async importOriginal => {
 });
 vi.mock('@server/utils/orgAccess', () => ({ verifyOrgAccess: h.verifyOrgAccess }));
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return { dataLakeService: { ...actual.dataLakeService, recordLakeConfigChange: h.recordLakeConfigChange } };
+});
 // The sweep itself is covered by purgeDataLakeConnectionFiles's unit tests and the GitHub ingest e2e.
 vi.mock('@server/dataLakes/purgeConnectionIngestedFiles', () => ({
   purgeConnectionIngestedFiles: h.purgeConnectionIngestedFiles,
@@ -80,7 +85,7 @@ vi.mock('@bike4mind/database', async importOriginal => {
     dataLakeRepository: {
       ...actual.dataLakeRepository,
       findById: h.dlFindById,
-      clearPendingConnector: h.dlClearPendingConnector,
+      renameIfPlaceholderAndClearPending: h.dlRenameIfPlaceholder,
     },
     lakeConnectorClaimRepository: {
       ...actual.lakeConnectorClaimRepository,
@@ -139,7 +144,11 @@ import type {
   GitHubLakeRepository,
   GitHubLakeUserInstallation,
 } from './lakeAppClient';
-import { GITHUB_DISCONNECT_STALL_MS, type IOrgGitHubLakeConnectionDocument } from '@bike4mind/common';
+import {
+  GITHUB_DISCONNECT_STALL_MS,
+  GITHUB_LAKE_PLACEHOLDER_NAME,
+  type IOrgGitHubLakeConnectionDocument,
+} from '@bike4mind/common';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), log: vi.fn() } as never;
 const USER = { id: 'user-1', isAdmin: false };
@@ -566,7 +575,8 @@ describe('completeGitHubLakeConnection', () => {
     h.getInstallation.mockResolvedValue(INSTALLATION);
     h.ghConnCreate.mockResolvedValue({ id: 'conn1', repositoryId: REPO.id, repositoryFullName: REPO.fullName });
     h.consumeGitHubLakeAuthGrant.mockResolvedValue(undefined);
-    h.dlClearPendingConnector.mockResolvedValue(undefined);
+    h.dlRenameIfPlaceholder.mockResolvedValue(null);
+    h.recordLakeConfigChange.mockResolvedValue(undefined);
   });
 
   it('creates the connection with the picked repo, installation account, and connecting user', async () => {
@@ -653,22 +663,42 @@ describe('completeGitHubLakeConnection', () => {
     expect(h.ghConnCreate).not.toHaveBeenCalled();
   });
 
-  it('clears the lake pending connector once the connection is created', async () => {
+  it('clears the pending connector and offers the placeholder rename once the connection is created', async () => {
     await completeGitHubLakeConnection(params());
-    expect(h.dlClearPendingConnector).toHaveBeenCalledWith('lake1');
+    expect(h.dlRenameIfPlaceholder).toHaveBeenCalledWith('lake1', GITHUB_LAKE_PLACEHOLDER_NAME, REPO.fullName);
+    expect(h.recordLakeConfigChange).not.toHaveBeenCalled();
   });
 
-  it('keeps the pending connector when create loses a duplicate-key race', async () => {
+  it('records the rename as a config change by the connecting user when the placeholder was replaced', async () => {
+    h.dlRenameIfPlaceholder.mockResolvedValue({
+      id: 'lake1',
+      name: GITHUB_LAKE_PLACEHOLDER_NAME,
+      createdByUserId: 'u1',
+      organizationId: 'orgA',
+    });
+    await completeGitHubLakeConnection(params());
+    expect(h.recordLakeConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ userId: USER.id }),
+        lake: expect.objectContaining({ id: 'lake1' }),
+        action: 'update',
+        changes: [{ field: 'name', kind: 'literal', before: GITHUB_LAKE_PLACEHOLDER_NAME, after: REPO.fullName }],
+      }),
+      expect.anything()
+    );
+  });
+
+  it('keeps the pending connector and name when create loses a duplicate-key race', async () => {
     h.ghConnCreate.mockRejectedValue(Object.assign(new Error('E11000 duplicate key error'), { code: 11000 }));
     await expect(completeGitHubLakeConnection(params())).rejects.toMatchObject({ statusCode: 409 });
-    expect(h.dlClearPendingConnector).not.toHaveBeenCalled();
+    expect(h.dlRenameIfPlaceholder).not.toHaveBeenCalled();
   });
 
-  it('does not fail the connect when clearing the pending connector rejects (best-effort, logged)', async () => {
-    h.dlClearPendingConnector.mockRejectedValue(new Error('clear failed'));
+  it('does not fail the connect when the rename rejects (best-effort, logged)', async () => {
+    h.dlRenameIfPlaceholder.mockRejectedValue(new Error('rename failed'));
     await expect(completeGitHubLakeConnection(params())).resolves.toMatchObject({ id: 'conn1' });
     expect(logger.warn).toHaveBeenCalledWith(
-      'GitHub lake connect: could not clear the pending connector',
+      'GitHub lake connect: could not clear the pending connector or name the lake',
       expect.anything()
     );
   });

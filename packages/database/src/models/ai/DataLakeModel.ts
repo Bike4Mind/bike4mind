@@ -1247,6 +1247,21 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     await this.dataLakeModel.updateOne({ _id: id }, { $unset: { pendingConnector: 1 } });
   }
 
+  async renameIfPlaceholderAndClearPending(
+    id: string,
+    placeholder: string,
+    name: string
+  ): Promise<IDataLakeDocument | null> {
+    // The name match is the guard: a rename the user made meanwhile is never overwritten.
+    const renamed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, name: placeholder },
+      { $set: { name }, $unset: { pendingConnector: 1 } },
+      { new: false }
+    );
+    if (!renamed) await this.clearPendingConnector(id);
+    return renamed;
+  }
+
   async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
     // Mirror of activateIfDraft: guarded in the filter against the SAME caller-holds-a-stale-copy
     // race, and admits only 'active' as a source - a lake mid-archive, mid-delete or already

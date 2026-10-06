@@ -6,7 +6,12 @@ import {
   createMongoServer,
   MONGO_TEST_TIMEOUT_MS,
 } from '../../../../../../packages/database/src/__test__/createMongoServer';
-import { DataLakeModel, DataLakeAccessGrantModel, LakeConfigChangeEventModel } from '@bike4mind/database';
+import {
+  DataLakeModel,
+  DataLakeAccessGrantModel,
+  LakeConfigChangeEventModel,
+  dataLakeRepository,
+} from '@bike4mind/database';
 import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -207,6 +212,21 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(lakes).toHaveLength(2);
     expect(new Set(lakes.map(l => l.slug)).size).toBe(2);
     expect(new Set(lakes.map(l => l.datalakeTag)).size).toBe(2);
+  });
+
+  it('creates a lake the bind-time rename recognizes as still on its placeholder', async () => {
+    const { res, json } = makeRes();
+    await run(makeReq({ organizationId: ORG }), res);
+    const { dataLakeId } = json.mock.calls[0][0] as { dataLakeId: string };
+    const created = await DataLakeModel.findById(dataLakeId).lean();
+
+    await dataLakeRepository.renameIfPlaceholderAndClearPending(dataLakeId, GITHUB_LAKE_PLACEHOLDER_NAME, 'acme/repo');
+
+    const bound = await DataLakeModel.findById(dataLakeId).lean();
+    expect(bound?.name).toBe('acme/repo');
+    expect(bound).not.toHaveProperty('pendingConnector');
+    expect(bound?.slug).toBe(created?.slug);
+    expect(bound?.datalakeTag).toBe(created?.datalakeTag);
   });
 
   it('retries once with a fresh suffix when the first one collides', async () => {

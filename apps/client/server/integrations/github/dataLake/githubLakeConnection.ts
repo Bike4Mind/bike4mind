@@ -6,6 +6,7 @@ import {
   orgGitHubLakeConnectionRepository,
 } from '@bike4mind/database';
 import {
+  GITHUB_LAKE_PLACEHOLDER_NAME,
   acceptsConnectorContent,
   isGitHubDisconnectStalled,
   isLakeIngestable,
@@ -19,6 +20,8 @@ import {
   type IOrgGitHubLakeConnectionResponse,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
+import { dataLakeService } from '@bike4mind/services';
+import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { createStateToken, verifyStateToken, type BaseStatePayload } from '@server/auth/jwtStateStore';
 import { issueStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
@@ -424,9 +427,9 @@ export async function completeGitHubLakeConnection(params: {
   }
 
   // The binding stands without it: a stale intent only feeds the finish-connect banner, which also
-  // hides once a connection exists.
-  await dataLakeRepository.clearPendingConnector(lakeId).catch((error: unknown) =>
-    logger.warn('GitHub lake connect: could not clear the pending connector', {
+  // hides once a connection exists, and a lake left on the placeholder name can be renamed by hand.
+  await nameLakeAfterRepository(lakeId, repository.fullName, user).catch((error: unknown) =>
+    logger.warn('GitHub lake connect: could not clear the pending connector or name the lake', {
       connectionId: connection.id,
       error: serializeError(error),
     })
@@ -440,6 +443,29 @@ export async function completeGitHubLakeConnection(params: {
   );
   await queueFirstIngest(connection, logger);
   return connection;
+}
+
+/**
+ * Renames a lake still carrying the connector-first placeholder (POST /api/data-lakes/github-connect)
+ * to the bound repository's owner/repo, and clears its pending connector either way. A lake the user
+ * already renamed keeps its name; one they named exactly the placeholder is renamed too.
+ */
+async function nameLakeAfterRepository(lakeId: string, repositoryFullName: string, user: LakeUser): Promise<void> {
+  const before = await dataLakeRepository.renameIfPlaceholderAndClearPending(
+    lakeId,
+    GITHUB_LAKE_PLACEHOLDER_NAME,
+    repositoryFullName
+  );
+  if (!before) return;
+  await dataLakeService.recordLakeConfigChange(
+    {
+      actor: { userId: user.id, isAdmin: user.isAdmin, administeredOrgIds: [] },
+      lake: before,
+      action: 'update',
+      changes: dataLakeService.diffLakeConfig({ name: before.name }, { name: repositoryFullName }),
+    },
+    { db: lakeConfigAuditDb }
+  );
 }
 
 /**

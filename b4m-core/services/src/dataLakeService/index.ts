@@ -58,6 +58,8 @@ export * from './demoteDataLake';
 export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';
+export { recordLakeConfigChange } from './recordLakeConfigChange';
+export { diffLakeConfig } from './diffLakeConfig';
 export * from './recordLakeMembershipChange';
 export * from './recordLakeUploadBatch';
 export * from './prefixArmMembership';
