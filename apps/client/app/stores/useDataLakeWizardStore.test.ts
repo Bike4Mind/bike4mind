@@ -31,11 +31,73 @@ const seedStaleSession = () =>
     },
   });
 
+/**
+ * The create wizard asks for a source before anything else (#3817), and the answer decides the new
+ * lake's origin - so switching it must not carry the abandoned source's content into the lake the
+ * next one creates.
+ */
+describe('useDataLakeWizardStore - the chosen create source', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  it('starts unanswered, so the cards are what a fresh create shows', () => {
+    useDataLakeWizardStore.getState().openWizard();
+
+    expect(useDataLakeWizardStore.getState().createSource).toBeNull();
+  });
+
+  it('never asks in append mode - the target lake already declares its origin', () => {
+    useDataLakeWizardStore.getState().openWizardForLake({
+      id: 'lake1',
+      slug: 'niche',
+      name: 'Niche',
+      fileTagPrefix: 'niche:',
+      organizationId: 'org-1',
+      canManage: true,
+      isCreator: true,
+    });
+
+    expect(useDataLakeWizardStore.getState().createSource).toBe('upload');
+  });
+
+  it('drops the files and the Drive folder the abandoned source gathered', () => {
+    useDataLakeWizardStore.getState().setCreateSource('upload');
+    useDataLakeWizardStore.setState({
+      allFiles: [staleFile()],
+      pendingDriveFolder: { driveFolderId: 'FOLDER1' },
+    });
+
+    useDataLakeWizardStore.getState().setCreateSource('googleDrive');
+
+    const s = useDataLakeWizardStore.getState();
+    expect(s.createSource).toBe('googleDrive');
+    expect(s.allFiles).toEqual([]);
+    expect(s.pendingDriveFolder).toBeNull();
+  });
+
+  it('keeps what the current source gathered when it is re-selected', () => {
+    useDataLakeWizardStore.getState().setCreateSource('upload');
+    useDataLakeWizardStore.setState({ allFiles: [staleFile()] });
+
+    useDataLakeWizardStore.getState().setCreateSource('upload');
+
+    expect(useDataLakeWizardStore.getState().allFiles).toHaveLength(1);
+  });
+
+  it('clears the answer when the user goes back to the cards', () => {
+    useDataLakeWizardStore.getState().setCreateSource('googleDrive');
+
+    useDataLakeWizardStore.getState().setCreateSource(null);
+
+    expect(useDataLakeWizardStore.getState().createSource).toBeNull();
+  });
+});
+
 describe('useDataLakeWizardStore - open starts a clean session', () => {
   afterEach(() => useDataLakeWizardStore.getState().resetWizard());
 
   it('openWizard clears a prior session (no config/prefix/files leak)', () => {
     seedStaleSession();
+    useDataLakeWizardStore.getState().setCreateSource('googleDrive');
 
     useDataLakeWizardStore.getState().openWizard();
 
@@ -43,6 +105,8 @@ describe('useDataLakeWizardStore - open starts a clean session', () => {
     expect(s.isOpen).toBe(true);
     expect(s.step).toBe('source');
     expect(s.targetLake).toBeNull();
+    // A prior session's source must not pre-answer the new session's first question.
+    expect(s.createSource).toBeNull();
     expect(s.allFiles).toEqual([]);
     expect(s.config.name).toBe('');
     expect(s.config.tagPrefix).toBe('');

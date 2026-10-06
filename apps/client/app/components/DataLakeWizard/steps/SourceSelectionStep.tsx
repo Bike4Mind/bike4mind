@@ -30,9 +30,12 @@ import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
+import { createSourceRequiresUpload, useCreateLakeScope } from '@client/app/components/datalake/createLakeSources';
 import LakeSourceConnectActions from './LakeSourceConnectActions';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
 import DriveConnectUnavailableButton, { DRIVE_PERSONAL_OWNER_ONLY_REASON } from './DriveConnectUnavailableButton';
+import CreateSourceCards from './CreateSourceCards';
+import GitHubCreatePanel from './GitHubCreatePanel';
 
 const supportsWebkitDirectory =
   typeof HTMLInputElement !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
@@ -43,6 +46,9 @@ function normalizeName(name: string): string {
 
 export default function SourceSelectionStep() {
   const theme = useTheme();
+  const createSource = useDataLakeWizardStore(s => s.createSource);
+  const setCreateSource = useDataLakeWizardStore(s => s.setCreateSource);
+  const createScope = useCreateLakeScope();
   const setFiles = useDataLakeWizardStore(s => s.setFiles);
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const config = useDataLakeWizardStore(s => s.config);
@@ -158,8 +164,44 @@ export default function SourceSelectionStep() {
     [handleFilesSelected]
   );
 
+  // The source question is create-only and comes first: until it is answered there is nothing to
+  // name, because the answer decides what the rest of this step even asks for.
+  if (!targetLake && !createSource) {
+    return (
+      <Box data-testid="wizard-source-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
+        <CreateSourceCards />
+      </Box>
+    );
+  }
+
+  // GitHub owns the whole screen: its connect creates the lake itself (name included) and leaves
+  // the page, so none of the name/upload chrome below applies to it.
+  if (createSource === 'github' && !targetLake) {
+    return (
+      <Box data-testid="wizard-source-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
+        <GitHubCreatePanel organizationId={createScope.organizationId ?? ''} onBack={() => setCreateSource(null)} />
+      </Box>
+    );
+  }
+
+  // Only the Upload card asks for local files; a connector feeds the lake itself.
+  const wantsUpload = !!targetLake || (!!createSource && createSourceRequiresUpload(createSource));
+
   return (
     <Box data-testid="wizard-source-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2.5, p: 3 }}>
+      {!targetLake && (
+        <Button
+          data-testid="source-change-btn"
+          variant="plain"
+          color="neutral"
+          size="sm"
+          onClick={() => setCreateSource(null)}
+          sx={{ alignSelf: 'flex-start' }}
+        >
+          Back to sources
+        </Button>
+      )}
+
       {/* Identity lives here, not on Config: naming the lake before committing files is the
           point of the streamlined flow. Append mode has no name to set - the modal header
           already says which lake the files are joining. */}
@@ -192,128 +234,132 @@ export default function SourceSelectionStep() {
       )}
 
       {/* Drag-drop zone */}
-      <Box
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        sx={{
-          flex: 1,
-          minHeight: 200,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 2,
-          border: '2px dashed',
-          borderColor: isDragging ? 'primary.500' : 'divider',
-          borderRadius: 'lg',
-          bgcolor: isDragging ? (theme.palette.mode === 'dark' ? 'primary.900' : 'primary.50') : 'transparent',
-          transition: 'all 0.2s',
-          cursor: 'pointer',
-        }}
-        onClick={() => !isScanning && fileInputRef.current?.click()}
-      >
-        {isScanning ? (
-          <>
-            <CircularProgress size="lg" />
-            <Typography level="title-lg" textAlign="center">
-              Scanning folder contents&hellip;
-            </Typography>
-            <Typography level="body-sm" color="neutral" textAlign="center">
-              Reading all files in the dropped folder
-            </Typography>
-          </>
-        ) : (
-          <>
-            <CloudUploadIcon sx={{ fontSize: 56, color: isDragging ? 'primary.500' : 'neutral.400' }} />
-            <Typography level="title-lg" textAlign="center">
-              Drop files or a folder here
-            </Typography>
-            <Typography level="body-sm" color="neutral" textAlign="center">
-              Or use the Upload button below
-            </Typography>
-          </>
-        )}
-      </Box>
+      {wantsUpload && (
+        <Box
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          sx={{
+            flex: 1,
+            minHeight: 200,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 2,
+            border: '2px dashed',
+            borderColor: isDragging ? 'primary.500' : 'divider',
+            borderRadius: 'lg',
+            bgcolor: isDragging ? (theme.palette.mode === 'dark' ? 'primary.900' : 'primary.50') : 'transparent',
+            transition: 'all 0.2s',
+            cursor: 'pointer',
+          }}
+          onClick={() => !isScanning && fileInputRef.current?.click()}
+        >
+          {isScanning ? (
+            <>
+              <CircularProgress size="lg" />
+              <Typography level="title-lg" textAlign="center">
+                Scanning folder contents&hellip;
+              </Typography>
+              <Typography level="body-sm" color="neutral" textAlign="center">
+                Reading all files in the dropped folder
+              </Typography>
+            </>
+          ) : (
+            <>
+              <CloudUploadIcon sx={{ fontSize: 56, color: isDragging ? 'primary.500' : 'neutral.400' }} />
+              <Typography level="title-lg" textAlign="center">
+                Drop files or a folder here
+              </Typography>
+              <Typography level="body-sm" color="neutral" textAlign="center">
+                Or use the Upload button below
+              </Typography>
+            </>
+          )}
+        </Box>
+      )}
 
       {/* Action buttons. A single Upload split-button covers both files and folder selection:
           a browser file input can only be in one mode at a time (webkitdirectory forces folder-only),
           so the two modes live behind one control instead of two top-level buttons. */}
       <Stack direction="row" gap={2} justifyContent="center" flexWrap="wrap">
-        {/* Joined split-button built from a flex wrapper rather than ButtonGroup: ButtonGroup's
+        {wantsUpload && (
+          /* Joined split-button built from a flex wrapper rather than ButtonGroup: ButtonGroup's
             child-radius CSS keys off data-first/last-child markers, which the Dropdown wrapper
             around the caret swallows, so it can't round the caret correctly. We square the shared
-            edge and round the two outer edges by hand. */}
-        <Box sx={{ display: 'inline-flex' }}>
-          <Button
-            data-testid="wizard-upload-btn"
-            variant="solid"
-            color="primary"
-            startDecorator={<CloudUploadIcon />}
-            onClick={() => fileInputRef.current?.click()}
-            sx={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-          >
-            Upload
-          </Button>
-          <Dropdown>
-            <MenuButton
-              data-testid="wizard-upload-menu-btn"
-              aria-label="Upload options"
-              slots={{ root: Button }}
-              slotProps={{
-                root: {
-                  variant: 'solid',
-                  color: 'primary',
-                  sx: {
-                    px: 1,
-                    minWidth: 0,
-                    borderTopLeftRadius: 0,
-                    borderBottomLeftRadius: 0,
-                    borderLeft: '1px solid',
-                    borderLeftColor: 'primary.700', // subtle divider between the two halves
-                  },
-                },
-              }}
+            edge and round the two outer edges by hand. */
+          <Box sx={{ display: 'inline-flex' }}>
+            <Button
+              data-testid="wizard-upload-btn"
+              variant="solid"
+              color="primary"
+              startDecorator={<CloudUploadIcon />}
+              onClick={() => fileInputRef.current?.click()}
+              sx={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
             >
-              <KeyboardArrowDownIcon />
-            </MenuButton>
-            {/* zIndex above the wizard Modal (1300) so the menu isn't hidden behind it */}
-            <Menu placement="bottom-end" sx={{ zIndex: 1400 }}>
-              <MenuItem data-testid="wizard-upload-files-item" onClick={() => fileInputRef.current?.click()}>
-                <ListItemDecorator>
-                  <InsertDriveFileIcon />
-                </ListItemDecorator>
-                Upload Files&hellip;
-              </MenuItem>
-              {supportsWebkitDirectory ? (
-                <MenuItem data-testid="wizard-upload-folder-item" onClick={() => folderInputRef.current?.click()}>
+              Upload
+            </Button>
+            <Dropdown>
+              <MenuButton
+                data-testid="wizard-upload-menu-btn"
+                aria-label="Upload options"
+                slots={{ root: Button }}
+                slotProps={{
+                  root: {
+                    variant: 'solid',
+                    color: 'primary',
+                    sx: {
+                      px: 1,
+                      minWidth: 0,
+                      borderTopLeftRadius: 0,
+                      borderBottomLeftRadius: 0,
+                      borderLeft: '1px solid',
+                      borderLeftColor: 'primary.700', // subtle divider between the two halves
+                    },
+                  },
+                }}
+              >
+                <KeyboardArrowDownIcon />
+              </MenuButton>
+              {/* zIndex above the wizard Modal (1300) so the menu isn't hidden behind it */}
+              <Menu placement="bottom-end" sx={{ zIndex: 1400 }}>
+                <MenuItem data-testid="wizard-upload-files-item" onClick={() => fileInputRef.current?.click()}>
                   <ListItemDecorator>
-                    <CloudUploadIcon />
+                    <InsertDriveFileIcon />
                   </ListItemDecorator>
-                  Upload Folder&hellip;
+                  Upload Files&hellip;
                 </MenuItem>
-              ) : (
-                <Tooltip title="Folder upload is not supported in this browser. Please use Chrome, Edge, or Safari.">
-                  <span>
-                    <MenuItem data-testid="wizard-upload-folder-item" disabled>
-                      <ListItemDecorator>
-                        <CloudUploadIcon />
-                      </ListItemDecorator>
-                      Upload Folder&hellip;
-                    </MenuItem>
-                  </span>
-                </Tooltip>
-              )}
-            </Menu>
-          </Dropdown>
-        </Box>
+                {supportsWebkitDirectory ? (
+                  <MenuItem data-testid="wizard-upload-folder-item" onClick={() => folderInputRef.current?.click()}>
+                    <ListItemDecorator>
+                      <CloudUploadIcon />
+                    </ListItemDecorator>
+                    Upload Folder&hellip;
+                  </MenuItem>
+                ) : (
+                  <Tooltip title="Folder upload is not supported in this browser. Please use Chrome, Edge, or Safari.">
+                    <span>
+                      <MenuItem data-testid="wizard-upload-folder-item" disabled>
+                        <ListItemDecorator>
+                          <CloudUploadIcon />
+                        </ListItemDecorator>
+                        Upload Folder&hellip;
+                      </MenuItem>
+                    </span>
+                  </Tooltip>
+                )}
+              </Menu>
+            </Dropdown>
+          </Box>
+        )}
 
-        {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit; GitHub is not offered
-            there, since its install round-trip leaves the page and must sign a real lake id into
-            its state. Someone else's personal lake gets the control disabled with its reason, so
-            Drive stays discoverable where it cannot connect. */}
+        {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode does
+            not, so the selection is parked and connected on commit. Someone else's personal lake
+            gets the control disabled with its reason, so Drive stays discoverable where it cannot
+            connect. (GitHub never reaches here: its card owns the whole screen above, because its
+            connect creates the lake server-side and then leaves the page.) */}
         {targetLake ? (
           canConnectDrive ? (
             <LakeSourceConnectActions lake={targetLake} />
@@ -326,7 +372,7 @@ export default function SourceSelectionStep() {
             )
           )
         ) : (
-          <DrivePendingConnectAction />
+          createSource === 'googleDrive' && <DrivePendingConnectAction />
         )}
       </Stack>
 

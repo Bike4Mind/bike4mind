@@ -1,66 +1,9 @@
 import path from 'path';
+import { GITHUB_LAKE_FILE_RULES } from '@bike4mind/common';
 
-/** What a GitHub-fed lake ingests. The one place the allowlist, denylists and caps live. */
-export const GITHUB_LAKE_FILE_RULES = {
-  extensions: [
-    'md',
-    'mdx',
-    'txt',
-    'rst',
-    'adoc',
-    'ts',
-    'tsx',
-    'js',
-    'jsx',
-    'mjs',
-    'cjs',
-    'py',
-    'go',
-    'rs',
-    'java',
-    'kt',
-    'rb',
-    'php',
-    'cs',
-    'c',
-    'h',
-    'cpp',
-    'hpp',
-    'swift',
-    'scala',
-    'sh',
-    'sql',
-    'json',
-    'yaml',
-    'yml',
-    'toml',
-    'ini',
-  ],
-  extensionlessNames: ['README', 'LICENSE', 'Dockerfile', 'Makefile'],
-  deniedPathSegments: [
-    'node_modules',
-    'vendor',
-    'dist',
-    'build',
-    '.git',
-    'third_party',
-    '.next',
-    'target',
-    '__pycache__',
-  ],
-  deniedFileNames: [
-    'pnpm-lock.yaml',
-    'package-lock.json',
-    'yarn.lock',
-    'Cargo.lock',
-    'poetry.lock',
-    'Gemfile.lock',
-    'go.sum',
-    'composer.lock',
-  ],
-  maxFileBytes: 1024 * 1024,
-  maxCandidates: 5000,
-} as const;
+// Re-exported so every server consumer keeps importing the rules from the filter that applies them,
+// while the create wizard reads the same constant out of @bike4mind/common.
+export { GITHUB_LAKE_FILE_RULES };
 
 export type GitHubTreeEntry = { path?: string; mode?: string; type?: string; sha?: string; size?: number };
 export type GitHubLakeCandidate = { path: string; sha: string; size: number };

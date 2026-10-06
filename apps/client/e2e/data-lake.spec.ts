@@ -198,6 +198,82 @@ test.describe('Data Lake - management panel', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 // Create wizard (drive the steps we can without a live S3/vectorize upload)
 // ─────────────────────────────────────────────────────────────────────────────
+/**
+ * The source-first first step (#3817). The GitHub card's Continue leaves for GitHub's OAuth page,
+ * which no e2e can follow, so this covers everything BEFORE that redirect: which cards appear, the
+ * disabled reason, the read-only promise, and the "What gets synced" disclosure.
+ */
+test.describe('Data Lake - create wizard source cards', () => {
+  test('asks where the content is before asking for anything else', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+    await dataLakePage.startCreateAtSourceCards();
+
+    await expect(dataLakePage.sourceCards).toContainText("Where's your content?");
+    await expect(dataLakePage.sourceCard('upload')).toBeVisible();
+    await expect(dataLakePage.sourceCard('googleDrive')).toBeVisible();
+    // Naming comes after the source, so neither the name nor the upload control is on screen yet.
+    await expect(dataLakePage.page.getByTestId('source-name-input')).toBeHidden();
+    await expect(dataLakePage.wizardNextBtn).toBeDisabled();
+  });
+
+  test('the Upload card leads to the name + upload screen, and Back returns to the cards', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+    await dataLakePage.startCreate('upload');
+
+    await expect(dataLakePage.sourceNameInput).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.page.getByTestId('wizard-upload-btn')).toBeVisible();
+
+    await dataLakePage.sourceChangeBtn.click();
+    await expect(dataLakePage.sourceCards).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+
+  test('the Drive card asks for a folder rather than an upload', async ({ dataLakePage }) => {
+    await dataLakePage.openChatSurface();
+    await dataLakePage.startCreate('googleDrive');
+
+    // A connector feeds the lake itself, so the upload control is gone while the name stays.
+    await expect(dataLakePage.page.getByTestId('drive-connect-btn')).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.page.getByTestId('wizard-upload-btn')).toBeHidden();
+    await expect(dataLakePage.sourceNameInput).toBeVisible();
+  });
+
+  test('the GitHub card is present only where it can be used, and leads with the read-only promise', async ({
+    dataLakePage,
+  }) => {
+    await dataLakePage.openChatSurface();
+    await dataLakePage.startCreateAtSourceCards();
+
+    // The flag and the account scope decide this, and the e2e user's scope is not fixed here - so
+    // assert the rule rather than one outcome: the card is either absent (flag off), disabled with
+    // a reason (personal scope / non-manager), or it opens the panel.
+    if ((await dataLakePage.sourceCard('github').count()) === 0) {
+      test.info().annotations.push({ type: 'note', description: 'EnableDataLakeGitHub is off in this environment' });
+      return;
+    }
+    if (await dataLakePage.sourceCard('github').isDisabled()) {
+      await expect(dataLakePage.sourceCardReason('github')).toContainText(/organization/i);
+      return;
+    }
+
+    await dataLakePage.sourceCard('github').click();
+    await expect(dataLakePage.gitHubCreatePanel).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+    await expect(dataLakePage.page.getByTestId('github-read-only-promise')).toContainText(
+      'read code, never write, push, or open PRs'
+    );
+
+    // "What gets synced" is collapsed, and renders from the ingest filter's own constants.
+    await expect(dataLakePage.gitHubSyncedFilesDetails).toBeHidden();
+    await dataLakePage.gitHubSyncedFilesToggle.click();
+    await expect(dataLakePage.gitHubSyncedFilesDetails).toContainText('.md');
+    await expect(dataLakePage.gitHubSyncedFilesDetails).toContainText('node_modules');
+    await expect(dataLakePage.gitHubSyncedFilesDetails).toContainText('pnpm-lock.yaml');
+
+    // Back returns to the cards without creating anything.
+    await dataLakePage.page.getByTestId('github-create-back-btn').click();
+    await expect(dataLakePage.sourceCards).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
+  });
+});
+
 test.describe('Data Lake - create wizard', () => {
   test('step gating: Next needs both files and a valid name, then advances', async ({ dataLakePage }) => {
     await dataLakePage.openChatSurface();

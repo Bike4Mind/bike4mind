@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { deriveTagPrefixFromLakeName, isReservedTagPrefix } from '@bike4mind/common';
 import type { DataLakeOrigin, DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
+import type { CreateLakeSourceKind } from '../components/datalake/createLakeSources';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import {
   parseFilesToTree,
@@ -143,6 +144,7 @@ const freshSession = () => ({
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null as WizardTargetLake | null,
+  createSource: null as CreateLakeSourceKind | null,
   pendingDriveFolder: null as PendingDriveFolder | null,
   recoverableLake: null as RecoverableLake | null,
 });
@@ -275,6 +277,12 @@ interface DataLakeWizardStore {
   hashingProgress: { total: number; completed: number; status: 'idle' | 'hashing' | 'done' };
   /** Non-null when appending to an existing lake (vs creating a new one). */
   targetLake: WizardTargetLake | null;
+  /**
+   * Which source the user picked on the create wizard's first screen, or null while the question is
+   * still open. It decides the new lake's `origin` (see createLakeOrigin) and which panel the source
+   * step renders. Never set in append mode - an existing lake already declares its own origin.
+   */
+  createSource: CreateLakeSourceKind | null;
   /** Drive folder chosen during create, connected on commit once the lake has an id. */
   pendingDriveFolder: PendingDriveFolder | null;
   /** See RecoverableLake. Non-null only after a create-mode total-upload-failure rollback. */
@@ -308,6 +316,7 @@ interface DataLakeWizardStore {
   // Source step
   setFiles: (files: File[]) => void;
   setOptionalStep: (key: keyof OptionalSteps, enabled: boolean) => void;
+  setCreateSource: (source: CreateLakeSourceKind | null) => void;
   setPendingDriveFolder: (folder: PendingDriveFolder | null) => void;
 
   // Preview step
@@ -351,6 +360,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   uploadProgress: { ...DEFAULT_UPLOAD_PROGRESS },
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null,
+  createSource: null,
   pendingDriveFolder: null,
   recoverableLake: null,
   isManagerOpen: false,
@@ -375,12 +385,14 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   closeGitHubRepoPicker: () => set({ gitHubRepoPickerLakeId: null }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
-  // the (locked) Config step shows the right values.
+  // the (locked) Config step shows the right values. The source question is never asked here - the
+  // lake exists, so files go straight in.
   openWizardForLake: lake =>
     set({
       isOpen: true,
       ...freshSession(),
       targetLake: lake,
+      createSource: 'upload',
       config: {
         ...DEFAULT_CONFIG,
         name: lake.name,
@@ -404,6 +416,21 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   },
 
   setOptionalStep: (key, enabled) => set(state => ({ optionalSteps: { ...state.optionalSteps, [key]: enabled } })),
+
+  // Going back to the cards drops whatever the abandoned source had gathered, so a lake is never
+  // created with an origin from one source and content from another.
+  setCreateSource: source =>
+    set(state =>
+      source === state.createSource
+        ? state
+        : {
+            createSource: source,
+            folderTree: null,
+            allFiles: [],
+            pendingDriveFolder: null,
+            optionalSteps: { ...DEFAULT_OPTIONAL_STEPS },
+          }
+    ),
 
   setPendingDriveFolder: folder => set({ pendingDriveFolder: folder }),
 

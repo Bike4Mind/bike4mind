@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, DataLakeStatus, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { createLakeOrigin } from '@client/app/components/datalake/createLakeSources';
 import type {
   DataLakeFormValues,
   PendingDriveFolder,
@@ -221,7 +222,7 @@ export async function createWizardLake(
   // Same "read the store at call time" idiom as activeOrgId: both create callers (runBatchUpload,
   // useCreateLakeFromDrive) already have a pendingDriveFolder in scope, so read it here rather
   // than threading it through as a parameter both would just forward unchanged.
-  const { pendingDriveFolder } = useDataLakeWizardStore.getState();
+  const { createSource } = useDataLakeWizardStore.getState();
   const res = await api.post<{ id: string; status?: DataLakeStatus; slug: string }>('/api/data-lakes', {
     name: config.name,
     // The slug we ask for. The server disambiguates it against lakes in scope, so the created
@@ -232,11 +233,12 @@ export async function createWizardLake(
     requiredUserTag: config.requiredUserTag || undefined,
     requiredEntitlement: config.requiredEntitlement || undefined,
     ...(organizationId ? { organizationId } : {}),
-    // The user picked a Drive folder before creating the lake, so THIS request is their
-    // declaration that the lake is connector-fed - not an inferred flip on bind (see the schema
-    // comment on CreateDataLakeRequestInput). No folder picked -> omit, and the server default
-    // ('curated') applies.
-    ...(pendingDriveFolder ? { origin: 'connector-fed' as const } : {}),
+    // The source card the user chose IS the declaration of who may fill this lake - a connector
+    // source is born connector-fed rather than flipped on bind (see the schema comment on
+    // CreateDataLakeRequestInput). Deriving it from the card rather than from a picked folder is
+    // what makes a Drive lake connector-fed even when the user creates it before picking one.
+    // An unset source (append mode) omits it, and the server default ('curated') applies.
+    ...(createSource ? { origin: createLakeOrigin(createSource) } : {}),
   } satisfies CreateDataLakeRequestInputType);
   return { id: res.data.id, status: res.data.status, slug: res.data.slug };
 }

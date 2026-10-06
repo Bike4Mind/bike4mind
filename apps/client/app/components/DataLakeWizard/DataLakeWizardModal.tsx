@@ -52,6 +52,7 @@ export default function DataLakeWizardModal() {
   const config = useDataLakeWizardStore(s => s.config);
   const deriveTagPrefixFromName = useDataLakeWizardStore(s => s.deriveTagPrefixFromName);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
+  const createSource = useDataLakeWizardStore(s => s.createSource);
   const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
   const uploadStatus = useDataLakeWizardStore(s => s.uploadProgress.status);
   const hideFooter = step === 'upload' && uploadStatus === 'complete';
@@ -89,6 +90,10 @@ export default function DataLakeWizardModal() {
   const canGoNext = (() => {
     switch (step) {
       case 'source':
+        // The source question itself gates Next in create mode: nothing downstream has an answer
+        // until a card is picked, and the GitHub card leaves the wizard entirely rather than
+        // advancing through it.
+        if (!targetLake && (!createSource || createSource === 'github')) return false;
         // Counts INCLUDED files, not raw ones: auto-exclusion can empty a selection on its own
         // (e.g. only junk files picked), and Preview - which used to be the mandatory home of
         // this check - is now skippable, so nothing else would stop the user reaching Start

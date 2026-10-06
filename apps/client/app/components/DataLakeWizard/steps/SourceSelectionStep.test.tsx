@@ -6,10 +6,12 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore, type WizardTargetLake } from '@client/app/stores/useDataLakeWizardStore';
 import SourceSelectionStep from './SourceSelectionStep';
 
-const { lakes, selectedAccount, toastInfo } = vi.hoisted(() => ({
+const { lakes, selectedAccount, toastInfo, organizations, gitHubFlag } = vi.hoisted(() => ({
   lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
   selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
   toastInfo: vi.fn(),
+  organizations: { current: [] as { id: string; userId: string; managerId?: string }[] },
+  gitHubFlag: { current: true },
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -20,6 +22,29 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
     selector({ selectedAccount: selectedAccount.current }),
 }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
+// The cards resolve their scope from the account switcher plus the caller's rung on the selected
+// org. Mocked at those two reads rather than at useCreateLakeScope, so the real derivation (and the
+// real owner/manager predicate behind it) runs here instead of being stubbed over.
+vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
+  useFeatureEnabled: () => ({
+    isAdminFeatureEnabled: (key: string) => key !== 'EnableDataLakeGitHub' || gitHubFlag.current,
+    isFeatureEnabled: vi.fn(),
+    isLoading: false,
+  }),
+}));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (s: { currentUser: unknown }) => unknown) => selector({ currentUser: { id: 'me' } }),
+}));
+vi.mock('@client/app/hooks/data/organizations', () => ({
+  useGetUserOrganizations: () => ({ data: organizations.current }),
+}));
+// The GitHub panel's own behaviour is covered by GitHubCreatePanel.test.tsx; here it is a marker,
+// so these tests assert WHICH screen the step shows - the gate this component owns.
+vi.mock('@client/app/components/DataLakeWizard/steps/GitHubCreatePanel', () => ({
+  default: ({ organizationId }: { organizationId: string }) => (
+    <div data-testid="github-create-panel" data-org={organizationId} />
+  ),
+}));
 // The source actions pull in React Query (useConfig / lake-connection hooks); stub them so these
 // step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
 // LakeSourceConnectActions.test.tsx and DrivePendingConnectAction.test.tsx.
@@ -46,6 +71,20 @@ const renderStep = () =>
 
 const setName = (name: string) => useDataLakeWizardStore.setState(state => ({ config: { ...state.config, name } }));
 
+/** Every test below the cards starts from a chosen source, as the user would. */
+const pickSource = (kind: 'upload' | 'googleDrive' | 'github') =>
+  useDataLakeWizardStore.getState().setCreateSource(kind);
+
+/** The account-switcher scope the create will land in, which is what gates the GitHub card. */
+const asOrgOwner = () => {
+  selectedAccount.current = { id: 'org-1', personal: false };
+  organizations.current = [{ id: 'org-1', userId: 'me' }];
+};
+const asOrgMember = () => {
+  selectedAccount.current = { id: 'org-1', personal: false };
+  organizations.current = [{ id: 'org-1', userId: 'someone-else' }];
+};
+
 /** Drive the hidden file input the way a picker selection would. */
 const selectFiles = (container: HTMLElement, files: File[]) => {
   const inputs = container.querySelectorAll('input[type="file"]');
@@ -58,12 +97,168 @@ const file = (name: string) => new File(['x'], name, { type: 'text/plain' });
 
 beforeEach(() => {
   lakes.current = [];
+  // Personal by default, as the pre-existing name/duplicate tests below assume.
   selectedAccount.current = { id: 'me', personal: true };
+  organizations.current = [];
+  gitHubFlag.current = true;
   toastInfo.mockClear();
+  // The source question is asked first now, so every test that is not ABOUT the cards answers it.
+  pickSource('upload');
 });
 
 afterEach(() => {
   useDataLakeWizardStore.getState().resetWizard();
+});
+
+/**
+ * "Where's your content?" is the first question the create wizard asks (#3817). The cards come from
+ * the create-source registry, so visibility and the disabled reasons are asserted here as the user
+ * meets them; the registry's own rules are pinned in createLakeSources.test.ts.
+ */
+describe('SourceSelectionStep - the source cards', () => {
+  const showCards = () => useDataLakeWizardStore.getState().setCreateSource(null);
+
+  it('asks where the content is before anything else, with no name field yet', () => {
+    showCards();
+    renderStep();
+
+    expect(screen.getByText("Where's your content?")).toBeInTheDocument();
+    // Naming comes after the source: the answer decides what the rest of the step even asks for.
+    expect(screen.queryByTestId('source-name-input')).toBeNull();
+    expect(screen.queryByTestId('wizard-upload-btn')).toBeNull();
+  });
+
+  it('offers all three cards to an org owner/manager', () => {
+    asOrgOwner();
+    showCards();
+    renderStep();
+
+    expect(screen.getByTestId('create-source-card-upload')).toBeEnabled();
+    expect(screen.getByTestId('create-source-card-googleDrive')).toBeEnabled();
+    expect(screen.getByTestId('create-source-card-github')).toBeEnabled();
+  });
+
+  it('hides GitHub entirely while EnableDataLakeGitHub is off', () => {
+    asOrgOwner();
+    gitHubFlag.current = false;
+    showCards();
+    renderStep();
+
+    expect(screen.queryByTestId('create-source-card-github')).toBeNull();
+    expect(screen.getByTestId('create-source-card-upload')).toBeInTheDocument();
+    expect(screen.getByTestId('create-source-card-googleDrive')).toBeInTheDocument();
+  });
+
+  it('shows GitHub disabled with its reason in a personal workspace', () => {
+    showCards();
+    renderStep();
+
+    expect(screen.getByTestId('create-source-card-github')).toBeDisabled();
+    expect(screen.getByTestId('create-source-reason-github')).toHaveTextContent('organization');
+  });
+
+  it('shows GitHub disabled with its reason for a non-manager of the org', () => {
+    asOrgMember();
+    showCards();
+    renderStep();
+
+    expect(screen.getByTestId('create-source-card-github')).toBeDisabled();
+    expect(screen.getByTestId('create-source-reason-github')).toHaveTextContent('owner or manager');
+  });
+
+  it('does not record a source when a disabled card is clicked', () => {
+    showCards();
+    renderStep();
+
+    fireEvent.click(screen.getByTestId('create-source-card-github'));
+
+    expect(useDataLakeWizardStore.getState().createSource).toBeNull();
+    expect(screen.queryByTestId('github-create-panel')).toBeNull();
+  });
+
+  it.each([
+    ['upload', 'curated'],
+    ['googleDrive', 'connector-fed'],
+  ] as const)('records %s on the store, which the create sends as origin %s', kind => {
+    showCards();
+    renderStep();
+
+    fireEvent.click(screen.getByTestId(`create-source-card-${kind}`));
+
+    expect(useDataLakeWizardStore.getState().createSource).toBe(kind);
+  });
+
+  it('opens the GitHub panel for the selected organization', () => {
+    asOrgOwner();
+    showCards();
+    renderStep();
+
+    fireEvent.click(screen.getByTestId('create-source-card-github'));
+
+    expect(screen.getByTestId('github-create-panel')).toHaveAttribute('data-org', 'org-1');
+  });
+
+  it('returns to the cards from a chosen source, dropping what it had gathered', () => {
+    const { container } = renderStep();
+    selectFiles(container, [file('a.txt')]);
+    expect(useDataLakeWizardStore.getState().allFiles).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId('source-change-btn'));
+
+    // A file picked under Upload must not survive into a lake created for a connector.
+    expect(useDataLakeWizardStore.getState().createSource).toBeNull();
+    expect(useDataLakeWizardStore.getState().allFiles).toEqual([]);
+    expect(screen.getByText("Where's your content?")).toBeInTheDocument();
+  });
+
+  it('never asks the source question in append mode - the lake already has an origin', () => {
+    useDataLakeWizardStore.setState({
+      createSource: null,
+      targetLake: {
+        id: 'lake-1',
+        name: 'Niche',
+        slug: 'niche',
+        fileTagPrefix: 'niche:',
+        organizationId: 'org-1',
+        canManage: true,
+      } as WizardTargetLake,
+    });
+
+    renderStep();
+
+    expect(screen.queryByTestId('create-source-cards')).toBeNull();
+    expect(screen.getByTestId('wizard-upload-btn')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A connector feeds the lake itself, so it must never demand an upload - that demand is what made a
+ * connector-only lake impossible before (#1916), and the card now states the intent up front.
+ */
+describe('SourceSelectionStep - per-source chrome', () => {
+  it('asks for files, and not for Drive, under the Upload card', () => {
+    renderStep();
+
+    expect(screen.getByTestId('wizard-upload-btn')).toBeInTheDocument();
+    expect(screen.getByText('Drop files or a folder here')).toBeInTheDocument();
+    expect(screen.queryByTestId('drive-pending-connect-action')).toBeNull();
+  });
+
+  it('offers the Drive picker, and no upload control, under the Drive card', () => {
+    pickSource('googleDrive');
+    renderStep();
+
+    expect(screen.getByTestId('drive-pending-connect-action')).toBeInTheDocument();
+    expect(screen.queryByTestId('wizard-upload-btn')).toBeNull();
+    expect(screen.queryByText('Drop files or a folder here')).toBeNull();
+  });
+
+  it('still asks both halves to name the lake', () => {
+    pickSource('googleDrive');
+    renderStep();
+
+    expect(screen.getByTestId('source-name-input')).toBeInTheDocument();
+  });
 });
 
 /**
@@ -289,7 +484,10 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       expect(screen.getByTestId('lake-source-connect-actions')).toBeInTheDocument();
     });
 
-    it('still parks the selection in create mode, where there is no lake to gate on yet', () => {
+    it('still parks the selection under the Drive card, where there is no lake to gate on yet', () => {
+      // Create mode now reaches Drive through its own card rather than offering it beside Upload,
+      // so the deferral this asserts is exercised from that screen.
+      pickSource('googleDrive');
       renderStep();
 
       expect(screen.getByTestId('drive-pending-connect-action')).toBeInTheDocument();
