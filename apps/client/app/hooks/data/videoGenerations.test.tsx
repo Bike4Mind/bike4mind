@@ -78,6 +78,12 @@ describe('videoGenerationPollInterval', () => {
     );
   });
 
+  it('floors a short positive delay too, so clock skew cannot cause a rapid loop', () => {
+    const job = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
+    const fiveSecondsBeforeRefresh = Date.parse(EXPIRES) - DETAIL_URL_REFRESH_LEAD_MS - 5_000;
+    expect(videoGenerationPollInterval(job, true, fiveSecondsBeforeRefresh)).toBe(URL_REFRESH_FLOOR_MS);
+  });
+
   it('stops for a finished job with nothing left to refresh', () => {
     expect(videoGenerationPollInterval(videoJob({ state: 'failed' }), false, NOW)).toBe(false);
     const gone = videoJob({

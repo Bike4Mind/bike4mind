@@ -24,14 +24,12 @@ export const PENDING_SCAN_POLL_MS = 30_000;
 // per-user rate-limited, as low as 10/min.
 export const DETAIL_URL_REFRESH_LEAD_MS = 60_000;
 export const LIST_URL_REFRESH_LEAD_MS = 120_000;
-// Used when the refresh time is already past (e.g. a fast client clock), so the interval never reaches 0 and never
-// loops tight; stays well above the 10/min per-user rate limit.
+// Lower bound on every refresh delay. A fixed client-clock skew would otherwise yield the same short delay after each
+// re-sign, a repeating loop against the 10/min per-user rate limit.
 export const URL_REFRESH_FLOOR_MS = 60_000;
 
-const msUntil = (expiresAt: string, leadMs: number, now: number): number => {
-  const delay = Date.parse(expiresAt) - leadMs - now;
-  return delay > 0 ? delay : URL_REFRESH_FLOOR_MS;
-};
+const msUntil = (expiresAt: string, leadMs: number, now: number): number =>
+  Math.max(Date.parse(expiresAt) - leadMs - now, URL_REFRESH_FLOOR_MS);
 
 /** The fallback poll for one job; live updates normally arrive over the websocket (VideoGenerationUpdatesListener). */
 export function videoGenerationPollInterval(
