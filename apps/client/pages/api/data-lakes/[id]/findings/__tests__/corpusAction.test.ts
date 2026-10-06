@@ -4,6 +4,8 @@ const h = vi.hoisted(() => ({
   applyCorpusAction: vi.fn(),
   lakeConfigAuditPrincipal: vi.fn(() => undefined as unknown),
   toAccessContext: vi.fn(async () => ({ userId: 'curator-1', isAdmin: false })),
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -41,10 +43,16 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   dataLakeCorpusActionRepository: {},
   dataLakeFindingRepository: {},
-  dataLakeRepository: {},
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   fabFileRepository: {},
   lakeMembershipRemovalRepository: {},
   scopedSettingsRepository: {},
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    h.tx.push('enter');
+    const out = await fn();
+    h.tx.push('exit');
+    return out;
+  },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
@@ -68,6 +76,8 @@ const invoke = (body: Record<string, unknown>) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
+  h.touchIfStable.mockImplementation(async () => (h.tx.push('touch'), true));
   h.applyCorpusAction.mockResolvedValue({ action: 'merge', findingId: 'f1', targets: [], detail: {} });
 });
 
@@ -133,5 +143,29 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/corpus-action (#3046)',
       expect.objectContaining({ action: 'retag', tags: [] }),
       expect.anything()
     );
+  });
+});
+
+describe('corpus-action serialization against a concurrent revoke', () => {
+  const merge = { action: 'merge', keepFabFileId: 'a', retireFabFileIds: ['b'] };
+
+  it('runs the action inside the transaction and touches the lake last', async () => {
+    h.applyCorpusAction.mockImplementation(async () => {
+      h.tx.push('apply');
+      return { action: 'merge', findingId: 'f1', targets: [], detail: {} };
+    });
+
+    await invoke(merge).done;
+
+    expect(h.tx).toEqual(['enter', 'apply', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake1');
+  });
+
+  it('does not touch the lake when the action is refused', async () => {
+    h.applyCorpusAction.mockRejectedValue(new Error("You do not have permission to change this data lake's corpus"));
+
+    await expect(invoke(merge).done).rejects.toThrow(/permission/);
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

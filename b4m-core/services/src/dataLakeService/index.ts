@@ -21,6 +21,7 @@ export {
   resolveEffectiveOwnerIds,
   resolveLakeManageRung,
   type LakeGrant,
+  type SerializeLakeClaim,
 } from './manageRule';
 export * from './authorizeLakeManage';
 // The per-turn manage re-check. Exported so the admin key-mint route screens a lake binding

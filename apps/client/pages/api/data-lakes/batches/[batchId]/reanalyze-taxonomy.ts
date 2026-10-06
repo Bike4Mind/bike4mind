@@ -3,7 +3,8 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
-import { analyzeBatchTaxonomy } from '@server/dataLakes/analyzeBatchTaxonomy';
+import { analyzeBatchTaxonomy, claimBatchForAnalysis } from '@server/dataLakes/analyzeBatchTaxonomy';
+import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 import {
   TAXONOMY_DAILY_CAP,
   TAXONOMY_RATE_LIMIT_BUCKET,
@@ -46,25 +47,33 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const { context } = ReanalyzeTaxonomyRequestInput.parse(req.body);
     const userId = req.user.id;
 
-    const batch = await dataLakeBatchRepository.findById(batchId);
-    if (!batch) throw new NotFoundError('Batch not found');
-
-    const lake = await dataLakeRepository.findById(batch.dataLakeId);
-    if (!lake) throw new NotFoundError('Data lake not found');
     const ctx = await toAccessContext(req);
-    const grants = await dataLakeService.loadActiveLakeGrants(lake, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+    // The gate and the claim serialize against a concurrent revoke; the inference call runs after
+    // commit (see `serializeLakeClaim`), so a transaction retry never repeats it.
+    const { batch, claimed } = await serializeLakeClaim(async () => {
+      const batch = await dataLakeBatchRepository.findById(batchId);
+      if (!batch) throw new NotFoundError('Batch not found');
+
+      const lake = await dataLakeRepository.findById(batch.dataLakeId);
+      if (!lake) throw new NotFoundError('Data lake not found');
+      const grants = await dataLakeService.loadActiveLakeGrants(lake, {
+        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      if (!dataLakeService.canManageLake(lake, ctx, grants)) {
+        throw new BadRequestError('You do not have permission to re-analyze this batch');
+      }
+      // Only re-runs from a state that already finished a prior attempt (successfully or
+      // not) - never while a first analysis is still queued/analyzing/applying.
+      return { batch, lake, claimed: !!(await claimBatchForAnalysis(batchId, ['ready', 'failed'])) };
     });
-    if (!dataLakeService.canManageLake(lake, ctx, grants)) {
-      throw new BadRequestError('You do not have permission to re-analyze this batch');
+    if (!claimed) {
+      return res.status(400).json({ error: 'This batch is not in a state that can be re-analyzed right now' });
     }
 
     let result;
     try {
-      // Only re-runs from a state that already finished a prior attempt (successfully or
-      // not) - never while a first analysis is still queued/analyzing/applying.
       result = await analyzeBatchTaxonomy(batchId, batch.dataLakeId, userId, req.logger, {
-        from: ['ready', 'failed'],
+        claimHeldByCaller: true,
         context,
       });
     } catch (error) {
@@ -91,9 +100,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       throw new InternalServerError(curatedMessage);
     }
 
-    if (!result.claimed) {
-      return res.status(400).json({ error: 'This batch is not in a state that can be re-analyzed right now' });
-    }
     if (result.outcome === 'failed') {
       return res.status(400).json({ error: result.error });
     }

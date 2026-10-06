@@ -5,6 +5,9 @@ const h = vi.hoisted(() => ({
   lakeFindById: vi.fn(),
   setTaxonomyStatusIfActive: vi.fn(),
   analyzeBatchTaxonomy: vi.fn(),
+  claimBatchForAnalysis: vi.fn(),
+  // Order log: serializeLakeClaim's 'enter'/'touch:<lakeId>'/'exit', plus entries the stubs push.
+  tx: [] as string[],
   // Real admin-or-creator logic (not a bare stub), matching the sibling lifecycle.test.ts mock,
   // so the manage-gate call behaves identically to production, including the blank-identity case.
   canManageLake: vi.fn(
@@ -29,7 +32,22 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 // No-op rate limiter: the daily-cap policy itself isn't this test's concern.
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 vi.mock('@server/utils/config', () => ({ isDevelopment: () => false }));
-vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({ analyzeBatchTaxonomy: h.analyzeBatchTaxonomy }));
+vi.mock('@server/dataLakes/analyzeBatchTaxonomy', () => ({
+  analyzeBatchTaxonomy: h.analyzeBatchTaxonomy,
+  claimBatchForAnalysis: h.claimBatchForAnalysis,
+}));
+vi.mock('@server/dataLakes/serializeLakeClaim', () => ({
+  serializeLakeClaim: async <T extends { lake: { id: string } }>(claim: () => Promise<T>) => {
+    h.tx.push('enter');
+    try {
+      const result = await claim();
+      h.tx.push(`touch:${result.lake.id}`);
+      return result;
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+}));
 vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: { findById: h.batchFindById, setTaxonomyStatusIfActive: h.setTaxonomyStatusIfActive },
   dataLakeRepository: { findById: h.lakeFindById },
@@ -68,12 +86,13 @@ const run = (batchId: string, res: unknown, body?: unknown, user?: { id: string;
 describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
+    h.claimBatchForAnalysis.mockImplementation(async () => (h.tx.push('claim'), { id: 'b1' }));
     h.batchFindById.mockResolvedValue({ id: 'b1', dataLakeId: 'lake1' });
     h.lakeFindById.mockResolvedValue({ id: 'lake1', createdByUserId: 'u1', fileTagPrefix: 'acme:' });
-    h.analyzeBatchTaxonomy.mockResolvedValue({
-      claimed: true,
-      outcome: 'ready',
-      batch: { id: 'b1', taxonomyStatus: 'ready' },
+    h.analyzeBatchTaxonomy.mockImplementation(async () => {
+      h.tx.push('analyze');
+      return { claimed: true, outcome: 'ready', batch: { id: 'b1', taxonomyStatus: 'ready' } };
     });
     h.setTaxonomyStatusIfActive.mockResolvedValue({ id: 'b1' });
     h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
@@ -86,7 +105,16 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     const { res } = makeRes();
 
     await expect(run('b1', res)).rejects.toThrow(/permission/i);
+    expect(h.claimBatchForAnalysis).not.toHaveBeenCalled();
     expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
+  });
+
+  // The inference call is an external spend a transaction retry would repeat, so only the gate and
+  // the claim sit inside; the lake touch is what makes a concurrent revoke collide with the claim.
+  it('claims inside the lake-touching transaction and runs the analysis only after it commits', async () => {
+    await run('b1', makeRes().res);
+
+    expect(h.tx).toEqual(['enter', 'claim', 'touch:lake1', 'exit', 'analyze']);
   });
 
   it('now delegates to canManageLake, so a blank-identity lake is rejected rather than granted (#1153)', async () => {
@@ -117,17 +145,19 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
       'lake1',
       'u1',
       expect.objectContaining({ error: expect.any(Function) }),
-      { from: ['ready', 'failed'], context: 'legal docs' }
+      { claimHeldByCaller: true, context: 'legal docs' }
     );
+    expect(h.claimBatchForAnalysis).toHaveBeenCalledWith('b1', ['ready', 'failed']);
   });
 
   it('refuses when the guarded claim is lost (not currently ready/failed)', async () => {
-    h.analyzeBatchTaxonomy.mockResolvedValue({ claimed: false });
+    h.claimBatchForAnalysis.mockResolvedValue(null);
     const { res } = makeRes();
 
     await run('b1', res);
 
     expect(res.status).toHaveBeenCalledWith(400);
+    expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
   });
 
   it('returns a 400 with the real reason for an anticipated failure (e.g. no API key)', async () => {

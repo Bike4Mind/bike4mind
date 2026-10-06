@@ -20,6 +20,7 @@ import { removeFileFromDataLake, type RemoveFileFromDataLakeAdapters } from './r
 import { setDataLakeFileTags, type SetDataLakeFileTagsAdapters } from './setDataLakeFileTags';
 import { attributeFileToLakeIds, type AttributableLake } from './attributeAccessedLakes';
 import { lakeMembershipScope } from './lakeMembershipScope';
+import { recomputeLakeStats } from './recomputeLakeStats';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
 /**
@@ -47,6 +48,13 @@ import { datalakeTagsFrom } from './getDataLakePrompts';
  * (`recordLakeFindings`) and every queue handler are forbidden from reaching it, which
  * `applyCorpusAction.guardrail.test.ts` asserts by scanning the repository for importers rather
  * than trusting this paragraph.
+ *
+ * ONE TRANSACTION. The only caller (the corpus-action route) runs this inside `withTransaction`, so
+ * the mutation and its audit row commit together or not at all, and a grant revoke landing mid-call
+ * aborts it (WRITE-TIME RESIDUAL on `canManageLake`). That is why every read and write here is
+ * sequential (the ambient session rejects concurrent operations), and why there is no partial-merge
+ * audit or audit retry: a failure anywhere rolls the whole action back, so there is never a committed
+ * change without its row.
  */
 
 /** Keep one document, drop the others' membership of this lake. */
@@ -105,9 +113,6 @@ export interface ApplyCorpusActionAdapters {
     error?: (msg: string, ...args: unknown[]) => void;
   };
 }
-
-/** How many times the audit write is retried before the failure is surfaced. */
-const AUDIT_RECORD_ATTEMPTS = 3;
 
 export interface ApplyCorpusActionResult {
   action: LakeCorpusAction;
@@ -223,8 +228,8 @@ async function candidateAttributionLakes(
 
   if (ownerUserId) {
     const ownedIds = (await db.dataLakes.findIdsCreatedBy(ownerUserId)).filter(id => id !== lake.id);
-    const ownedLakes = await Promise.all(ownedIds.map(id => db.dataLakes.findById(id)));
-    for (const doc of ownedLakes) {
+    for (const ownedId of ownedIds) {
+      const doc = await db.dataLakes.findById(ownedId);
       // `findIdsCreatedBy` returns ids in any status, but the read scope this guard exists to
       // mirror (getDynamicDataLakeTags) is bounded to `status: 'active'` - an owner's draft or
       // archived lake can never actually grant an attribution at retrieval time, so including it
@@ -339,36 +344,14 @@ export const applyCorpusAction = async (
       rung,
       at,
     };
-    // The mutation above has already committed by the time this runs, so a rejected write here
-    // is not "the action failed" - it is "the action happened and its audit row did not". Retried
-    // a few times before that gap is surfaced, since a transient write hiccup is the likeliest
-    // cause and every attempt after the first is cheap insurance against exactly the failure this
-    // module exists to prevent: a corpus change with nothing recording who made it.
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= AUDIT_RECORD_ATTEMPTS; attempt += 1) {
-      try {
-        await db.dataLakeCorpusActions.record(event);
-        logger?.log?.('[dataLakes] curator corpus action applied', {
-          dataLakeId: lake.id,
-          findingId: finding.id,
-          action: request.action,
-          rung,
-          targets,
-        });
-        return;
-      } catch (err) {
-        lastError = err;
-      }
-    }
-    logger?.error?.('[dataLakes] curator corpus action applied but its audit record failed to write', {
+    await db.dataLakeCorpusActions.record(event);
+    logger?.log?.('[dataLakes] curator corpus action applied', {
       dataLakeId: lake.id,
       findingId: finding.id,
       action: request.action,
       rung,
       targets,
-      err: lastError,
     });
-    throw lastError;
   };
 
   let targets: LakeCorpusActionTarget[];
@@ -391,32 +374,14 @@ export const applyCorpusAction = async (
       throw new NotFoundError('The document to keep is not a member of this data lake');
     }
 
-    // Sequential, not concurrent: each removal recomputes the lake's stats, and two of those
-    // interleaving would race each other to write a count neither of them read.
-    //
-    // A failure part-way through is NOT rolled back - each removal has already committed, and the
-    // restore record is what undoes one. What must not happen is it going unrecorded: without the
-    // catch, a merge that dropped one member and then threw left membership changed with nothing
-    // saying who did it. So the partial outcome is audited, naming only the ids that really went,
-    // and the error is rethrown so the caller still sees a failure.
+    // Stats are recomputed once after the loop, not per removal: a lake-wide aggregate per retired
+    // member would hold the transaction (and the lake-doc lock) open for as many aggregates.
     const removed: string[] = [];
-    try {
-      for (const fabFileId of retire) {
-        await removeFileFromDataLake(actor, lake.id, fabFileId, { db, logger });
-        removed.push(fabFileId);
-      }
-    } catch (error) {
-      if (removed.length > 0) {
-        await audit(
-          [
-            { fabFileId: request.keepFabFileId, fileName: nameFor(finding, request.keepFabFileId), role: 'kept' },
-            ...removed.map(id => ({ fabFileId: id, fileName: nameFor(finding, id), role: 'retired' as const })),
-          ],
-          { removedFabFileIds: removed, partial: true, requestedFabFileIds: retire }
-        );
-      }
-      throw error;
+    for (const fabFileId of retire) {
+      await removeFileFromDataLake(actor, lake.id, fabFileId, { db, logger }, { deferStatsRecompute: true });
+      removed.push(fabFileId);
     }
+    await recomputeLakeStats(lake, { db, logger });
     targets = [
       { fabFileId: request.keepFabFileId, fileName: nameFor(finding, request.keepFabFileId), role: 'kept' },
       ...removed.map(id => ({ fabFileId: id, fileName: nameFor(finding, id), role: 'retired' as const })),
@@ -498,11 +463,8 @@ export const applyCorpusAction = async (
     detail = { tags: result.tags, primaryTagCleared: result.primaryTagCleared };
   }
 
-  // AFTER the mutation, deliberately. An audit row for an action that then failed would be a claim
-  // about something that did not happen, which is worse than a missing row - and the mutations
-  // above are all through doors that leave their own recoverable trail (a restore record, the tag
-  // log line, the marker on the file itself). The one exception is a merge that failed PART WAY,
-  // which is audited from its own catch above: there, something really did happen.
+  // AFTER the mutation, so the row records what the action actually did; the shared transaction is
+  // what keeps a failed audit from leaving the mutation standing without it.
   await audit(targets, detail);
 
   return { action: request.action, findingId: finding.id, targets, detail };

@@ -3,9 +3,11 @@ import { applyCorpusAction, type ApplyCorpusActionAdapters, type CorpusActionReq
 
 const removeFileFromDataLake = vi.hoisted(() => vi.fn());
 const setDataLakeFileTags = vi.hoisted(() => vi.fn());
+const recomputeLakeStats = vi.hoisted(() => vi.fn());
 
 vi.mock('./removeFileFromDataLake', () => ({ removeFileFromDataLake }));
 vi.mock('./setDataLakeFileTags', () => ({ setDataLakeFileTags }));
+vi.mock('./recomputeLakeStats', () => ({ recomputeLakeStats }));
 
 const LAKE_ID = 'lake1';
 const OWNER = 'owner-1';
@@ -119,7 +121,9 @@ describe('applyCorpusAction merge', () => {
     const result = await promise;
 
     expect(removeFileFromDataLake).toHaveBeenCalledTimes(1);
-    expect(removeFileFromDataLake).toHaveBeenCalledWith(actor, LAKE_ID, 'doc-b', expect.anything());
+    expect(removeFileFromDataLake).toHaveBeenCalledWith(actor, LAKE_ID, 'doc-b', expect.anything(), {
+      deferStatsRecompute: true,
+    });
     expect(result.targets).toEqual([
       { fabFileId: 'doc-a', fileName: 'a.md', role: 'kept' },
       { fabFileId: 'doc-b', fileName: 'b.md', role: 'retired' },
@@ -127,6 +131,24 @@ describe('applyCorpusAction merge', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'merge', lakeId: LAKE_ID, findingId: 'finding-1', actorUserId: OWNER })
     );
+  });
+
+  it('recomputes the lake stats once after every removal, not once per retired member', async () => {
+    const order: string[] = [];
+    removeFileFromDataLake.mockImplementation(async () => (order.push('remove'), { success: true }));
+    recomputeLakeStats.mockImplementation(async () => (order.push('recompute'), {}));
+    const finding3 = finding({
+      sources: [
+        { fabFileId: 'doc-a', fileName: 'a.md', excerpt: 'x' },
+        { fabFileId: 'doc-b', fileName: 'b.md', excerpt: 'y' },
+        { fabFileId: 'doc-c', fileName: 'c.md', excerpt: 'z' },
+      ],
+    });
+
+    await run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b', 'doc-c'] }, { finding: finding3 })
+      .promise;
+
+    expect(order).toEqual(['remove', 'remove', 'recompute']);
   });
 
   it('refuses a document the finding does not cite', async () => {
@@ -455,29 +477,15 @@ describe('applyCorpusAction guards', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
-  it('retries a failing audit write before giving up, and still throws once retries are exhausted', async () => {
+  it('throws on a failed audit write without retrying, so the route transaction rolls the action back', async () => {
+    // A retry inside the transaction would only hit the same aborted session; the rollback is what
+    // keeps the mutation from standing without its row.
     const { deps, record } = makeDeps();
     (deps.db.dataLakeCorpusActions.record as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('write boom'));
     await expect(
       applyCorpusAction(actor, LAKE_ID, 'finding-1', { action: 'retag', fabFileId: 'doc-a', tags: [] }, deps)
     ).rejects.toThrow('write boom');
-    expect(record).toHaveBeenCalledTimes(3);
-  });
-
-  it('recovers from a transient audit-write failure without losing the outcome', async () => {
-    const { deps, record } = makeDeps();
-    (deps.db.dataLakeCorpusActions.record as ReturnType<typeof vi.fn>)
-      .mockRejectedValueOnce(new Error('transient'))
-      .mockResolvedValueOnce({});
-    const result = await applyCorpusAction(
-      actor,
-      LAKE_ID,
-      'finding-1',
-      { action: 'retag', fabFileId: 'doc-a', tags: [] },
-      deps
-    );
-    expect(result.action).toBe('retag');
-    expect(record).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenCalledTimes(1);
   });
 
   it('refuses an actor with no manage rung on the lake', async () => {
@@ -517,10 +525,7 @@ describe('applyCorpusAction guards', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
-  it('audits a merge that failed PART WAY, naming only the members that really went', async () => {
-    // The first removal committed and cannot be rolled back, so the alternative to this row is
-    // membership changed with no trail saying who changed it. `partial` is what keeps the row from
-    // claiming the whole merge happened.
+  it('writes no audit row for a merge that failed part way - the transaction rolls the removals back', async () => {
     const finding3 = finding({
       sources: [
         { fabFileId: 'doc-a', fileName: 'a.md', excerpt: 'x' },
@@ -536,16 +541,7 @@ describe('applyCorpusAction guards', () => {
     );
     await expect(promise).rejects.toThrow('boom');
 
-    expect(record).toHaveBeenCalledTimes(1);
-    expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'merge',
-        detail: { removedFabFileIds: ['doc-b'], partial: true, requestedFabFileIds: ['doc-b', 'doc-c'] },
-        targets: [
-          { fabFileId: 'doc-a', fileName: 'a.md', role: 'kept' },
-          { fabFileId: 'doc-b', fileName: 'b.md', role: 'retired' },
-        ],
-      })
-    );
+    expect(record).not.toHaveBeenCalled();
+    expect(recomputeLakeStats).not.toHaveBeenCalled();
   });
 });
