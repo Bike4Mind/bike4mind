@@ -38,6 +38,15 @@ describe('isDirectInvocation', () => {
     expect(isDirectInvocation(pathToFileURL(script).href)).toBe(true);
   });
 
+  it('is true when the path contains a space (import.meta.url is percent-encoded, argv[1] is not)', () => {
+    const spacedDir = path.join(dir, 'with space');
+    fs.mkdirSync(spacedDir);
+    const script = path.join(spacedDir, 'script.ts');
+    fs.writeFileSync(script, '');
+    process.argv[1] = script;
+    expect(isDirectInvocation(pathToFileURL(script).href)).toBe(true);
+  });
+
   it('is true regardless of file extension, so a compiled copy still runs', () => {
     const script = path.join(dir, 'script.js');
     fs.writeFileSync(script, '');
