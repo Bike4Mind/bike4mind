@@ -214,6 +214,45 @@ function advanceCounters(counters: BillingCounters, checkpoint: BillingCheckpoin
   counters.cacheWriteTokens = checkpoint.totalCacheWriteTokens;
 }
 
+type IterationTokenRecord = Pick<
+  IIterationBilling,
+  'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'
+>;
+
+/**
+ * Rebuild `counters` on resume from the persisted per-iteration token deltas. `cumulativeCost`
+ * is re-priced with this invocation's `modelInfo` (the rate `billIteration` will use), never
+ * carried over, so a price change between invocations cannot make the next delta negative.
+ */
+export function reseedCounters(
+  iterationBilling: readonly IterationTokenRecord[],
+  modelInfo: ModelInfo | undefined
+): BillingCounters {
+  const counters: BillingCounters = {
+    cumulativeCost: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  for (const billing of iterationBilling) {
+    counters.inputTokens += billing.inputTokens;
+    counters.outputTokens += billing.outputTokens;
+    counters.cacheReadTokens += billing.cacheReadTokens;
+    counters.cacheWriteTokens += billing.cacheWriteTokens;
+  }
+  if (iterationBilling.length > 0 && modelInfo) {
+    counters.cumulativeCost = getTextModelCost(
+      modelInfo,
+      counters.inputTokens,
+      counters.outputTokens,
+      counters.cacheReadTokens,
+      counters.cacheWriteTokens
+    );
+  }
+  return counters;
+}
+
 /**
  * Bill one completed iteration against the model's cumulative cost, advancing
  * `counters` in place. No-op unless the cost has grown since the last billed

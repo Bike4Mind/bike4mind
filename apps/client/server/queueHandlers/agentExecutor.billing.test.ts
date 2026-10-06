@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   billIteration,
+  reseedCounters,
   addToolUsage,
   takeToolUsage,
   foldGeneratedMediaUsd,
@@ -532,11 +533,10 @@ describe('billIteration (negative cost delta)', () => {
     });
     expect(first.spies.deductCredits).toHaveBeenCalledWith(expect.objectContaining({ credits: 2000 }));
 
-    // Mirror the executor's resume reseed: sum persisted iterationBilling deltas, then re-price
-    // them with the new invocation's (cheaper) model.
+    // Resume on a new invocation with the cheaper model, reseeding from what iteration 1 persisted.
     const recorded = first.spies.addIterationBilling.mock.calls.map(([billing]) => billing);
-    const inputTokens = recorded.reduce((sum, b) => sum + b.inputTokens, 0);
-    const resumed = makeCounters({ inputTokens, cumulativeCost: 1 * inputTokens });
+    const resumed = reseedCounters(recorded, rateB);
+    expect(resumed).toEqual(makeCounters({ inputTokens: 1000, cumulativeCost: 1000 }));
 
     const second = makeEffects();
     await billIteration({
