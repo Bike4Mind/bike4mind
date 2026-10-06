@@ -1,8 +1,8 @@
 /**
  * A request for a static asset that does not exist must return 404, not the SPA HTML shell.
  * Browserless and unauthenticated: it only uses Playwright's `request` fixture against the base
- * URL, so it needs none of the per-spec auth setup. The config's globalSetup still runs and
- * requires E2E_CLEANUP_SECRET (or an sst secret) to be set.
+ * URL, so it needs none of the per-spec auth setup. The config's globalSetup still runs: it
+ * requires E2E_CLEANUP_SECRET and sweeps stale e2e data on the target.
  */
 import { test, expect } from '@playwright/test';
 

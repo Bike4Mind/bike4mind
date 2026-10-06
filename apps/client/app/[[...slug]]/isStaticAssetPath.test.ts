@@ -58,6 +58,8 @@ describe('isStaticAssetPath', () => {
     // Its one dynamic segment is an arbitrary encoded QA key that can end in a file-like token.
     expect(isStaticAssetPath(['status', 'tests', 'notebook.spec.ts > saves.json'])).toBe(false);
     expect(isStaticAssetPath(['status', 'tests', 'x.json'])).toBe(false);
+    // The exemption needs both segments: `/status/<file>` alone is still an asset path.
+    expect(isStaticAssetPath(['status', 'x.json'])).toBe(true);
     // The exemption is scoped to the `status/tests` prefix, not to any second segment named
     // `tests`.
     expect(isStaticAssetPath(['foo', 'tests', 'x.json'])).toBe(true);
