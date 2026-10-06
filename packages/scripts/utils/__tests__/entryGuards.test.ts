@@ -8,9 +8,53 @@ import { fileURLToPath } from 'url';
 
 const SCRIPTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Scripts that run only when launched directly. The helper is unit-tested on its own; this pins
-// that each script goes through it and still starts when reached through a symlink.
-const GUARDED_SCRIPTS = ['cleanupOldQuerySubscriptions.ts', 'src/seed-oauth-client.ts'];
+// Every CLI that runs only when launched directly. The helper is unit-tested on its own; this pins
+// that each script goes through it.
+const GUARDED_SCRIPTS = [
+  'cleanupOldQuerySubscriptions.ts',
+  'src/seed-oauth-client.ts',
+  'help/build-help-index.ts',
+  'help/bundle-help-content.ts',
+  'help/help-coverage-report.ts',
+  'help/validate-help-content.ts',
+  'help/vectorize-help-content.ts',
+];
+
+interface SymlinkLaunch {
+  name: string;
+  script: string;
+  args?: string[];
+  env?: NodeJS.ProcessEnv;
+  // Only asserted when set: the validator's exit code depends on the current docs corpus.
+  expectedStatus?: number;
+  stdoutContains?: string;
+  stderrContains?: string;
+}
+
+// One launch per probe that answers without a database or network. cleanupOldQuerySubscriptions is
+// answered by its own yargs parser inside main(), seed-oauth-client by its first env check, and the
+// validator prints its banner before any validation runs.
+const SYMLINK_LAUNCHES: SymlinkLaunch[] = [
+  {
+    name: 'cleanupOldQuerySubscriptions',
+    script: 'cleanupOldQuerySubscriptions.ts',
+    args: ['--help'],
+    expectedStatus: 0,
+    stdoutContains: 'Delete documents older than N days',
+  },
+  {
+    name: 'seed-oauth-client',
+    script: 'src/seed-oauth-client.ts',
+    env: { MONGODB_URI: '' },
+    expectedStatus: 1,
+    stderrContains: 'MONGODB_URI env var required',
+  },
+  {
+    name: 'validate-help-content',
+    script: 'help/validate-help-content.ts',
+    stdoutContains: 'Validating help content...',
+  },
+];
 
 describe('scripts CLI entry guards', () => {
   it.each(GUARDED_SCRIPTS)('%s gates its CLI body on isDirectInvocation', file => {
@@ -34,32 +78,23 @@ describe('scripts CLI entry guards', () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     });
 
-    it('still starts cleanupOldQuerySubscriptions', () => {
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, path.join(link, 'cleanupOldQuerySubscriptions.ts'), '--help'],
-        {
+    it.each(SYMLINK_LAUNCHES)(
+      'still starts $name',
+      ({ script, args = [], env, expectedStatus, stdoutContains, stderrContains }) => {
+        const result = spawnSync(process.execPath, [tsxCli, path.join(link, script), ...args], {
           cwd: SCRIPTS_DIR,
           encoding: 'utf-8',
           timeout: 120_000,
-        }
-      );
+          env: { ...process.env, ...env },
+        });
 
-      // --help is answered by the CLI's own yargs parser inside main(), so this proves the guard
-      // fired without needing a database.
-      expect(result.stdout).toContain('Delete documents older than N days');
-    }, 130_000);
-
-    it('still starts seed-oauth-client', () => {
-      const result = spawnSync(process.execPath, [tsxCli, path.join(link, 'src', 'seed-oauth-client.ts')], {
-        cwd: SCRIPTS_DIR,
-        encoding: 'utf-8',
-        timeout: 120_000,
-        env: { ...process.env, MONGODB_URI: '' },
-      });
-
-      expect(result.stderr).toContain('MONGODB_URI env var required');
-      expect(result.status).toBe(1);
-    }, 130_000);
+        // A spawn failure (timeout, crash) would otherwise surface as an empty-string mismatch below.
+        expect(result.error).toBeUndefined();
+        if (expectedStatus !== undefined) expect(result.status, result.stderr).toBe(expectedStatus);
+        if (stdoutContains) expect(result.stdout).toContain(stdoutContains);
+        if (stderrContains) expect(result.stderr).toContain(stderrContains);
+      },
+      130_000
+    );
   });
 });
