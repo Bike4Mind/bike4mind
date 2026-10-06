@@ -472,6 +472,10 @@ export class NotebookImportService {
       artifactIds: [] as string[],
       toolIds: [] as string[],
       agentIds: [] as string[],
+      // This import always originates from a web-app upload; stamped explicitly rather than left
+      // to the "absent means unknown, rendered as web" default so a future non-web trigger into
+      // this same pipeline doesn't silently inherit a label it was never given.
+      origin: { channel: 'web' as const },
     };
 
     // The notebook is created BEFORE its attachments, and the id arrays are written back below.
@@ -711,8 +715,8 @@ export class NotebookImportService {
         }
 
         // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
-        // path, and the org branch would be wrong anyway - organization.currentStorageSize is never
-        // incremented on upload, so uploaded bytes are debited to the user.
+        // path, and the org branch would be wrong anyway - orgs track no storage usage, so uploaded
+        // bytes are debited to the user.
         if (!this.importingUser) {
           throw new Error('no importing user resolved, refusing to skip the storage quota check');
         }

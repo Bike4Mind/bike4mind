@@ -1,5 +1,11 @@
 # @bike4mind/memory
 
+## 0.2.3
+
+### Patch Changes
+
+- [#3706](https://github.com/Bike4Mind/bike4mind/pull/3706) [`edfe671`](https://github.com/Bike4Mind/bike4mind/commit/edfe6718c78309af24d2057d0d428e5dea7f208d) Thanks [@erikbethke](https://github.com/erikbethke)! - bump vulnerable dependencies (HIGH)
+
 ## 0.2.2
 
 ### Patch Changes

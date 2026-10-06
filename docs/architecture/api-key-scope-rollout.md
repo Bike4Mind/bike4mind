@@ -78,11 +78,18 @@ and can refuse on its own.
 ## Gating a route that serves both a read and a write
 
 `requiredScopes` is per ROUTE, not per method, so a file with a `.get` and a `.post`
-cannot ask for two different scopes at the door. Declare the weaker (read) gate there
-and assert the stronger one at the top of the mutating handler -
+cannot ask for two different scopes at the door. The route gate must admit every scope
+any method needs, and the per-method asserts narrow. Where the write scope implies read
+(data lakes) that means declaring the read gate; where it does not (`/api/files`, where
+write does not imply read) declare the read-or-write gate (`FILES_READ_OR_WRITE_SCOPES`),
+or a write-only key is refused at the door before its write assert runs. Assert at the top
+of each handler -
 `assertDataLakeWriteScope` / `assertDataLakeShareScope`
-(`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes. Two rules an assert
-in this family has to follow:
+(`apps/client/server/dataLakes/dataLakeScopes.ts`) for data lakes,
+`assertFilesReadScope` / `assertFilesWriteScope` (`apps/client/server/files/fileScopes.ts`)
+for the `/api/files` doors. Build a new family's asserts on `assertApiKeyScope`
+(`apps/client/server/middlewares/apiKeyScopeGate.ts`), which already follows the two rules
+an assert in this family has to follow:
 
 - **Let a caller with no `apiKeyInfo` through.** That is a JWT/browser caller, for whom
   the key gate never ran either.
@@ -96,8 +103,8 @@ of this pattern: it checks `hearth:write` directly rather than via `decideScopeG
 it does NOT honor `API_KEY_SCOPE_STAGING`, and it separately special-cases `admin:*`
 (`scopes.includes(ApiKeyScope.ADMIN)`) - something the data-lake asserts deliberately
 never do, since `admin:*` is excluded from this family's scopes precisely so it stays
-unstageable-but-absent rather than unstageable-and-listed. Follow the data-lake asserts
-as the template for a new family; do not copy Hearth's shape.
+unstageable-but-absent rather than unstageable-and-listed. Build on `assertApiKeyScope`
+for a new family; do not copy Hearth's shape.
 
 Do not list `admin:*` among a family's `requiredScopes` while it is rolling out. A route
 is in its grace period only while EVERY scope it accepts is staged, and `admin:*` can
@@ -234,7 +241,7 @@ to a question it cannot see.
    per-route, so adding a scope back to the list to grandfather a late-arriving door also
    re-opens every door already gating on it - a rollout that reached step 6 months ago is
    silently un-enforced for the whole window. That is worst at an in-handler assert
-   (`assertScope` in `dataLakeScopes.ts`), which unlike `apiKeyAuth`'s door gate logs
+   (`assertApiKeyScope` in `apiKeyScopeGate.ts`), which unlike `apiKeyAuth`'s door gate logs
    nothing on a staged pass, so step 5's cross-check never sees those keys at all.
 
    When a new route joins a family whose scope has already finished its rollout, weigh

@@ -158,4 +158,12 @@ describe('resolveDispatchTools agentless dispatch', () => {
     expect(resolveDispatchTools(['web_search'], ['web_search'], undefined).enabledToolsAreAmbient).toBe(false);
     expect(resolveDispatchTools(undefined, SMART_TOOLS, ['mermaid_chart']).enabledToolsAreAmbient).toBe(false);
   });
+
+  it('ships the curated list, not the Smart Tools, when a curated agent meets non-empty Smart Tools', () => {
+    const curated = ['mermaid_chart', 'file_read'];
+    expect(resolveDispatchTools(undefined, SMART_TOOLS, curated)).toEqual({
+      enabledTools: curated,
+      enabledToolsAreAmbient: false,
+    });
+  });
 });

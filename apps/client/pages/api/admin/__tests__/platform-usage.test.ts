@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 // Captures the config so a test can assert requiredScopes: the scope gate lives in
 // apiKeyAuth (real middleware, not exercised here), so asserting the handler is
@@ -92,5 +92,83 @@ describe('GET /api/admin/platform-usage', () => {
     await run();
     expect(mockPlatformUsageSummary).toHaveBeenCalledWith({ days: 7, source: undefined, ownerType: undefined });
     expect(res._getJSONData().days).toBe(7);
+  });
+
+  describe('consumer owner attribution', () => {
+    const orgKeyId = 'a'.repeat(24);
+    const userKeyId = 'b'.repeat(24);
+
+    it('attributes an org-billed key to its organization and a user-billed key to its user, even when the latter carries an organizationId', async () => {
+      mockPlatformUsageSummary.mockResolvedValue({
+        overTime: [],
+        byFeature: [],
+        byConsumer: [{ apiKeyId: orgKeyId }, { apiKeyId: userKeyId }],
+        byModel: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      });
+      mockUserApiKeyFind.mockResolvedValue([
+        {
+          id: orgKeyId,
+          name: 'org key',
+          keyPrefix: 'org_',
+          userId: 'user-1',
+          organizationId: 'org-1',
+          billingOwnerType: CreditHolderType.Organization,
+        },
+        {
+          id: userKeyId,
+          name: 'user key',
+          keyPrefix: 'usr_',
+          userId: 'user-2',
+          organizationId: 'org-2',
+          billingOwnerType: CreditHolderType.User,
+        },
+      ]);
+      const { res, run } = call({});
+      await run();
+      const byApiKeyId = new Map<string, { ownerType: string; ownerId: string }>(
+        res
+          ._getJSONData()
+          .byConsumer.map((c: { apiKeyId: string; ownerType: string; ownerId: string }) => [c.apiKeyId, c])
+      );
+      expect(byApiKeyId.get(orgKeyId)).toMatchObject({ ownerType: CreditHolderType.Organization, ownerId: 'org-1' });
+      expect(byApiKeyId.get(userKeyId)).toMatchObject({ ownerType: CreditHolderType.User, ownerId: 'user-2' });
+    });
+  });
+
+  describe('endpoint traffic filters', () => {
+    it.each(['api', 'cli'] as const)('passes source %s and the owner type to the endpoint rollup', async source => {
+      const { run } = call({ query: { source, ownerType: CreditHolderType.Organization } });
+      await run();
+      expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({
+        days: 30,
+        source,
+        ownerType: CreditHolderType.Organization,
+      });
+    });
+
+    it('spans all sources and owner types when neither filter is set', async () => {
+      const { run } = call({});
+      await run();
+      expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({ days: 30, source: undefined, ownerType: undefined });
+    });
+
+    it('filters by owner type alone and clamps the window to the log TTL', async () => {
+      const { res, run } = call({ query: { days: '365', ownerType: CreditHolderType.User } });
+      await run();
+      expect(mockPlatformEndpointUsage).toHaveBeenCalledWith({
+        days: 90,
+        source: undefined,
+        ownerType: CreditHolderType.User,
+      });
+      expect(res._getJSONData().endpointWindowDays).toBe(90);
+    });
+
+    it('skips the rollup for a source the API-key log never records', async () => {
+      const { res, run } = call({ query: { source: 'web' } });
+      await run();
+      expect(mockPlatformEndpointUsage).not.toHaveBeenCalled();
+      expect(res._getJSONData().endpoints).toBeNull();
+    });
   });
 });

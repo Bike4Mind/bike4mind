@@ -62,10 +62,20 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       });
     }
 
+    // Agent ids are session-creation input, checked ahead of the full parse so a malformed value
+    // keeps its specific code.
+    const requestedAgentIds: unknown = req.body.agentIds;
+    if (requestedAgentIds !== undefined && !isStringArray(requestedAgentIds)) {
+      throw new UnprocessableEntityError('agentIds must be an array of strings.', {
+        code: 'AGENT_IDS_INVALID',
+      });
+    }
+
     // Everything that can reject the request runs before getOrCreateSession, so a rejected request
     // leaves no session behind. invoke() parses the body again, but only after that write.
     const body = LLMApiRequestBodySchema.parse(req.body);
-    const { sessionId: reqSessionId, sessionName, ...invokeParams } = body;
+    // agentIds is destructured out so a session-creation field never rides into the completion body.
+    const { sessionId: reqSessionId, sessionName, agentIds, ...invokeParams } = body;
 
     // Resolve the billing org from the client-supplied value, rejecting any org the caller is
     // not a member of (a bare body value would otherwise let A bill B's credit pool).
@@ -77,6 +87,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       sessionName,
       projectId: body.projectId,
       fabFileIds: body.fabFileIds,
+      agentIds,
       user: req.user,
       ability: req.ability,
       logger: req.logger,
@@ -123,6 +134,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
         ...(deniedTools.length > 0 ? { deniedTools } : {}),
       },
       userId: req.user.id,
+      // Attributes a lake write a tool drives this turn to the key rather than its owner.
+      apiKeyId: req.apiKeyInfo?.keyId,
     });
 
     // Handle case where quest creation failed (session or quest not found during invoke)

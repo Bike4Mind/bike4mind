@@ -1,17 +1,18 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IDataLakeResearchConfigDocument, IDataLakeResearchRunDocument } from '@bike4mind/common';
 import {
   emptyResearchRunTotals,
   RESEARCH_COST_CEILING_MICRO_USD_DEFAULT,
+  RESEARCH_MAX_RESULTS_LIMIT,
   RESEARCH_MIN_RELEVANCE_DEFAULT,
   RESEARCH_REVIEW_BACKLOG_LIMIT_DEFAULT,
   RESEARCH_RUN_STALE_AFTER_MS,
 } from '@bike4mind/common';
-import { DataLakeResearchPanel } from './DataLakeResearchPanel';
+import { DataLakeResearchPanel, formatWhen } from './DataLakeResearchPanel';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -509,17 +510,81 @@ describe('DataLakeResearchPanel', () => {
     });
 
     it('names the model that judged a run', () => {
-      renderPanel({ runs: [run({ judgeModel: 'gpt-4.1-mini' })] });
+      renderPanel({
+        runs: [run({ judgeModel: 'gpt-4.1-mini', totals: { ...emptyResearchRunTotals(), proposed: 1 } })],
+      });
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
     });
 
     // The server stamps judgeModel on the first progress write, so the label must not wait for a
     // terminal status.
-    it('names the judge on a run still in flight', () => {
+    it('names the judge on a run still in flight when judgments are happening', () => {
       renderPanel({
-        runs: [run({ status: 'running', startedAt: new Date(), completedAt: null, judgeModel: 'gpt-4.1-mini' })],
+        runs: [
+          run({
+            status: 'running',
+            startedAt: new Date(),
+            completedAt: null,
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), proposed: 1 },
+          }),
+        ],
       });
       expect(screen.getByText(/judged by gpt-4\.1-mini/)).toBeTruthy();
+    });
+
+    it('does not show a judge label when nothing was judged and nothing was proposed', () => {
+      renderPanel({ runs: [run({ status: 'failed', judgeModel: 'gpt-4.1-mini', totals: emptyResearchRunTotals() })] });
+      expect(screen.queryByText(/judged by gpt-4\.1-mini/)).toBeNull();
+      expect(screen.queryByText(/judge gpt-4\.1-mini unavailable/)).toBeNull();
+    });
+
+    it('names the judge on a run the judge breaker stopped', () => {
+      renderPanel({
+        runs: [
+          run({
+            status: 'failed',
+            stopReason: 'judge_unavailable',
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+          }),
+        ],
+      });
+      expect(
+        within(screen.getByTestId('datalake-research-run-when')).getByText(/judge gpt-4\.1-mini unavailable/)
+      ).toBeTruthy();
+      expect(screen.queryByText(/judged by/)).toBeNull();
+    });
+
+    // A weekly re-run whose relevant hits are all already pending or in the lake still paid the
+    // judge for every one of them.
+    it('names the judge on a run whose judged hits were all deduplicated', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 3, alreadyInLake: 2, duplicatePending: 1 },
+          }),
+        ],
+      });
+      expect(
+        within(screen.getByTestId('datalake-research-run-when')).getByText(/judged by gpt-4\.1-mini/)
+      ).toBeTruthy();
+    });
+
+    it('says judged by, not unavailable, when some judgments succeeded', () => {
+      renderPanel({
+        runs: [
+          run({
+            judgeModel: 'gpt-4.1-mini',
+            totals: { ...emptyResearchRunTotals(), searchHits: 2, judgeFailed: 1, proposed: 1 },
+          }),
+        ],
+      });
+      expect(
+        within(screen.getByTestId('datalake-research-run-when')).getByText(/judged by gpt-4\.1-mini/)
+      ).toBeTruthy();
+      expect(screen.queryByText(/judge gpt-4\.1-mini unavailable/)).toBeNull();
     });
 
     it('shows what a run spent, at a resolution a fraction of a cent survives', () => {
@@ -583,6 +648,25 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.getByText('Enter a whole number from 1 to 25.')).toBeTruthy();
     });
 
+    // Joy colours FormHelperText from the FormControl's error class, so `error` set on the Input
+    // instead still shows the message but leaves it grey. Assert on the class Joy keys off.
+    it.each([
+      ['max-results', String(RESEARCH_MAX_RESULTS_LIMIT + 1), 'max-proposals'],
+      ['max-proposals', '-3', 'max-results'],
+      ['recency', '-7', 'max-results'],
+      ['min-relevance', '5', 'max-results'],
+      ['cost-ceiling', '99', 'max-results'],
+    ])('marks %s as an error when it is %s, and leaves %s alone', (field, value, sibling) => {
+      openFilledForm();
+      fireEvent.change(screen.getByTestId(`datalake-research-${field}-input`), { target: { value } });
+      expect(screen.getByTestId(`datalake-research-${field}-input`).closest('.MuiFormControl-root')).toHaveClass(
+        'Mui-error'
+      );
+      expect(screen.getByTestId(`datalake-research-${sibling}-input`).closest('.MuiFormControl-root')).not.toHaveClass(
+        'Mui-error'
+      );
+    });
+
     it('explains a Save disabled for a missing name or question', () => {
       renderPanel();
       fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
@@ -622,9 +706,10 @@ describe('DataLakeResearchPanel', () => {
         configs: [config({ lastRunAt: new Date('2026-03-01T11:00:00.000Z') })],
         runs: [run({ startedAt })],
       });
-      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(
-        `Last run ${startedAt.toLocaleString()}`
-      );
+      // Anchored to the fixture, not just row-vs-card: both read `runStartedAt`, so they would drift together.
+      const expected = formatWhen(startedAt);
+      expect(screen.getByTestId('datalake-research-run-when').textContent?.split(' \u00b7 ')[0]).toBe(expected);
+      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(`Last run ${expected}`);
     });
 
     // A retired or filtered model must still read as the selection, or the picker shows blank while
@@ -682,13 +767,16 @@ describe('DataLakeResearchPanel', () => {
       expect(screen.queryByTestId('research-config-schedule')).toBeNull();
     });
 
-    it('names the cadence and the next run time on the config card', () => {
+    it('names the cadence, the next run time and the pause threshold on the config card', () => {
       renderPanel({
-        configs: [config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z') })],
+        configs: [
+          config({ cadence: 'weekly', nextRunAt: new Date('2026-04-01T00:00:00.000Z'), reviewBacklogLimit: 7 }),
+        ],
       });
       const line = screen.getByTestId('research-config-schedule').textContent ?? '';
       expect(line).toMatch(/Runs weekly/);
-      expect(line).toMatch(/next/);
+      expect(line).toMatch(/next .*2026/);
+      expect(line).toMatch(/pauses at 7\b/);
     });
 
     it('shows the paused line once pending proposals reach the limit, and not one below it', () => {
@@ -698,7 +786,7 @@ describe('DataLakeResearchPanel', () => {
       unmount();
 
       renderPanel({ configs: [scheduled], pendingProposals: 10 });
-      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 of 10 pending proposals/);
+      expect(screen.getByTestId('research-config-schedule-paused').textContent).toMatch(/10 pending \(pauses at 10\)/);
     });
 
     it('says why the last scheduled tick did not start a run', () => {

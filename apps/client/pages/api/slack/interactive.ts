@@ -881,9 +881,14 @@ async function handleCreateNotebook(dbUser: any, slackUserId: string, responseUr
     })}`;
 
     const ability = { can: () => true };
-    const newSession = await createSession(dbUser.id, { name: notebookName }, ability as any, {
-      setLastNotebook: true,
-    });
+    const newSession = await createSession(
+      dbUser.id,
+      { name: notebookName, origin: { channel: 'slack' } },
+      ability as any,
+      {
+        setLastNotebook: true,
+      }
+    );
 
     // Update user's slack settings with the new default notebook
     const slackSettings = dbUser.slackSettings || {};

@@ -1,6 +1,9 @@
 import { lazy, Suspense, useState } from 'react';
 import { captureUtmParams } from '@client/app/utils/utmCapture';
 import { beaconVisit } from '@client/app/utils/visitBeacon';
+import type { GitHubLakeCallbackSearch } from '@client/app/utils/githubLakeCallbackStep';
+import { captureGitHubLakeCallbackSearch, GITHUB_LAKE_CALLBACK_PATH } from '@client/app/utils/githubLakeCallbackSearch';
+import { requireGitHubLakeCallbackSession } from '@client/app/utils/githubLakeCallbackGuard';
 import {
   createRouter,
   createRoute,
@@ -68,6 +71,7 @@ const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
+const GitHubLakeCallbackPage = lazy(() => import('./routes/data-lakes/github/callback'));
 const HomePage = lazy(() => import('./routes/index'));
 const Admin = lazy(() => import('./routes/admin'));
 const QuestsPage = lazy(() => import('./routes/quests'));
@@ -301,18 +305,19 @@ const notebookShellRoute = createRoute({
 });
 
 // New notebook route (replaces /new.tsx)
-const newRoute = createRoute({
+export const newRoute = createRoute({
   getParentRoute: () => notebookShellRoute,
   path: '/new',
   validateSearch: (
     search: Record<string, unknown>
-  ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
+  ): { projectId?: string; questmaster?: string; goal?: string; article?: string; passage?: string } => {
     return {
       projectId: optionalStringParam(search, 'projectId'),
       questmaster: optionalStringParam(search, 'questmaster'),
       goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
       article: optionalStringParam(search, 'article'),
+      passage: optionalStringParam(search, 'passage'),
     };
   },
 });
@@ -607,10 +612,25 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// Layout for the QA status pages: layoutRoute's providers and consent guard without the notebook
+// sidenav/header. A rootRoute child like adminRoute; the login redirect comes from RestrictedPage.
+const qaStatusLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'qa-status-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={false}>
+      <ProviderBundle>
+        <Outlet />
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+});
+
 // QA status (admin only). Exported so pages read typed search/params via
 // `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
 export const qaStatusRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status',
   validateSearch: parseQaStatusSearch,
   component: () => (
@@ -623,7 +643,7 @@ export const qaStatusRoute = createRoute({
 });
 
 export const qaRunRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/runs/$id',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -637,7 +657,7 @@ export const qaRunRoute = createRoute({
 // The router encodes the key into one segment (it contains / > ? #); the page
 // re-sends it as ?testKey=.
 export const qaTestRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/tests/$testKey',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -843,6 +863,25 @@ const googleDriveCallbackRoute = createRoute({
   },
 });
 
+// Data-lake GitHub App return: its OAuth Callback URL points here, and with OAuth-during-install on, the install return lands here too.
+const gitHubLakeCallbackRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: GITHUB_LAKE_CALLBACK_PATH,
+  beforeLoad: ({ location }) => requireGitHubLakeCallbackSession(location),
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <GitHubLakeCallbackPage />
+    </Suspense>
+  ),
+  validateSearch: (search: Record<string, unknown>): GitHubLakeCallbackSearch => ({
+    installation_id: optionalStringParam(search, 'installation_id'),
+    code: optionalStringParam(search, 'code'),
+    state: optionalStringParam(search, 'state'),
+    error: optionalStringParam(search, 'error'),
+    setup_action: optionalStringParam(search, 'setup_action'),
+  }),
+});
+
 // Subscribe route (replaces /subscribe.tsx)
 const subscribeRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -900,12 +939,14 @@ const questsV5Route = createRoute({
 // surface (DataLakeChatSurface). This route survives ONLY to keep already-shared `?article=`
 // deep links working: it turns Data Lake mode on and forwards into a fresh chat, which opens the
 // article in the viewer. There is no page component behind it.
-const dataLakesRoute = createRoute({
+export const dataLakesRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/data-lakes',
-  validateSearch: (search: Record<string, unknown>): { article?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { article?: string; passage?: string } => ({
     // Shareable deep link to a specific article within a lake.
     article: typeof search.article === 'string' && search.article ? search.article : undefined,
+    // Cited passage to highlight once the article opens (from a findings "Open document" link).
+    passage: optionalStringParam(search, 'passage'),
   }),
   beforeLoad: ({ search }) => {
     // The store is the mode's source of truth on /new (no session exists yet to carry
@@ -915,7 +956,10 @@ const dataLakesRoute = createRoute({
     // "off" and break the deep link for entitled users. DataLakeChatSurface re-checks the flag
     // before rendering, so an unentitled arrival leaves this flag set but inert.
     useDataLakeMode.getState().setEnabled(true);
-    throw redirect({ to: '/new', search: search.article ? { article: search.article } : {} });
+    throw redirect({
+      to: '/new',
+      search: search.article ? { article: search.article, ...(search.passage ? { passage: search.passage } : {}) } : {},
+    });
   },
   component: () => null,
 });
@@ -1118,9 +1162,6 @@ const routeTree = rootRoute.addChildren([
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
-    qaStatusRoute,
-    qaRunRoute,
-    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
@@ -1133,6 +1174,8 @@ const routeTree = rootRoute.addChildren([
     hearthRoute,
     ...builtAppShellPremiumRoutes,
   ]),
+  // QA status pages (admin layout without the sidenav)
+  qaStatusLayoutRoute.addChildren([qaStatusRoute, qaRunRoute, qaTestRoute]),
   // Standalone auth routes (no layout)
   authCallbackRoute,
   authSuccessRoute,
@@ -1143,6 +1186,7 @@ const routeTree = rootRoute.addChildren([
   verifyEmailChangeRoute,
   adminEmergencyRoute,
   googleDriveCallbackRoute,
+  gitHubLakeCallbackRoute,
   subscribeRoute,
   activateRoute,
   adminRoute,
@@ -1176,6 +1220,9 @@ function createNextCompatibleHistory() {
 // guard redirects an unauthenticated landing to /login (which strips the query string). See
 // captureUtmParams() for why this cannot live in a React effect.
 captureUtmParams();
+
+// Same constraint for the data-lake GitHub App return: the router's first resolve rewrites its query.
+captureGitHubLakeCallbackSearch();
 
 // Then tell the server a visit is happening. Order matters: the beacon is the request the
 // server reads the campaign cookie from, so it has to follow the line above.

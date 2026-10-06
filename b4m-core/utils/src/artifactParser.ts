@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType, matchArtifactBlocks } from '@bike4mind/common';
+import {
+  type ArtifactBlockMatch,
+  ArtifactOperation,
+  ArtifactType,
+  mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+} from '@bike4mind/common';
 
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
@@ -414,13 +420,55 @@ export function markToolEchoes(content: string, isToolEcho: (body: string) => bo
   return transformCodeBlocks(content, { isToolEcho }, true);
 }
 
+const normalizeWhitespace = (value: string): string => value.trim().replace(/\s+/g, ' ');
+
+// Single-line only: the body lines of a multi-line `accDescr {` block still count.
+const MERMAID_DEDUPE_IGNORED_LINE = /^(?:title|accTitle|accDescr)\b|^%%/;
+
+/** Dedupe form of a mermaid body: title, accessibility and comment lines dropped, whitespace normalized. */
+const mermaidDedupeLines = (value: string): string[] =>
+  value.split('\n').filter(line => !MERMAID_DEDUPE_IGNORED_LINE.test(line.trim()));
+const normalizeMermaid = (value: string): string => normalizeWhitespace(mermaidDedupeLines(value).join('\n'));
+
+/**
+ * Protects every complete artifact span from the detectors and collects normalized mermaid bodies.
+ * A span wrapping a tool-output placeholder is not protected itself, but artifacts inside it still are.
+ */
+function protectArtifactSpans(content: string, mask: ToolOutputMask): { masked: string; mermaidBodies: Set<string> } {
+  const mermaidBodies = new Set<string>();
+  const spans: Array<[number, number]> = [];
+  // restore() is single-pass, so a span wrapping an already-protected region cannot itself be protected;
+  // the scan descends into it instead, so an inner artifact sharing its closer is still found.
+  const holdsPlaceholder = (block: ArtifactBlockMatch) => mask.holds(block.fullMatch);
+  for (const block of matchArtifactBlocks(content, holdsPlaceholder)) {
+    const type = Array.from(block.attrs.matchAll(ATTRIBUTE_REGEX))
+      .filter(m => m[1] === 'type')
+      .pop();
+    if ((type?.[2] ?? type?.[3]) === 'application/vnd.ant.mermaid') mermaidBodies.add(normalizeMermaid(block.body));
+    if (holdsPlaceholder(block)) continue;
+    // Ordered and disjoint: the scan only resumes inside a block that does not become a span.
+    spans.push([block.index, block.index + block.fullMatch.length]);
+  }
+
+  let masked = '';
+  let copiedTo = 0;
+  for (const [start, end] of spans) {
+    masked += content.slice(copiedTo, start) + mask.protect(content.slice(start, end));
+    copiedTo = end;
+  }
+  return { masked: masked + content.slice(copiedTo), mermaidBodies };
+}
+
 function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
   const mask = maskToolOutputRegions(content);
-  content = mask.masked;
+  const spans = protectArtifactSpans(mask.masked, mask);
+  content = spans.masked;
+  const { mermaidBodies } = spans;
+  const isDuplicateMermaid = (text: string) => mermaidBodies.size > 0 && mermaidBodies.has(normalizeMermaid(text));
   const { isToolEcho } = options;
   // Echoed spans become marked fences, protected at once so later passes skip them too.
-  // A span that holds a placeholder wraps protected tool output; promoting it would put that
-  // output back inside an artifact when restore runs.
+  // A span that holds a placeholder wraps a protected region (tool output or an existing artifact);
+  // promoting it would put that region back inside a new artifact when restore runs.
   const { holds } = mask;
   const echoFence = (lang: string, body: string, whole: string, start: number, end: number): string | null =>
     isToolEcho?.(body)
@@ -512,7 +560,7 @@ ${codeContent.trim()}
 
   // Detect Mermaid code blocks and mixed content.
   content = replaceMermaidFences(content, (fullMatch, codeContent) => {
-    if (echoOnly || holds(codeContent)) return fullMatch;
+    if (echoOnly || holds(codeContent) || isDuplicateMermaid(codeContent)) return fullMatch;
     // Clean and validate the Mermaid syntax
     const { isValid, cleanedContent, errors } = validateMermaidSyntax(codeContent);
 
@@ -525,31 +573,6 @@ ${codeContent.trim()}
     } else {
       // If validation fails, keep the original content and log errors
       Logger.globalInstance.warn('Mermaid validation failed:', errors);
-      return fullMatch;
-    }
-  });
-
-  // Also handle raw Mermaid content (no code blocks) mixed with other content,
-  // e.g. when an LLM outputs raw Mermaid plus code blocks.
-  const rawMermaidRegex =
-    /((?:^|\n)(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|gantt|pie|mindmap)[\s\S]*?)(?=\n```|$)/gm;
-
-  content = content.replace(rawMermaidRegex, (fullMatch, mermaidContent) => {
-    // Skip if this is already inside a code block or artifact
-    if (echoOnly || holds(fullMatch) || fullMatch.includes('```') || fullMatch.includes('<artifact')) {
-      return fullMatch;
-    }
-
-    const { isValid, cleanedContent } = validateMermaidSyntax(mermaidContent);
-
-    if (isValid && cleanedContent.trim()) {
-      const diagramType = extractMermaidDiagramType(cleanedContent);
-      const identifier = `mermaid-${diagramType}`;
-      const title = `${diagramType.charAt(0).toUpperCase() + diagramType.slice(1)} Diagram`;
-
-      return `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">${cleanedContent}</artifact>`;
-    } else {
-      // If validation fails, return original content
       return fullMatch;
     }
   });
@@ -814,6 +837,7 @@ export function cleanMermaidSyntax(content: string): string {
   const mermaidLines: string[] = [];
   let foundMermaidStart = false;
   let foundInvalidContent = false;
+  let sequence = false;
 
   for (const line of lines) {
     const trimmedLine = line.trim();
@@ -830,6 +854,7 @@ export function cleanMermaidSyntax(content: string): string {
     if (!foundMermaidStart) {
       if (isMermaidDiagramStart(trimmedLine)) {
         foundMermaidStart = true;
+        sequence = /^sequenceDiagram\b/.test(trimmedLine);
         mermaidLines.push(line);
         continue;
       }
@@ -839,7 +864,7 @@ export function cleanMermaidSyntax(content: string): string {
 
     // If we've started Mermaid content, check if this line is valid Mermaid
     if (foundMermaidStart && !foundInvalidContent) {
-      if (isMermaidSyntax(trimmedLine)) {
+      if (isMermaidSyntax(trimmedLine, sequence)) {
         mermaidLines.push(line);
       } else {
         // Found invalid content, stop processing
@@ -942,10 +967,24 @@ function isMermaidDiagramStart(line: string): boolean {
   );
 }
 
+// Only valid inside a sequenceDiagram: words like `option` or `title` are ordinary prose elsewhere.
+const SEQUENCE_PATTERNS = [
+  /^(participant|actor)\s+\S/,
+  /^(create\s+(participant|actor)|destroy)\s+\S/,
+  /^box(\s|$)/,
+  // A hyphen joins word runs (`Auth-Service`); in the sender never before `x`, so it cannot also read as
+  // the `-x` arrow, an ambiguity that backtracks quadratically on a long `A-xA-x...` line with no colon.
+  /^[\w.]+(?:-(?!x)[\w.]+)*(?: [\w.]+(?:-(?!x)[\w.]+)*)*\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+(?:-[\w.]+)*(?: [\w.]+(?:-[\w.]+)*)*\s*:/,
+  /^Note\s+(left of|right of|over)\s+\S/,
+  /^(loop|alt|else|opt|par|and|critical|option|break|rect)(\s|$)/,
+  /^(autonumber|activate|deactivate|links?)(\s|$)/,
+  /^(title|accTitle|accDescr)\b/,
+];
+
 /**
- * Checks if a line contains valid Mermaid syntax
+ * Checks if a line contains valid Mermaid syntax. `sequence` also accepts sequence-diagram-only lines.
  */
-export function isMermaidSyntax(line: string): boolean {
+export function isMermaidSyntax(line: string, sequence = false): boolean {
   // Empty lines are valid
   if (!line.trim()) return true;
 
@@ -989,5 +1028,8 @@ export function isMermaidSyntax(line: string): boolean {
   }
 
   // If it matches a valid Mermaid pattern, it's valid
-  return mermaidPatterns.some(pattern => pattern.test(line));
+  return (
+    mermaidPatterns.some(pattern => pattern.test(line)) ||
+    (sequence && SEQUENCE_PATTERNS.some(pattern => pattern.test(line)))
+  );
 }

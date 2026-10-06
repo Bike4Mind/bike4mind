@@ -7,6 +7,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
 type TagIdQuery = { id?: string | string[] };
 
@@ -30,7 +31,7 @@ const requireTagId = (query: TagIdQuery): string => {
   return id;
 };
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES })
   .put(
     asyncHandler<{}, unknown, TagUpdateBody, TagIdQuery>(async (req, res) => {
       if (!req.user.id) {

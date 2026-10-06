@@ -19,7 +19,11 @@ import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
-import { lakeMembershipsFrom, warnIfManyLakeMemberships } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import {
+  lakeMembershipsFrom,
+  warnIfManyLakeMemberships,
+  type ResolvedLakeAccess,
+} from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
@@ -50,7 +54,7 @@ import type { RetrievalSummary } from '../../retrievalSummaryMerge';
 import { resolveSearchBudgets, type ResolvedSearchBudgets } from '../../../../dataLakeService/resolveSearchBudgets';
 import { scopeForCaller } from '../../../../settings/resolveScopedSetting';
 import { openSearchChunkAdapter } from '../../../../dataLakeService/openSearchChunkAdapter';
-import { attributeAccessedLakeIds, type AttributableLake } from '../../../../dataLakeService/attributeAccessedLakes';
+import { attributeAccessedLakeIds, citableOriginFor } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
@@ -430,7 +434,12 @@ async function emitSemanticCitables(
   skipNotice?: SkipNotice | null,
   dataLakeTags: string[] = [],
   /** Undefined when attribution was inconclusive - see the schema field's own doc. */
-  dataLakeTagsWithCandidates?: string[]
+  dataLakeTagsWithCandidates?: string[],
+  /**
+   * The lakes to attribute each chip's `sourceOrigin` against. Omitted on a path with no lake
+   * concept (agent-scoped), which leaves the field off so the chip is not mislabelled as library.
+   */
+  originLakes?: ResolvedLakeAccess[]
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article).
   // `ranked` is score-descending, so the chunk that survives the dedup is the file's BEST hit,
@@ -461,6 +470,14 @@ async function emitSemanticCitables(
         // an empty array the chip would badge with no partner to name, and the chip must not alias
         // the detector's own array.
         ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
+        ...(originLakes
+          ? {
+              sourceOrigin: citableOriginFor(
+                { tags: r.fileTags, ownerUserId: r.fileUserId, callerUserId: context.userId },
+                originLakes
+              ),
+            }
+          : {}),
       },
     });
   }
@@ -638,7 +655,7 @@ async function trySemanticKbSearch(
     // A personal-corpus session searches with NO lake arms: `collectScopedFiles` passes
     // `includeShared: true` alongside these, so emptying them leaves the caller's own and shared
     // files as the corpus - which is exactly the intent, and keeps their whole library rankable.
-    const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+    const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } = await resolveSessionLakeAccess(context);
     // No accessible data lake - keyword search owns the user's own files. EXCEPT when the lakes
     // were suppressed deliberately: there the caller does have a corpus worth ranking (their own
     // files), and falling through to the metadata-only keyword arm would lose content search over
@@ -762,7 +779,9 @@ async function trySemanticKbSearch(
       conflict.conflictsByFileId,
       skipNotice,
       dataLakeTags,
-      lakesWithCandidates.length > 0 ? lakesWithCandidates : undefined
+      lakesWithCandidates.length > 0 ? lakesWithCandidates : undefined,
+      // A degraded lake read would mislabel every lake file as library; no origin keeps "Data Lake".
+      lakeViewComplete === false ? undefined : lakes
     );
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
@@ -1339,7 +1358,10 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           let searchResults;
           // Populated only in the unscoped arm below (mirrors the semantic arm: a scoped call
           // never consults lake access, so its audit event carries no lake attribution either).
-          let keywordArmLakes: AttributableLake[] = [];
+          let keywordArmLakes: ResolvedLakeAccess[] = [];
+          // Set only by the unscoped arm: an empty keywordArmLakes there means "no accessible lake"
+          // (chips read as library), but on the scoped arm it means "no lake concept" (no origin).
+          let keywordArmOriginLakes: ResolvedLakeAccess[] | undefined;
           if (scope) {
             // Scoped keyword arm: restrictToFileIds is the sole authority (skipOwnership -
             // curated files match even when owned by another user, mirroring the semantic
@@ -1369,8 +1391,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Search files the user has access to (owned + shared + org-shared + data lake)
             // Same treatment as the semantic arm above - a fallback that re-widened to owner-wide
             // lake access would undo the scope on exactly the turns semantic search found nothing.
-            const { dataLakeTags, dataLakeTagPrefixes, lakes } = await resolveSessionLakeAccess(context);
+            const { dataLakeTags, dataLakeTagPrefixes, lakes, lakeViewComplete } =
+              await resolveSessionLakeAccess(context);
             keywordArmLakes = lakes;
+            // Same degraded-read rule as the semantic arm's origin lakes.
+            keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
             warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(
@@ -1491,18 +1516,31 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
+              const fileTagNames = file.tags?.map(t => t.name) || [];
               return {
                 id: file.id,
                 type: 'document' as const,
                 title: file.fileName,
                 url: `/opti?mode=datalake&article=${file.id}`,
-                description: citationTagDescription(file.tags?.map(t => t.name) || []),
+                description: citationTagDescription(fileTagNames),
                 timestamp: new Date().toISOString(),
                 status: 'complete' as const,
                 metadata: {
                   sourceSystem: 'knowledge_base',
-                  tags: file.tags?.map(t => t.name) || [],
+                  tags: fileTagNames,
                   relevanceScore: 1 - index * 0.1,
+                  ...(keywordArmOriginLakes
+                    ? {
+                        sourceOrigin: citableOriginFor(
+                          {
+                            tags: fileTagNames,
+                            ownerUserId: normalizeId(file.userId),
+                            callerUserId: context.userId,
+                          },
+                          keywordArmOriginLakes
+                        ),
+                      }
+                    : {}),
                 },
               };
             });

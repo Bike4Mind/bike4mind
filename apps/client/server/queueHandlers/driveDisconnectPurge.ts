@@ -10,10 +10,11 @@ import {
 import { dataLakeService } from '@bike4mind/services';
 import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
-import type { IDataLakeDocument } from '@bike4mind/common';
+import { driveConnectionOwnerOf, type IDataLakeDocument } from '@bike4mind/common';
 import { Resource } from 'sst';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { releaseDriveConnection } from '@server/integrations/google/drive/common';
+import { deleteDriveOrphans, listDeletableDriveOrphans } from '@server/integrations/google/drive/connectorOrphanFiles';
 import { shredMemoryForLakeTags } from '@server/dataLakes/shredMemoryForLakeTags';
 import { getFilesStorage } from '@server/utils/storage';
 import { sendToQueue } from '@server/utils/sqs';
@@ -22,7 +23,8 @@ import { z, ZodError } from 'zod';
 export const DriveDisconnectPurgePayload = z.object({
   connectionId: z.string(),
   dataLakeId: z.string(),
-  organizationId: z.string(),
+  // Absent for a personal connection (one feeding an org-less lake).
+  organizationId: z.string().optional(),
   // How many times this disconnect has waited out an in-flight sync; bounded by MAX_SYNC_DEFERRALS.
   syncDeferrals: z.number().int().nonnegative().optional(),
 });
@@ -67,6 +69,7 @@ export async function runDriveDisconnectPurge(
     logger.info('[driveDisconnectPurge] connection already released; nothing to do', { connectionId, dataLakeId });
     return 'dropped';
   }
+  const owner = driveConnectionOwnerOf(conn);
   if (!conn.disconnectRequestedAt) {
     logger.warn('[driveDisconnectPurge] no disconnect pending on this connection; dropping', { connectionId });
     return 'dropped';
@@ -74,14 +77,14 @@ export async function runDriveDisconnectPurge(
 
   // Re-asserted every run: it is the same compare-and-set the route took, so an ingest that slipped
   // in anyway (a lost race on a re-enable) finishes before this sweep resolves its slice.
-  if (!(await orgGoogleDriveConnectionRepository.markDisconnecting(connectionId, organizationId))) {
+  if (!(await orgGoogleDriveConnectionRepository.markDisconnecting(connectionId, owner))) {
     const syncDeferrals = (payload.syncDeferrals ?? 0) + 1;
     if (syncDeferrals > MAX_SYNC_DEFERRALS) {
       throw new Error(`Drive disconnect purge for ${connectionId} is still blocked by a sync; giving up`);
     }
     // Waiting out a sync is still progress; without this the chain reads as stalled mid-deferral and
     // the UI offers a retry the route would only 409.
-    await orgGoogleDriveConnectionRepository.touchDisconnect(connectionId, organizationId);
+    await orgGoogleDriveConnectionRepository.touchDisconnect(connectionId, owner);
     await enqueue({ ...payload, syncDeferrals }, SYNC_DEFERRAL_DELAY_SEC);
     logger.info('[driveDisconnectPurge] a sync is in flight; deferred', { connectionId, syncDeferrals });
     return 'deferred';
@@ -95,9 +98,18 @@ export async function runDriveDisconnectPurge(
       logger.info('[driveDisconnectPurge] purged a slice; continuing', { connectionId, sliceSize });
       return 'continued';
     }
+
+    // Every lake MEMBER is gone. Now the ORPHANS: files this connection unpicked (removed from the
+    // folder, or a pre-fix edit-retire) keep their `driveConnectionId` but lost the lake meta-tag, so
+    // purgeSlice above cannot see them. Kept copies - shared, held by another lake, ownerless - are
+    // left alive by the shared gate. Run before release: a throw here leaves the connection
+    // disconnecting so the retry re-sweeps (the finder is soft-delete filtered, so already-deleted
+    // orphans are skipped) rather than revoking the grant over a half-swept set.
+    const orphans = await listDeletableDriveOrphans(lake, connectionId, logger);
+    await deleteDriveOrphans(orphans, logger);
   }
 
-  await releaseDriveConnection(connectionId, organizationId);
+  await releaseDriveConnection(connectionId, owner);
   logger.info('[driveDisconnectPurge] purged every ingested file and released the connection', {
     connectionId,
     dataLakeId,

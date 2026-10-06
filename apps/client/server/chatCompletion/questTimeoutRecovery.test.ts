@@ -35,6 +35,7 @@ describe('resolveQuestTimeoutRecovery', () => {
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
   });
 
@@ -44,6 +45,11 @@ describe('resolveQuestTimeoutRecovery', () => {
     // generation; the finishReason stamp still records that the run died.
     const recovery = resolveQuestTimeoutRecovery(quest({ replies: ['Here is your dog:'], images: ['dog.png'] }), NOW);
     expect(recovery).toEqual({ status: 'done', finishReason: 'timeout' });
+  });
+
+  it('drops fallbackInfo when only media survived, since the failed primary may have produced it', () => {
+    const recovery = resolveQuestTimeoutRecovery(quest({ replies: [], images: ['primary.png'] }), NOW);
+    expect(recovery).toEqual({ status: 'done', finishReason: 'timeout', fallbackInfo: null });
   });
 
   // #3356: a run hard-killed mid tool call used to settle as a clean `done` / `message`, so a
@@ -73,6 +79,7 @@ describe('resolveQuestTimeoutRecovery', () => {
   it('marks tool-only content unfinished without discarding it', () => {
     expect(resolveQuestTimeoutRecovery(quest({ toolResults: [{ content: 'rows' }] as never }), NOW)).toEqual({
       status: 'done',
+      fallbackInfo: null,
       finishReason: 'timeout',
       reply: `\n\n${UNFINISHED_REPLY_NOTICE}`,
     });
@@ -90,6 +97,7 @@ describe('resolveQuestTimeoutRecovery', () => {
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
   });
 
@@ -101,12 +109,23 @@ describe('resolveQuestTimeoutRecovery', () => {
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
     expect(resolveQuestTimeoutRecovery(quest({ reply: '<think>some hidden reasoning' }), NOW)).toEqual({
       status: 'done',
       type: 'error',
       reply: 'This request timed out. The server did not respond in time. Please try again.',
+      fallbackInfo: null,
     });
+  });
+
+  it('clears a persisted fallbackInfo when the turn settles as an error, but keeps it when content survived', () => {
+    // A timed-out run that had already switched models must not keep claiming a model answered it.
+    const empty = resolveQuestTimeoutRecovery(quest({ replies: [] }), NOW);
+    expect(empty).toMatchObject({ type: 'error', fallbackInfo: null });
+
+    const partial = resolveQuestTimeoutRecovery(quest({ replies: ['half an answer'] }), NOW);
+    expect(partial).not.toHaveProperty('fallbackInfo');
   });
 
   it('does not recover exactly at the threshold (strictly older required)', () => {

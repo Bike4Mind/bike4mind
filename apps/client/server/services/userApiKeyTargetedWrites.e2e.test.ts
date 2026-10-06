@@ -83,8 +83,8 @@ describe('userApiKeyService writers vs concurrent writes (real repo + Mongo)', (
       if (doc) await race(minted.id, 7, true);
       return doc;
     };
-    repo.update = (data: Partial<IUserApiKeyDocument>) => {
-      const p = userApiKeyRepository.update(data);
+    repo.healKeyPrefix = (id: string, keyPrefix: string, expectedKeyHash: string) => {
+      const p = userApiKeyRepository.healKeyPrefix(id, keyPrefix, expectedKeyHash);
       healed = p;
       return p;
     };
