@@ -17,7 +17,7 @@ import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
 import { applyStatusEvents } from './sessionStatus';
-import { totalTokens, type TurnProgress } from './statusLine';
+import { EVENT_STAMP_RESOLUTION_MS, totalTokens, type TurnProgress } from './statusLine';
 
 const LIVE_FLUSH_FALLBACK_MS = 100;
 
@@ -427,6 +427,16 @@ export function useConversation(
       setMessages(current =>
         current.map(message => events.reduce((folded, event) => applyLiveEvent(folded, event), message))
       );
+      // The turn's sign of life, stamped once per FLUSH rather than once per event: the batch
+      // above exists so a fast stream does not re-render per token, and a stamp per token would
+      // hand that straight back. Coarser still at a second, where the same object is returned
+      // and React re-renders nothing at all - see EVENT_STAMP_RESOLUTION_MS.
+      setTurn(current => {
+        if (!current) return current;
+        const stamped = Date.now();
+        const previous = current.lastEventAt ?? current.startedAt;
+        return stamped - previous < EVENT_STAMP_RESOLUTION_MS ? current : { ...current, lastEventAt: stamped };
+      });
     };
 
     const unsubscribe = window.b4m.chat.onStreamEvent(event => {
@@ -457,7 +467,8 @@ export function useConversation(
 
       if (event.type === 'start') {
         setStreaming(true);
-        setTurn({ startedAt: Date.now(), tokens: null });
+        const startedAt = Date.now();
+        setTurn({ startedAt, tokens: null, lastEventAt: startedAt });
         setMessages(current => startReply(current, event.messageId));
         return;
       }
