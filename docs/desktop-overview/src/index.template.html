@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bike4Mind Desktop - Product Overview</title>
+<style>
+:root{--bg:#f7f8fb;--card:#fff;--ink:#14171f;--mute:#586074;--line:#e2e6ef;--brand:#2f6fed;--brand-soft:#e8effd;--ok:#0f7a3d;--shadow:0 18px 50px rgba(20,30,60,.12)}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1118;--card:#161a24;--ink:#eef1f7;--mute:#9aa3b8;--line:#262c3a;--brand:#6c9bff;--brand-soft:#1b2540;--ok:#47c77b;--shadow:0 18px 50px rgba(0,0,0,.5)}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.65 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif}
+a{color:var(--brand)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 20px}
+nav{position:sticky;top:0;z-index:10;backdrop-filter:blur(12px);background:color-mix(in srgb,var(--bg) 82%,transparent);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;gap:22px;align-items:center;height:54px;overflow-x:auto;white-space:nowrap}
+nav b{margin-right:auto;font-size:16px}
+nav a{color:var(--mute);text-decoration:none;font-size:14px}
+nav a:hover{color:var(--ink)}
+.hero{padding:76px 0 40px;text-align:center}
+.eyebrow{display:inline-block;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--brand);background:var(--brand-soft);padding:4px 12px;border-radius:999px}
+h1{font-size:clamp(36px,6vw,60px);line-height:1.08;margin:18px 0 14px;letter-spacing:-.025em}
+.lede{max-width:700px;margin:0 auto;color:var(--mute);font-size:19px}
+.hero figure{margin:44px auto 0}
+figure{margin:0}
+figure img{display:block;width:100%;height:auto;border-radius:14px;border:1px solid var(--line);box-shadow:var(--shadow);background:#fff}
+figcaption{margin-top:10px;font-size:13.5px;color:var(--mute);text-align:center}
+section{padding:68px 0 10px}
+h2{font-size:clamp(28px,4vw,38px);line-height:1.15;margin:0 0 10px;letter-spacing:-.02em}
+h3{font-size:24px;margin:0 0 8px;letter-spacing:-.01em}
+.sub{color:var(--mute);max-width:720px;margin:0 0 28px}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:26px 0}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
+.panel h4{margin:0 0 6px;font-size:18px}
+.panel ul{margin:10px 0 0;padding-left:20px;color:var(--mute)}
+.panel li{margin:4px 0}
+.panel.hi{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.feature{display:grid;grid-template-columns:5fr 7fr;gap:34px;align-items:center;padding:34px 0}
+.feature.flip{grid-template-columns:7fr 5fr}.feature.flip .txt{order:2}
+.feature .txt p{color:var(--mute);margin:8px 0}
+.pill{display:inline-block;font-size:12px;font-weight:600;color:var(--brand);background:var(--brand-soft);border-radius:999px;padding:2px 10px;margin-bottom:8px}
+.txt ul{padding-left:20px;margin:10px 0;color:var(--mute)}.txt li{margin:5px 0}
+code{font:14px ui-monospace,Menlo,monospace;background:var(--brand-soft);padding:1px 6px;border-radius:6px}
+.group{border-top:1px solid var(--line);margin-top:30px;padding-top:30px}
+.tools{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.tools code{background:var(--card);border:1px solid var(--line)}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:20px}
+.trust{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 28px;margin-top:28px}
+.trust ul{margin:10px 0 0;padding-left:20px;color:var(--mute)}.trust li{margin:6px 0}
+footer{margin:80px 0 50px;color:var(--mute);font-size:13.5px;text-align:center;border-top:1px solid var(--line);padding-top:24px}
+@media (max-width:800px){.cmp,.feature,.feature.flip,.grid3{grid-template-columns:1fr}.feature.flip .txt{order:0}.hero{padding-top:48px}}
+</style>
+</head>
+<body>
+<nav><div class="wrap"><b>Bike4Mind Desktop</b><a href="#why">Why desktop</a><a href="#code">Code sessions</a><a href="#sessions">Agent-to-agent</a><a href="#browser">Built-in browser</a><a href="#beyond">Beyond Claude Desktop</a></div></nav>
+
+<header class="hero"><div class="wrap">
+  <span class="eyebrow">Product overview</span>
+  <h1>Bike4Mind, on your machine.</h1>
+  <p class="lede">A desktop app that gives Bike4Mind hands: it works in your repositories, runs your commands, drives a real browser, and still makes images and audio the way the web app does.</p>
+  <figure><img src="img/code.gif" alt="A Code session fixing a bug: the agent searches, reads files, shows a diff and runs the tests" width="1000" height="593"><figcaption>A Code session: ask, watch the agent search, edit and test, then review the diff.</figcaption></figure>
+</div></header>
+
+<main class="wrap">
+
+<section id="why">
+  <h2>Why a desktop app when there is already a web app?</h2>
+  <p class="sub">The Bike4Mind web app is excellent for conversation, knowledge and collaboration. A browser tab, by design, cannot touch your computer. The desktop app exists for the work that lives there.</p>
+  <div class="cmp">
+    <div class="panel"><h4>Bike4Mind web app</h4><ul>
+      <li>Lives in a browser tab, sandboxed from your machine</li>
+      <li>Cannot read your project folders or run your build</li>
+      <li>Cannot use a browser as a tool on your behalf</li>
+      <li>Best for chat, knowledge, notebooks and team sharing</li></ul></div>
+    <div class="panel hi"><h4>Bike4Mind Desktop</h4><ul>
+      <li>Runs on your machine, in the folders you grant it</li>
+      <li>Reads and edits files, runs shell commands and dev servers</li>
+      <li>Owns a built-in browser the agent can drive</li>
+      <li>Same account, same models, same credits, same backend</li></ul></div>
+  </div>
+</section>
+
+<section id="features">
+  <h2>Features</h2>
+  <p class="sub">Two modes in one window. <b>Chat</b> for general work, <b>Code</b> for work grounded in a repository.</p>
+
+  <div class="feature" id="code">
+    <div class="txt">
+      <span class="pill">Code sessions</span>
+      <h3>An agent grounded in your repo</h3>
+      <p>Pick a project folder and start. The agent searches, reads, edits and tests inside it, and every conversation groups under its project in the sidebar.</p>
+      <ul>
+        <li><b>Workspace bar:</b> shows the project and branch the agent is working in. Change them any time. Tick <b>worktree</b> to give the session its own copy of the branch, so parallel tasks never collide.</li>
+        <li><b>Real tools:</b> file read and write, patching, glob and grep, shell commands, and long-running background processes with live output.</li>
+        <li><b>Plans, questions and diffs:</b> the agent keeps a todo list, asks multiple-choice questions when it needs a decision, and shows edits as diffs.</li>
+        <li><b>Skill-aware:</b> finds your project and personal skills and lists them in a <code>/</code> picker. The agent can use them too. Project skills load only after you trust the project.</li>
+        <li><b>Memory-aware:</b> each project keeps its own memory, loaded from the first message. The agent saves what is worth keeping and deletes what is wrong, and you review each change. Memory lasts across sessions.</li>
+        <li><b>Extend it</b> with MCP servers for your own tools.</li>
+      </ul>
+    </div>
+    <figure><img src="img/code-real.png" alt="A real Code session: the agent applied five patches and ran the build and tests, with a diff of the new file and the workspace bar showing project, branch and worktree" loading="lazy"><figcaption>A real Code session: five patches applied, the build and tests run, and the new file shown as a diff. The workspace bar below shows project, branch and worktree.</figcaption></figure>
+  </div>
+
+  <div class="group" id="sessions">
+    <span class="pill">Agent-to-agent</span>
+    <h3>Sessions that start sessions, and talk to each other</h3>
+    <p class="sub">An agent can hand work to another agent. A session can start a child session for a self-contained job, such as an independent PR review, and keep talking to it afterwards. Every message is an explicit tool call you can see in the transcript.</p>
+    <figure><img src="img/sessions.gif" alt="A parent session spawns a PR review session, is told it finished, reads the result, then sends it a follow-up message" loading="lazy"><figcaption>Spawn, finished notice, read, send: each step is a visible row in the thread.</figcaption></figure>
+    <div class="grid3">
+      <div class="panel"><h4><code>session_spawn</code></h4><p style="color:var(--mute);margin:0">Starts a child with an empty conversation, so the brief has to carry the whole task. You approve every spawn first, and the child can only touch the folders its parent can. It gets its own worktree, so it never edits the parent's files.</p></div>
+      <div class="panel"><h4>Told, not handed back</h4><p style="color:var(--mute);margin:0">The parent keeps working. When the child finishes it learns <i>that</i> it finished, and pulls the content with <code>session_read</code> when it needs it.</p></div>
+      <div class="panel"><h4><code>session_send</code></h4><p style="color:var(--mute);margin:0">Follow up with a child that already exists instead of starting over. You approve every send too. The receiver sees it as a message from another session, not from you, and weighs it that way.</p></div>
+    </div>
+  </div>
+
+  <div class="group" id="browser">
+    <span class="pill">Built-in browser</span>
+    <h3>A real browser, side by side with the conversation</h3>
+    <p class="sub">Each conversation gets its own browser pane. You can use it like any browser, and the agent can use it too. It keeps its own cookie jar, separate from everything you browse.</p>
+    <div class="tools"><code>browser_navigate</code><code>browser_snapshot</code><code>browser_click</code><code>browser_type</code><code>browser_press</code><code>browser_back</code><code>browser_screenshot</code><code>browser_evaluate</code></div>
+
+    <div class="feature">
+      <div class="txt">
+        <h3 style="font-size:20px">Use it for end-to-end testing</h3>
+        <p>Start your dev server, then ask the agent to test the flow. It opens your local app, fills the form, clicks through, reads the page and reports pass or fail for each case, with screenshots.</p>
+        <ul><li>Catches regressions the unit tests do not see</li><li>Test what you just changed, right after changing it</li><li>The same session that wrote the fix can verify it</li></ul>
+      </div>
+      <figure><img src="img/e2e.gif" alt="The agent signs in on a local test page with valid then invalid credentials and reports pass for both" loading="lazy"><figcaption>An e2e check of a sign-in page: valid login, wrong password, both reported.</figcaption></figure>
+    </div>
+
+    <div class="feature flip">
+      <div class="txt">
+        <h3 style="font-size:20px">Bring your Chrome sign-ins along</h3>
+        <p>Sites behind SSO and 2FA stop an agent cold. Import cookies from your own Chrome profile, per site, and the built-in browser is signed in already.</p>
+        <ul>
+          <li><b>You choose the sites</b> from a list of your own Chrome cookies. The page and the model can never name one for you.</li>
+          <li><b>Only chosen sites are read.</b> The rest of your Chrome cookies are never decrypted.</li>
+          <li><b>Never in the transcript.</b> The import is a click, not a tool, and only counts and hostnames cross into the UI.</li>
+          <li>Manage or remove imported sites any time from the same menu.</li>
+        </ul>
+      </div>
+      <figure><img src="img/cookies.gif" alt="Browser menu, Import cookies from Chrome dialog, site selection, then the agent reading a signed-in orders portal" loading="lazy"><figcaption>Menu, pick one site, import, and the agent can see your open orders.</figcaption></figure>
+    </div>
+
+    <div class="feature">
+      <div class="txt">
+        <h3 style="font-size:20px">Use it to automate websites</h3>
+        <p>Anything you would do by clicking, the agent can do: open a site, read what is on it, extract the parts you care about, fill forms and move between pages.</p>
+        <ul><li>Pull headlines, prices, or table data into a list</li><li>Walk repetitive admin screens</li><li>Watch it happen in the pane, and take over whenever you like</li></ul>
+      </div>
+      <figure><img src="img/auto.gif" alt="The agent opens a news site, reads it and returns the top three headlines" loading="lazy"><figcaption>Open, read, extract: the agent summarizes a page you can see live.</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="beyond">
+  <h2>What Bike4Mind Desktop adds beyond Claude Desktop</h2>
+  <p class="sub">Claude Desktop is a general assistant. Bike4Mind Desktop is a client for the whole Bike4Mind platform, so the creative and knowledge tools of the web app come with it, and more of them arrive as they are ported over.</p>
+
+  <div class="feature">
+    <div class="txt">
+      <span class="pill">Image generation</span>
+      <h3>Make images in the conversation</h3>
+      <p>Describe it and the agent calls <code>generate_image</code>. The result appears inline and is saved to disk for the session.</p>
+      <ul><li>Posters, diagrams, mockups, thumbnails</li><li>Refine in follow-up messages without leaving the thread</li><li>Metered against your Bike4Mind credits</li></ul>
+    </div>
+    <figure><img src="img/image.gif" alt="A prompt for a bicycle poster and the generated image appearing inline" loading="lazy"><figcaption>Prompt in, image inline. Illustration of the flow.</figcaption></figure>
+  </div>
+
+  <div class="feature flip">
+    <div class="txt">
+      <span class="pill">Audio generation</span>
+      <h3>Voice, music and sound effects</h3>
+      <p>Three tools cover the audio the web app can make, each with a built-in player in the thread, and a browsable copy can be kept in your Bike4Mind files.</p>
+      <div class="tools"><code>generate_speech</code><code>generate_music</code><code>generate_sound_effect</code></div>
+      <ul><li>Narrate an announcement or a script</li><li>Score a short jingle</li><li>Drop in a one-second effect</li></ul>
+    </div>
+    <figure><img src="img/audio.gif" alt="Three audio players in a chat: a sound effect, a music clip and a speech clip" loading="lazy"><figcaption>Sound effect, music and speech, generated from one message.</figcaption></figure>
+  </div>
+
+  <div class="trust" style="margin-top:8px">
+    <h3 style="font-size:21px">And everything else on the web side that makes sense locally</h3>
+    <p style="color:var(--mute);margin:6px 0 0">The desktop app is built on the same backend and shared schemas as the web app, so porting a capability is a matter of giving it a native surface. Already here today:</p>
+    <ul>
+      <li><b>Artifacts</b> rendered in the app, with a library to find them again</li>
+      <li><b>Model picker and reasoning effort</b> for every conversation, with live credit and context meters</li>
+      <li><b>MCP servers and skills</b> for connecting your own tools and workflows</li>
+      <li><b>Attachments</b> by drag and drop, <b>prompt suggestions</b>, a message queue, and light and dark themes</li>
+      <li><b>Built-in updates</b> and installers for macOS and Windows</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<footer><div class="wrap">
+  Screens in this overview are illustrations of the Bike4Mind Desktop interface, with sample projects and data, not live captures.
+</div></footer>
+</body>
+</html>

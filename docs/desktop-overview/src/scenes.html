@@ -1,0 +1,177 @@
+<!doctype html><meta charset=utf-8><title>scenes</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:1280px;height:760px;overflow:hidden;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;color:#171a21;background:#fff}
+.win{display:flex;height:760px}
+aside{width:224px;background:#eef1f7;border-right:1px solid #dde2ec;display:flex;flex-direction:column;padding:12px 10px}
+.modes{display:flex;gap:4px;background:#e2e7f1;border-radius:9px;padding:3px;width:max-content;margin-bottom:12px}
+.modes span{padding:3px 11px;border-radius:7px;font-weight:600;font-size:13px;color:#4a5265}.modes .on{background:#b7c9f2;color:#111}
+.nav div{padding:6px 8px;color:#222;display:flex;gap:9px}
+.search{margin:8px 0 12px;border:1px solid #d3d9e6;background:#fff;border-radius:8px;padding:5px 9px;color:#8b93a6;font-size:13px}
+.grp{font-weight:600;font-size:12px;color:#444;margin:8px 4px 4px;display:flex;justify-content:space-between}
+.sess{padding:5px 8px;border-radius:7px;color:#444;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sess.on{background:#d9e0ee;color:#111}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;border:1.5px solid #bbb;margin-right:8px}.dot.run{border-color:#2f6fed;border-top-color:transparent;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.user{margin-top:auto;display:flex;gap:9px;align-items:center;padding:8px 4px;border-top:1px solid #dde2ec}
+.av{width:30px;height:30px;border-radius:50%;background:#d6e2fb;display:grid;place-items:center;font-size:12px;color:#25458f}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+.head{height:44px;border-bottom:1px solid #e7eaf1;padding:0 24px;display:flex;align-items:center;justify-content:space-between;font-weight:600}
+.head .g{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;color:#444}.head .g.on{background:#dfe5f1}
+.thread{flex:1;overflow:hidden;padding:18px 24px 0;display:flex;flex-direction:column;gap:12px;max-width:760px;width:100%;margin:0 auto}
+.u{align-self:flex-end;background:#dfe9fb;border-radius:14px;padding:8px 14px;max-width:80%}
+.a{max-width:100%}.a code,.tool code{background:#eef0f5;border-radius:5px;padding:1px 5px;font:12.5px ui-monospace,Menlo,monospace}
+.tool{border-left:3px solid #dfe3ec;padding:2px 10px;color:#586074;font-size:13.5px;margin:-4px 0}
+.tool b{font-weight:500}
+.diff{border:1px solid #dfe3ec;border-radius:9px;overflow:hidden;font:12px/1.6 ui-monospace,Menlo,monospace}
+.diff .h{background:#f5f6fa;padding:5px 10px;font-family:inherit;color:#555}
+.diff .l{padding:0 10px;white-space:pre}.add{background:#e6f6e9;color:#14612b}.del{background:#fdeaea;color:#8d1f26}
+.status{color:#8b93a6;font-size:12.5px}
+.chips{max-width:760px;width:100%;margin:0 auto;padding:0 24px;display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.chip{border:1px solid #d3d9e6;border-radius:999px;padding:3px 11px;font-size:12.5px;display:flex;gap:6px;align-items:center;background:#fff}
+.chip .cb{width:13px;height:13px;border:1.5px solid #b3bacb;border-radius:3px}
+.comp{max-width:760px;width:100%;margin:0 auto;padding:0 24px}
+.box{border:1px solid #cfd6e4;border-radius:10px;padding:13px 14px;color:#8b93a6;height:50px;display:flex;justify-content:space-between;background:#fafbfd}
+.send{width:30px;height:30px;border-radius:6px;background:#e6e9f1;display:grid;place-items:center;margin-top:-6px;color:#777}
+.foot{display:flex;gap:22px;padding:10px 4px 12px;font-size:12.5px;color:#444;align-items:center}.foot .sp{margin-left:auto}
+.pane{width:470px;border-left:1px solid #dde2ec;display:flex;flex-direction:column;background:#fff}
+.nav2{height:44px;border-bottom:1px solid #e7eaf1;display:flex;gap:8px;align-items:center;padding:0 10px;color:#777;position:relative}
+.addr{flex:1;border:1px solid #d3d9e6;border-radius:8px;padding:4px 10px;font-size:12.5px;color:#222;background:#fff;white-space:nowrap;overflow:hidden}
+.page{flex:1;position:relative;overflow:hidden;background:#f4f6fb;display:grid;place-items:center}
+.empty{text-align:center;color:#444}.empty small{display:block;color:#666;margin-top:6px}
+form.f{background:#fff;padding:26px;border-radius:14px;box-shadow:0 8px 30px #0001;width:290px}
+form.f h1{margin:0 0 14px;font-size:20px}.in{border:1px solid #ccd;border-radius:8px;padding:9px;margin:6px 0;font-size:14px;height:38px;color:#222;background:#fff}
+.btn{background:#2f6fed;color:#fff;border-radius:8px;padding:9px;text-align:center;margin-top:8px}.msg{margin-top:10px;font-size:13.5px}
+.menu{position:absolute;right:8px;top:40px;background:#fff;border:1px solid #d7dce8;border-radius:10px;box-shadow:0 10px 30px #0002;padding:6px;font-size:13px;z-index:5;width:240px}
+.menu div{padding:7px 10px;border-radius:6px}.menu .hi{background:#eef2fb}.menu .dis{color:#aaa}
+.modal{position:absolute;inset:0;background:#0006;display:grid;place-items:center;z-index:9}
+.dlg{background:#fff;border-radius:14px;width:420px;padding:20px;box-shadow:0 20px 60px #0004}
+.dlg h3{margin:0 0 4px;font-size:17px}.dlg p{margin:0 0 12px;color:#586074;font-size:12.5px}
+.row{display:flex;justify-content:space-between;padding:7px 10px;border:1px solid #e3e7f0;border-radius:8px;margin:5px 0;font-size:13px}
+.row.sel{background:#eaf1ff;border-color:#9db9f3}.row i{font-style:normal;color:#8b93a6}
+.dlgb{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}.dlgb span{padding:6px 14px;border-radius:7px;background:#eef0f5}.dlgb .p{background:#2f6fed;color:#fff}
+.media{border:1px solid #dfe3ec;border-radius:12px;overflow:hidden;width:380px;background:#fff}
+.media .cap{padding:8px 12px;font-size:12.5px;color:#586074;display:flex;justify-content:space-between}
+.gen{width:380px;height:240px;border-radius:12px;background:linear-gradient(110deg,#eef1f7 30%,#f9fafc 50%,#eef1f7 70%);background-size:200% 100%;animation:sh 1.4s linear infinite;display:grid;place-items:center;color:#8b93a6}
+@keyframes sh{to{background-position:-200% 0}}
+.aud{display:flex;align-items:center;gap:12px;border:1px solid #dfe3ec;border-radius:12px;padding:10px 14px;width:430px;background:#fff}
+.play{width:34px;height:34px;border-radius:50%;background:#2f6fed;display:grid;place-items:center;color:#fff;font-size:13px;flex:none}
+.wave{display:flex;align-items:center;gap:2px;height:34px;flex:1}.wave s{display:block;width:3px;background:#9db9f3;border-radius:2px}.wave s.d{background:#2f6fed}
+.tag{font-size:11.5px;background:#eef2fb;color:#2f4f9f;border-radius:999px;padding:1px 8px}
+.banner{position:absolute;left:0;right:0;bottom:0;background:#fff8e1;border-top:1px solid #f1dc92;padding:6px 12px;font-size:12px;color:#6a5200}
+.cur{display:inline-block;width:1px;height:15px;background:#222;vertical-align:middle;animation:b 1s steps(1) infinite}@keyframes b{50%{opacity:0}}
+.win.short{height:672px}
+.flow{height:88px;border-top:1px solid #dde2ec;background:#f7f8fc;display:flex;gap:10px;padding:12px 16px;align-items:stretch}
+.fl{flex:1;border:1px solid #d9deea;border-radius:10px;padding:7px 11px;font-size:12px;color:#586074;background:#fff;opacity:.5;line-height:1.35}
+.fl.on{opacity:1;background:#eaf1ff;border-color:#2f6fed;color:#17306b;box-shadow:0 2px 10px #2f6fed33}
+.fl b{display:block;font:600 12.5px ui-monospace,Menlo,monospace;margin-bottom:2px}
+.fl em{font-style:normal;float:right;font-size:11px;color:#2f6fed;font-weight:700}
+.cpane{width:430px;border-left:1px solid #dde2ec;display:flex;flex-direction:column;background:#fbfcfe}
+.cpane .thread{padding:14px 18px 0;gap:10px;font-size:13.5px}
+.chead{height:44px;border-bottom:1px solid #e7eaf1;padding:0 16px;display:flex;align-items:center;gap:8px;font-weight:600}
+.badge{font-size:11px;font-weight:600;background:#eef2fb;color:#2f4f9f;border-radius:999px;padding:1px 8px}
+.card{border:1px solid #f0cf72;background:#fff9e5;border-radius:10px;padding:10px 12px;font-size:13px}
+.card .bt{display:flex;gap:8px;margin-top:8px}.card .bt span{padding:3px 12px;border-radius:7px;background:#fff;border:1px solid #d9c27a}.card .bt .p{background:#2f6fed;color:#fff;border-color:#2f6fed}
+.note{border:1px dashed #b9c6e6;background:#f3f6fd;border-radius:10px;padding:8px 12px;font-size:13px;color:#33427a}
+.relay{border-left:3px solid #2f6fed;background:#eef3ff;border-radius:0 10px 10px 0;padding:8px 12px;font-size:13px}
+.relay small{display:block;color:#2f4f9f;font-weight:600;margin-bottom:3px}
+.cempty{margin:auto;color:#8b93a6;text-align:center;font-size:13px}
+.head{min-height:44px;height:auto;padding-top:6px;padding-bottom:6px}
+.ap{background:#e8effd;border-radius:8px;padding:10px 12px;font-size:13px}
+.apd{margin:8px 0;padding:8px;border:1px solid #cfd8ee;border-radius:7px;background:#fff;font:12px/1.5 ui-monospace,Menlo,monospace}
+.ap .bt{display:flex;gap:8px}.ap .bt span{padding:4px 12px;border-radius:7px;font-size:12.5px}.ap .p{background:#2f6fed;color:#fff}.ap .s{background:#d6e2fb;color:#17306b}.ap .g{color:#586074}
+.gray{background:#f1f3f8;border-radius:10px;padding:10px 14px;font-size:13.5px;color:#4a5265}.gray small{display:block;font-weight:600;color:#33394a;margin-bottom:2px}
+</style>
+<body><div id=root></div>
+<script>
+const q=new URLSearchParams(location.search),scene=q.get('s')||'code',step=+(q.get('n')||1);
+const I={g:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><circle cx=12 cy=12 r=9 /><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>',more:'⋯',back:'←',fwd:'→',rl:'↻'};
+const sess=(t,on,run)=>`<div class="sess ${on?'on':''}"><span class="dot ${run?'run':''}"></span>${t}</div>`;
+function sidebar(mode,groups){return `<aside><div class=modes><span class="${mode=='chat'?'on':''}">💬 Chat</span><span class="${mode=='code'?'on':''}">&lt;&gt; Code</span></div>
+<div class=nav><div>＋ New</div><div>▤ Artifacts</div><div>☼ Customize</div></div><div class=search>🔍 Search conversations</div>${groups}
+<div class=user><div class=av>JU</div><div>jude<br><small style="color:#777">Remote</small></div></div></aside>`}
+const u=t=>`<div class=u>${t}</div>`,a=t=>`<div class=a>${t}</div>`,tool=t=>`<div class=tool>${t} ›</div>`;
+const status=t=>`<div class=status>✳ ${t}</div>`;
+function composer(o={}){return `${o.chips?`<div class=chips><div class=chip>📁 bike4mind</div><div class=chip>⎇ feat/checkout-tax <span style="color:#ccc">|</span> <span class=cb></span> worktree</div><div class=chip>＋📁</div></div>`:''}
+<div class=comp><div class=box><span>${o.ph||(o.chips?'Describe a task or ask a question':'Send a message...')}</span><div class=send>${o.busy?'■':'↑'}</div></div>
+<div class=foot><span>＋</span><span>🛡 Approve for me</span><span class=sp>${o.model||'GPT-5'}</span><span>Effort: Low</span><span>● Context ${o.ctx||'4%'}</span></div></div>`}
+function chat(title,thread,o={}){return `<main><div class=head><span>${title}</span><span class="g ${o.pane?'on':''}">${I.g}</span></div><div class=thread>${thread}</div>${composer(o)}</main>`}
+function pane(addr,page,extra=''){return `<section class=pane><div class=nav2><span>${I.back}</span><span>${I.fwd}</span><span>${I.rl}</span><div class=addr>${addr||'<span style="color:#999">Search or enter address</span>'}</div><span>${I.more}</span>${extra}</div><div class=page>${page}</div></section>`}
+const login=(e,p,m,c)=>`<form class=f><h1>Acme Cycles</h1><div class=in>${e?e:'<span style="color:#999">Email</span>'}</div><div class=in>${p?'•'.repeat(p):'<span style="color:#999">Password</span>'}</div><div class=btn>Sign in</div><div class=msg style="color:${c}">${m||''}</div></form>`;
+const groupCode=(extra='')=>`<div class=grp>bike4mind <span>＋</span></div>${extra}${sess('Fix checkout tax rounding',1,1)}${sess('What changed in v2.4?')}${sess('Add dark mode to settings')}`;
+const S={};
+S.code=[
+ ()=>sidebar('code',groupCode())+chat('Fix checkout tax rounding',u('Checkout totals are off by a cent when tax is 8.25%. Find the cause and fix it, then run the tests.')+status('2s · Thinking…'),{chips:1,busy:1}),
+ ()=>sidebar('code',groupCode())+chat('Fix checkout tax rounding',u('Checkout totals are off by a cent when tax is 8.25%. Find the cause and fix it, then run the tests.')+a('Starting with where tax is computed.')+tool('<b>Searched for</b> <code>calculateTax</code>')+tool('<b>Read 2 files</b>')+status('9s · Responding…'),{chips:1,busy:1}),
+ ()=>sidebar('code',groupCode())+chat('Fix checkout tax rounding',u('Checkout totals are off by a cent when tax is 8.25%. Find the cause and fix it, then run the tests.')+a('Tax is rounded per line item and then summed, so cents drift. Rounding once on the subtotal fixes it.')+`<div class=diff><div class=h>src/cart/tax.ts</div><div class="l del">- return items.reduce((s, i) =&gt; s + round(i.price * rate), 0);</div><div class="l add">+ return round(items.reduce((s, i) =&gt; s + i.price, 0) * rate);</div></div>`+status('21s · Responding…'),{chips:1,busy:1}),
+ ()=>sidebar('code',groupCode())+chat('Fix checkout tax rounding',u('Checkout totals are off by a cent when tax is 8.25%. Find the cause and fix it, then run the tests.')+`<div class=diff><div class=h>src/cart/tax.ts · edited</div><div class="l del">- return items.reduce((s, i) =&gt; s + round(i.price * rate), 0);</div><div class="l add">+ return round(items.reduce((s, i) =&gt; s + i.price, 0) * rate);</div></div>`+tool('<b>Ran</b> <code>pnpm test tax</code>')+a('Fixed. The 14 tax tests pass, including a new case for 8.25%. Changes are on <code>feat/checkout-tax</code>, not committed yet.')+status('34s · 18k tokens · Done'),{chips:1})
+];
+const E='Use the built-in browser to e2e test the sign-in page. Sign in with the test account, then try a wrong password.';
+const eg=sidebar('code',groupCode(sess('E2E: sign-in page',1,1)).replace(sess('Fix checkout tax rounding',1,1),sess('Fix checkout tax rounding')));
+const e2eThread=(t)=>u(E)+t;
+S.e2e=[
+ ()=>eg+chat('E2E: sign-in page',e2eThread(a('Opening the page.')+tool('<b>browser_navigate</b> <code>localhost:8765</code>')+status('4s · Responding…')),{chips:1,busy:1,pane:1})+pane('localhost:8765',login()),
+ ()=>eg+chat('E2E: sign-in page',e2eThread(tool('<b>browser_navigate</b>')+tool('<b>browser_type</b> email, password')+status('9s · Responding…')),{chips:1,busy:1,pane:1})+pane('localhost:8765',login('rider@acme.test',7)),
+ ()=>eg+chat('E2E: sign-in page',e2eThread(tool('<b>browser_click</b> “Sign in”')+tool('<b>browser_snapshot</b>')+status('13s · Responding…')),{chips:1,busy:1,pane:1})+pane('localhost:8765',login('rider@acme.test',7,'Welcome back, rider! Dashboard loaded.','#0a7d32')),
+ ()=>eg+chat('E2E: sign-in page',e2eThread(tool('<b>browser_type</b> wrong password')+tool('<b>browser_click</b> “Sign in”')+status('19s · Responding…')),{chips:1,busy:1,pane:1})+pane('localhost:8765',login('rider@acme.test',5,'Invalid email or password.','#c0272d')),
+ ()=>eg+chat('E2E: sign-in page',e2eThread(a('<b>Both cases pass.</b><br>✅ Valid credentials show “Welcome back, rider!”<br>✅ A wrong password shows “Invalid email or password.”')+tool('<b>browser_screenshot</b> saved')+status('24s · Done')),{chips:1,pane:1})+pane('localhost:8765',login('rider@acme.test',5,'Invalid email or password.','#c0272d'))
+];
+const news=(n)=>`<div style="width:100%;height:100%;background:#fff;padding:18px;text-align:left"><div style="font-weight:800;font-size:19px;color:#c2410c">Bike Weekly</div><div style="color:#888;font-size:11px;margin-bottom:10px">Cycling news</div>${['Gravel season opens with record turnout','New e-bike rules land in three states','Tested: five budget commuter lights','Shop owners on the parts shortage'].map((t,i)=>`<div style="padding:9px 0;border-top:1px solid #eee;font-size:14px;${n==2&&i<3?'background:#fff7e6;margin:0 -6px;padding-left:6px':''}"><b>${t}</b><div style="color:#888;font-size:11px">${i+2} hours ago</div></div>`).join('')}</div>`;
+const ag=sidebar('code',groupCode(sess('Summarize cycling news',1,1)).replace(sess('Fix checkout tax rounding',1,1),sess('Fix checkout tax rounding')));
+const AU='Open bikeweekly.example and pull the top three headlines into a short list.';
+S.auto=[
+ ()=>ag+chat('Summarize cycling news',u(AU)+a('Opening the site.')+tool('<b>browser_navigate</b> <code>bikeweekly.example</code>')+status('3s · Responding…'),{chips:1,busy:1,pane:1})+pane('bikeweekly.example',news(1)),
+ ()=>ag+chat('Summarize cycling news',u(AU)+tool('<b>browser_navigate</b>')+tool('<b>browser_snapshot</b> read the page')+status('8s · Responding…'),{chips:1,busy:1,pane:1})+pane('bikeweekly.example',news(2)),
+ ()=>ag+chat('Summarize cycling news',u(AU)+a('Top three right now:<br>1. Gravel season opens with record turnout<br>2. New e-bike rules land in three states<br>3. Tested: five budget commuter lights')+status('14s · Done'),{chips:1,pane:1})+pane('bikeweekly.example',news(2))
+];
+const portal=(ok)=>`<div style="width:100%;height:100%;background:#fff;padding:20px;text-align:left"><div style="font-weight:800;font-size:18px;color:#0f766e">Orders Portal</div><div style="display:flex;justify-content:space-between;margin:14px 0"><b>${ok?'Welcome back, Jude':'Please sign in'}</b><span style="color:#888">${ok?'Jude ▾':''}</span></div>${ok?['#4821 · Shipped','#4820 · Packing','#4817 · Delivered'].map(t=>`<div class=row>${t}<i>view</i></div>`).join(''):`<div class=in>Email</div><div class=in>Password</div><div class=btn>Sign in</div><div style="color:#888;font-size:12px;margin-top:10px">SSO and 2FA required</div>`}</div>`;
+const cg=sidebar('code',groupCode(sess('Check my open orders',1)).replace(sess('Fix checkout tax rounding',1,1),sess('Fix checkout tax rounding')));
+const dlg=(sel)=>`<div class=modal><div class=dlg><h3>Import cookies from Chrome</h3><p>From your Chrome profile Jude. Pick the sites to import. Only those sites are read; the rest of your Chrome cookies are never decrypted.</p>${[['orders.example.com',14],['calendar.example.com',9],['docs.example.com',22],['news.example.org',6]].map(([h,c],i)=>`<div class="row ${sel&&i==0?'sel':''}"><span>${sel&&i==0?'☑':'☐'} ${h}</span><i>${c} cookies</i></div>`).join('')}<div class=dlgb><span>Cancel</span><span class=p>Import ${sel?'1 site':''}</span></div></div></div>`;
+const CP='Check my open orders on the orders portal.';
+S.cookies=[
+ ()=>cg+chat('Check my open orders',u(CP)+a('The portal asks for sign-in with SSO and 2FA, so I can’t go further. You can import your Chrome session for this site from the browser menu.')+status('Done'),{chips:1,pane:1})+pane('orders.example.com',portal(0)),
+ ()=>cg+chat('Check my open orders',u(CP)+a('The portal asks for sign-in with SSO and 2FA, so I can’t go further. You can import your Chrome session for this site from the browser menu.'),{chips:1,pane:1})+pane('orders.example.com',portal(0),`<div class=menu><div class=hi>Import cookies from Chrome...</div><div class=dis>Manage imported sites...</div></div>`),
+ ()=>cg+chat('Check my open orders',u(CP),{chips:1,pane:1})+pane('orders.example.com',portal(0))+dlg(0),
+ ()=>cg+chat('Check my open orders',u(CP),{chips:1,pane:1})+pane('orders.example.com',portal(0))+dlg(1),
+ ()=>cg+chat('Check my open orders',u(CP+' (cookies imported)')+a('You’re signed in. Three open orders: <b>#4821</b> shipped, <b>#4820</b> packing, <b>#4817</b> delivered.')+status('Done'),{chips:1,pane:1})+pane('orders.example.com',portal(1))
+];
+const chatGroups=sess('Poster for the Saturday ride',1,1)+sess('Bike chain explained')+sess('Weekly plan');
+const cs=sidebar('chat',`<div style="height:6px"></div>${chatGroups}`);
+const bike=`<svg viewBox="0 0 380 240" width=380 height=240><defs><linearGradient id=s x1=0 y1=0 x2=0 y2=1><stop offset=0 stop-color="#2b1b5e"/><stop offset=.55 stop-color="#e2557b"/><stop offset=1 stop-color="#ffb35c"/></linearGradient></defs><rect width="380" height="240" fill="url(#s)"/><circle cx=190 cy=140 r=46 fill="#ffd27a"/><path d="M0 170 L70 120 L140 165 L220 110 L300 160 L380 125 V240 H0Z" fill="#241a45"/><rect y=196 width=380 height=44 fill="#171230"/><g fill=none stroke="#fff" stroke-width=4 stroke-linecap=round stroke-linejoin=round><circle cx=135 cy=190 r=28 /><circle cx=245 cy=190 r=28 /><path d="M135 190 L175 150 L225 150 L245 190 M175 150 L195 190 L135 190 M225 150 L212 134 M168 142 H186"/></g></svg>`;
+const IP='Generate a poster image: a bicycle riding at sunset over mountains.';
+S.image=[
+ ()=>cs+chat('Poster for the Saturday ride',u(IP)+tool('<b>generate_image</b> in progress')+`<div class=gen>Generating image…</div>`+status('6s · Responding…'),{busy:1,model:'GPT-5'}),
+ ()=>cs+chat('Poster for the Saturday ride',u(IP)+tool('<b>generate_image</b> done')+`<div class=media>${bike}<div class=cap><span>bicycle-sunset.png</span><span class=tag>Saved locally</span></div></div>`+a('Here’s your poster. Want a portrait crop, or a version with the ride details as text?')+status('14s · Done'),{model:'GPT-5'})
+];
+const wf=(n,d)=>Array.from({length:44},(_,i)=>`<s class="${i<d?'d':''}" style="height:${6+Math.abs(Math.sin(i*n))*26}px"></s>`).join('');
+const aud=(k,l,t,n,d)=>`<div class=aud><div class=play>▶</div><div><div style="font-size:12.5px"><b>${k}</b> <span class=tag>${t}</span></div><div class=wave style="width:290px">${wf(n,d)}</div></div><span style="color:#888;font-size:12px">${l}</span></div>`;
+const AP='Make a bicycle bell sound effect, a 15-second upbeat intro jingle, and read the ride announcement aloud.';
+S.audio=[
+ ()=>cs+chat('Ride announcement audio',u(AP)+tool('<b>generate_sound_effect</b>')+tool('<b>generate_music</b>')+tool('<b>generate_speech</b>')+status('11s · Responding…'),{busy:1}),
+ ()=>cs+chat('Ride announcement audio',u(AP)+aud('bike-bell.mp3','0:02','Sound effect',.9,0)+aud('ride-intro.mp3','0:15','Music',.55,0)+aud('announcement.mp3','0:08','Speech',.7,0)+status('Done'),{}),
+ ()=>cs+chat('Ride announcement audio',u(AP)+aud('bike-bell.mp3','0:02','Sound effect',.9,0)+aud('ride-intro.mp3','0:15','Music',.55,22)+aud('announcement.mp3','0:08','Speech',.7,0)+status('Done'),{})
+];
+
+const SP='Open a PR for this fix, then have a separate session review it with fresh eyes.';
+const psess=(sel,run)=>`<div class=grp>bike4mind <span>＋</span></div>${sess('Ship the tax fix',sel=='p',0)}${run!=null?sess('PR review',sel=='c',run=='c'):''}${sess('What changed in v2.4?')}`;
+const FL=[['session_spawn','Starts a session with a full brief','→'],['finished notice','Tells the parent THAT it finished','←'],['session_read','Pulls what the child produced','←'],['session_send','Messages it as another assistant','→']];
+const flow=on=>`<div class=flow>${FL.map((f,i)=>`<div class="fl ${on.includes(i)?'on':''}"><em>${f[2]}</em><b>${f[0]}</b>${f[1]}</div>`).join('')}</div>`;
+const sub=(t,w)=>`<div>${t}<div style="font-weight:400;font-size:12px;color:#586074">${w}</div></div>`;
+const approve=(q,d)=>`<div class=ap><b>${q}</b><div class=apd>${d}</div><div class=bt><span class=p>Allow once</span><span class=s>Always in this chat</span><span class=g>Don't run</span></div></div>`;
+const started=`<div class=tool style="border-left-color:#c7cfe0"><b>Started a session</b> ⌃<div style="font:12px/1.5 ui-monospace,Menlo,monospace;margin:6px 0 0;color:#444">PR review<br><span style="color:#666">Started session b0604077 (“PR review”).<br>It is running now. You will be told in this conversation WHEN it finishes, but not what it said - read it with session_read then if you need that.</span></div></div>`;
+const fromChild=t=>`<div class=gray><small>From a session you started</small>${t}</div>`;
+const brief='[You are running in a git worktree made for this task: …/agent+pr-review]<br><br>Task: review the open PR on <code>feat/checkout-tax</code>. Tax is now rounded once on the subtotal. Check <code>src/cart/tax.ts</code> and its tests. Done means a list of any bugs, or “no issues”.';
+const sw=(a,b)=>`<div class="win short" style="height:760px">${a}</div>`;
+const par=(thr,o)=>chat('Ship the tax fix',u(SP)+thr,Object.assign({chips:1},o||{}));
+const kid=(thr,o)=>chat(sub('PR review','worktree: ~/dev/shop/agent+pr-review'),`<div class=u style="max-width:92%">${brief}</div>`+thr,Object.assign({chips:1},o||{}));
+const rl='<div class=tool style="border-left-color:#2f6fed"><b>Received message from Ship the tax fix:</b> Please check how negative totals round, and add a… ›</div>';
+S.sessions=[
+ ()=>sw(sidebar('code',psess('p'))+par(a('PR is open. Starting a reviewer session so it sees the diff without my assumptions.')+tool('<b>Starting a session...</b>')+approve('Start this session working? It runs on its own and costs credits.','PR review'),{busy:1}),[]),
+ ()=>sw(sidebar('code',psess('p','c'))+par(a('PR is open. Starting a reviewer session so it sees the diff without my assumptions.')+started+a('The reviewer runs on its own. I will be told when it finishes, so I am wrapping up here.')+status('Done')),[0]),
+ ()=>sw(sidebar('code',psess('c','c'))+kid(tool('<b>Ran 2 commands</b>')+tool('<b>Read 3 files</b>')+status('24s · Responding…'),{busy:1}),[]),
+ ()=>sw(sidebar('code',psess('p',''))+par(a('The reviewer runs on its own. I will be told when it finishes.')+fromChild('The session “PR review” has finished.')+tool('<b>Read another session</b>')+a('It found one gap: refunds are untested. Asking it to dig in.')+status('Responding…'),{busy:1}),[1,2]),
+ ()=>sw(sidebar('code',psess('p',''))+par(fromChild('The session “PR review” has finished.')+tool('<b>Read another session</b>')+tool('<b>Sending a message...</b>')+approve('Send this to that conversation? It runs there on its own and costs credits.','To: PR review<br>Please check how negative totals round, and add a test if it is missing.'),{busy:1}),[3]),
+ ()=>sw(sidebar('code',psess('c','c'))+kid(a('<b>One gap:</b> no test for refunds. Everything else looks correct.')+rl+tool('<b>Edited</b> <code>tax.test.ts</code>')+status('9s · Responding…'),{busy:1}),[3]),
+ ()=>sw(sidebar('code',psess('p',''))+par(fromChild('The session “PR review” has finished.')+tool('<b>Read another session</b>')+tool('<b>Messaged a session</b>')+a('Reviewer confirmed refunds round correctly and added a test. Ready to merge.')+status('Done')),[1,2])
+];
+{const m=S[scene][Math.min(step,S[scene].length)-1]();document.getElementById('root').innerHTML=m.startsWith('<div class="win short"')?m:`<div class=win>${m}</div>`;}
+window.COUNT=Object.fromEntries(Object.entries(S).map(([k,v])=>[k,v.length]));
+</script>
