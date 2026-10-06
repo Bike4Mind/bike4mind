@@ -529,7 +529,9 @@ function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | u
     $element
       .find(PROMO_CONTROL_SELECTOR)
       .toArray()
-      .some(control => $(control).parentsUntil(element).filter(PROMO_INLINE_CONTROL_CONTAINER_SELECTOR).length === 0) &&
+      .some(
+        control => $(control).parentsUntil($element).filter(PROMO_INLINE_CONTROL_CONTAINER_SELECTOR).length === 0
+      ) &&
     $element.find(`h1, h2, h3, main, article, ${PROMO_STRUCTURED_CONTENT_SELECTOR}`).length === 0 &&
     squash($element.text()).length <= MAX_PROMO_TEXT_CHARS
   );
