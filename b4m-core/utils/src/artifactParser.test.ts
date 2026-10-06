@@ -1380,10 +1380,10 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
     expect(parseArtifacts(out).artifacts).toHaveLength(1);
   });
 
-  it('still promotes a raw sequenceDiagram block outside any artifact', () => {
+  // Only fenced mermaid is promoted: a raw-line pass could capture just the header line.
+  it('leaves a raw sequenceDiagram block outside any fence as text', () => {
     const input = 'Intro\nsequenceDiagram\n    participant User\n    User->>App: Request code\n';
-    const out = convertCodeBlocksToArtifacts(input);
-    expect(out).toContain('<artifact identifier="mermaid-sequenceDiagram" type="application/vnd.ant.mermaid"');
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
   describe('near-duplicate echoes ignore title and comment lines', () => {
@@ -1449,6 +1449,17 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
       expect(convertCodeBlocksToArtifacts(input)).toBe(input);
     });
 
+    it.each([
+      ['text/html', '```mermaid'],
+      ['text/html', '```html'],
+      ['application/vnd.ant.react', '```mermaid'],
+      ['application/vnd.ant.react', '```html'],
+    ])('leaves a %s artifact holding a %s fence untouched', (type, opener) => {
+      const fenceBody = opener === '```html' ? '<div class="card"><p>hi</p></div>' : FLOW;
+      const input = `<artifact identifier="a" type="${type}" title="t">\n<pre>\n${opener}\n${fenceBody}\n\`\`\`\n</pre>\n</artifact>`;
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
     it('handles an unclosed stray opener before a real artifact and a duplicate fence', () => {
       const input = `see <artifact docs\n${toolFlow}\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n`;
       expect(convertCodeBlocksToArtifacts(input)).toBe(input);
@@ -1491,6 +1502,18 @@ describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
       ],
     ])('stays linear on %s', (_name, build) => {
       assertLinearGrowth(build, 16000, (out, input) => expect(out).toBe(input), convertCodeBlocksToArtifacts, 150);
+    });
+
+    // Smaller size: a rescan per held artifact is quadratic, and 16000 of them would hang the runner.
+    it('stays linear on artifacts that each wrap tool output', () => {
+      const wrapped = `<artifact identifier="a" type="text/plain" title="t">\n~~~ ${TOOL_OUTPUT_MARKER}\nx\n~~~\n</artifact>\n`;
+      assertLinearGrowth(
+        n => wrapped.repeat(n),
+        2000,
+        (out, input) => expect(out).toBe(input),
+        convertCodeBlocksToArtifacts,
+        150
+      );
     });
   });
 });
@@ -1599,7 +1622,11 @@ describe('sequence diagram syntax', () => {
     'Email Service-->>App: y',
     'User Agent->>+Auth Server: z',
     'User Agent-->>-Auth Server : done',
-  ])('accepts spaced participant names in %j', line => {
+    'Auth-Service->>DB: x',
+    'Auth-Service-->>Edge Proxy: y',
+    'Edge Proxy-1->>+Auth-Service v2: z',
+    'App->>Auth-xray: w',
+  ])('accepts spaced or hyphenated participant names in %j', line => {
     expect(isMermaidSyntax(line)).toBe(false);
     expect(isMermaidSyntax(line, true)).toBe(true);
   });
@@ -1624,6 +1651,20 @@ describe('sequence diagram syntax', () => {
     );
     assertLinearGrowth(
       n => `${'A '.repeat(n)}->> ${'B '.repeat(n)}`,
+      25000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => `${'A-'.repeat(n)}->>`,
+      25000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => 'A-x'.repeat(n),
       25000,
       () => undefined,
       run,
