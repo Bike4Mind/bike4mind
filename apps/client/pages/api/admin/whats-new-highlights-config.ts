@@ -5,7 +5,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { AdminSettings } from '@bike4mind/database';
 import { ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
-import { validateHighlightsTemplate } from '@server/queueHandlers/whatsNewHighlights.prompt';
+import { validateHighlightsTemplate } from '@server/whatsNew/whatsNewHighlights.prompt';
 
 // Rate limiting constants
 const ADMIN_CONFIG_RATE_LIMIT = 10; // requests per minute

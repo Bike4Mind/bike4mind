@@ -18,7 +18,7 @@ import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { sendToQueue } from '@server/utils/sqs';
 import { collectDataForDate } from '@server/services/whatsNewDataCollector';
-import type { WhatsNewGenerationPayload } from '@server/queueHandlers/types';
+import type { WhatsNewGenerationPayload } from '@server/whatsNew/whatsNewGeneration.types';
 
 const logger = new Logger({ metadata: { service: 'whatsNewGenerationCron' } });
 
