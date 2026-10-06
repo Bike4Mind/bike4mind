@@ -125,7 +125,7 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
   return { overrides: Object.fromEntries(entries), fixes, skipped, changed: fixes.length > 0 };
 }
 
-export function renderSummary({ fixes, skipped }, shapeNote) {
+function renderSummary({ fixes, skipped }, shapeNote) {
   const lines = [
     'Raises `pnpm.overrides` past high/critical advisories found by the scheduled dependency audit of `main`.',
     '',
@@ -165,9 +165,10 @@ async function main() {
     pkg.pnpm = { ...pkg.pnpm, overrides: result.overrides };
     await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
   }
-  await fs.writeFile(summaryPath, renderSummary(result, shapeNote));
+  const summary = renderSummary(result, shapeNote);
+  await fs.writeFile(summaryPath, summary);
   if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `changed=${result.changed}\n`);
-  console.log(renderSummary(result, shapeNote));
+  console.log(summary);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
