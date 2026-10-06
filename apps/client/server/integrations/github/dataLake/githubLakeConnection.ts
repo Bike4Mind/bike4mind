@@ -466,10 +466,22 @@ export async function nameLakeAfterRepository(
   );
   if (!before) return;
   // Same grant set and org-admin set the route-driven lake writes resolve, so the audit rung names
-  // the grant owner or org admin that made the bind rather than collapsing to creator/system.
+  // the grant owner or org admin that made the bind rather than collapsing to creator/system. The
+  // rename has already landed, so a failed lookup only narrows the rung and must not drop the row.
+  const orEmpty = <T>(lookup: Promise<T[]>, what: string): Promise<T[]> =>
+    lookup.catch((error: unknown) => {
+      logger.warn(`GitHub lake connect: could not load ${what} for the rename audit`, {
+        dataLakeId: lakeId,
+        error: serializeError(error),
+      });
+      return [];
+    });
   const [grants, administeredOrgIds] = await Promise.all([
-    dataLakeService.loadActiveLakeGrants(before, { db: { dataLakeAccessGrants: dataLakeAccessGrantRepository } }),
-    user.isAdmin ? Promise.resolve([]) : organizationRepository.findIdsWithAdminRights(user.id),
+    orEmpty(
+      dataLakeService.loadActiveLakeGrants(before, { db: { dataLakeAccessGrants: dataLakeAccessGrantRepository } }),
+      'lake grants'
+    ),
+    user.isAdmin ? Promise.resolve([]) : orEmpty(organizationRepository.findIdsWithAdminRights(user.id), 'admin orgs'),
   ]);
   await dataLakeService.recordLakeConfigChange(
     {
