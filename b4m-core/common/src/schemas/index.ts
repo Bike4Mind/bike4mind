@@ -31,6 +31,7 @@ export * from './contextTelemetry';
 export * from './dataLake';
 export * from './dataLakePublic';
 export * from './pagination';
+export * from './publicModel';
 export * from './briefcasePrompt';
 export * from './imageGenerationTemplate';
 export * from './qa';

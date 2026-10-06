@@ -61,13 +61,14 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST /api/v1/voice/sessions/:id/end',
       'GET /api/v1/quests/:id',
       'GET /api/v1/credits',
+      'GET /api/v1/models',
     ],
   },
   {
     value: ApiKeyScope.AI_CHAT,
     label: 'AI Chat',
     description: 'Use AI chat features',
-    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id', 'GET /api/v1/credits'],
+    endpoints: ['POST /api/ai/llm', 'GET /api/v1/quests/:id', 'GET /api/v1/credits', 'GET /api/v1/models'],
   },
   {
     value: ApiKeyScope.READ_PROJECTS,
