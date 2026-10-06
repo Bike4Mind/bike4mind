@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeResearchManage: vi.fn(),
   listResearchConfigs: vi.fn(),
   createResearchConfig: vi.fn(),
@@ -33,6 +36,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeResearchConfigRepository: {},
   dataLakeProposalRepository: { countPendingByLakes: h.countPendingByLakes },
   lakeConfigChangeEventRepository: {},
@@ -64,6 +76,7 @@ const GRANTS: unknown[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
   h.assertLakeResearchManage.mockResolvedValue({ lake: LAKE, actor: ACTOR, grants: GRANTS });
   h.listResearchConfigs.mockResolvedValue([savedConfig]);
   h.createResearchConfig.mockResolvedValue(savedConfig);
@@ -236,5 +249,68 @@ describe('/api/data-lakes/[id]/research/configs', () => {
 
       await expect(call(indexHandler, req('POST', { id: 'l' }, { nonsense: true }), res)).rejects.toThrow(/not found/i);
     });
+  });
+
+  it.each([
+    [
+      'create',
+      'createResearchConfig',
+      () => call(indexHandler, req('POST', { id: 'l' }, { name: 'n' }), makeRes().res),
+    ],
+    [
+      'update',
+      'updateResearchConfig',
+      () => call(byIdHandler, req('PUT', { id: 'l', configId: 'c1' }, {}), makeRes().res),
+    ],
+    [
+      'delete',
+      'deleteResearchConfig',
+      () => call(byIdHandler, req('DELETE', { id: 'l', configId: 'c1' }), makeRes().res),
+    ],
+  ] as const)(
+    '%s: runs the manage gate and the write inside one transaction, then touches the resolved lake last',
+    async (_label, writeFn, invoke) => {
+      h.assertLakeResearchManage.mockImplementation(async () => {
+        h.tx.push('gate');
+        return { lake: LAKE, actor: ACTOR, grants: GRANTS };
+      });
+      h[writeFn].mockImplementation(async () => {
+        h.tx.push('write');
+        return savedConfig;
+      });
+      h.touchIfStable.mockImplementation(async () => {
+        h.tx.push('touch');
+        return true;
+      });
+
+      await invoke();
+
+      expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+      expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+    }
+  );
+
+  it.each([
+    [
+      'create',
+      'createResearchConfig',
+      () => call(indexHandler, req('POST', { id: 'l' }, { name: 'n' }), makeRes().res),
+    ],
+    [
+      'update',
+      'updateResearchConfig',
+      () => call(byIdHandler, req('PUT', { id: 'l', configId: 'c1' }, {}), makeRes().res),
+    ],
+    [
+      'delete',
+      'deleteResearchConfig',
+      () => call(byIdHandler, req('DELETE', { id: 'l', configId: 'c1' }), makeRes().res),
+    ],
+  ] as const)('%s: neither writes nor touches when the manage gate throws', async (_label, writeFn, invoke) => {
+    h.assertLakeResearchManage.mockRejectedValue(new Error('forbidden'));
+
+    await expect(invoke()).rejects.toThrow('forbidden');
+    expect(h[writeFn]).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

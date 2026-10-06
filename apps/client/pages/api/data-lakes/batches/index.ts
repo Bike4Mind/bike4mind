@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import {
+  withTransaction,
   dataLakeBatchRepository,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -88,55 +89,68 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // readable but not owned.
     const accessContext = await toAccessContext(req);
     const grantDb = { dataLakeAccessGrants: dataLakeAccessGrantRepository };
-    const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, accessContext, {
-      db: { dataLakes: dataLakeRepository, ...grantDb },
+
+    // The gates and the create share one transaction so a grant revoke committing mid-request
+    // collides on the lake doc and the retry re-reads live grants.
+    const outcome = await withTransaction(async () => {
+      const dataLake = await dataLakeService.assertLakeWriteAccess(data.dataLakeId, accessContext, {
+        db: { dataLakes: dataLakeRepository, ...grantDb },
+      });
+
+      if (!isLakeIngestable(dataLake.status)) {
+        return { kind: 'not-ingestable' as const, status: dataLake.status };
+      }
+
+      // Admission contract (#1680) at the earliest point the intent is known: refusing the BATCH is
+      // what makes the refusal legible in the upload UI, rather than letting the user pick files and
+      // fail at presign. The files do not exist yet, so the subject is the uploader as owner-to-be.
+      // Report-only unless this lake's EnforceLakeAdmission lever is on.
+      await dataLakeService.assertLakeAdmission([dataLake], [{ userId }], {
+        db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
+        logger: req.logger,
+      });
+
+      // Resolved here because this is the only point that holds the uploader's full access context;
+      // the upload History row is written later from a queue handler that has only their user id, so
+      // an org or platform admin's upload would otherwise record as `system`.
+      const uploaderManageRung =
+        dataLakeService.resolveLakeManageRung(
+          dataLake,
+          accessContext,
+          await dataLakeService.loadActiveLakeGrants(dataLake, { db: grantDb })
+        ) ?? undefined;
+
+      const created = await dataLakeBatchRepository.create({
+        dataLakeId: dataLake.id,
+        userId,
+        status: 'preparing',
+        conflictResolution: data.conflictResolution ?? 'skip',
+        totalFiles: data.totalFiles,
+        totalSizeBytes: data.totalSizeBytes,
+        uploadedFiles: 0,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        processingFailedFiles: 0,
+        skippedFiles: 0,
+        deferredFiles: 0,
+        uploadedSizeBytes: 0,
+        files: [],
+        appliedTags: data.appliedTags || [],
+        startedAt: new Date(),
+        wantsTaxonomy: data.wantsTaxonomy ?? false,
+        taxonomyStatus: 'none',
+        uploaderManageRung,
+      });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(dataLake.id);
+      return { kind: 'created' as const, batch: created };
     });
 
-    if (!isLakeIngestable(dataLake.status)) {
-      return res.status(400).json({ error: `Cannot create a batch for a data lake in '${dataLake.status}' status` });
+    if (outcome.kind === 'not-ingestable') {
+      return res.status(400).json({ error: `Cannot create a batch for a data lake in '${outcome.status}' status` });
     }
-
-    // Admission contract (#1680) at the earliest point the intent is known: refusing the BATCH is
-    // what makes the refusal legible in the upload UI, rather than letting the user pick files and
-    // fail at presign. The files do not exist yet, so the subject is the uploader as owner-to-be.
-    // Report-only unless this lake's EnforceLakeAdmission lever is on.
-    await dataLakeService.assertLakeAdmission([dataLake], [{ userId }], {
-      db: { adminSettings: adminSettingsRepository, scopedSettings: scopedSettingsRepository },
-      logger: req.logger,
-    });
-
-    // Resolved here because this is the only point that holds the uploader's full access context;
-    // the upload History row is written later from a queue handler that has only their user id, so
-    // an org or platform admin's upload would otherwise record as `system`.
-    const uploaderManageRung =
-      dataLakeService.resolveLakeManageRung(
-        dataLake,
-        accessContext,
-        await dataLakeService.loadActiveLakeGrants(dataLake, { db: grantDb })
-      ) ?? undefined;
-
-    const batch = await dataLakeBatchRepository.create({
-      dataLakeId: dataLake.id,
-      userId,
-      status: 'preparing',
-      conflictResolution: data.conflictResolution ?? 'skip',
-      totalFiles: data.totalFiles,
-      totalSizeBytes: data.totalSizeBytes,
-      uploadedFiles: 0,
-      chunkedFiles: 0,
-      vectorizedFiles: 0,
-      failedFiles: 0,
-      processingFailedFiles: 0,
-      skippedFiles: 0,
-      deferredFiles: 0,
-      uploadedSizeBytes: 0,
-      files: [],
-      appliedTags: data.appliedTags || [],
-      startedAt: new Date(),
-      wantsTaxonomy: data.wantsTaxonomy ?? false,
-      taxonomyStatus: 'none',
-      uploaderManageRung,
-    });
+    const { batch } = outcome;
 
     // No status write here. Activation is `recomputeLakeStats`'s, keyed on the lake actually
     // having a member file - and `computeDataLakeStats` excludes status:'pending' rows, so a

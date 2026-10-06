@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   saveHandoff: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  startChatWithLake: vi.fn(),
+  promoteMutateAsync: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/githubLake', () => ({
@@ -30,8 +32,10 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     h.useUpdateDataLake(opts);
     return { mutate: h.updateLakeMutate, isPending: h.updatePending.current };
   },
+  usePromoteDataLake: () => ({ mutateAsync: h.promoteMutateAsync, isPending: false }),
 }));
 vi.mock('@client/app/utils/githubLakeConnectHandoff', () => ({ saveGitHubLakeConnectHandoff: h.saveHandoff }));
+vi.mock('@client/app/hooks/useStartChatWithLake', () => ({ default: () => h.startChatWithLake }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
 
 import GitHubConnectAction from './GitHubConnectAction';
@@ -51,6 +55,9 @@ const connected = (over: Partial<LakeGitHubConnection> = {}): LakeGitHubConnecti
   lastError: null,
   defaultBranch: 'main',
   lastSyncedAt: null,
+  lastSyncedCommitSha: null,
+  candidateCount: null,
+  skippedCount: null,
   syncStale: false,
   fileCount: 3,
   disconnecting: false,
@@ -294,6 +301,104 @@ describe('GitHubConnectAction', () => {
     const button = screen.getByTestId('github-disconnect-btn');
     expect(button).toHaveTextContent('Retry disconnect');
     expect(button).not.toBeDisabled();
+  });
+
+  describe('sync summary', () => {
+    it('shows when the lake last synced and links the 7-character commit to GitHub', () => {
+      h.connection.current = connected({
+        lastSyncedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+        lastSyncedCommitSha: 'abcdef1234567890',
+      });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+
+      expect(screen.getByTestId('github-connection-last-synced')).toHaveTextContent(/Last synced .*abcdef1/);
+      const link = screen.getByTestId('github-connection-commit-link');
+      expect(link).toHaveTextContent('abcdef1');
+      expect(link).not.toHaveTextContent('abcdef12');
+      expect(link).toHaveAttribute('href', 'https://github.com/acme/docs/commit/abcdef1234567890');
+    });
+
+    it('says Not synced yet when no sync has completed', () => {
+      h.connection.current = connected({ lastSyncedAt: null });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+      expect(screen.getByTestId('github-connection-last-synced')).toHaveTextContent('Not synced yet');
+      expect(screen.queryByTestId('github-connection-commit-link')).toBeNull();
+    });
+
+    it('shows synced and skipped counts, and the skip count opens the sync rules', () => {
+      h.connection.current = connected({ fileCount: 12, skippedCount: 3 });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+      expect(screen.getByTestId('github-connection-counts')).toHaveTextContent('12 files synced, 3 skipped');
+      expect(screen.queryByTestId('github-sync-rules-modal')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('github-sync-rules-link'));
+      expect(screen.getByTestId('github-sync-rules-modal')).toBeInTheDocument();
+    });
+
+    it('points at the sync rules when the skipped count is unknown', () => {
+      h.connection.current = connected({ fileCount: 12, skippedCount: null });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+      expect(screen.getByTestId('github-sync-rules-link')).toHaveTextContent('see sync rules');
+    });
+
+    it('shows live progress while a sync runs', () => {
+      h.connection.current = connected({ status: 'syncing', fileCount: 4, candidateCount: 10 });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+      expect(screen.getByTestId('github-sync-progress-count')).toHaveTextContent('4 of 10 files indexed');
+    });
+
+    it('shows no progress when no sync is running', () => {
+      h.connection.current = connected({ status: 'connected', fileCount: 4, candidateCount: 10 });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1' }} />);
+      expect(screen.queryByTestId('github-sync-progress')).toBeNull();
+    });
+  });
+
+  describe('Ask about this repo', () => {
+    const SYNCED_AT = '2026-02-01T00:00:00.000Z';
+
+    it('starts a chat scoped to the lake once a sync has completed', () => {
+      h.connection.current = connected({ lastSyncedAt: SYNCED_AT });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} />);
+
+      const button = screen.getByTestId('github-ask-about-repo-btn');
+      expect(button).toHaveTextContent('Ask about this repo');
+      fireEvent.click(button);
+      expect(h.startChatWithLake).toHaveBeenCalledWith('lake1');
+    });
+
+    it('is hidden during a first sync, which has not finished landing the repo', () => {
+      h.connection.current = connected({ status: 'syncing', lastSyncedAt: null });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} />);
+      expect(screen.queryByTestId('github-ask-about-repo-btn')).toBeNull();
+    });
+
+    it('is shown during a re-sync of an already-synced lake', () => {
+      h.connection.current = connected({ status: 'syncing', lastSyncedAt: SYNCED_AT });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} />);
+      expect(screen.getByTestId('github-ask-about-repo-btn')).toBeInTheDocument();
+    });
+
+    it('is hidden when no files have synced', () => {
+      h.connection.current = connected({ lastSyncedAt: SYNCED_AT, fileCount: 0 });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} />);
+      expect(screen.queryByTestId('github-ask-about-repo-btn')).toBeNull();
+    });
+
+    it('is hidden while disconnecting', () => {
+      h.connection.current = connected({ lastSyncedAt: SYNCED_AT, disconnecting: true });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'active' }} />);
+      expect(screen.queryByTestId('github-ask-about-repo-btn')).toBeNull();
+    });
+
+    it('confirms before chatting with a draft lake instead of starting right away', () => {
+      h.connection.current = connected({ lastSyncedAt: SYNCED_AT });
+      wrap(<GitHubConnectAction lake={{ id: 'lake1', status: 'draft' }} />);
+
+      fireEvent.click(screen.getByTestId('github-ask-about-repo-btn'));
+      expect(screen.getByTestId('datalake-startchat-draft-modal')).toBeInTheDocument();
+      expect(h.startChatWithLake).not.toHaveBeenCalled();
+    });
   });
 });
 

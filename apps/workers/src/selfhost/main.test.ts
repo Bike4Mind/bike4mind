@@ -44,3 +44,14 @@ describe('long-running queue registrations', () => {
     expect(registration(src, 'driveDisconnectPurgeQueue')).toContain('batchSize: 1');
   });
 });
+
+it('preserves five application-event attempts before native dead-letter retention', async () => {
+  const source = await readFile(resolve(__dirname, 'main.ts'), 'utf8');
+  const broker = await readFile(resolve(__dirname, '../../../../elasticmq.conf'), 'utf8');
+  const eventRegistration = source.match(/worker\.registerQueueHandler\(\s*'selfHostEventQueue',[\s\S]*?\n {4}\);/);
+  expect(eventRegistration).not.toBeNull();
+  expect(eventRegistration![0]).toMatch(/maxReceiveCount: 5/);
+  expect(broker).toMatch(
+    /selfHostEventQueue\s*\{\s*deadLettersQueue\s*\{\s*name = "selfHostEventQueueDLQ", maxReceiveCount = 5/
+  );
+});

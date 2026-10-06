@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
  * process.argv[1] as typed, so a plain equality check silently no-ops the CLI when
  * it is launched through a symlinked directory.
  *
- * Lives outside utils.ts because that file is shared with the client bundle, which
+ * Kept out of help/utils.ts because the client (React) also uses that file and
  * cannot import fs.
  */
 export function isDirectInvocation(importMetaUrl: string): boolean {

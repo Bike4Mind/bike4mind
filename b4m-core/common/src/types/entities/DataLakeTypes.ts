@@ -856,6 +856,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
   ): Promise<IDataLakeDocument | null>;
   /**
+   * Bumps `updatedAt` and nothing else, so a manage write that would otherwise never write the lake
+   * document collides with a concurrent grant revoke (see the WRITE-TIME RESIDUAL note on
+   * `canManageLake`). Only meaningful inside `withTransaction`, after the gate.
+   *
+   * Skips a lake in a transitional status: `updatedAt` is that lake's stranded clock
+   * (`strandedCutoffMsFor`), and a data-plane write must not make a stuck lifecycle look busy.
+   * Returns whether the lake was touched.
+   */
+  touchIfStable(id: string): Promise<boolean>;
+  /**
    * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
    * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller
    * must NOT make the provider call. Call BEFORE spending, so a crash can only overcount.

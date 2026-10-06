@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const LAKE = { id: 'lake1', datalakeTag: 'datalake:lake1', createdByUserId: 'creator-1' };
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   approveDataLakeProposal: vi.fn(),
   declineDataLakeProposal: vi.fn(),
@@ -32,7 +35,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: { findById: h.findById },
   lakeConfigChangeEventRepository: {},
@@ -58,6 +69,7 @@ const makeRes = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.findById.mockResolvedValue({ id: 'prop-1', dataLakeId: 'lake1' });
   h.approveDataLakeProposal.mockResolvedValue({
@@ -153,5 +165,50 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     await expect(handler(makeReq({ decision: 'auto_approve' }) as never, res)).rejects.toThrow();
     expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
     expect(h.declineDataLakeProposal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['decline', 'declineDataLakeProposal'],
+    ['restore', 'restoreDataLakeProposal'],
+  ] as const)(
+    '%s: runs the gates and the write inside one transaction, then touches the resolved lake last',
+    async (decision, writeFn) => {
+      h.assertLakeAccess.mockImplementation(async () => {
+        h.tx.push('gate');
+        return LAKE;
+      });
+      h[writeFn].mockImplementation(async () => {
+        h.tx.push('write');
+        return { id: 'prop-1' };
+      });
+      h.touchIfStable.mockImplementation(async () => {
+        h.tx.push('touch');
+        return true;
+      });
+
+      await handler(makeReq({ decision }) as never, makeRes().res);
+
+      expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+      expect(h.touchIfStable).toHaveBeenCalledWith(LAKE.id);
+    }
+  );
+
+  it.each(['decline', 'restore'] as const)(
+    '%s: neither writes nor touches when the belongs-to check fails',
+    async decision => {
+      h.findById.mockResolvedValue({ id: 'prop-1', dataLakeId: 'lake-other' });
+
+      await expect(handler(makeReq({ decision }) as never, makeRes().res)).rejects.toThrow(/Proposal not found/);
+      expect(h.declineDataLakeProposal).not.toHaveBeenCalled();
+      expect(h.restoreDataLakeProposal).not.toHaveBeenCalled();
+      expect(h.touchIfStable).not.toHaveBeenCalled();
+    }
+  );
+
+  it('approve stays outside the transaction and does not touch the lake', async () => {
+    await handler(makeReq({ decision: 'approve' }) as never, makeRes().res);
+
+    expect(h.tx).toEqual([]);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

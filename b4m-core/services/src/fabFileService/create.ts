@@ -67,6 +67,7 @@ export const createFabFileSchema = z.object({
 type CreateFabFileParameters = z.infer<typeof createFabFileSchema>;
 
 export interface CreateFabFileAdapters {
+  objectKey?: string;
   db: {
     fabFiles: {
       create: (data: Omit<IFabFileDocument, 'id'>) => Promise<IFabFileDocument>;
@@ -163,10 +164,10 @@ const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
  * Explorer's tag tree until some later edit happens to trigger it. `previousTags` is deliberately
  * omitted - a create has no prior state to retract a stamp against.
  */
-export const createFabFile = async (
+export const prepareFabFile = async (
   userId: string,
   parameters: CreateFabFileParameters,
-  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence }: CreateFabFileAdapters
+  { db, storage, provenance, administeredOrgIds, logger, mimeTypePrecedence, objectKey }: CreateFabFileAdapters
 ) => {
   const params = secureParameters(parameters, createFabFileSchema);
   const user = await db.users.findById(userId);
@@ -203,6 +204,8 @@ export const createFabFile = async (
 
   let filePath = params.prefix ? `${params.prefix}/` : '';
   filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
+
+  if (objectKey) filePath = objectKey;
 
   const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
@@ -249,7 +252,11 @@ export const createFabFile = async (
     buildData.presignedUrl = await storage.generateSignedUrl(filePath, 600, 'put');
   }
 
-  const result = await db.fabFiles.create(buildData);
-
-  return result;
+  return buildData;
 };
+
+export const createFabFile = async (
+  userId: string,
+  parameters: CreateFabFileParameters,
+  adapters: CreateFabFileAdapters
+) => adapters.db.fabFiles.create(await prepareFabFile(userId, parameters, adapters));

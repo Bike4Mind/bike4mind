@@ -2,6 +2,7 @@ import { userRepository } from '@bike4mind/database';
 import {
   ApiKeyScope,
   LLMApiRequestBody,
+  LLMApiRequestBodySchema,
   PROMPT_TEXT_MAX,
   UnprocessableEntityError,
   redactSessionForClient,
@@ -41,16 +42,9 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
     })
   )
   .post(async (req: Request<unknown, unknown, LLMApiRequestBody>, res) => {
-    const { sessionId: reqSessionId, sessionName, agentIds, ...invokeParams } = req.body;
-
-    // This route spreads req.body straight into the invoke params rather than parsing it here, but
-    // it is not unvalidated: the ChatCompletionInvokeParamsSchema.parse that opens invoke() caps
-    // systemPrompt and throws outside any try, so an oversized value already 422s with no quest row.
-    // Re-checking here is purely about side effects, and how many depends on the branch: with no
-    // sessionId, getOrCreateSession creates a session, notifies and writes event logs; on every
-    // request the lastNotebookId update just below fires at push time, so it lands even though the
-    // throw path never awaits asyncPromises. Thrown rather than returned so errorHandler logs the
-    // rejection - a returned status leaves no line carrying one.
+    // Checked ahead of the full parse below only so these failures keep their specific codes.
+    // Thrown rather than returned so errorHandler logs the rejection - a returned status leaves no
+    // line carrying one.
     const { systemPrompt } = req.body;
     if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
       throw new UnprocessableEntityError('systemPrompt must be a string.', { code: 'SYSTEM_PROMPT_INVALID' });
@@ -61,7 +55,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       });
     }
 
-    // Validated here, beside systemPrompt, so a malformed value is rejected before any session or lastNotebookId write. invoke()'s own parse would 422 it too, but only after those side effects.
     const requestedDenials: unknown = req.body.deniedTools;
     if (requestedDenials !== undefined && !isStringArray(requestedDenials)) {
       throw new UnprocessableEntityError('deniedTools must be an array of strings.', {
@@ -69,28 +62,36 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       });
     }
 
-    // Agent ids the composer wants stamped on a session this request creates. Validated here so a
-    // malformed value is rejected before getOrCreateSession writes a session, and destructured out
-    // of invokeParams above so a session-creation field never rides into the completion body.
-    if (agentIds !== undefined && !isStringArray(agentIds)) {
+    // Agent ids are session-creation input, checked ahead of the full parse so a malformed value
+    // keeps its specific code.
+    const requestedAgentIds: unknown = req.body.agentIds;
+    if (requestedAgentIds !== undefined && !isStringArray(requestedAgentIds)) {
       throw new UnprocessableEntityError('agentIds must be an array of strings.', {
         code: 'AGENT_IDS_INVALID',
       });
     }
 
+    // Everything that can reject the request runs before getOrCreateSession, so a rejected request
+    // leaves no session behind. invoke() parses the body again, but only after that write.
+    const body = LLMApiRequestBodySchema.parse(req.body);
+    // agentIds is destructured out so a session-creation field never rides into the completion body.
+    const { sessionId: reqSessionId, sessionName, agentIds, ...invokeParams } = body;
+
+    // Resolve the billing org from the client-supplied value, rejecting any org the caller is
+    // not a member of (a bare body value would otherwise let A bill B's credit pool).
+    // null = personal account, undefined = fall back to the caller's own org.
+    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
+
     const { session, sessionId, asyncPromises } = await getOrCreateSession({
-      sessionId: req.body.sessionId,
-      sessionName: req.body.sessionName,
-      projectId: req.body.projectId,
-      fabFileIds: req.body.fabFileIds ?? [],
+      sessionId: reqSessionId,
+      sessionName,
+      projectId: body.projectId,
+      fabFileIds: body.fabFileIds,
       agentIds,
       user: req.user,
       ability: req.ability,
       logger: req.logger,
     });
-
-    // Update the user's last notebook ID
-    asyncPromises.push(userRepository.update({ id: req.user.id, lastNotebookId: sessionId }));
 
     // General chat gets the brand identity so it can pitch the product when asked. A session that
     // carries its OWN authored prompt skips it - either raw `systemPromptText` (e.g. the /opti
@@ -121,11 +122,6 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       },
     });
 
-    // Resolve the billing org from the client-supplied value, rejecting any org the caller is
-    // not a member of (a bare body value would otherwise let A bill B's credit pool).
-    // null = personal account, undefined = fall back to the caller's own org.
-    const effectiveOrgId = await resolveBillingOrgId(req, invokeParams.organizationId);
-
     // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
     // scope gaps always win.
     const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
@@ -152,6 +148,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
       });
     }
 
+    // Pushed only once the quest exists, so a failed invoke() does not move the pointer.
+    asyncPromises.push(userRepository.update({ id: req.user.id, lastNotebookId: sessionId }));
     await Promise.all(asyncPromises);
 
     // Redact server-owned systemPromptText AFTER it has been read above (the base-identity

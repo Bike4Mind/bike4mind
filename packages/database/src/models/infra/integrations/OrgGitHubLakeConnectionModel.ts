@@ -4,6 +4,7 @@ import {
   IOrgGitHubLakeConnectionRepository,
   IMongoDocument,
   GITHUB_DISCONNECT_STALL_MS,
+  type GitHubLakeTreeCounts,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
@@ -67,6 +68,8 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     defaultBranch: { type: String },
     lastSyncedCommitSha: { type: String },
     lastSyncedAt: { type: Date },
+    treeCandidateCount: { type: Number },
+    treeSkippedCount: { type: Number },
     syncClaimedAt: { type: Date },
     activeIngestBatchId: { type: String },
     ingestClaimToken: { type: String },
@@ -230,6 +233,18 @@ class OrgGitHubLakeConnectionRepository
       { $set: { syncClaimedAt: new Date(), activeIngestBatchId, ingestClaimToken: rotatedToken } }
     );
     return renewed !== null ? rotatedToken : null;
+  }
+
+  async recordTreeCounts(
+    id: string,
+    expectedToken: string,
+    { candidateCount, skippedCount }: GitHubLakeTreeCounts
+  ): Promise<boolean> {
+    const res = await this.model.updateOne(
+      { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
+      { $set: { treeCandidateCount: candidateCount, treeSkippedCount: skippedCount } }
+    );
+    return res.matchedCount > 0;
   }
 
   async releaseSyncClaim(
