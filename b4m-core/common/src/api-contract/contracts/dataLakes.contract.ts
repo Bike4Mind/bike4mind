@@ -228,6 +228,11 @@ export const searchDataLakeContract = defineEndpoint({
       description: 'The ranked passages and what, if anything, was withheld.',
       schema: DataLakeSearchResponseSchema,
     },
+    400: {
+      description:
+        'The API key bills an organization that no longer exists, or one its owner is no longer a member of.',
+      schema: ApiErrorSchema,
+    },
     403: {
       description: `The API key lacks \`datalake:query\`, ${FEATURE_DISABLED_NOTE}.`,
       schema: ScopeForbiddenErrorSchema,

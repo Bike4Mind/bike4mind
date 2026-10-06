@@ -1,12 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BadRequestError, ForbiddenError } from '@bike4mind/common';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   captured: {} as { get?: (req: unknown, res: unknown) => Promise<unknown> },
   previewDataLakeSlug: vi.fn(),
   previewDataLakeTagPrefix: vi.fn(),
-  resolveActiveOrg: vi.fn(),
+  findAccessibleById: vi.fn(),
+  findOrgById: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -24,8 +25,11 @@ vi.mock('@server/middlewares/featureFlag', () => ({
   requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({ DATA_LAKE_READ_SCOPES: [] }));
-vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: h.resolveActiveOrg }));
-vi.mock('@bike4mind/database', () => ({ dataLakeRepository: { tag: 'repo' } }));
+// resolveActiveOrg runs for real, so the org gate is exercised rather than stubbed.
+vi.mock('@bike4mind/database', () => ({
+  dataLakeRepository: { tag: 'repo' },
+  organizationRepository: { shareable: { findAccessibleById: h.findAccessibleById }, findById: h.findOrgById },
+}));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: { previewDataLakeSlug: h.previewDataLakeSlug, previewDataLakeTagPrefix: h.previewDataLakeTagPrefix },
 }));
@@ -33,16 +37,23 @@ vi.mock('@bike4mind/services', () => ({
 import '../slug-preview';
 
 const makeRes = () => ({ json: vi.fn(), status: vi.fn().mockReturnThis() });
-const get = (query: Record<string, unknown>, apiKeyInfo?: { keyId: string }) => {
+const get = (
+  query: Record<string, unknown>,
+  apiKeyInfo?: { keyId: string },
+  user: Record<string, unknown> = { id: 'u1' }
+) => {
   const res = makeRes();
-  const req = { user: { id: 'u1' }, apiKeyInfo, query };
+  const req = { user, apiKeyInfo, query };
   return { req, res, done: h.captured.get!(req, res) };
 };
 
 beforeEach(() => {
   h.previewDataLakeSlug.mockReset().mockResolvedValue('vendor-contracts-1');
   h.previewDataLakeTagPrefix.mockReset().mockImplementation(async (_db, base: string) => base.replace(/:$/, '-1:'));
-  h.resolveActiveOrg.mockReset().mockResolvedValue('org-1');
+  h.findAccessibleById
+    .mockReset()
+    .mockImplementation(async (_user: unknown, id: string) => (id === 'org-1' ? { id: 'org-1' } : null));
+  h.findOrgById.mockReset().mockResolvedValue(null);
 });
 
 describe('GET /api/data-lakes/slug-preview', () => {
@@ -64,8 +75,6 @@ describe('GET /api/data-lakes/slug-preview', () => {
   });
 
   it('403s on an org the caller cannot use, before computing any slug', async () => {
-    h.resolveActiveOrg.mockRejectedValue(new ForbiddenError('You are not a member of the selected organization.'));
-
     await expect(get({ name: 'x-lake', organizationId: 'org-x' }).done).rejects.toBeInstanceOf(ForbiddenError);
     expect(h.previewDataLakeSlug).not.toHaveBeenCalled();
   });
@@ -78,7 +87,7 @@ describe('GET /api/data-lakes/slug-preview', () => {
     const { req, res, done } = get({ name: 'Vendor Contracts', organizationId: 'org-1' });
     await done;
 
-    expect(h.resolveActiveOrg).toHaveBeenCalledWith(req, 'org-1');
+    expect(h.findAccessibleById).toHaveBeenCalledWith(req.user, 'org-1');
     expect(h.previewDataLakeSlug).toHaveBeenCalledWith({ dataLakes: { tag: 'repo' } }, 'Vendor Contracts', 'org-1');
     expect(h.previewDataLakeTagPrefix).toHaveBeenCalledWith({ dataLakes: { tag: 'repo' } }, 'vendor-contracts:', {
       createdByUserId: 'u1',
@@ -107,5 +116,19 @@ describe('GET /api/data-lakes/slug-preview', () => {
 
     expect(h.previewDataLakeTagPrefix).not.toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith({ slug: 'vendor-contracts-1', tagPrefix: null });
+  });
+
+  it('previews in personal scope when no organizationId is sent', async () => {
+    await get({ name: 'Vendor Contracts' }).done;
+
+    expect(h.findAccessibleById).not.toHaveBeenCalled();
+    expect(h.previewDataLakeSlug).toHaveBeenCalledWith({ dataLakes: { tag: 'repo' } }, 'Vendor Contracts', undefined);
+  });
+
+  it('404s an admin on an org that does not exist', async () => {
+    await expect(
+      get({ name: 'x-lake', organizationId: 'org-gone' }, undefined, { id: 'admin', isAdmin: true }).done
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(h.previewDataLakeSlug).not.toHaveBeenCalled();
   });
 });

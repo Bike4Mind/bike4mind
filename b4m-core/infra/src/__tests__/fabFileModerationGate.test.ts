@@ -166,7 +166,7 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
-  'apps/client/server/queueHandlers/researchEngineQueue.ts':
+  'apps/workers/src/queueHandlers/researchEngineQueue.ts':
     'DI passthrough — storage adapter consumed by already-gated researchTaskService.process/downloadRelevantLinks (routes through findOrUpdateExistingResearchData, gated commit 63cc8f9d3e, and createFabFile)',
   'apps/workers/src/queueHandlers/notebookCuration.ts':
     'DI passthrough — storage adapter consumed by NotebookCurationService.storeFile, which calls the already-gated fabFileService.createFabFile with a converter-produced mimeType that is always markdown/txt/html, never an image',
