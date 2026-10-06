@@ -95,11 +95,11 @@ describe('stripFrontmatter', () => {
     expect(stripFrontmatter(content)).toBe(content);
   });
 
-  it('strips a lone prose line ending in a colon (known trade-off of spaced keys)', () => {
+  it('strips a prose line with a colon after plain words (known trade-off of spaced keys)', () => {
     expect(stripFrontmatter('---\nImportant notice: please read\n---\nBody')).toBe('Body');
   });
 
-  it('keeps a colon line whose text before the colon has punctuation', () => {
+  it('keeps a colon line whose pre-colon text contains a comma', () => {
     const content = '---\nPlease read this, carefully: ok\n---\nBody';
     expect(stripFrontmatter(content)).toBe(content);
   });

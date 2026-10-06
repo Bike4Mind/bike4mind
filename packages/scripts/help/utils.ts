@@ -396,7 +396,8 @@ function splitAtH3(lines: string[], h2Heading: string): MarkdownSection[] {
 const FRONTMATTER_BLOCK = /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/;
 
 // An unquoted key may carry a leading `@` (JSON-LD `@context`) and inner spaces (`Last Updated`).
-// Trade-off: a prose line ending in a colon (`Important notice: please read`) also matches, so it is stripped when it sits alone between two leading rules.
+// Trade-off: a prose line with a colon after plain words (`Important notice: please read`) also matches, so a
+// leading block holding only such lines and other YAML-shaped lines is stripped.
 const KEY_VALUE = /(?:"[^"]*"|'[^']*'|@?[\w.-]+(?:[ \t]+[\w.-]+)*)[ \t]*:(?:[ \t].*)?/;
 const KEY_VALUE_LINE = new RegExp(`^${KEY_VALUE.source}$`);
 // A frontmatter line is blank, a comment, a list item, an indented continuation, or `key: value`.
