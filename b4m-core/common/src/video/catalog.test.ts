@@ -111,13 +111,16 @@ describe('grok-imagine-video-1.5', () => {
       resolutions: ['480p', '720p'],
       defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '480p' },
       audio: 'always',
-      pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.08 } },
-      defaultEnabled: false,
+      pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.14 } },
+      defaultEnabled: true,
     });
   });
 
-  it.each(['480p', '720p'] as const)('prices a 10s %s clip at the flat per-second rate', resolution => {
-    expect(estimateVideoCostUsd(caps, request({ durationSeconds: 10, resolution }))).toBeCloseTo(0.8, 6);
+  it.each([
+    ['480p', 0.8],
+    ['720p', 1.4],
+  ] as const)('prices a 10s %s clip at its per-second rate', (resolution, usd) => {
+    expect(estimateVideoCostUsd(caps, request({ durationSeconds: 10, resolution }))).toBeCloseTo(usd, 6);
   });
 
   it.each([0, 16])('rejects %ss', seconds => {
@@ -171,7 +174,7 @@ describe('veo-3.1-fast-generate-preview', () => {
       defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
       audio: 'always',
       pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
-      defaultEnabled: false,
+      defaultEnabled: true,
     });
   });
 

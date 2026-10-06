@@ -49,10 +49,9 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     resolutions: ['480p', '720p'],
     defaults: { durationSeconds: 6, aspectRatio: '16:9', resolution: '480p' },
     audio: 'always',
-    // Provisional flat rate for both tiers; the live check compares it with usage.cost_in_usd_ticks (1e10 ticks = $1).
-    pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.08 } },
-    // Off until the live provider check passes, like Omni; the check gates the flip to true.
-    defaultEnabled: false,
+    // Measured from usage.cost_in_usd_ticks (1e10 ticks = $1) on live 2s 480p and 1s 720p clips.
+    pricing: { unit: 'per_second', usdByResolution: { '480p': 0.08, '720p': 0.14 } },
+    defaultEnabled: true,
   },
   // Audio is generated and included in the per-second price; a blocked clip is documented as not charged.
   'veo-3.1-fast-generate-preview': {
@@ -66,8 +65,7 @@ export const VIDEO_MODEL_CATALOG: Record<VideoModelId, VideoModelCapabilities> =
     defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
     audio: 'always',
     pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1 } },
-    // Off until the live provider check passes, like Omni and xAI.
-    defaultEnabled: false,
+    defaultEnabled: true,
   },
 };
 

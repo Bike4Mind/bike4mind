@@ -14,19 +14,13 @@ describe('isVideoModelEnabled', () => {
     );
   });
 
-  it('ships Grok Imagine disabled until the live check passes', () => {
-    expect(isVideoModelEnabled('grok-imagine-video-1.5', undefined)).toBe(false);
-    expect(isVideoModelEnabled('grok-imagine-video-1.5', { enabledModels: { 'grok-imagine-video-1.5': true } })).toBe(
-      true
-    );
-  });
-
-  it('ships Veo disabled until the live check passes', () => {
-    expect(isVideoModelEnabled('veo-3.1-fast-generate-preview', undefined)).toBe(false);
-    expect(
-      isVideoModelEnabled('veo-3.1-fast-generate-preview', { enabledModels: { 'veo-3.1-fast-generate-preview': true } })
-    ).toBe(true);
-  });
+  it.each(['grok-imagine-video-1.5', 'veo-3.1-fast-generate-preview'] as const)(
+    'ships %s enabled, and an admin can turn it off',
+    model => {
+      expect(isVideoModelEnabled(model, undefined)).toBe(true);
+      expect(isVideoModelEnabled(model, { enabledModels: { [model]: false } })).toBe(false);
+    }
+  );
 
   it('an override wins over the catalog default', () => {
     expect(isVideoModelEnabled('test-video', { enabledModels: { 'test-video': false } })).toBe(false);
