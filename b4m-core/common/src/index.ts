@@ -17,12 +17,10 @@ export * from './imageGeneration';
 export * from './generatedAudio';
 export * from './voiceGeneration';
 export * from './voicePricing';
-export * from './videoGeneration';
 export * from './video';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
-export * from './schemas/sora';
 export * from './schemas';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately

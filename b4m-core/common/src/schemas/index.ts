@@ -36,7 +36,6 @@ export * from './briefcasePrompt';
 export * from './imageGenerationTemplate';
 export * from './qa';
 export * from './imageApi';
-export * from './videoApi';
 export * from './videoGenerations';
 export * from './voiceApi';
 export * from './generationCallback';

@@ -36,7 +36,7 @@ const PromptMetaModelParametersSchema = z.object({
   background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
-  // Video generation parameters (Sora)
+  // Video generation parameters
   seconds: z.number().optional(), // Video duration in seconds (4, 8, or 12)
   model: z.string().optional(), // Video model name
 });
