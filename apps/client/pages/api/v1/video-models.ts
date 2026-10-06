@@ -7,7 +7,7 @@ import { perUserRateLimit } from '@server/videoGenerations/routeDeps';
 
 const handler = nextRouteForContract(listVideoModelsContract, {
   exemptReadsFromDailyRateLimit: true,
-  rateLimit: perUserRateLimit('/api/v1/video-models'),
+  rateLimit: perUserRateLimit('GET /api/v1/video-models'),
 }).get(async (req, res) => res.json({ models: await listUsableVideoModels(req.user.id, getVideoJobDeps()) }));
 
 export const config = {

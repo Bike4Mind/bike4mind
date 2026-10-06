@@ -158,16 +158,29 @@ describe('POST /api/v1/video-generations/{id}/cancel', () => {
     expect(res._getJSONData()).toMatchObject({ id: JOB_ID, state: 'running' });
   });
 
-  it('cancel during storing returns 200 with the job as-is and does not mark cancelRequested', async () => {
-    const storing = videoJob({ state: 'storing' });
+  it('cancel during storing returns 200 with the job as-is when the engine declines the cancel', async () => {
+    const storing = videoJob({ state: 'storing', updatedAt: new Date('2026-10-06T00:05:00Z') });
     h.findById.mockResolvedValue(storing);
     h.requestCancel.mockResolvedValue(null);
     const { req, res } = cancel(JOB_ID);
     await cancelHandler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ state: 'storing', error: null });
-    expect(h.requestCancel).toHaveBeenCalledTimes(1);
-    expect(storing.cancelRequested).toBe(false);
+    expect(h.requestCancel).toHaveBeenCalledWith(JOB_ID);
+    // The response renders the job read before the cancel, unchanged, rather than a cancelled or failed one.
+    expect(res._getJSONData()).toMatchObject({
+      id: JOB_ID,
+      state: 'storing',
+      error: null,
+      updated_at: '2026-10-06T00:05:00.000Z',
+    });
+  });
+
+  it('404s cancel of a malformed id without querying or cancelling', async () => {
+    const { req, res } = cancel('nope');
+    await cancelHandler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(h.findById).not.toHaveBeenCalled();
+    expect(h.requestCancel).not.toHaveBeenCalled();
   });
 
   it("404s cancel of another user's job", async () => {
