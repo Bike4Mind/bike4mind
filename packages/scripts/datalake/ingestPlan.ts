@@ -130,7 +130,7 @@ export const resolveLakeTarget = (
     throw new Error(
       `Data lake "${slug}" in ${org ? `org ${org}` : 'the org-less scope'} is ${unresolvableShadow.status}; ` +
         'refusing to fall back to another lake with that slug. Restore it first' +
-        (org ? ', or drop --organizationId to target the registry lake.' : '.')
+        (org ? ', or drop --organizationId to target the org-less or registry lake.' : '.')
     );
   }
   if (dbLake) {
