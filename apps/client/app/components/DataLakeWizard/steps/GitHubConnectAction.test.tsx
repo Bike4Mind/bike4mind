@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
   disconnectMutate: vi.fn(),
   updateLakeMutate: vi.fn(),
   updatePending: { current: false },
-  revertOriginMutate: vi.fn(),
+  useUpdateDataLake: vi.fn(),
   saveHandoff: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -26,10 +26,10 @@ vi.mock('@client/app/hooks/data/githubLake', () => ({
   useDisconnectLakeGitHub: () => ({ mutate: h.disconnectMutate, isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useUpdateDataLake: (opts?: { notifySuccess?: boolean }) =>
-    opts?.notifySuccess === false
-      ? { mutate: h.revertOriginMutate, isPending: false }
-      : { mutate: h.updateLakeMutate, isPending: h.updatePending.current },
+  useUpdateDataLake: (opts?: { notifySuccess?: boolean }) => {
+    h.useUpdateDataLake(opts);
+    return { mutate: h.updateLakeMutate, isPending: h.updatePending.current };
+  },
 }));
 vi.mock('@client/app/utils/githubLakeConnectHandoff', () => ({ saveGitHubLakeConnectHandoff: h.saveHandoff }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
@@ -63,6 +63,8 @@ const FED_LAKE = { id: 'lake1', origin: 'connector-fed' as const };
 const URLS = {
   authorizeUrl: 'https://github.com/login/oauth/authorize?client_id=c&state=s1',
 };
+
+const CURATED_WRITE = { id: 'lake1', origin: 'curated' };
 
 const assign = vi.fn();
 
@@ -338,7 +340,7 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
       options.onSettled?.();
     });
     expect(h.startMutate).not.toHaveBeenCalled();
-    expect(h.revertOriginMutate).not.toHaveBeenCalled();
+    expect(h.updateLakeMutate).not.toHaveBeenCalledWith(CURATED_WRITE);
     expect(screen.getByTestId('github-switch-origin-prompt')).toBeInTheDocument();
   });
 
@@ -357,7 +359,35 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
     act(() =>
       startOptions.onError({ isAxiosError: true, response: { status: 400, data: { error: 'archived status' } } })
     );
-    expect(h.revertOriginMutate).toHaveBeenCalledWith({ id: 'lake1', origin: 'curated' });
+    expect(h.updateLakeMutate).toHaveBeenCalledWith(CURATED_WRITE);
+  });
+
+  it('does not toast the origin write, since the page leaves for GitHub right after it', () => {
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    expect(h.useUpdateDataLake).toHaveBeenCalledWith({ notifySuccess: false });
+    expect(h.useUpdateDataLake).not.toHaveBeenCalledWith(undefined);
+  });
+
+  it('switches the lake back to curated when the handoff cannot be saved, and does not leave for GitHub', () => {
+    h.saveHandoff.mockImplementationOnce(() => {
+      throw new Error('SecurityError');
+    });
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
+    act(() => resolveStart());
+    expect(h.updateLakeMutate).toHaveBeenLastCalledWith(CURATED_WRITE);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('switches the lake back to curated when the start fails with a non-axios error', () => {
+    openPrompt({ id: 'lake1', origin: 'curated' });
+    fireEvent.click(screen.getByTestId('github-switch-origin-confirm-btn'));
+    act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
+    const [, startOptions] = h.startMutate.mock.calls[0];
+    act(() => startOptions.onError(new Error('Network Error')));
+    expect(h.updateLakeMutate).toHaveBeenCalledWith(CURATED_WRITE);
   });
 
   it('keeps connector-fed when the connect is refused because another connector holds the lake', () => {
@@ -369,7 +399,7 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
       startOptions.onError({ isAxiosError: true, response: { status: 409, data: { error: 'already connected' } } })
     );
     expect(h.toastError).toHaveBeenCalledWith('already connected');
-    expect(h.revertOriginMutate).not.toHaveBeenCalled();
+    expect(h.updateLakeMutate).not.toHaveBeenCalledWith(CURATED_WRITE);
   });
 
   it('keeps the switch once the connect leaves for GitHub', () => {
@@ -378,7 +408,7 @@ describe('GitHubConnectAction on a lake that is not connector-fed', () => {
     act(() => h.updateLakeMutate.mock.calls[0][1].onSuccess());
     act(() => resolveStart());
     expect(assign).toHaveBeenCalledWith(URLS.authorizeUrl);
-    expect(h.revertOriginMutate).not.toHaveBeenCalled();
+    expect(h.updateLakeMutate).not.toHaveBeenCalledWith(CURATED_WRITE);
   });
 
   it('closes a prompt opened on one lake when another lake is selected', () => {

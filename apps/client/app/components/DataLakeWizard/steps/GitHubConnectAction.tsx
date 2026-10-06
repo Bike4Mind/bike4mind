@@ -50,8 +50,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
   const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
-  const updateLake = useUpdateDataLake();
-  const revertOrigin = useUpdateDataLake({ notifySuccess: false });
+  const updateLake = useUpdateDataLake({ notifySuccess: false });
   const needsSwitch = !acceptsConnectorContent(lake.origin);
 
   if (isLoading) {
@@ -121,7 +120,7 @@ export default function GitHubConnectAction({ lake }: { lake: { id: string; orig
                         beginConnect({
                           onFailed: error => {
                             if (isAxiosError(error) && error.response?.status === 409) return;
-                            revertOrigin.mutate({ id: lakeId, origin: 'curated' });
+                            updateLake.mutate({ id: lakeId, origin: 'curated' });
                           },
                         });
                       },
