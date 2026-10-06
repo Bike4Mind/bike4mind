@@ -118,8 +118,13 @@ import handler from '../sound-effects';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
 
-const run = (body: unknown, apiKeyInfo?: unknown, userOrganizationId?: string) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const run = (
+  body: unknown,
+  apiKeyInfo?: unknown,
+  userOrganizationId?: string,
+  headers: Record<string, string> = {}
+) => {
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, {
     user: { id: 'u1', organizationId: userOrganizationId ?? null },
     apiKeyInfo,
@@ -189,6 +194,20 @@ describe('POST /api/ai/sound-effects', () => {
     );
   });
 
+  it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
+
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 }, undefined, undefined, {
+      'user-agent': 'b4m-cli/0.9.3',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Same classifier apiKeyAuth stamps on ApiKeyUsageLog, so the dashboard slices agree.
+    expect(deductCredits.mock.calls[0][0]).toMatchObject({ source: 'cli' });
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', creditsCharged: 12 }));
+  });
   it('does NOT reserve or charge when enforceCredits is off, but still records analytics (COGS, 0 credits)', async () => {
     getSettingsValue.mockReturnValue(false);
     estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });

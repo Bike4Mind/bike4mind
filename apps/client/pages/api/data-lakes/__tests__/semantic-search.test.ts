@@ -236,7 +236,15 @@ const makeReq = (
   body: unknown,
   user: Record<string, unknown> = { id: 'u1', tags: [] },
   apiKeyInfo?: Record<string, unknown>
-) => ({ user, apiKeyInfo, body, on: vi.fn(), logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() } }) as never;
+) =>
+  ({
+    user,
+    apiKeyInfo,
+    body,
+    headers: {},
+    on: vi.fn(),
+    logger: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  }) as never;
 
 const makeRes = () => {
   const res: Record<string, unknown> = { writableEnded: false };
@@ -1135,6 +1143,7 @@ describe('POST /api/data-lakes/semantic-search access-event audit', () => {
     const req = {
       user: { id: 'u1', tags: [] },
       body: { query: 'pto policy' },
+      headers: {},
       on: vi.fn((event: string, cb: () => void) => {
         if (event === 'close') closeCallback = cb;
       }),

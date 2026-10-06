@@ -114,8 +114,8 @@ import handler from '../embeddings';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
 
-const run = async (body: unknown) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const run = async (body: unknown, headers: Record<string, string> = {}) => {
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, { user: { id: 'u1' }, logger: { error: vi.fn(), warn: vi.fn() } });
   await (handler as unknown as Handler)(req, res);
   return { status: res._getStatusCode(), body: res._getJSONData() };
@@ -171,6 +171,14 @@ describe('POST /api/v1/embeddings', () => {
       expect.objectContaining({ type: 'text_generation_usage', inputTokens: 5, outputTokens: 0, source: 'api' })
     );
     expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'embedding', status: 'ok' }));
+  });
+
+  it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {
+    await run({ model: 'text-embedding-3-small', input: 'hello' }, { 'user-agent': 'b4m-cli/0.9.3' });
+
+    // Same classifier apiKeyAuth stamps on ApiKeyUsageLog, so the dashboard slices agree.
+    expect(settle).toHaveBeenCalledWith(0, expect.objectContaining({ source: 'cli' }));
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', status: 'ok' }));
   });
 
   it('truncates to the requested width and base64-encodes on request', async () => {
