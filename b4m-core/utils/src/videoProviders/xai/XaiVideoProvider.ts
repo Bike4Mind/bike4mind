@@ -15,9 +15,15 @@ import {
 // Wire shapes are pinned by __fixtures__ (see record.ts; each synthetic fixture names its evidence).
 const GENERATIONS_URL = 'https://api.x.ai/v1/videos/generations';
 const VIDEOS_URL = 'https://api.x.ai/v1/videos';
-const MODERATION_PATTERN = /moderat|\bblock/i;
+// Whole-token match on the normalised error code (`-` read as `_`), never a substring: a capacity or auth failure
+// must not read as a content block. The wording of a real block is unconfirmed until the live recording.
+const MODERATION_CODE = /^(content_|safety_)?(blocked|moderat\w*)$|^(safety|content_policy|content_filter)$/;
+// Free text counts only in the block phrasing ("blocked by moderation", "rejected by safety filters").
+const MODERATION_PHRASE = /\b(blocked|rejected|flagged|violat\w*)\b[^.:]*\b(moderation|safety|polic(y|ies))\b/i;
 // The live "bad request id" 400 reads "Malformed request ID"; an id that is well formed but gone reads as unknown.
-const UNKNOWN_REQUEST_PATTERN = /malformed|unknown|not found|invalid request id/i;
+// Anchored on "request id" so a transient "Unknown error" 400 never ends a running, billed job.
+const UNKNOWN_REQUEST_PATTERN =
+  /\b(malformed|invalid|unknown) request id\b|\brequest id\b[^.]*\b(unknown|not found)\b/i;
 // The submit statuses a resubmit can get past; any other 4xx is deterministic for this request and key.
 const RETRYABLE_SUBMIT_STATUSES: ReadonlySet<number> = new Set([408, 429]);
 const MODERATION_REASON = 'xai_moderation';
@@ -68,7 +74,8 @@ const errorInfoOf = (raw: unknown): ErrorInfo => {
 };
 
 const isModeration = (info: ErrorInfo): boolean =>
-  [info.code, info.message].some(value => value !== undefined && MODERATION_PATTERN.test(value));
+  (info.code !== undefined && MODERATION_CODE.test(normaliseCode(info.code) ?? '')) ||
+  (info.message !== undefined && MODERATION_PHRASE.test(info.message));
 
 const requestIdOf = (handle: ProviderJobHandle): string => {
   const id = handle.data.requestId;
@@ -161,8 +168,8 @@ export class XaiVideoProvider implements VideoProvider {
         signal: ctx.signal,
       });
     } catch (error) {
-      // Unknown outcome: the job may exist, so the engine must not resubmit.
-      throw new ProviderSubmitError('xai_submit_transport', false, String(error), true);
+      // Unknown outcome: the job may exist (and be billed), so the engine must not resubmit.
+      throw new ProviderSubmitError('xai_submit_transport', false, String(error));
     }
     const raw = await readJson(response);
     if (!response.ok) {
@@ -172,12 +179,14 @@ export class XaiVideoProvider implements VideoProvider {
       if (normaliseCode(info.code) === 'invalid_argument' && isModeration(info)) {
         return { provider: this.id, data: { blocked: true, reason: MODERATION_REASON } };
       }
-      // A 4xx created nothing; a 5xx may have. Only a timeout, throttle or server fault is worth retrying.
+      // A 4xx created nothing; a 5xx may have, and it is not resubmitted because the job may already be billed
+      // (definitive: false, so `retryable` would be dead and is left to default). Only a timeout or throttle is
+      // definitive and worth a resubmit; any other 4xx fails the job at once.
       throw new ProviderSubmitError(
         `xai_http_${response.status}`,
         response.status < 500,
         raw,
-        RETRYABLE_SUBMIT_STATUSES.has(response.status) || response.status >= 500
+        RETRYABLE_SUBMIT_STATUSES.has(response.status)
       );
     }
     const parsed = SubmitResponseSchema.safeParse(raw);
@@ -200,7 +209,11 @@ export class XaiVideoProvider implements VideoProvider {
     ) {
       return failed('request_not_found', raw);
     }
-    if (!response.ok) throw new Error(`xai_poll_http_${response.status}`);
+    if (!response.ok) {
+      // The engine logs only the message; keep the provider text (never the key) for the retry streak.
+      ctx.logger.error('xai_poll_rejected', { status: response.status, raw });
+      throw new Error(`xai_poll_http_${response.status}`);
+    }
     const parsed = PollSchema.safeParse(raw);
     if (!parsed.success) throw new Error('xai_poll_unparseable');
     return toPollResult(parsed.data, ctx);

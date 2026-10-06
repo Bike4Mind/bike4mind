@@ -4983,18 +4983,18 @@
           "id": "664f1c2b9a1e4d0012ab34cd",
           "object": "video_generation",
           "state": "pending",
-          "model": "gemini-omni-1.1-flash",
+          "model": "grok-imagine-video-1.5",
           "mode": "text_to_video",
           "prompt": "A slow dolly shot of a red lighthouse at dusk",
           "duration_seconds": 6,
           "aspect_ratio": "16:9",
-          "resolution": "720p",
+          "resolution": "480p",
           "source": "api",
           "progress": null,
           "error": null,
           "output": null,
           "credits": {
-            "reserved": 6085,
+            "reserved": 4801,
             "settled": null
           },
           "created_at": "2026-10-06T00:00:00.000Z",
@@ -5209,18 +5209,18 @@
           "id": "664f1c2b9a1e4d0012ab34cd",
           "object": "video_generation",
           "state": "pending",
-          "model": "gemini-omni-1.1-flash",
+          "model": "grok-imagine-video-1.5",
           "mode": "text_to_video",
           "prompt": "A slow dolly shot of a red lighthouse at dusk",
           "duration_seconds": 6,
           "aspect_ratio": "16:9",
-          "resolution": "720p",
+          "resolution": "480p",
           "source": "api",
           "progress": null,
           "error": null,
           "output": null,
           "credits": {
-            "reserved": 6085,
+            "reserved": 4801,
             "settled": null
           },
           "created_at": "2026-10-06T00:00:00.000Z",
@@ -5366,7 +5366,7 @@
           "prompt"
         ],
         "example": {
-          "model": "gemini-omni-1.1-flash",
+          "model": "grok-imagine-video-1.5",
           "prompt": "A slow dolly shot of a red lighthouse at dusk"
         }
       },
@@ -5578,18 +5578,18 @@
           "id": "664f1c2b9a1e4d0012ab34cd",
           "object": "video_generation",
           "state": "pending",
-          "model": "gemini-omni-1.1-flash",
+          "model": "grok-imagine-video-1.5",
           "mode": "text_to_video",
           "prompt": "A slow dolly shot of a red lighthouse at dusk",
           "duration_seconds": 6,
           "aspect_ratio": "16:9",
-          "resolution": "720p",
+          "resolution": "480p",
           "source": "api",
           "progress": null,
           "error": null,
           "output": null,
           "credits": {
-            "reserved": 6085,
+            "reserved": 4801,
             "settled": null
           },
           "created_at": "2026-10-06T00:00:00.000Z",
@@ -16737,17 +16737,17 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/video-generations\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"gemini-omni-1.1-flash\",\n  \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n}\nB4M_REQUEST_BODY"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/video-generations\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"grok-imagine-video-1.5\",\n  \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n}\nB4M_REQUEST_BODY"
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"gemini-omni-1.1-flash\",\n  \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"grok-imagine-video-1.5\",\n  \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n}),\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/video-generations\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"gemini-omni-1.1-flash\",\n        \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n    },\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/video-generations\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"grok-imagine-video-1.5\",\n        \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n    },\n)"
           }
         ]
       },

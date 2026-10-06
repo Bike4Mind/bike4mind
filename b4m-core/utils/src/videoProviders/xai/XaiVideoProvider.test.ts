@@ -97,9 +97,9 @@ const ctx = () => ({
   signal: new AbortController().signal,
 });
 const handleFor = (requestId: string) => ({ provider: 'xai' as const, data: { requestId } });
-const pollWith = (body: unknown, status = 200) => {
+const pollWith = (body: unknown, status = 200, context = ctx()) => {
   server.use(http.get(`${VIDEOS}/:id`, () => HttpResponse.json(body as Record<string, unknown>, { status })));
-  return new XaiVideoProvider().poll(handleFor('r1'), ctx());
+  return new XaiVideoProvider().poll(handleFor('r1'), context);
 };
 
 describeVideoProviderConformance('XaiVideoProvider', {
@@ -210,8 +210,16 @@ describe('XaiVideoProvider specifics', () => {
     expect((error as ProviderSubmitError).raw).toEqual(submitBodyOf(FIXTURES.rejects));
   });
 
-  it('maps a submit moderation 400 to a blocked handle that polls blocked without a network call', async () => {
+  // A recording may show moderation arriving after generation (200, then respect_moderation false) instead.
+  it('maps the blocked fixture to a blocked outcome, offline when it is a submit-time rejection', async () => {
     active = FIXTURES.blocked;
+    const provider = new XaiVideoProvider();
+    if (exchange(FIXTURES.blocked, 'submit').response.status < 400) {
+      const handle = await provider.submit(request(), {}, ctx());
+      settled = true;
+      expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'blocked' });
+      return;
+    }
     let polls = 0;
     server.use(
       http.get(`${VIDEOS}/:id`, () => {
@@ -219,7 +227,6 @@ describe('XaiVideoProvider specifics', () => {
         return HttpResponse.json({});
       })
     );
-    const provider = new XaiVideoProvider();
     const handle = await provider.submit(request(), {}, ctx());
     expect(handle.data).toEqual({ blocked: true, reason: 'xai_moderation' });
     expect(await provider.poll(handle, ctx())).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
@@ -230,7 +237,9 @@ describe('XaiVideoProvider specifics', () => {
     'normalises the %s code when matching a moderation block',
     async code => {
       server.use(
-        http.post(GENERATIONS, () => HttpResponse.json({ code, error: 'Request was blocked' }, { status: 400 }))
+        http.post(GENERATIONS, () =>
+          HttpResponse.json({ code, error: 'Request blocked by moderation' }, { status: 400 })
+        )
       );
       const handle = await new XaiVideoProvider().submit(request(), {}, ctx());
       expect(handle.data).toEqual({ blocked: true, reason: 'xai_moderation' });
@@ -260,6 +269,8 @@ describe('XaiVideoProvider specifics', () => {
     expect(error).toMatchObject({ definitive: true, retryable: false, message: 'xai_http_403' });
   });
 
+  // 5xx and network errors are not definitive: the job may exist and be billed, so the engine never resubmits them
+  // (retryable only matters when definitive, so it keeps its default there).
   it.each([
     [429, true, true],
     [408, true, true],
@@ -267,8 +278,8 @@ describe('XaiVideoProvider specifics', () => {
     [401, true, false],
     [403, true, false],
     [422, true, false],
-    [500, false, true],
-    [503, false, true],
+    [500, false, false],
+    [503, false, false],
   ])(
     'maps a %i submit to definitive=%s retryable=%s with a code-only message',
     async (status, definitive, retryable) => {
@@ -282,10 +293,10 @@ describe('XaiVideoProvider specifics', () => {
     }
   );
 
-  it('treats a network failure on submit as retryable but not definitive', async () => {
+  it('treats a network failure on submit as an unknown outcome, never resubmitted', async () => {
     server.use(http.post(GENERATIONS, () => HttpResponse.error()));
     const error = await new XaiVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
-    expect(error).toMatchObject({ definitive: false, retryable: true, message: 'xai_submit_transport' });
+    expect(error).toMatchObject({ definitive: false, retryable: false, message: 'xai_submit_transport' });
   });
 
   it('treats an unparseable 200 submit as not definitive', async () => {
@@ -345,9 +356,43 @@ describe('XaiVideoProvider specifics', () => {
   it.each([
     [{ code: 'invalid_argument', message: 'Content blocked by moderation' }],
     [{ code: 'moderation_blocked', message: 'Rejected' }],
+    [{ code: 'content_blocked', message: 'Something happened' }],
+    [{ code: 'CONTENT-BLOCKED' }],
+    [{ code: 'internal_error', message: 'Rejected by safety filters' }],
+    [{ code: 'failed_precondition', message: 'Prompt violates usage policy' }],
   ])('maps a failed job whose error indicates moderation (%o) to blocked', async error => {
     expect(await pollWith({ status: 'failed', error })).toMatchObject({ status: 'blocked', reason: 'xai_moderation' });
   });
+
+  it.each([
+    [{ code: 'service_unavailable', message: 'Request blocked: rate limit exceeded' }],
+    [{ code: 'internal_error', message: 'Upstream blocked waiting on GPU' }],
+    [{ code: 'permission_denied', message: 'Account blocked' }],
+    [{ code: 'unblocked_retry', message: 'Try again' }],
+  ])('keeps a failed job that merely says "blocked" (%o) a plain failure', async error => {
+    expect(await pollWith({ status: 'failed', error })).toMatchObject({ status: 'failed', message: 'xai_failed' });
+  });
+
+  it('does not read a submit 400 saying "Request blocked: rate limit exceeded" as a content block', async () => {
+    server.use(
+      http.post(GENERATIONS, () =>
+        HttpResponse.json({ code: 'invalid-argument', error: 'Request blocked: rate limit exceeded' }, { status: 400 })
+      )
+    );
+    const error = await new XaiVideoProvider().submit(request(), {}, ctx()).catch((e: unknown) => e);
+    expect(error).toMatchObject({ definitive: true, message: 'xai_http_400' });
+  });
+
+  it.each(['Rejected by safety filters', 'Prompt violates usage policy'])(
+    'reads a submit invalid-argument saying "%s" as a content block',
+    async message => {
+      server.use(
+        http.post(GENERATIONS, () => HttpResponse.json({ code: 'invalid-argument', error: message }, { status: 400 }))
+      );
+      const handle = await new XaiVideoProvider().submit(request(), {}, ctx());
+      expect(handle.data).toEqual({ blocked: true, reason: 'xai_moderation' });
+    }
+  );
 
   it('maps expired to a non-retryable failure', async () => {
     expect(await pollWith(pollBodyOf(FIXTURES.expired))).toMatchObject({
@@ -385,6 +430,23 @@ describe('XaiVideoProvider specifics', () => {
 
   it.each([429, 500, 502])('a %i poll throws so the engine retries', async status => {
     await expect(pollWith({}, status)).rejects.toThrow(`xai_poll_http_${status}`);
+  });
+
+  it.each([
+    [400, { code: 'invalid-argument', error: 'Unknown error, please retry' }],
+    [401, { code: 'unauthenticated', error: 'Invalid API key' }],
+    [403, { code: 'permission-denied', error: 'Forbidden' }],
+  ])('a %i poll that does not name the request id throws instead of failing the job', async (status, body) => {
+    await expect(pollWith(body, status)).rejects.toThrow(`xai_poll_http_${status}`);
+  });
+
+  it('logs the body of a rejected poll at error level, never the key', async () => {
+    const c = ctx();
+    const error = vi.spyOn(c.logger, 'error').mockImplementation(() => undefined);
+    const body = { code: 'unauthenticated', error: 'Invalid API key' };
+    await expect(pollWith(body, 401, c)).rejects.toThrow('xai_poll_http_401');
+    expect(error).toHaveBeenCalledWith('xai_poll_rejected', { status: 401, raw: body });
+    expect(JSON.stringify(error.mock.calls)).not.toContain(KEY);
   });
 
   it('an unparseable 200 poll throws so the engine retries', async () => {

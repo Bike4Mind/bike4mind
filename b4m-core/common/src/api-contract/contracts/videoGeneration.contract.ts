@@ -17,17 +17,17 @@ const exampleJob = {
   id: EXAMPLE_RESOURCE_ID,
   object: 'video_generation',
   state: 'pending',
-  model: 'gemini-omni-1.1-flash',
+  model: 'grok-imagine-video-1.5',
   mode: 'text_to_video',
   prompt: 'A slow dolly shot of a red lighthouse at dusk',
   duration_seconds: 6,
   aspect_ratio: '16:9',
-  resolution: '720p',
+  resolution: '480p',
   source: 'api',
   progress: null,
   error: null,
   output: null,
-  credits: { reserved: 6085, settled: null },
+  credits: { reserved: 4801, settled: null },
   created_at: '2026-10-06T00:00:00.000Z',
   updated_at: '2026-10-06T00:00:00.000Z',
 } as const;
@@ -81,7 +81,7 @@ export const createVideoGenerationContract = defineEndpoint({
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_GENERATE],
   request: CreateVideoGenerationBodySchema,
-  requestExample: { model: 'gemini-omni-1.1-flash', prompt: 'A slow dolly shot of a red lighthouse at dusk' },
+  requestExample: { model: 'grok-imagine-video-1.5', prompt: 'A slow dolly shot of a red lighthouse at dusk' },
   responses: {
     202: {
       description: 'Accepted; the job is queued (or replayed for a repeated Idempotency-Key).',
@@ -107,7 +107,7 @@ export const createVideoGenerationContract = defineEndpoint({
   codeSample: {
     authToken: 'b4m_live_<key>',
     streaming: false,
-    body: { model: 'gemini-omni-1.1-flash', prompt: 'A slow dolly shot of a red lighthouse at dusk' },
+    body: { model: 'grok-imagine-video-1.5', prompt: 'A slow dolly shot of a red lighthouse at dusk' },
   },
 });
 
