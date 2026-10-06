@@ -13,6 +13,7 @@ import {
   addToolUsage,
   takeToolUsage,
   foldGeneratedMediaUsd,
+  settleSubagentMediaUsage,
   type BillingCounters,
   type IterationBillingEffects,
   type PendingToolUsage,
@@ -624,5 +625,87 @@ describe('billIteration (negative cost delta)', () => {
     });
 
     for (const spy of Object.values(spies)) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('settleSubagentMediaUsage', () => {
+  function pendingWith(costUsd: number): PendingToolUsage {
+    return { costUsd, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  }
+
+  function makeEffects(usdToCredits: (usd: number) => number = usd => usd * 100) {
+    return {
+      usdToCredits: vi.fn(usdToCredits),
+      deductCredits: vi.fn().mockResolvedValue(undefined),
+      recordAuditCredits: vi.fn().mockResolvedValue(undefined),
+      recordUsageEvent: vi.fn(),
+    };
+  }
+
+  it('deducts the accrued media USD as credits and mirrors it onto the audit counter', async () => {
+    const effects = makeEffects();
+
+    const charged = await settleSubagentMediaUsage(pendingWith(0.04), effects);
+
+    expect(charged).toBe(4);
+    expect(effects.usdToCredits).toHaveBeenCalledWith(0.04);
+    expect(effects.deductCredits).toHaveBeenCalledWith(4);
+    expect(effects.recordAuditCredits).toHaveBeenCalledWith(4);
+  });
+
+  it('records a usage event carrying the media COGS and the credits charged', async () => {
+    const effects = makeEffects();
+    const pending = { costUsd: 0.04, inputTokens: 7, outputTokens: 3, cacheReadTokens: 2, cacheWriteTokens: 1 };
+
+    await settleSubagentMediaUsage(pending, effects);
+
+    expect(effects.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(effects.recordUsageEvent).toHaveBeenCalledWith({
+      inputTokens: 7,
+      outputTokens: 3,
+      cachedInputTokens: 2,
+      cacheWriteTokens: 1,
+      costUsd: 0.04,
+      creditsCharged: 4,
+    });
+  });
+
+  it('drains the accumulator so a second settlement charges nothing', async () => {
+    const pending = pendingWith(0.04);
+    const effects = makeEffects();
+
+    await settleSubagentMediaUsage(pending, effects);
+    const second = await settleSubagentMediaUsage(pending, effects);
+
+    expect(second).toBe(0);
+    expect(pending.costUsd).toBe(0);
+    expect(effects.deductCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('touches no effect when no media cost accrued', async () => {
+    const effects = makeEffects();
+
+    expect(await settleSubagentMediaUsage(pendingWith(0), effects)).toBe(0);
+    expect(effects.usdToCredits).not.toHaveBeenCalled();
+    expect(effects.deductCredits).not.toHaveBeenCalled();
+    expect(effects.recordAuditCredits).not.toHaveBeenCalled();
+    expect(effects.recordUsageEvent).not.toHaveBeenCalled();
+  });
+
+  it('skips the deduction when the cost rounds to zero credits', async () => {
+    const effects = makeEffects(() => 0);
+
+    expect(await settleSubagentMediaUsage(pendingWith(0.0001), effects)).toBe(0);
+    expect(effects.deductCredits).not.toHaveBeenCalled();
+    expect(effects.recordAuditCredits).not.toHaveBeenCalled();
+  });
+
+  it('does not record audit credits when the deduction fails', async () => {
+    const effects = makeEffects();
+    effects.deductCredits.mockRejectedValue(new Error('db down'));
+
+    await expect(settleSubagentMediaUsage(pendingWith(0.04), effects)).rejects.toThrow('db down');
+    expect(effects.recordAuditCredits).not.toHaveBeenCalled();
+    expect(effects.recordUsageEvent).not.toHaveBeenCalled();
   });
 });
