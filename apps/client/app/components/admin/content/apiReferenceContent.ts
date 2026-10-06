@@ -701,12 +701,11 @@ POST /api/ai/llm
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
 
-#### Image Generation, Editing, and Video Generation (async)
+#### Image Generation and Editing (async)
 
 \`\`\`
 POST /api/v1/image-generations
 POST /api/v1/image-edits
-POST /api/v1/video-generations
 \`\`\`
 
 **Required API-key scope:** \`ai:generate\`.
@@ -714,19 +713,32 @@ POST /api/v1/video-generations
 > **These endpoints are generated from their contracts.** The full request/response
 > reference - every field, its type, defaults, and validation rules, including the
 > \`referenceImageFabFileIds\` style anchors and the optional \`callbackUrl\` - lives in the
-> [generated API docs](/api/v1/docs) under \`generateImage\`, \`editImage\`, and
-> \`generateVideo\`, derived from the same objects the handlers validate with.
+> [generated API docs](/api/v1/docs) under \`generateImage\` and \`editImage\`, derived from the
+> same objects the handlers validate with.
 >
-> All three are asynchronous: the call queues the render and returns a quest with no
-> image/video yet, so it never blocks on generation. Poll \`GET /api/v1/quests/{id}\`
-> until \`status\` is \`done\` (see [Poll Quest Status](#poll-quest-status)); a render that failed
-> arrives there as \`type: "error"\`, not as a 4xx. Pass \`callbackUrl\` (an https URL) to
-> receive a signed \`POST\` instead of polling (at-least-once: dedupe on
-> \`X-Webhook-Event-ID\`) - see the \`generateVideo\` contract
-> description in the [generated API docs](/api/v1/docs) for the header/retry/signing
-> details, which apply the same way to all three endpoints. \`POST /api/ai/generate-image\`,
-> \`POST /api/ai/edit-image\`, and \`POST /api/ai/generate-video\` are legacy aliases of the
-> same handlers and keep working.
+> Both are asynchronous: the call queues the render and returns a quest with no image yet.
+> Poll \`GET /api/v1/quests/{id}\` until \`status\` is \`done\` (see [Poll Quest Status](#poll-quest-status));
+> a render that failed arrives there as \`type: "error"\`, not as a 4xx. Pass \`callbackUrl\` (an https URL)
+> to receive a signed \`POST\` instead of polling (at-least-once: dedupe on \`X-Webhook-Event-ID\`).
+> \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\` are legacy aliases of the same handlers.
+
+#### Video Generation (jobs)
+
+\`\`\`
+GET  /api/v1/video-models
+POST /api/v1/video-generations
+GET  /api/v1/video-generations
+GET  /api/v1/video-generations/{id}
+POST /api/v1/video-generations/{id}/cancel
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+> Generated from their contracts: see \`listVideoModels\`, \`createVideoGeneration\`,
+> \`getVideoGeneration\`, \`listVideoGenerations\` and \`cancelVideoGeneration\` in the
+> [generated API docs](/api/v1/docs). Create returns \`202\` with a job; poll the job until \`state\` is
+> terminal, then download \`output.url\` (signed, valid 15 minutes; re-read the job for a fresh URL).
+> Send \`Idempotency-Key\` to make retries safe. \`POST /api/ai/generate-video\` was removed and answers \`410\`.
 
 #### Voice Sessions
 
@@ -748,7 +760,7 @@ POST /api/v1/voice/sessions/{id}/end
 
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\` (and \`/{id}\`, \`/{id}/cancel\`), \`/api/v1/video-models\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
