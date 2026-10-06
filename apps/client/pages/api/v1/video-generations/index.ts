@@ -18,6 +18,7 @@ import { createVideoJob, type CreateVideoJobResult } from '@bike4mind/services/v
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
+import { resolveBillingOrgId } from '@server/utils/orgAccess';
 import { hasUsableKey } from '@server/videoGenerations/listUsableVideoModels';
 import { mapperDeps, perUserRateLimit } from '@server/videoGenerations/routeDeps';
 import { toPublicVideoGeneration } from '@server/videoGenerations/toPublicVideoGeneration';
@@ -74,7 +75,7 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
   }
   const result = await createVideoJob(
     {
-      user: { id: req.user.id, organizationId: req.user.organizationId ?? null },
+      user: { id: req.user.id, organizationId: await resolveBillingOrgId(req, undefined) },
       request,
       source: 'api',
       // The domain scopes keys per credit owner (the org for members); per user here keeps members apart.

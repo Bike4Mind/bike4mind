@@ -23,6 +23,7 @@ export const h = {
   listUsableVideoModels: vi.fn(),
   hasUsableKey: vi.fn(),
   providersGet: vi.fn(),
+  resolveBillingOrgId: vi.fn(),
 };
 
 export const VALID_KEY = 'sk-test-valid-key';
@@ -50,6 +51,11 @@ export const rateLimitMiddlewareMock = () => ({
 });
 
 export const userRateTierMock = () => ({ resolveUserRateLimitPerMin: () => 60 });
+
+export const orgAccessMock = async (orig: ImportOriginal) => ({
+  ...(await orig<ModuleExports>()),
+  resolveBillingOrgId: (...a: unknown[]) => h.resolveBillingOrgId(...a),
+});
 
 export const servicesMock = async (orig: ImportOriginal) => {
   const actual = await orig<ModuleExports>();
@@ -173,6 +179,10 @@ export const resetHarness = () => {
   vi.clearAllMocks();
   asUser('user-1');
   h.rateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+  // Default: the caller's own org pointer, as for a member in good standing.
+  h.resolveBillingOrgId.mockImplementation(async (req: { user?: { organizationId?: unknown } }) =>
+    req.user?.organizationId ? String(req.user.organizationId) : null
+  );
   h.providersGet.mockReturnValue({ id: 'gemini-omni' });
   h.hasUsableKey.mockResolvedValue(true);
   h.sign.mockImplementation(async (_location: string, key: string) => `https://signed.example/${key}`);

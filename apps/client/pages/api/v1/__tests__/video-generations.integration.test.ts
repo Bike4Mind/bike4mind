@@ -25,6 +25,9 @@ vi.mock('@server/middlewares/rateLimit', async () =>
 vi.mock('@server/utils/userRateTier', async () =>
   (await import('@server/videoGenerations/__test__/routeHarness')).userRateTierMock()
 );
+vi.mock('@server/utils/orgAccess', async orig =>
+  (await import('@server/videoGenerations/__test__/routeHarness')).orgAccessMock(orig)
+);
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@bike4mind/services', async orig =>
   (await import('@server/videoGenerations/__test__/routeHarness')).servicesMock(orig)
@@ -126,6 +129,26 @@ describe('POST /api/v1/video-generations', () => {
       { id: 'member-a', organizationId: 'org-1' },
       { id: 'member-b', organizationId: 'org-1' },
     ]);
+  });
+
+  it('bills the org that resolveBillingOrgId returns', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    h.resolveBillingOrgId.mockResolvedValue('billing-org');
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(h.resolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: 'billing-org' });
+  });
+
+  it('falls back to personal billing when the org pointer is stale', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    asUser('user-1', 'left-org');
+    h.resolveBillingOrgId.mockResolvedValue(null);
+    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p' });
+    await handler(req, res);
+    expect(h.createVideoJob.mock.calls[0][0].user).toEqual({ id: 'user-1', organizationId: null });
   });
 
   it.each(['', 'x'.repeat(256), 'bad\u0001key'])('rejects Idempotency-Key %j with 422', async key => {
