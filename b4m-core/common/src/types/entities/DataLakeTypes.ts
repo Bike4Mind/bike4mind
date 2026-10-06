@@ -53,8 +53,10 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 /**
  * Statuses a slug lookup (`findBySlug` / `findBySlugAmongIds`) never resolves. The lake keeps
  * reserving its slug (create still disambiguates past it, and restore needs it back), but reaching
- * it by slug would let writes land on a lake the user deleted. `deleting` stays resolvable so an
- * in-flight delete can still be retried or inspected by slug. By-id lookups are unaffected.
+ * it by slug would let writes land on a lake the user deleted. By-id lookups are unaffected.
+ * `deleting` stays resolvable: the lifecycle route re-runs a stuck delete by id OR slug (API keys
+ * included), and hiding it would not 404 but fall through to the next same-slug lake the caller
+ * manages. Writes are kept off a `deleting` lake by `isLakeIngestable`, not by slug status.
  */
 export const DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES = ['deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
 
