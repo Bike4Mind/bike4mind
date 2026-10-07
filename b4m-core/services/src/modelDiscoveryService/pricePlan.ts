@@ -1,4 +1,5 @@
 import {
+  ADAPTER_LITERAL_PRICE_SOURCE,
   DISCOVERY_PRICE_NOTE_PREFIX,
   type IModelPrice,
   type IModelPriceInput,
@@ -37,8 +38,17 @@ const TOKENS_PER_MTOK = 1_000_000;
  */
 export const SEED_PRICE_NOTE = 'adapter-seed';
 
-/** The source name on a row written from an adapter literal rather than a feed. */
-export const ADAPTER_LITERAL_SOURCE = 'adapter-literal';
+/** A row planPriceWrites recorded from an adapter literal, as opposed to one a feed priced. */
+export const isAdapterLiteralRow = (row: Pick<IModelPrice, 'note'>): boolean =>
+  row.note?.startsWith(`${DISCOVERY_PRICE_NOTE_PREFIX}${ADAPTER_LITERAL_PRICE_SOURCE}@`) === true;
+
+function ladderMatches(row: IModelPrice, ladder: Readonly<Record<string, IModelPriceTier>>): boolean {
+  const keys = Object.keys(ladder);
+  return (
+    keys.length === Object.keys(row.pricing).length &&
+    keys.every(key => row.pricing[key] !== undefined && isEqual(rateFields(row.pricing[key]), rateFields(ladder[key])))
+  );
+}
 
 /** Stamped on every row discovery appends, for the admin provenance badge. */
 export const DISCOVERY_REPRICED_BY = 'model-discovery';
@@ -117,9 +127,11 @@ export interface PricePlanInput {
   adapterTiers?: ReadonlyMap<string, IModelPriceTier>;
   /**
    * The same literals as whole tier ladders (adapterPriceLadders). A model with
-   * no row in force that no source priced this run gets its literal written as
-   * its first row, so the price lives in the prices collection where an operator
-   * can see it and the next pass finds it already held. Unset writes none.
+   * no row in force and no row planned this run (a refused lone-aggregator quote
+   * does not count) gets its literal written as its first row, so the price lives
+   * in the prices collection where an operator can see it and the next pass finds
+   * it already held. A row this wrote is rewritten when the build's ladder moves
+   * on. Unset writes none.
    */
   adapterLadders?: ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>;
   /** modelDiscoveryPriceBandPct: the largest move, in percent, applied unattended. */
@@ -141,7 +153,9 @@ export interface PricePlan {
 }
 
 /**
- * Turn this run's observed prices into the ModelPrice rows it would append.
+ * Turn this run's observed prices into the ModelPrice rows it would append, plus a
+ * row recorded from the adapter literal for a known model no row holds and no
+ * observation priced (see `adapterLadders`).
  *
  * Every precedence rule is enforced HERE, at write time, because the runtime
  * read path (applyModelPriceCatalog) has no provenance awareness at all: it
@@ -366,22 +380,29 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
     });
   }
 
-  // A model this build prices in code that no source quoted and no row holds. The
-  // literal is first-party and promotion already trusts it, so recording it
-  // removes the dependency on the price seed having been applied. The whole
+  // A model this build prices in code that no row holds and no source priced this
+  // run. The literal is first-party and promotion already trusts it, so recording
+  // it removes the dependency on the price seed having been applied. The whole
   // ladder goes in: the read path replaces the pricing map wholesale, and a row
   // holding only the base tier would bill long prompts at the short rate. Noted
-  // as an automation row, so an operator reprice or a newer seed still wins.
+  // as an automation row, so an operator reprice or a feed still wins.
+  //
+  // A row of this kind tracks the build: without a row the read path bills the
+  // live literal, so a stored copy that stopped matching it would pin billing to
+  // an old build's price. Rewriting is gated on the note, never on a row some
+  // other owner wrote.
   const plannedIds = new Set(rows.map(row => row.modelId));
   for (const modelId of [...(input.adapterLadders?.keys() ?? [])].sort()) {
     const ladder = input.adapterLadders?.get(modelId);
-    if (!ladder || !input.knownModelIds.has(modelId) || inForce.has(modelId) || plannedIds.has(modelId)) continue;
+    if (!ladder || !input.knownModelIds.has(modelId) || plannedIds.has(modelId)) continue;
+    const held = inForce.get(modelId);
+    if (held && (!isAdapterLiteralRow(held) || ladderMatches(held, ladder))) continue;
     rows.push({
       modelId,
       unit: 'per_token',
       pricing: Object.fromEntries(Object.entries(ladder).map(([threshold, tier]) => [threshold, { ...tier }])),
       effectiveFrom: input.runStartedAt,
-      note: `${DISCOVERY_PRICE_NOTE_PREFIX}${ADAPTER_LITERAL_SOURCE}@${input.runStartedAt.toISOString()}`,
+      note: `${DISCOVERY_PRICE_NOTE_PREFIX}${ADAPTER_LITERAL_PRICE_SOURCE}@${input.runStartedAt.toISOString()}`,
       repricedBy: DISCOVERY_REPRICED_BY,
     });
   }
