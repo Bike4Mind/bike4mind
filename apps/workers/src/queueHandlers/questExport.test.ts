@@ -142,13 +142,13 @@ vi.mock('@server/utils/generatedImageAccess', () => ({
 
 vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
 
-vi.mock('@client/app/utils/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
+vi.mock('@client/shared/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
 vi.mock('./createZipBuffer', () => ({ createZipBuffer: h.createZipBuffer }));
 
 // The summary worker is exercised in its own file; here only the routing matters. The payload
 // schema is real because the dispatch's union is built from it at module load.
-vi.mock('@server/queueHandlers/orgFeedbackSummary', async () => {
+vi.mock('@workers/queueHandlers/orgFeedbackSummary', async () => {
   const { z } = await import('zod');
   return {
     OrgFeedbackSummaryPayload: z.object({

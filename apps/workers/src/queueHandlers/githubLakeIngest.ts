@@ -24,8 +24,8 @@ import {
   gitHubErrorStatus,
   gitHubRateLimitDelaySeconds,
 } from '@server/integrations/github/dataLake/lakeAppClient';
-import { runGitHubLakeSlice } from '@server/queueHandlers/githubLakeSlice';
-import { settleLakeIngestBatch } from '@server/queueHandlers/lakeIngestShared';
+import { runGitHubLakeSlice } from '@workers/queueHandlers/githubLakeSlice';
+import { settleLakeIngestBatch } from '@workers/queueHandlers/lakeIngestShared';
 import { Resource } from 'sst';
 import { z, ZodError } from 'zod';
 
