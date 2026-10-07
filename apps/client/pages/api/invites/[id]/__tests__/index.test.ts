@@ -105,6 +105,7 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
 
     const body = res._getJSONData();
     expect(body.type).toBe('FabFile');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(body.recipients.pending).toEqual(['me@x.com']);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
     expect(JSON.stringify(body)).not.toContain('third@x.com');
@@ -129,6 +130,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
@@ -174,6 +176,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
       expect.objectContaining({ db: expect.any(Object) })
     );
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 
   it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
@@ -190,6 +193,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
@@ -212,6 +216,17 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     await mockRefs.getHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).toHaveBeenCalled();
+  });
+
+  it('keeps the no-store header when the resolver throws', async () => {
+    resolveRedeemableInvite.mockRejectedValue(new Error('db down'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await expect(mockRefs.getHandler!(req, res)).rejects.toThrow('db down');
+
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });
