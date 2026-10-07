@@ -1,5 +1,5 @@
 {
-  "notice": "Aggregator key universes captured 2026-07-26 from models.dev/api.json (ETag 97c7bbb38bbf69bf51d022718f331faf) and github.com/BerriAI/litellm@v1.93.0/model_prices_and_context_window.json. Keys only, no values: this fixture exists so the join-coverage guard and the dead-alias check run without egress. modelsDev holds only the providers MODELS_DEV_PROVIDER_BY_BACKEND maps a backend to; litellm holds only first-party keys, because a key whose gateway prefix survives normalization can never match one of our ids and must never be aliased to. The moonshotai provider keys and the first-party moonshot/* litellm keys were added 2026-07-28 when the Kimi backend landed; the litellm side is still read at v1.93.0, the models.dev side from a later fetch than the ETag above. The deepseek provider was added 2026-09-13 when the DeepSeek backend landed: models.dev already lists both deepseek-flash and deepseek-v4-pro under it, while litellm's bare deepseek-v4-pro predates that capture and its deepseek-flash entry has not appeared yet (it still only carries the vendor's legacy deepseek-v4-flash alias name). Both sides carry keys for DeepSeek ids this build does not ship, the same as every other provider here - the capture is the provider's whole key space, not our catalog.",
+  "notice": "Aggregator key universes captured 2026-07-26 from models.dev/api.json (ETag 97c7bbb38bbf69bf51d022718f331faf) and github.com/BerriAI/litellm@v1.93.0/model_prices_and_context_window.json. Keys only, no values: this fixture exists so the join-coverage guard and the dead-alias check run without egress. modelsDev holds only the providers MODELS_DEV_PROVIDER_BY_BACKEND maps a backend to; litellm holds only first-party keys, because a key whose gateway prefix survives normalization can never match one of our ids and must never be aliased to. The moonshotai provider keys and the first-party moonshot/* litellm keys were added 2026-07-28 when the Kimi backend landed; the litellm side is read at v1.93.0, plus three keys added from litellm main on 2026-10-07 (see the end of this notice), the models.dev side from a later fetch than the ETag above. The deepseek provider was added 2026-09-13 when the DeepSeek backend landed: models.dev already lists both deepseek-flash and deepseek-v4-pro under it, while litellm's bare deepseek-v4-pro predates that capture and its deepseek-flash entry had not appeared yet at that capture (it then only carried the vendor's legacy deepseek-v4-flash alias name; litellm main now has it). Both sides carry keys for DeepSeek ids this build does not ship, the same as every other provider here - the capture is the provider's whole key space, not our catalog. On 2026-10-07 three litellm keys were added from litellm main (deepseek-flash, moonshot/kimi-k2.7-code, moonshot/kimi-k3), which now publishes them; the rest of the litellm side is still the v1.93.0 capture, because a full re-capture from main also drops 116 retired keys the seed still carries. litellm main still has no kimi-k2.7-code-highspeed.",
   "capturedAt": "2026-07-26",
   "modelsDevProviders": [
     "amazon-bedrock",
@@ -10,7 +10,7 @@
     "openai",
     "xai"
   ],
-  "litellmRef": "v1.93.0",
+  "litellmRef": "v1.93.0 + 3 keys from main (2026-10-07)",
   "modelsDev": [
     "amazon.nova-2-lite-v1:0",
     "amazon.nova-lite-v1:0",
@@ -384,6 +384,7 @@
     "davinci-002",
     "deep-research-pro-preview-12-2025",
     "deepseek-chat",
+    "deepseek-flash",
     "deepseek-reasoner",
     "deepseek-v3-2-251201",
     "deepseek-v4-flash",
@@ -748,6 +749,8 @@
     "moonshot/kimi-k2-turbo-preview",
     "moonshot/kimi-k2.5",
     "moonshot/kimi-k2.6",
+    "moonshot/kimi-k2.7-code",
+    "moonshot/kimi-k3",
     "moonshot/kimi-latest",
     "moonshot/kimi-latest-128k",
     "moonshot/kimi-latest-32k",
