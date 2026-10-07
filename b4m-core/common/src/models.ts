@@ -526,40 +526,12 @@ export const supportedSpeechToTextModels = z.enum(SpeechToTextModels);
 export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 
 /**
- * Video Models
- */
-export enum VideoModels {
-  SORA_2 = 'sora-2',
-  SORA_2_PRO = 'sora-2-pro',
-}
-
-export const VIDEO_MODELS = Object.values(VideoModels);
-export const supportedVideoModels = z.enum(VideoModels);
-export type VideoModelName = z.infer<typeof supportedVideoModels>;
-
-/**
- * Video size constraints and options for Sora
- */
-export const VIDEO_SIZE_CONSTRAINTS = {
-  SORA: {
-    durations: [4, 8, 12] as const,
-    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'] as const,
-    defaultDuration: 4,
-    defaultSize: '720x1280' as const,
-  },
-} as const;
-
-export type SoraDuration = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.durations)[number];
-export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
-
-/**
  * All supported models
  */
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
   ...SpeechToTextModels,
-  ...VideoModels,
 });
 
 export type ModelName = z.infer<typeof supportedModels>;

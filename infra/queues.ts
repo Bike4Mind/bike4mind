@@ -1094,48 +1094,6 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// Video Generation Queue
-// Handles async OpenAI Sora video generation (longer processing times)
-// Note: Lambda max timeout is 15 minutes. The Sora polling happens within the Lambda,
-// so we set to max Lambda timeout. If videos take longer, the polling will timeout
-// and the job may need to be retried or handled differently in the future.
-const videoGenerationDLQ = new sst.aws.Queue('videoGenerationDLQ', {});
-const videoGenerationQueue = new sst.aws.Queue('videoGenerationQueue', {
-  visibilityTimeout: '20 minutes', // Lambda timeout (15 min) + safety margin
-  dlq: {
-    queue: videoGenerationDLQ.arn,
-    retry: 2, // Fewer retries - video generation is expensive
-  },
-});
-const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
-  {
-    handler: 'apps/client/server/queueHandlers/videoGeneration.dispatch',
-    runtime: 'nodejs24.x',
-    timeout: '15 minutes', // Max Lambda timeout (900 seconds)
-    vpc: lambdaVpc,
-    link: [
-      ...allSecrets,
-      websocketApi,
-      generatedImagesBucket,
-      fabFileBucket,
-      appFilesBucket,
-      eventBus,
-      generationCallbackQueue,
-    ],
-    logging: {
-      retention: '3 days',
-    },
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    concurrency: {
-      // Limit concurrency - video generation is resource-intensive
-      reserved: 5,
-    },
-  },
-  SINGLE_RECORD_BATCH
-);
-
 // Generation Job Queue
 // One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
 // needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
@@ -1743,7 +1701,6 @@ export {
   generationCallbackQueue,
   imageGenerationQueue,
   imageEditQueue,
-  videoGenerationQueue,
   generationJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
@@ -1780,7 +1737,6 @@ export {
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
-  videoGenerationDLQ,
   generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
@@ -1818,7 +1774,6 @@ export {
   generationCallbackQueueSubscription,
   imageGenerationQueueSubscription,
   imageEditQueueSubscription,
-  videoGenerationQueueSubscription,
   generationJobQueueSubscription,
   fabFileBucketNotification,
   researchEngineQueueSubscription,

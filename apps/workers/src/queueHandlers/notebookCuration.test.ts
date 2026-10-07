@@ -16,7 +16,7 @@ const { mockCurateNotebook, mockSendToClient, NotebookCurationJob, Session, User
 }));
 
 // Benign proxy so `Resource.X.value` / `Resource.App.stage` resolve to strings
-// without touching real SST resources (mirrors videoGeneration.test.ts).
+// without touching real SST resources.
 vi.mock('sst', () => ({
   Resource: new Proxy({} as Record<string, unknown>, {
     get(_, key) {

@@ -345,101 +345,6 @@
           ]
         }
       },
-      "generateVideo200PollResult": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "stopped",
-              "running",
-              "done"
-            ]
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "message",
-              "oob",
-              "error",
-              "system",
-              "voice_transcript"
-            ]
-          },
-          "errorCode": {
-            "type": "string",
-            "enum": [
-              "insufficient_credits",
-              "spend_cap_exceeded"
-            ]
-          },
-          "reply": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "replies": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "fallbackInfo": {
-            "type": "object",
-            "properties": {
-              "primaryModel": {
-                "type": "string"
-              },
-              "primaryModelName": {
-                "type": "string"
-              },
-              "fallbackModel": {
-                "type": "string"
-              },
-              "fallbackModelName": {
-                "type": "string"
-              },
-              "reason": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "primaryModel",
-              "primaryModelName",
-              "fallbackModel",
-              "fallbackModelName"
-            ]
-          },
-          "sessionId": {
-            "type": "string"
-          },
-          "videos": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "sessionId"
-        ],
-        "description": "The quest polled at `GET /api/v1/quests/{id}` after this ACK. The render is finished once `status` is `\"done\"`: on success `videos` holds the rendered videos; a render that FAILED is `type: \"error\"` with the reason in `reply`, never a 4xx. That covers credit exhaustion (tagged `errorCode: \"insufficient_credits\"`, the same vocabulary as the synchronous 422s on the audio endpoints) and a provider error. Check `type` before reading `videos`; `errorCode` is absent on unclassified failures, so its absence does not mean success.",
-        "example": {
-          "id": "664f1c2b9a1e4d0012ab34cd",
-          "sessionId": "664f1c2b9a1e4d0012ab34aa",
-          "status": "done",
-          "type": "message",
-          "videos": [
-            "3f6c1a52-9d1e-4b7a-8c2f-5e0d4a9b1c7e.mp4"
-          ]
-        }
-      },
       "sendChatMessageResponse200": {
         "type": "object",
         "properties": {
@@ -4870,192 +4775,1245 @@
           "top_k": 5
         }
       },
-      "generateVideoResponse200": {
+      "cancelVideoGenerationResponse200": {
         "type": "object",
         "properties": {
-          "quest": {
-            "type": "object",
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "video_generation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "storing",
+              "succeeded",
+              "failed",
+              "blocked",
+              "cancelled"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "text_to_video",
+              "image_to_video"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": "number"
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "3:2",
+              "2:3",
+              "21:9"
+            ]
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "4k"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "api",
+              "studio",
+              "agent"
+            ]
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
             "properties": {
-              "id": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "content_blocked",
+                  "provider_timeout",
+                  "provider_error",
+                  "region_unavailable",
+                  "output_too_large",
+                  "input_image_not_found",
+                  "cancelled"
+                ]
+              },
+              "message": {
                 "type": "string"
-              },
-              "status": {
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "output": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "availability": {
                 "type": "string",
                 "enum": [
-                  "pending",
-                  "stopped",
-                  "running",
-                  "done"
-                ]
+                  "ready",
+                  "pending_scan",
+                  "unavailable"
+                ],
+                "description": "`ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling."
               },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "message",
-                  "oob",
-                  "error",
-                  "system",
-                  "voice_transcript"
-                ]
-              },
-              "errorCode": {
-                "type": "string",
-                "enum": [
-                  "insufficient_credits",
-                  "spend_cap_exceeded"
-                ]
-              },
-              "reply": {
+              "url": {
                 "type": [
                   "string",
                   "null"
-                ]
+                ],
+                "description": "Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null."
               },
-              "replies": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601. When url stops working; null whenever url is."
               },
-              "fallbackInfo": {
-                "type": "object",
-                "properties": {
-                  "primaryModel": {
-                    "type": "string"
-                  },
-                  "primaryModelName": {
-                    "type": "string"
-                  },
-                  "fallbackModel": {
-                    "type": "string"
-                  },
-                  "fallbackModelName": {
-                    "type": "string"
-                  },
-                  "reason": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "primaryModel",
-                  "primaryModelName",
-                  "fallbackModel",
-                  "fallbackModelName"
-                ]
-              },
-              "sessionId": {
+              "content_type": {
                 "type": "string"
               },
-              "videos": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
+              "duration_seconds": {
+                "type": "number"
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The Files entry, or null when the clip was stored outside Files."
               }
             },
             "required": [
-              "id",
-              "sessionId"
+              "availability",
+              "url",
+              "expires_at",
+              "content_type",
+              "duration_seconds",
+              "file_id"
             ]
           },
-          "session": {
+          "credits": {
             "type": "object",
             "properties": {
-              "id": {
+              "reserved": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "settled": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reserved",
+              "settled"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "state",
+          "model",
+          "mode",
+          "prompt",
+          "duration_seconds",
+          "aspect_ratio",
+          "resolution",
+          "source",
+          "progress",
+          "error",
+          "output",
+          "credits",
+          "created_at",
+          "updated_at"
+        ],
+        "example": {
+          "id": "664f1c2b9a1e4d0012ab34cd",
+          "object": "video_generation",
+          "state": "pending",
+          "model": "grok-imagine-video-1.5",
+          "mode": "text_to_video",
+          "prompt": "A slow dolly shot of a red lighthouse at dusk",
+          "duration_seconds": 6,
+          "aspect_ratio": "16:9",
+          "resolution": "480p",
+          "source": "api",
+          "progress": null,
+          "error": null,
+          "output": null,
+          "credits": {
+            "reserved": 960,
+            "settled": null
+          },
+          "created_at": "2026-10-06T00:00:00.000Z",
+          "updated_at": "2026-10-06T00:00:00.000Z"
+        }
+      },
+      "createVideoGenerationResponse202": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "video_generation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "storing",
+              "succeeded",
+              "failed",
+              "blocked",
+              "cancelled"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "text_to_video",
+              "image_to_video"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": "number"
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "3:2",
+              "2:3",
+              "21:9"
+            ]
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "4k"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "api",
+              "studio",
+              "agent"
+            ]
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "content_blocked",
+                  "provider_timeout",
+                  "provider_error",
+                  "region_unavailable",
+                  "output_too_large",
+                  "input_image_not_found",
+                  "cancelled"
+                ]
+              },
+              "message": {
                 "type": "string"
               }
             },
             "required": [
-              "id"
+              "code",
+              "message"
+            ]
+          },
+          "output": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "availability": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "pending_scan",
+                  "unavailable"
+                ],
+                "description": "`ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null."
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601. When url stops working; null whenever url is."
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "duration_seconds": {
+                "type": "number"
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The Files entry, or null when the clip was stored outside Files."
+              }
+            },
+            "required": [
+              "availability",
+              "url",
+              "expires_at",
+              "content_type",
+              "duration_seconds",
+              "file_id"
+            ]
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "reserved": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "settled": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reserved",
+              "settled"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "state",
+          "model",
+          "mode",
+          "prompt",
+          "duration_seconds",
+          "aspect_ratio",
+          "resolution",
+          "source",
+          "progress",
+          "error",
+          "output",
+          "credits",
+          "created_at",
+          "updated_at"
+        ],
+        "example": {
+          "id": "664f1c2b9a1e4d0012ab34cd",
+          "object": "video_generation",
+          "state": "pending",
+          "model": "grok-imagine-video-1.5",
+          "mode": "text_to_video",
+          "prompt": "A slow dolly shot of a red lighthouse at dusk",
+          "duration_seconds": 6,
+          "aspect_ratio": "16:9",
+          "resolution": "480p",
+          "source": "api",
+          "progress": null,
+          "error": null,
+          "output": null,
+          "credits": {
+            "reserved": 960,
+            "settled": null
+          },
+          "created_at": "2026-10-06T00:00:00.000Z",
+          "updated_at": "2026-10-06T00:00:00.000Z"
+        }
+      },
+      "createVideoGenerationResponse404": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "unsupported_duration",
+              "unsupported_aspect_ratio",
+              "unsupported_resolution",
+              "unsupported_mode",
+              "missing_input_image",
+              "unexpected_input_image",
+              "unsupported_audio_option",
+              "invalid_request",
+              "model_disabled",
+              "model_unavailable",
+              "insufficient_credits",
+              "input_image_not_found",
+              "idempotency_key_reused",
+              "invalid_idempotency_key"
             ]
           }
         },
         "required": [
-          "quest",
-          "session"
+          "error"
         ]
       },
-      "generateVideoRequest": {
+      "createVideoGenerationResponse422": {
         "type": "object",
         "properties": {
-          "prompt": {
-            "type": "string",
-            "minLength": 1
+          "error": {
+            "type": "string"
           },
+          "request_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "deprecated": true,
+            "description": "Deprecated, sunset 2026-12-01. The `name` of whatever the server threw - usually one of our own error classes (`NotFoundError`, `UnprocessableEntityError`, ...), but on an unhandled 500 it can be a library or driver class name instead. Unstable by nature: these are internal names we rename at will, and the set is open. Documented only so the wire and this spec agree for the deprecation window; it is removed on the sunset date. Branch on the HTTP status, not on this."
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "unsupported_duration",
+              "unsupported_aspect_ratio",
+              "unsupported_resolution",
+              "unsupported_mode",
+              "missing_input_image",
+              "unexpected_input_image",
+              "unsupported_audio_option",
+              "invalid_request",
+              "model_disabled",
+              "model_unavailable",
+              "insufficient_credits",
+              "input_image_not_found",
+              "idempotency_key_reused",
+              "invalid_idempotency_key"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "createVideoGenerationRequest": {
+        "type": "object",
+        "properties": {
           "model": {
             "type": "string",
-            "enum": [
-              "sora-2",
-              "sora-2-pro"
-            ],
-            "default": "sora-2"
+            "minLength": 1,
+            "description": "A model id from GET /api/v1/video-models."
           },
-          "seconds": {
-            "anyOf": [
-              {
-                "type": "number",
-                "enum": [
-                  4
-                ]
-              },
-              {
-                "type": "number",
-                "enum": [
-                  8
-                ]
-              },
-              {
-                "type": "number",
-                "enum": [
-                  12
-                ]
-              }
-            ],
-            "default": 4
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000
           },
-          "size": {
+          "mode": {
             "type": "string",
             "enum": [
-              "720x1280",
-              "1280x720",
-              "1024x1792",
-              "1792x1024"
+              "text_to_video",
+              "image_to_video"
             ],
-            "default": "720x1280"
+            "description": "Defaults to image_to_video when input_image_file_id is set, else text_to_video."
           },
-          "sessionId": {
+          "duration_seconds": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Defaults to the model's default duration."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "3:2",
+              "2:3",
+              "21:9"
+            ]
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "4k"
+            ]
+          },
+          "input_image_file_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An image file you own, for image_to_video."
+          },
+          "audio": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "model",
+          "prompt"
+        ],
+        "additionalProperties": false,
+        "example": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "A slow dolly shot of a red lighthouse at dusk"
+        }
+      },
+      "getVideoGenerationResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
             "type": "string"
           },
-          "sessionName": {
+          "object": {
+            "type": "string",
+            "enum": [
+              "video_generation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "storing",
+              "succeeded",
+              "failed",
+              "blocked",
+              "cancelled"
+            ]
+          },
+          "model": {
             "type": "string"
           },
-          "questId": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "text_to_video",
+              "image_to_video"
+            ]
+          },
+          "prompt": {
             "type": "string"
           },
-          "projectId": {
+          "duration_seconds": {
+            "type": "number"
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "enum": [
+              "16:9",
+              "9:16",
+              "1:1",
+              "4:3",
+              "3:4",
+              "3:2",
+              "2:3",
+              "21:9"
+            ]
+          },
+          "resolution": {
+            "type": "string",
+            "enum": [
+              "360p",
+              "480p",
+              "720p",
+              "1080p",
+              "4k"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "api",
+              "studio",
+              "agent"
+            ]
+          },
+          "progress": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "content_blocked",
+                  "provider_timeout",
+                  "provider_error",
+                  "region_unavailable",
+                  "output_too_large",
+                  "input_image_not_found",
+                  "cancelled"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "output": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "availability": {
+                "type": "string",
+                "enum": [
+                  "ready",
+                  "pending_scan",
+                  "unavailable"
+                ],
+                "description": "`ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling."
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null."
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "ISO 8601. When url stops working; null whenever url is."
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "duration_seconds": {
+                "type": "number"
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The Files entry, or null when the clip was stored outside Files."
+              }
+            },
+            "required": [
+              "availability",
+              "url",
+              "expires_at",
+              "content_type",
+              "duration_seconds",
+              "file_id"
+            ]
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "reserved": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "settled": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "reserved",
+              "settled"
+            ]
+          },
+          "created_at": {
             "type": "string"
           },
-          "organizationId": {
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "object",
+          "state",
+          "model",
+          "mode",
+          "prompt",
+          "duration_seconds",
+          "aspect_ratio",
+          "resolution",
+          "source",
+          "progress",
+          "error",
+          "output",
+          "credits",
+          "created_at",
+          "updated_at"
+        ],
+        "example": {
+          "id": "664f1c2b9a1e4d0012ab34cd",
+          "object": "video_generation",
+          "state": "pending",
+          "model": "grok-imagine-video-1.5",
+          "mode": "text_to_video",
+          "prompt": "A slow dolly shot of a red lighthouse at dusk",
+          "duration_seconds": 6,
+          "aspect_ratio": "16:9",
+          "resolution": "480p",
+          "source": "api",
+          "progress": null,
+          "error": null,
+          "output": null,
+          "credits": {
+            "reserved": 960,
+            "settled": null
+          },
+          "created_at": "2026-10-06T00:00:00.000Z",
+          "updated_at": "2026-10-06T00:00:00.000Z"
+        }
+      },
+      "listVideoGenerationsResponse200": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "object": {
+                  "type": "string",
+                  "enum": [
+                    "video_generation"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "storing",
+                    "succeeded",
+                    "failed",
+                    "blocked",
+                    "cancelled"
+                  ]
+                },
+                "model": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "text_to_video",
+                    "image_to_video"
+                  ]
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "duration_seconds": {
+                  "type": "number"
+                },
+                "aspect_ratio": {
+                  "type": "string",
+                  "enum": [
+                    "16:9",
+                    "9:16",
+                    "1:1",
+                    "4:3",
+                    "3:4",
+                    "3:2",
+                    "2:3",
+                    "21:9"
+                  ]
+                },
+                "resolution": {
+                  "type": "string",
+                  "enum": [
+                    "360p",
+                    "480p",
+                    "720p",
+                    "1080p",
+                    "4k"
+                  ]
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "api",
+                    "studio",
+                    "agent"
+                  ]
+                },
+                "progress": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "error": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "content_blocked",
+                        "provider_timeout",
+                        "provider_error",
+                        "region_unavailable",
+                        "output_too_large",
+                        "input_image_not_found",
+                        "cancelled"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                },
+                "output": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "availability": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "pending_scan",
+                        "unavailable"
+                      ],
+                      "description": "`ready`: url is set. `pending_scan`: the saved file is still being scanned; re-fetch the job until it changes (self-hosted installs can stay here for up to ~30 minutes). `unavailable`: the file was blocked by the scan or deleted and url will never be set; stop polling."
+                    },
+                    "url": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Signed download URL, valid until expires_at; re-fetch the job for a fresh one. Set only when availability is `ready`, otherwise null."
+                    },
+                    "expires_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "ISO 8601. When url stops working; null whenever url is."
+                    },
+                    "content_type": {
+                      "type": "string"
+                    },
+                    "duration_seconds": {
+                      "type": "number"
+                    },
+                    "file_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "The Files entry, or null when the clip was stored outside Files."
+                    }
+                  },
+                  "required": [
+                    "availability",
+                    "url",
+                    "expires_at",
+                    "content_type",
+                    "duration_seconds",
+                    "file_id"
+                  ]
+                },
+                "credits": {
+                  "type": "object",
+                  "properties": {
+                    "reserved": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "settled": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reserved",
+                    "settled"
+                  ]
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "object",
+                "state",
+                "model",
+                "mode",
+                "prompt",
+                "duration_seconds",
+                "aspect_ratio",
+                "resolution",
+                "source",
+                "progress",
+                "error",
+                "output",
+                "credits",
+                "created_at",
+                "updated_at"
+              ]
+            }
+          },
+          "next_cursor": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "callbackUrl": {
-            "type": "string",
-            "maxLength": 2048,
-            "format": "uri",
-            "description": "Optional https URL that receives one signed POST when the job settles (success or failure). Requires API-key authentication and a callback signing secret on that key. The body is the GET /api/v1/quests/{id} response. Verify it with the `X-Webhook-Signature-256` header: `sha256=` + hex HMAC-SHA256 of `<X-Webhook-Timestamp>.<raw body>` keyed with the signing secret. Polling keeps working either way."
           }
         },
         "required": [
-          "prompt"
-        ],
-        "example": {
-          "prompt": "a drone shot over a foggy pine forest at sunrise",
-          "model": "sora-2",
-          "seconds": 4
-        }
+          "data",
+          "next_cursor"
+        ]
+      },
+      "listVideoModelsResponse200": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "object": {
+                  "type": "string",
+                  "enum": [
+                    "video_model"
+                  ]
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "modes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "text_to_video",
+                      "image_to_video"
+                    ]
+                  }
+                },
+                "duration": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "range"
+                          ]
+                        },
+                        "min": {
+                          "type": "number"
+                        },
+                        "max": {
+                          "type": "number"
+                        },
+                        "step": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "min",
+                        "max",
+                        "step"
+                      ]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "discrete"
+                          ]
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "values"
+                      ]
+                    }
+                  ]
+                },
+                "aspect_ratios": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "16:9",
+                      "9:16",
+                      "1:1",
+                      "4:3",
+                      "3:4",
+                      "3:2",
+                      "2:3",
+                      "21:9"
+                    ]
+                  }
+                },
+                "resolutions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "360p",
+                      "480p",
+                      "720p",
+                      "1080p",
+                      "4k"
+                    ]
+                  }
+                },
+                "defaults": {
+                  "type": "object",
+                  "properties": {
+                    "duration_seconds": {
+                      "type": "number"
+                    },
+                    "aspect_ratio": {
+                      "type": "string",
+                      "enum": [
+                        "16:9",
+                        "9:16",
+                        "1:1",
+                        "4:3",
+                        "3:4",
+                        "3:2",
+                        "2:3",
+                        "21:9"
+                      ]
+                    },
+                    "resolution": {
+                      "type": "string",
+                      "enum": [
+                        "360p",
+                        "480p",
+                        "720p",
+                        "1080p",
+                        "4k"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "duration_seconds",
+                    "aspect_ratio",
+                    "resolution"
+                  ]
+                },
+                "audio": {
+                  "type": "string",
+                  "enum": [
+                    "always",
+                    "optional",
+                    "none"
+                  ]
+                },
+                "credits_per_second": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": {
+                    "type": "number"
+                  },
+                  "description": "Credits per second of output by resolution; null for per-clip priced models."
+                },
+                "deprecation_date": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "object",
+                "display_name",
+                "provider",
+                "modes",
+                "duration",
+                "aspect_ratios",
+                "resolutions",
+                "defaults",
+                "audio",
+                "credits_per_second",
+                "deprecation_date"
+              ]
+            }
+          }
+        },
+        "required": [
+          "models"
+        ]
       },
       "listVoicesResponse200": {
         "type": "object",
@@ -15070,11 +16028,11 @@
         ]
       }
     },
-    "/api/v1/video-generations": {
+    "/api/v1/video-generations/{id}/cancel": {
       "post": {
-        "operationId": "generateVideo",
-        "summary": "Generate a video",
-        "description": "Queues a Sora video generation and returns immediately with the quest that will carry the result - no video yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is `\"done\"` (see the `generateVideo200PollResult` schema). Omit `sessionId` to create a new session. Credits are checked when the render runs, so insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-video` is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nOptional `callbackUrl`: an https URL that receives a signed POST when the quest settles (success, failure, or a stop; a failed render is `type: \"error\"` in the body, same as the poll). The body is the `GET /api/v1/quests/{id}` response. Headers: `X-Webhook-Event-ID` (the same on every attempt for one settlement; delivery is at-least-once, so dedupe on it, and a retried quest settles again under a new one), `X-Webhook-Delivery-ID` (unique per attempt), `X-Webhook-Timestamp` (unix seconds), `X-Webhook-Signature-256` (`sha256=` + hex HMAC-SHA256 of `<timestamp>.<raw body>` keyed with the API key's callback signing secret), and `X-Event-Type: quest.settled`. Delivery makes up to 5 attempts, retrying on a 5xx, 408, 429, timeout or network error - never on any other 4xx, and redirects are not followed; your endpoint must answer 2xx within 10 seconds. Requires API-key authentication and a signing secret on that key (returned once at key creation, or via `POST /api/user-api-keys/{id}/callback-secret`). A `callbackUrl` is rejected with a 400 when the request is not API-key authenticated, the key has no signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks; a URL that is not https fails request validation with a 422. Polling still works whether or not `callbackUrl` is set.",
+        "operationId": "cancelVideoGeneration",
+        "summary": "Cancel a video generation",
+        "description": "Requests cancellation and returns the job. A `pending` or `running` job moves to `cancelled` shortly after and its reserved credits are returned. A job already `storing` or finished is returned unchanged (the provider has already produced, and charged for, the video).",
         "tags": [
           "Videos"
         ],
@@ -15086,82 +16044,24 @@
             "apiKeyAuth": []
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/generateVideoRequest"
-              }
-            }
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
           }
-        },
+        ],
         "responses": {
           "200": {
-            "description": "Generation queued - NOT a finished render. `quest` has no videos yet; its outcome arrives on `GET /api/v1/quests/{id}`.",
+            "description": "The job after the cancel request.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/generateVideoResponse200"
-                }
-              }
-            },
-            "headers": {
-              "X-Request-ID": {
-                "description": "Correlation id for this request; safe to log and quote in support requests.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "X-RateLimit-Limit-Minute": {
-                "description": "Request quota per minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Minute": {
-                "description": "Requests remaining in the current minute.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Minute": {
-                "description": "Unix epoch (seconds) when the minute window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Limit-Day": {
-                "description": "Request quota per day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Remaining-Day": {
-                "description": "Requests remaining in the current day.",
-                "schema": {
-                  "type": "integer"
-                }
-              },
-              "X-RateLimit-Reset-Day": {
-                "description": "Unix epoch (seconds) when the day window resets.",
-                "schema": {
-                  "type": "integer"
-                }
-              }
-            },
-            "x-poll-result": {
-              "schema": {
-                "$ref": "#/components/schemas/generateVideo200PollResult"
-              }
-            }
-          },
-          "400": {
-            "description": "The `callbackUrl` was rejected: the request is not API-key authenticated, the key has no callback signing secret, the URL resolves to a private address, or the deployment does not deliver callbacks.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/cancelVideoGenerationResponse200"
                 }
               }
             },
@@ -15229,7 +16129,7 @@
             }
           },
           "403": {
-            "description": "The API key does not hold any of the required scopes.",
+            "description": "The API key lacks the `ai:generate` scope.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15243,11 +16143,47 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
               }
             }
           },
           "404": {
-            "description": "The session, or the quest being retried, does not exist or is not accessible to the caller. A nonexistent billing `organizationId` is `404` only for an admin caller; for anyone else, an invalid or inaccessible `organizationId` is `403` instead.",
+            "description": "No video generation with that id was requested by the caller (a malformed id is also a 404).",
             "content": {
               "application/json": {
                 "schema": {
@@ -15377,6 +16313,60 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
           }
         },
         "x-required-scopes": [
@@ -15386,17 +16376,1334 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/video-generations\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"prompt\": \"a drone shot over a foggy pine forest at sunrise\",\n  \"model\": \"sora-2\",\n  \"seconds\": 4\n}\nB4M_REQUEST_BODY"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/video-generations/<id>/cancel\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"prompt\": \"a drone shot over a foggy pine forest at sunrise\",\n  \"model\": \"sora-2\",\n  \"seconds\": 4\n}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations/<id>/cancel\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/video-generations\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"prompt\": \"a drone shot over a foggy pine forest at sunrise\",\n        \"model\": \"sora-2\",\n        \"seconds\": 4\n    },\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/video-generations/<id>/cancel\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/video-generations": {
+      "post": {
+        "operationId": "createVideoGeneration",
+        "summary": "Start a video generation",
+        "description": "Queues a video generation and returns `202` with the job. Poll `GET /api/v1/video-generations/{id}` until `state` is `succeeded`, `failed`, `blocked` or `cancelled`. On success, `output.availability` says whether the clip can be downloaded: `ready` means `output.url` is a signed download URL valid for 15 minutes (re-fetch the job for a fresh one); `pending_scan` means the saved file is still being scanned, so keep re-fetching the job (self-hosted installs can stay here for up to ~30 minutes); `unavailable` means the file was blocked or deleted and `output.url` will never be set, so stop polling. Credits for the requested duration are reserved up front and settled on completion; a failed or cancelled job is not charged. A `blocked` job is not charged either, unless the provider generated the clip before rejecting it and billed it: then the requested duration is charged and `credits.settled` shows it. Send an `Idempotency-Key` header (1-255 printable ASCII characters) to make retries safe: a repeat with the same key and body returns the original job, and the same key with a different body is a 422 `idempotency_key_reused`. Omitted fields take the model defaults from `GET /api/v1/video-models`.",
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/createVideoGenerationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; the job is queued (or replayed for a repeated Idempotency-Key).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createVideoGenerationResponse202"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the `ai:generate` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`input_image_file_id` does not name an image you own (`errorCode: input_image_not_found`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createVideoGenerationResponse404"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request cannot run: a body or capability violation (`errorCode` names it, e.g. `unsupported_duration`), an unknown or unavailable model (`model_unavailable`), a model your administrator disabled (`model_disabled`), too few credits (`insufficient_credits`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/createVideoGenerationResponse422"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/v1/video-generations\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"grok-imagine-video-1.5\",\n  \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n}\nB4M_REQUEST_BODY"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"grok-imagine-video-1.5\",\n  \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/video-generations\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"grok-imagine-video-1.5\",\n        \"prompt\": \"A slow dolly shot of a red lighthouse at dusk\"\n    },\n)"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "listVideoGenerations",
+        "summary": "List your video generations",
+        "description": "Your jobs, newest first, optionally filtered by `state` and `source`. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`.",
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "running",
+                "storing",
+                "succeeded",
+                "failed",
+                "blocked",
+                "cancelled"
+              ]
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "api",
+                "studio",
+                "agent"
+              ]
+            },
+            "required": false,
+            "name": "source",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of jobs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/listVideoGenerationsResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the `ai:generate` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A malformed `cursor`, `limit`, `state` or `source`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/video-generations\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/video-generations\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/video-generations/{id}": {
+      "get": {
+        "operationId": "getVideoGeneration",
+        "summary": "Get a video generation",
+        "description": "Returns one job you requested. Each read signs a fresh `output.url` (valid 15 minutes, see `expires_at`).",
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getVideoGenerationResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the `ai:generate` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No video generation with that id was requested by the caller (a malformed id is also a 404).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed validation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/video-generations/<id>\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-generations/<id>\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/video-generations/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
+    },
+    "/api/v1/video-models": {
+      "get": {
+        "operationId": "listVideoModels",
+        "summary": "List the video models you can use",
+        "description": "Returns the video models that are enabled, available in this deployment and have a usable provider key for the caller, with their capabilities and per-second credit price. Validate requests against these capabilities: an unsupported duration, aspect ratio or resolution is a 422, never silently adjusted.",
+        "tags": [
+          "Videos"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The usable models.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/listVideoModelsResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key lacks the `ai:generate` scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/video-models\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/video-models\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/video-models\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }

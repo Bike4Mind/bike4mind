@@ -214,6 +214,7 @@ import {
   categorizeToolError,
   AnomalyAlertService,
   aggregateWebFetchContentTelemetry,
+  performanceFromPromptMeta,
 } from '../telemetry';
 import type {
   ToolTelemetry,
@@ -5902,11 +5903,12 @@ export class ChatCompletionProcess {
             telemetryBuilder.setFinishReason(finishReason);
             telemetryBuilder.setUsedTools(hasToolCalls);
 
-            // Set performance metrics (use promptMeta values which are set earlier)
-            telemetryBuilder.setPerformance({
-              totalResponseTimeMs: totalResponseTime,
-              modelInferenceMs: quest.promptMeta?.performance?.modelInferenceTime,
-            });
+            // Set performance metrics (use promptMeta values which are set earlier). The TTFVT
+            // pair is forwarded unaltered so a never-rendered turn stays distinguishable from
+            // a fast one downstream; see performanceFromPromptMeta.
+            telemetryBuilder.setPerformance(
+              performanceFromPromptMeta(quest.promptMeta?.performance, totalResponseTime)
+            );
 
             // Set context window metrics (for M3, but initialize here)
             telemetryBuilder.setContextWindow({

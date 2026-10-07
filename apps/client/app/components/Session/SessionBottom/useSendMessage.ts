@@ -557,7 +557,7 @@ export function useSendMessage({
       undefined,
       sessionAgents.map(a => a.id)
     );
-    // Real slash commands (e.g. `/gen_image`, `/roll`, `/gen_video`) must run
+    // Real slash commands (e.g. `/gen_image`, `/roll`) must run
     // their own handler even when the Agent-mode toggle is ON - otherwise the
     // executor branch returns before `handler(sessionToSend)` is reached and
     // the command silently never executes. `/llm` is the implicit default and
@@ -1124,7 +1124,7 @@ export function useSendMessage({
     // stream replaces `statusMessage` on its first update; the error path below
     // clears it if no stream ever lands.
     //
-    // Skipped for real slash commands (`/roll`, `/gen_image`, `/gen_video`,
+    // Skipped for real slash commands (`/roll`, `/gen_image`,
     // etc.) - those handlers don't emit `streamed_chat_completion` WS events,
     // so the sentinel would never be overwritten on success and the Stop
     // button would stay stuck after the command returned. `handleLLMCommand`
