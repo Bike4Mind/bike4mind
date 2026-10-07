@@ -242,6 +242,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // `[]`/`{}` (which would otherwise echo in the API response for every key).
     agentId: { type: String },
     allowedOrigins: { type: [String], default: undefined },
+    identifiedClientIds: { type: [String], default: undefined },
     // Lake ids this key is bound to for the manage-but-not-member session admission (see
     // pages/api/v1/sessions/index.ts's preauthorizedLakeIds containment check). Admin-minted only.
     // No index: the only read is by the key's own id (already indexed), never a bulk lookup by

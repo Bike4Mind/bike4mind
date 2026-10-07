@@ -23,7 +23,6 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { agentRepository, cacheRepository, organizationRepository } from '@bike4mind/database';
 import {
   oauthClientRepository,
-  oauthGrantRepository,
   userApiKeyRepository,
   userRepository,
   UserApiKeyAuditLog,
@@ -31,6 +30,7 @@ import {
 import { userApiKeyService } from '@bike4mind/services';
 import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
+import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
@@ -182,83 +182,18 @@ const handler = baseApi({ auth: false })
         .json({ error: 'invalid_grant', error_description: 'Token subject does not resolve to a B4M user' });
     }
 
-    // 5.5. Grant gate (SECURITY) - relying-party clients only. Require the durable (user, client)
-    //      authorization grant recorded by the authorize flow (code.ts), AND that the grant covers
-    //      the billable scope. Closes two holes:
-    //        (a) a pool-signed token - including a forged identities[] entry from a compromised pool
-    //            - for a user who never authorized this client. The pool cannot forge a B4M grant.
-    //        (b) a grant that covers only identity scopes (openid/email/profile) being treated as
-    //            authorization for any minted scope. The grant must cover every scope this exchange
-    //            mints - the user must have explicitly approved each one for this client.
-    //      Reads the SAME OAuthGrant that token.ts enforces, per that model's contract.
-    //
-    //      Scoped to relying-party clients: a first-party / pre-existing federated client is trusted
-    //      (B4M controls the pool) and never went through code.ts's consent flow, so it has no grant
-    //      row and never will. Enforcing one on it would 403 every such integration the moment the
-    //      lever flips - the gate exists to constrain UNTRUSTED relying-party pools, so first-party
-    //      clients are exempt.
-    //
-    //      Defaults to GRACE (log-only): unlike the interactive token.ts flow (where the user
-    //      consents moments earlier in the same round-trip), this server-to-server exchange may
-    //      present a token minted before grants existed, so grace mode logs a would-reject instead of
-    //      blocking while operators re-mint/re-authorize. It does NOT auto-heal - a grant is recorded
-    //      only when the user actually authorizes this client. Flip enforcement per stage with
-    //      OAUTH_AI_TOKEN_ENFORCE_GRANT=true; the lever is plumbed through infra (deploy-contract.json
-    //      + infra/web.ts), per the API_KEY_SCOPE_STAGING precedent.
-    if (client.clientType === 'relying-party') {
-      const enforce = process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT === 'true';
-      let grant: Awaited<ReturnType<typeof oauthGrantRepository.findGrant>> | undefined;
-      let lookupFailed = false;
-      try {
-        grant = await oauthGrantRepository.findGrant(b4mUserId, client_id);
-      } catch (err) {
-        lookupFailed = true;
-        req.logger.warn(
-          `[OAUTH_AI_TOKEN] grant lookup failed for user ${b4mUserId} via client ${client_id}: ${String(err)}`
-        );
-      }
-
-      if (enforce) {
-        // Fail closed: an unreadable grant is UNKNOWN, not absent. Minting anyway would defeat the
-        // gate on exactly the transient error an attacker could induce. 503 so the caller retries.
-        if (lookupFailed) {
-          return res.status(503).json({
-            error: 'temporarily_unavailable',
-            error_description: 'Grant lookup failed; cannot verify authorization',
-          });
-        }
-        if (!grant) {
-          return res
-            .status(403)
-            .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
-        }
-        // Every requested scope must be covered by the grant -- not just billable ones. Any scope
-        // this exchange mints should be one the user explicitly consented to for this client.
-        const uncovered = requestedScopes.filter(s => !(grant.scopes ?? []).includes(s));
-        if (uncovered.length > 0) {
-          return res.status(403).json({
-            error: 'access_denied',
-            error_description: `User has not authorized the following scope(s) for this client: ${uncovered.join(' ')}`,
-          });
-        }
-      } else if (!lookupFailed) {
-        // Grace: surface would-rejects so operators see what enforcement would block. (A lookup
-        // failure is already logged above.)
-        if (!grant) {
-          req.logger.warn(
-            `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
-              `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
-          );
-        } else {
-          const uncovered = requestedScopes.filter(s => !(grant.scopes ?? []).includes(s));
-          if (uncovered.length > 0) {
-            req.logger.warn(
-              `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks ` +
-                `scope(s): ${uncovered.join(' ')} (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
-            );
-          }
-        }
-      }
+    // 5.5. Grant gate (SECURITY) - relying-party clients only; see federatedGrantGate.ts.
+    const grantRejection = await checkFederatedGrant({
+      client,
+      clientId: client_id,
+      userId: b4mUserId,
+      scopes: requestedScopes,
+      logger: req.logger,
+      logTag: 'OAUTH_AI_TOKEN',
+    });
+    if (grantRejection) {
+      const { status, ...body } = grantRejection;
+      return res.status(status).json(body);
     }
 
     // 6. Consent gate (SECURITY-CRITICAL). This endpoint mints outside the gated REST

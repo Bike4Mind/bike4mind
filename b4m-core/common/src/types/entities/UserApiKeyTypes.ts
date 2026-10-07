@@ -269,6 +269,12 @@ export interface IUserApiKey {
   /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
   allowedOrigins?: string[];
   /**
+   * OAuth client ids allowed to mint identified (user-pays) sessions on this embed key.
+   * Absent or empty = anonymous only. The opt-in binds a federated client to this key's
+   * tenant; without it any federated client could pair its users with any public key.
+   */
+  identifiedClientIds?: string[];
+  /**
    * Lake ids this key is bound to for the manage-but-not-member session admission (see
    * `preauthorizedLakeIds` on the session, and its containment check at
    * pages/api/v1/sessions/index.ts). Admin-minted only; a key's presence in this list is not itself

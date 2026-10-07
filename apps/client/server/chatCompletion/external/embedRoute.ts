@@ -50,9 +50,11 @@ import {
   fallbackLakeSettingsRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
+  embedConversationRepository,
 } from '@bike4mind/database';
-import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
-import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
+import { verifyEmbedApiKey, type ApiKeyInfo } from '@server/cli/auth';
+import { extractBearer, resolveEmbedSessionToken } from '@server/embed/resolveEmbedSessionToken';
+import { reauthorizeIdentifiedSession } from '@server/embed/identifiedEmbedUser';
 import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
@@ -76,8 +78,16 @@ import { z } from 'zod';
  * 422/429) instead of an SSE error frame. Only failures once the stream is open
  * (mid-completion) surface as SSE errors.
  *
- * Stateless: end-user turns are never persisted to any owner's session history -
- * the route never passes a sessionId and never calls persistRunAsQuest.
+ * Stateless for anonymous visitors: end-user turns are never persisted to any owner's
+ * session history - the route never passes a sessionId and never calls persistRunAsQuest.
+ *
+ * Identified mode (session token carries `endUserId`, see pages/api/embed/session.ts):
+ * the host's authenticated user is the actor. They pay from their own balance (never the
+ * key's org pool), tools run as them, and their conversation with this agent is kept
+ * server-side in EmbedConversation, so the server - not the request - supplies prior turns.
+ * The agent's tool gate, KB confinement and rate limits still apply. The per-key spend cap
+ * does not: it bounds what the key's org pays, and an identified user's own balance is
+ * the bound on their spend, so their turns neither count toward nor are blocked by it.
  *
  * Tools: server-side execution with a hard gate. KB retrieval is on by default but
  * confined to the bound agent's Project file set (kbScope, fail-closed to empty);
@@ -90,6 +100,9 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 // Lower than the backend default (10): an anonymous caller must not drive the full loop
 // depth on the owner org's credits. KB search + retrieve + one follow-up is plenty.
 const EMBED_MAX_TOOL_CALLS = 5;
+// Prior turns replayed to the model in identified mode. The stored history is longer
+// (EMBED_CONVERSATION_MAX_MESSAGES); this bounds per-turn input cost on the user's balance.
+const IDENTIFIED_HISTORY_MESSAGES = 40;
 
 const EmbedChatRequestSchema = z.object({
   // Only user/assistant turns from the client. The system persona is set
@@ -122,9 +135,18 @@ interface EmbedContext {
   currentSpend?: number;
   /** Present only on the session-token path; enables the per-session rate limit. */
   sessionId?: string;
+  /** Identified mode only: the host's authenticated user, who acts and pays. */
+  endUserId?: string;
+  /** Identified mode only: the OAuth client that handed the user over. */
+  oauthClientId?: string;
+  /** The key's opt-in list of clients allowed to run identified sessions. */
+  identifiedClientIds?: string[];
 }
 
-function toContext(info: ApiKeyInfo, sessionId?: string): EmbedContext {
+function toContext(
+  info: ApiKeyInfo,
+  session?: { sessionId: string; endUserId?: string; oauthClientId?: string }
+): EmbedContext {
   return {
     keyId: info.keyId,
     userId: info.userId,
@@ -134,7 +156,9 @@ function toContext(info: ApiKeyInfo, sessionId?: string): EmbedContext {
     rateLimit: info.rateLimit,
     spendCap: info.spendCap,
     currentSpend: info.currentSpend,
-    ...(sessionId && { sessionId }),
+    identifiedClientIds: info.identifiedClientIds,
+    ...(session && { sessionId: session.sessionId }),
+    ...(session?.endUserId && { endUserId: session.endUserId, oauthClientId: session.oauthClientId }),
   };
 }
 
@@ -147,19 +171,14 @@ function toContext(info: ApiKeyInfo, sessionId?: string): EmbedContext {
  * @throws Error (mapped to 401 by the caller) on any invalid credential.
  */
 async function resolveEmbedContext(headers: Record<string, string | undefined>): Promise<EmbedContext> {
-  const auth = headers.authorization;
-  const bearer = auth && /^bearer /i.test(auth) ? auth.slice(7).trim() : undefined;
+  const bearer = extractBearer(headers.authorization);
 
   // A bearer that is NOT a raw b4m_ key is the minted session token (a JWT always
   // starts with `eyJ`). This discriminator is coupled to the `b4m_` key prefix that
   // extractApiKeyFromHeaders keys on - if that prefix ever changes, both move together.
   if (bearer && !bearer.startsWith('b4m_')) {
-    const claims = verifyEmbedSessionToken(bearer);
-    const info = await verifyEmbedKeyById(claims.keyId);
-    if (info.agentId !== claims.agentId || info.organizationId !== claims.organizationId) {
-      throw new Error('Session token does not match the embed key');
-    }
-    return toContext(info, claims.sessionId);
+    const { claims, info } = await resolveEmbedSessionToken(bearer);
+    return toContext(info, claims);
   }
 
   return toContext(await verifyEmbedApiKey(headers));
@@ -188,6 +207,14 @@ async function resolveEmbedContext(headers: Record<string, string | undefined>):
  */
 async function buildEmbedServerTools(args: {
   ctx: EmbedContext;
+  /**
+   * The user tools execute as: the key owner for an anonymous visitor, the identified
+   * user otherwise. Project authorization below stays keyed on the key owner/org - the
+   * agent's curated project is the grant, not anything the actor owns.
+   */
+  actorUserId: string;
+  /** Already loaded on the request path in identified mode; fetched here otherwise. */
+  actorUser: Awaited<ReturnType<typeof userRepository.findById>> | null;
   hydrated: { model?: string; projectId?: string; allowedTools: string[]; deniedTools: string[] };
   /**
    * Owner org, or null. Set only when the bound agent passed the ORG-ownership clause -
@@ -210,21 +237,32 @@ async function buildEmbedServerTools(args: {
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
-  const { ctx, hydrated, ownerOrg, apiKeys: toolApiKeys, models, modelId, logger, getAbortSignal } = args;
+  const {
+    ctx,
+    actorUserId,
+    actorUser,
+    hydrated,
+    ownerOrg,
+    apiKeys: toolApiKeys,
+    models,
+    modelId,
+    logger,
+    getAbortSignal,
+  } = args;
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
 
   // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
-  const [project, owner, toolAvailability] = await Promise.all([
+  const [project, actor, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
-    userRepository.findById(ctx.userId),
+    actorUser ? Promise.resolve(actorUser) : userRepository.findById(actorUserId),
     // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
     // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
     // key, so a tool this lookup couldn't confirm works should not reach the model.
     resolveToolAvailability(
-      ctx.userId,
+      actorUserId,
       { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } },
       { onLookupError: 'unavailable', logger }
     ),
@@ -243,13 +281,13 @@ async function buildEmbedServerTools(args: {
     }
   }
 
-  if (!owner) {
-    logger.warn('[EMBED_CHAT] Key owner not found; running without tools');
+  if (!actor) {
+    logger.warn('[EMBED_CHAT] Acting user not found; running without tools');
     return undefined;
   }
 
   const modelInfo = models.find(m => m.id === modelId);
-  const toolLlm = getLlmByModel(toolApiKeys, { modelInfo, logger, endUserId: ctx.userId });
+  const toolLlm = getLlmByModel(toolApiKeys, { modelInfo, logger, endUserId: actorUserId });
   if (!toolLlm) {
     logger.warn('[EMBED_CHAT] No LLM backend for tool context; running without tools');
     return undefined;
@@ -257,8 +295,8 @@ async function buildEmbedServerTools(args: {
   toolLlm.currentModel = modelId;
 
   const deps: ToolBuilderDeps = {
-    userId: ctx.userId,
-    user: owner,
+    userId: actorUserId,
+    user: actor,
     logger,
     db: {
       adminSettings: adminSettingsRepository,
@@ -299,6 +337,39 @@ async function buildEmbedServerTools(args: {
     config: { web_search: {} },
   });
   return tools && tools.length > 0 ? tools : undefined;
+}
+
+/**
+ * Bound the stored history to the replay window, starting on a user turn so the
+ * conversation handed to the provider never opens with an assistant message.
+ */
+function toReplayableHistory(window: Array<{ role: 'user' | 'assistant'; content: string }>): IMessage[] {
+  const firstUser = window.findIndex(m => m.role === 'user');
+  if (firstUser === -1) return [];
+  return window.slice(firstUser).map(m => ({ role: m.role, content: m.content }));
+}
+
+/**
+ * Persist a completed identified turn. A write failure is logged, not surfaced: the
+ * user already received (and paid for) the reply, and failing the stream after the
+ * fact would read as a failed turn.
+ */
+async function persistIdentifiedTurn(
+  ctx: EmbedContext,
+  userText: string,
+  replyText: string,
+  logger: Logger
+): Promise<void> {
+  try {
+    await embedConversationRepository.appendMessages(ctx.endUserId!, ctx.agentId, ctx.keyId, [
+      { role: 'user', content: userText },
+      { role: 'assistant', content: replyText },
+    ]);
+  } catch (err) {
+    logger.error('[EMBED_CHAT] Failed to persist identified conversation turn', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
@@ -407,13 +478,33 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         return res.status(403).json({ error: 'forbidden', error_description: 'Embed key organization not found' });
       }
 
-      // Unconditional pre-flight balance check against the owner org (runs even when
-      // enforceCredits is off). Must precede any stream bytes so it can 422. This is a
+      // Identified mode: re-authorize client, grant and user on every turn, so a revocation
+      // lands mid-session rather than at token expiry.
+      let endUser: Awaited<ReturnType<typeof userRepository.findById>> = null;
+      if (ctx.endUserId) {
+        const loaded = await reauthorizeIdentifiedSession({
+          userId: ctx.endUserId,
+          clientId: ctx.oauthClientId!,
+          allowedClientIds: ctx.identifiedClientIds,
+          logger,
+        });
+        if ('rejection' in loaded) {
+          const { status, ...rejection } = loaded.rejection;
+          return res.status(status).json(rejection);
+        }
+        endUser = loaded.user;
+      }
+      const actorUserId = ctx.endUserId ?? ctx.userId;
+
+      // Unconditional pre-flight balance check against whoever pays: the owner org for an
+      // anonymous visitor, the identified user's own balance otherwise. A broke identified
+      // user is refused - never silently billed to the org pool instead. Runs even when
+      // enforceCredits is off and must precede any stream bytes so it can 422. This is a
       // coarse floor (requiredCredits defaults to 1) - exact settlement/refusal happens
-      // inside executeCompletion; a broke-but-nonzero org can still trip the mid-stream
+      // inside executeCompletion; a broke-but-nonzero payer can still trip the mid-stream
       // InsufficientCreditsError. A rough per-model pre-estimate here is a later refinement.
       try {
-        assertOwnerHasCredits(org);
+        assertOwnerHasCredits(endUser ?? org);
       } catch (creditErr) {
         const status = (creditErr as { statusCode?: number }).statusCode ?? 422;
         return res.status(status).json({
@@ -424,7 +515,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // Per-key spend-cap gate, the second billing-class check: the org may be
-      // solvent while this key has exhausted its own budget. Reads the validation-
+      // solvent while this key has exhausted its own budget. Org-paid turns only (see the
+      // identified-mode note at the top of this file). Reads the validation-
       // time snapshot off ctx (no fresh query - the auth layer just loaded the
       // key); the race this leaves open is bounded and accepted, since the cap is
       // a leaked-key backstop, not exact accounting. Not only N parallel streams:
@@ -432,7 +524,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // cliCompletions.ts), so even back-to-back sequential requests from a fast
       // client can pass this gate before the prior increment lands.
       try {
-        assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
+        if (!ctx.endUserId) assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
       } catch (capErr) {
         const status = (capErr as { statusCode?: number }).statusCode ?? 422;
         return res.status(status).json({
@@ -468,7 +560,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // spend cap or rate limit must not be able to drive that work; still before any
       // stream bytes, so the refusal is a clean JSON 422.
       // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
-      const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+      const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(actorUserId, {
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
         getSettingsByNames,
       })) as ApiKeyTable;
@@ -501,6 +593,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         models: embedModels,
         modelId: embedModelId,
         ctx,
+        actorUserId,
+        actorUser: endUser,
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.
         ownerOrg: ownedByOrg ? org : null,
@@ -521,14 +615,24 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // Prepend the agent's hydrated persona as a leading system message - the
       // embed run's configured behavior. Kept at the call site so executeCompletion
       // stays a plain message-list consumer.
+      // Identified mode: the server holds the history, so only the new user turn is taken
+      // from the request.
+      const latestUserTurn = body.messages[body.messages.length - 1];
+      const priorTurns: IMessage[] = ctx.endUserId
+        ? toReplayableHistory(
+            await embedConversationRepository.getMessages(ctx.endUserId, ctx.agentId, IDENTIFIED_HISTORY_MESSAGES)
+          )
+        : (body.messages.slice(0, -1) as IMessage[]);
       const messages: IMessage[] = [
         { role: 'system', content: hydrated.systemPrompt },
-        ...(body.messages as IMessage[]),
+        ...priorTurns,
+        latestUserTurn as IMessage,
       ];
+      let replyText = '';
 
       try {
         await executeCompletion({
-          userId: ctx.userId,
+          userId: actorUserId,
           model: hydrated.model,
           messages,
           options: { temperature: hydrated.temperature, maxTokens: hydrated.maxTokens, stream: true },
@@ -539,14 +643,15 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             users: userRepository,
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
-            // Per-key spend metering (spend-cap enforcement). NOT the provider-LLM
-            // key repo above (apiKeys) - this one holds the embed UserApiKey docs.
-            userApiKeys: userApiKeyRepository,
+            // Per-key spend metering (spend-cap enforcement), org-paid turns only. NOT the
+            // provider-LLM key repo above (apiKeys) - this one holds the embed UserApiKey docs.
+            ...(ctx.endUserId ? {} : { userApiKeys: userApiKeyRepository }),
           },
           apiKeyInfo: { keyId: ctx.keyId, keyName: 'embed' },
-          // Bill the owner org's pool (ownerType: Organization).
-          billingOrganizationId: ctx.organizationId,
-          // Meter org usage even on a stage with enforceCredits off.
+          // Anonymous: bill the owner org's pool (ownerType: Organization). Identified:
+          // omitted, so executeCompletion bills the acting user's own balance.
+          ...(ctx.endUserId ? {} : { billingOrganizationId: ctx.organizationId }),
+          // Meter usage even on a stage with enforceCredits off.
           alwaysRecordUsage: true,
           // Server-side tool execution (KB scoped to the agent's project; see
           // buildEmbedServerTools). Absent => persona-only, executeTools stays false.
@@ -560,10 +665,15 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             // server-internal metadata the backend reports on tool turns. The text is
             // forwarded verbatim - reasoning is kept out by the model gate above, not by
             // filtering content. See its contract in sseEvents.ts.
-            write(serializeSSEEvent(buildPublicSSEEvent(text, info)));
+            const event = buildPublicSSEEvent(text, info);
+            replyText += event.text;
+            write(serializeSSEEvent(event));
           },
         });
         write(SSE_DONE_SIGNAL);
+        if (ctx.endUserId && replyText && !abortController.signal.aborted) {
+          await persistIdentifiedTurn(ctx, latestUserTurn.content, replyText, logger);
+        }
       } finally {
         clearInterval(heartbeat);
       }

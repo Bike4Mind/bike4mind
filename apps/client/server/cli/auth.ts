@@ -44,6 +44,8 @@ export interface ApiKeyInfo {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** OAuth clients allowed to mint identified sessions on this embed key. */
+  identifiedClientIds?: string[];
   /** White-label config for an embed key; drives the widget serve route theming. */
   branding?: IEmbedBranding;
   /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
@@ -171,6 +173,7 @@ function toApiKeyInfo(v: {
   organizationId?: string;
   agentId?: string;
   allowedOrigins?: string[];
+  identifiedClientIds?: string[];
   branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
@@ -184,6 +187,7 @@ function toApiKeyInfo(v: {
     organizationId: v.organizationId,
     agentId: v.agentId,
     allowedOrigins: v.allowedOrigins,
+    identifiedClientIds: v.identifiedClientIds,
     branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
