@@ -85,6 +85,20 @@ describe('computeOverrideFixes', () => {
     expect(result.skipped[0].reason).toMatch(/plain override/);
   });
 
+  it('leaves a package with per-major range or line overrides to a human', () => {
+    const current = {
+      'some-pkg@<4.0.0': '^3.15.1',
+      'some-pkg@>=4.0.0 <5.0.0': '^4.3.1',
+      'other@>=7.5.0 <7.6.5': '^7.6.5',
+    };
+    for (const pkg of ['some-pkg', 'other']) {
+      const result = computeOverrideFixes(report(advisory({ module_name: pkg })), ALLOWLIST, current);
+      expect(result.changed).toBe(false);
+      expect(result.overrides).toEqual(current);
+      expect(result.skipped[0].reason).toMatch(/not a floor/);
+    }
+  });
+
   it('(7) reproduces the hand-written sharp + shell-quote fix', () => {
     const live = report(
       advisory({

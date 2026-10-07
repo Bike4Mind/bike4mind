@@ -95,10 +95,22 @@ export function computeOverrideFixes(report, allowlist, currentOverrides = {}) {
         skipped.push({ ...a, reason: `\`${pkg}\` is pinned by a plain override (needs a human)` });
       continue;
     }
+    // A floor is `name@<X: ^Y` with Y >= X. Anything else (a per-major range like
+    // `name@>=4.0.0 <5.0.0`, or a line pin like `name@<4.0.0: ^3.15.1`) would be
+    // overlapped or replaced across majors, so the package goes to a human.
     const floorOf = k => {
       const range = parseOverrideKey(k).range;
-      return range.startsWith('<') && VERSION.test(range.slice(1)) ? range.slice(1) : null;
+      const value = String(currentOverrides[k]);
+      if (!range.startsWith('<') || !VERSION.test(range.slice(1))) return null;
+      if (!value.startsWith('^') || !VERSION.test(value.slice(1))) return null;
+      return compareVersions(value.slice(1), range.slice(1)) >= 0 ? range.slice(1) : null;
     };
+    const nonFloor = ownKeys.find(k => !floorOf(k));
+    if (nonFloor) {
+      for (const a of advisories)
+        skipped.push({ ...a, reason: `\`${nonFloor}\` is a range or line override, not a floor (needs a human)` });
+      continue;
+    }
     const covering = ownKeys.find(k => floorOf(k) && compareVersions(floorOf(k), floor) >= 0);
     if (covering) {
       for (const a of advisories)
