@@ -582,7 +582,8 @@ describe('assertLakeAccessById - no slug fall-through', () => {
   const lakeHex = '507f1f77bcf86cd799439011';
   const db = (byId: IDataLakeDocument | null) => ({
     dataLakes: {
-      findById: byId ? vi.fn().mockResolvedValue(byId) : vi.fn().mockRejectedValue(new Error('cast')),
+      // BaseModel.findById resolves null for a non-ObjectId string; it does not throw.
+      findById: vi.fn().mockResolvedValue(byId),
       // The next lake sharing the slug, which the slug arm would hand back once the first is deleted.
       findBySlug: vi.fn().mockResolvedValue(lake({ id: 'other-lake', slug: 'shared', createdByUserId: 'owner' })),
       findBySlugAmongIds: vi.fn().mockResolvedValue(null),
@@ -603,7 +604,7 @@ describe('assertLakeAccessById - no slug fall-through', () => {
   });
 
   it('answers an id-shaped miss with not-found, not the slug 400', async () => {
-    const d = { dataLakes: { ...db(null).dataLakes, findById: vi.fn().mockResolvedValue(null) } };
+    const d = db(null);
     await expect(assertLakeAccessById(lakeHex, ctx({ userId: 'owner' }), { db: d })).rejects.toThrow(/not found/i);
     expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
   });
