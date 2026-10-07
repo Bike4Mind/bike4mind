@@ -84,6 +84,8 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'GET /api/projects/:id/files',
       'GET /api/projects/:id/sessions',
       'GET /api/projects/:id/invites',
+      'GET /api/v1/projects',
+      'GET /api/v1/projects/:id',
     ],
   },
   {
@@ -101,6 +103,9 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
       'POST|DELETE /api/projects/:id/systemPrompts',
       'POST /api/projects/:id/systemPrompts/toggle',
       'DELETE /api/projects/removeNonExistintFiles',
+      'POST /api/v1/projects',
+      'GET /api/v1/projects',
+      'GET /api/v1/projects/:id',
     ],
   },
   {

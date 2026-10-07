@@ -40,6 +40,15 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
     orderBy: { by: 'createdAt' | 'updatedAt'; direction: 'asc' | 'desc' }
   ) => Promise<{ data: IProject[]; hasMore: boolean; total: number }>;
 
+  /**
+   * One keyset page of accessible projects in ascending `_id` order, starting after `afterId`.
+   * Same access predicate as searchAccessible; reads at most `limit + 1` documents.
+   */
+  listAccessibleAfterId: (
+    userId: string,
+    options: { scope?: Record<string, unknown>; afterId?: string; limit: number }
+  ) => Promise<{ data: IProject[]; hasMore: boolean }>;
+
   removeSession: (sessionId: string) => Promise<void>;
 
   /**

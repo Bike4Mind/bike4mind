@@ -365,6 +365,11 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
         "to one, check each file's ingestion status, and run semantic search over a single lake.",
     },
+    {
+      name: 'Projects',
+      description:
+        'Workspaces that group sessions and files: list and read the projects you can reach, and create new ones.',
+    },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
