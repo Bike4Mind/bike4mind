@@ -56,6 +56,7 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: REPO,
   adminSettingsRepository: REPO,
   fallbackLakeSettingsRepository: REPO,
+  orgGitHubLakeConnectionRepository: REPO,
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
 vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: vi.fn() }));
