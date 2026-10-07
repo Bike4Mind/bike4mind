@@ -465,11 +465,16 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
   // Every current-gen Bedrock-hosted Claude ID paired with the Anthropic-direct twin its
   // chain must lead with. Keep in sync with fallbackPreferences in fallback.ts.
   const BEDROCK_TO_DIRECT_TWIN: Array<[string, string]> = [
+    ['global.anthropic.claude-fable-5-1', 'claude-fable-5-1'],
+    ['global.anthropic.claude-fable-5', 'claude-fable-5'],
+    ['global.anthropic.claude-opus-5-5', 'claude-opus-5-5'],
+    ['global.anthropic.claude-opus-5', 'claude-opus-5'],
     ['global.anthropic.claude-opus-4-8', 'claude-opus-4-8'],
     ['global.anthropic.claude-opus-4-7', 'claude-opus-4-7'],
     ['global.anthropic.claude-opus-4-6-v1', 'claude-opus-4-6'],
     ['global.anthropic.claude-opus-4-5-20251101-v1:0', 'claude-opus-4-5-20251101'],
     ['global.anthropic.claude-sonnet-5', 'claude-sonnet-5'],
+    ['global.anthropic.claude-sonnet-5-5', 'claude-sonnet-5-5'],
     ['global.anthropic.claude-sonnet-4-6', 'claude-sonnet-4-6'],
     ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-4-5-20250929'],
     ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'],

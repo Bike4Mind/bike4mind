@@ -78,6 +78,38 @@ describe('AnthropicBedrockBackend prompt caching guard (#8322)', () => {
   });
 });
 
+describe('AnthropicBedrockBackend current inference profiles', () => {
+  const profiles = [
+    [ChatModels.CLAUDE_5_OPUS_BEDROCK, 5, 25],
+    [ChatModels.CLAUDE_5_5_OPUS_BEDROCK, 5, 25],
+    [ChatModels.CLAUDE_5_5_SONNET_BEDROCK, 3, 15],
+    [ChatModels.CLAUDE_FABLE_5_BEDROCK, 10, 50],
+    [ChatModels.CLAUDE_FABLE_5_1_BEDROCK, 10, 50],
+  ] as const;
+
+  it.each(profiles)('lists %s as an adaptive-thinking Bedrock model', async (id, input, output) => {
+    const model = (await backend.getModelInfo()).find(candidate => candidate.id === id);
+
+    expect(model).toMatchObject({
+      id,
+      backend: 'bedrock',
+      can_think: true,
+      thinkingStyle: 'adaptive',
+      rank: expect.any(Number),
+    });
+    expect(model?.pricing[1_000_000]).toEqual({ input: input / 1_000_000, output: output / 1_000_000 });
+  });
+
+  it.each(profiles)('omits sampling parameters for %s', (id, _input, _output) => {
+    const body = JSON.parse(
+      backend.getPayload(id, [{ role: 'user', content: 'Hello' }], { temperature: 0.2, topP: 0.8 }).body
+    ) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+  });
+});
+
 /**
  * Characterization test for `translateStreamChunk` and its 11 stream type-guards.
  * These are the surface the `any`->`unknown`+`isRecord` refactor touched, and had no
