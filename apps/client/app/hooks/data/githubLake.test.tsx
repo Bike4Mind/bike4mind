@@ -368,6 +368,23 @@ describe('useDisconnectLakeGitHub', () => {
     expect(result.current.connection.data).toEqual({ ...connected, disconnecting: true, disconnectStalled: false });
   });
 
+  it('still shows a repeat disconnect as disconnecting when its 202 says no new purge was queued', async () => {
+    del.mockResolvedValue({ status: 202, data: { success: true, queued: false } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), { ...connected, disconnecting: true });
+    const { result } = renderHook(() => useDisconnectLakeGitHub(), { wrapper: wrapperFor(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual({
+      ...connected,
+      disconnecting: true,
+      disconnectStalled: false,
+    });
+  });
+
   it('clears the cached connection on a 204 (nothing was connected)', async () => {
     del.mockResolvedValue({ status: 204, data: '' });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -169,13 +169,15 @@ export function useDisconnectLakeGitHub() {
   return useMutation({
     mutationFn: async (dataLakeId: string) => {
       const response = await api.delete(`/api/data-lakes/${dataLakeId}/github-connection`);
-      return { queued: response.status !== 204 };
+      // Keyed on the status, not the body's `queued` (whether a NEW purge message was sent): a repeat
+      // disconnect answers 202 with `queued: false` while the first purge is still running.
+      return { disconnecting: response.status === 202 };
     },
-    onSuccess: ({ queued }, dataLakeId) => {
+    onSuccess: ({ disconnecting }, dataLakeId) => {
       // Show the outcome now and refresh in the background: awaiting the refetches (the tag-count
       // prefix spans every lake) held the confirm spinner for the length of the slowest one.
       queryClient.setQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
-        queued ? previous && { ...previous, disconnecting: true, disconnectStalled: false } : null
+        disconnecting ? previous && { ...previous, disconnecting: true, disconnectStalled: false } : null
       );
       void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
       void invalidateLakeFileQueries(queryClient, dataLakeId);
