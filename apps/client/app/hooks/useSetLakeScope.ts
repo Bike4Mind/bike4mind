@@ -31,9 +31,20 @@ export default function useSetLakeScope() {
     (lakeTags: string[]) => {
       if (!currentSession) return;
       const explicit = lakeTags.length > 0;
-      setCurrentSession({ ...currentSession, retrievalTags: lakeTags, lakeScopeExplicit: explicit });
+      // Picking a scope defaults the caller's library off, but never overrides a choice already made.
+      const defaultLibraryOff = currentSession.includeLibraryFiles === undefined;
+      setCurrentSession({
+        ...currentSession,
+        retrievalTags: lakeTags,
+        lakeScopeExplicit: explicit,
+        ...(defaultLibraryOff ? { includeLibraryFiles: false } : {}),
+      });
       updateSession(
-        { id: currentSession.id, lakeScope: explicit ? lakeTags : null },
+        {
+          id: currentSession.id,
+          lakeScope: explicit ? lakeTags : null,
+          ...(defaultLibraryOff ? { includeLibraryFilesChoice: false } : {}),
+        },
         {
           onError: () => {
             setCurrentSession(currentSession);

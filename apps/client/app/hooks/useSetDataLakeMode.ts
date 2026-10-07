@@ -1,4 +1,5 @@
 import { toast } from 'sonner';
+import { DATALAKE_TAG_PREFIX, effectiveIncludeLibraryFiles } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -21,13 +22,25 @@ export default function useSetDataLakeMode() {
   return (next: boolean) => {
     setEnabled(next);
     if (!currentSession) return;
-    setCurrentSession({ ...currentSession, forceKnowledgeRetrieval: next });
+    // ON defaults the caller's library off unless they already chose; OFF re-admits it when the
+    // lake tags a lake chat keeps would otherwise leave it excluded from the knowledge tools.
+    const { includeLibraryFiles, retrievalTags } = currentSession;
+    const namesALake = !!retrievalTags?.some(tag => tag.startsWith(DATALAKE_TAG_PREFIX));
+    let libraryChoice: boolean | undefined;
+    if (next && includeLibraryFiles === undefined) libraryChoice = false;
+    if (!next && !effectiveIncludeLibraryFiles(includeLibraryFiles, namesALake)) libraryChoice = true;
+    const libraryPatch = libraryChoice === undefined ? {} : { includeLibraryFiles: libraryChoice };
+    setCurrentSession({ ...currentSession, forceKnowledgeRetrieval: next, ...libraryPatch });
     // Send ONLY the flipped field. Echoing the whole cached session would make the server
     // treat a stale knowledgeIds as an authoritative overwrite - re-adding a file another
     // actor removed and fanning it out to projects - which is far outside what a UI toggle
     // promises. The update schema is optional-per-field, so a minimal payload is complete.
     updateSession(
-      { id: currentSession.id, forceKnowledgeRetrieval: next },
+      {
+        id: currentSession.id,
+        forceKnowledgeRetrieval: next,
+        ...(libraryChoice === undefined ? {} : { includeLibraryFilesChoice: libraryChoice }),
+      },
       {
         onError: () => {
           setEnabled(!next);

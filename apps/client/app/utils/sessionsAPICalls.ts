@@ -72,13 +72,16 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
  * key to accidentally carry, so the server's parse drops it rather than reading the echoed
  * `retrievalTags: []` Mongoose hydrates onto every session as a deliberate "ground on no lake".
  */
-export type SessionUpdatePayload = Partial<ISessionDocument> & Pick<SessionUpdateRequest, 'lakeScope'>;
+export type SessionUpdatePayload = Partial<ISessionDocument> &
+  Pick<SessionUpdateRequest, 'lakeScope'> & { includeLibraryFilesChoice?: boolean };
 
 // `includeLibraryFiles` is stripped because a whole-session echo (a rename) would otherwise resend a
-// possibly stale cached value over a newer toggle; setSessionIncludeLibraryFiles is its only sender.
+// possibly stale cached value over a newer toggle. A deliberate write uses the request-only
+// `includeLibraryFilesChoice` (no cached session carries it) or setSessionIncludeLibraryFiles.
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
-  const body = { ...sessionData };
+  const { includeLibraryFilesChoice, ...body } = sessionData;
   delete body.includeLibraryFiles;
+  if (includeLibraryFilesChoice !== undefined) body.includeLibraryFiles = includeLibraryFilesChoice;
   const response = await api.put(`/api/sessions/${sessionData.id}`, body);
   return response.data;
 };

@@ -43,6 +43,47 @@ describe('useSetDataLakeMode', () => {
     );
   });
 
+  it('turning on: defaults the library off when the chat never chose', () => {
+    currentSession = { id: 's1', name: 'Chat', forceKnowledgeRetrieval: false };
+    const { result } = renderHook(() => useSetDataLakeMode());
+    act(() => result.current(true));
+    expect(updateSession).toHaveBeenCalledWith(
+      { id: 's1', forceKnowledgeRetrieval: true, includeLibraryFilesChoice: false },
+      expect.anything()
+    );
+    expect(setCurrentSession).toHaveBeenCalledWith(expect.objectContaining({ includeLibraryFiles: false }));
+  });
+
+  it('turning on: keeps a library choice the chat already made', () => {
+    currentSession = { id: 's1', name: 'Chat', forceKnowledgeRetrieval: false, includeLibraryFiles: true };
+    const { result } = renderHook(() => useSetDataLakeMode());
+    act(() => result.current(true));
+    expect(updateSession).toHaveBeenCalledWith({ id: 's1', forceKnowledgeRetrieval: true }, expect.anything());
+  });
+
+  it('turning off: re-admits the library in a lake chat whose tags would keep it excluded', () => {
+    currentSession = { id: 's1', name: 'Chat', forceKnowledgeRetrieval: true, retrievalTags: ['datalake:acme'] };
+    const { result } = renderHook(() => useSetDataLakeMode());
+    act(() => result.current(false));
+    expect(updateSession).toHaveBeenCalledWith(
+      { id: 's1', forceKnowledgeRetrieval: false, includeLibraryFilesChoice: true },
+      expect.anything()
+    );
+  });
+
+  it('turning off: sends no library choice when the library is already included', () => {
+    currentSession = {
+      id: 's1',
+      name: 'Chat',
+      forceKnowledgeRetrieval: true,
+      retrievalTags: ['datalake:acme'],
+      includeLibraryFiles: true,
+    };
+    const { result } = renderHook(() => useSetDataLakeMode());
+    act(() => result.current(false));
+    expect(updateSession).toHaveBeenCalledWith({ id: 's1', forceKnowledgeRetrieval: false }, expect.anything());
+  });
+
   it('rolls back the store + session when persistence fails', () => {
     updateSession.mockImplementationOnce((_s: unknown, opts?: { onError?: () => void }) => opts?.onError?.());
     const { result } = renderHook(() => useSetDataLakeMode());

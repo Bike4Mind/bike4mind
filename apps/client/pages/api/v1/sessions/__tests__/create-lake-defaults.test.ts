@@ -101,6 +101,7 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
     expect(paramsOf()).toMatchObject({
       name: 'New Notebook',
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       retrievalTags: ['datalake:acme'],
       systemPromptId: 'triage_router',
       // Always resolved onto a lake session; this lake set no mode -> the default.
@@ -131,6 +132,15 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
     expect(params.retrievalTags).toEqual(['mock:breast']);
   });
 
+  it('lets an explicit includeLibraryFiles win over the lake default', async () => {
+    h.assertLakeAccess.mockResolvedValue({ datalakeTag: 'datalake:acme' });
+    const { res } = makeRes();
+
+    await run(post({ name: 'N', dataLakeId: 'acme', includeLibraryFiles: true }), res);
+
+    expect(paramsOf().includeLibraryFiles).toBe(true);
+  });
+
   it('does not run the lake path (no access gate) when no dataLakeId is given', async () => {
     const { res } = makeRes();
 
@@ -141,6 +151,7 @@ describe('POST /api/sessions/create - lake-derived session defaults', () => {
     const params = paramsOf();
     expect('systemPromptId' in params).toBe(false);
     expect('forceKnowledgeRetrieval' in params).toBe(false);
+    expect('includeLibraryFiles' in params).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ describe('resolveLakeSessionDefaults', () => {
     const lake: LakeInput = { datalakeTag: 'datalake:acme', preferredSystemPromptId: 'triage_router' };
     expect(resolveLakeSessionDefaults(lake)).toEqual({
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       retrievalTags: ['datalake:acme'],
       systemPromptId: 'triage_router',
       // Always set for a lake session; absent stored mode -> the default.
@@ -21,6 +22,7 @@ describe('resolveLakeSessionDefaults', () => {
     const result = resolveLakeSessionDefaults(lake);
     expect(result).toEqual({
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       retrievalTags: ['datalake:acme'],
       corpusGroundingMode: 'retrieve',
     });
@@ -41,6 +43,7 @@ describe('resolveLakeSessionDefaults', () => {
     // Still forces retrieval and binds the prompt - only the single-lake scope is dropped.
     expect(result).toEqual({
       forceKnowledgeRetrieval: true,
+      includeLibraryFiles: false,
       systemPromptId: 'triage_router',
       corpusGroundingMode: 'retrieve',
     });
@@ -65,5 +68,11 @@ describe('resolveLakeSessionDefaults', () => {
   it('always sets corpusGroundingMode (a lake session is never left in the size-only branch)', () => {
     const result = resolveLakeSessionDefaults({ datalakeTag: 'datalake:acme' });
     expect('corpusGroundingMode' in result).toBe(true);
+  });
+
+  it('turns the caller library off, explicitly, so an explicit request value still wins under the merge', () => {
+    const result = resolveLakeSessionDefaults({ datalakeTag: 'datalake:acme', preferredSystemPromptId: undefined });
+    expect(result.includeLibraryFiles).toBe(false);
+    expect({ ...result, ...{ includeLibraryFiles: true } }.includeLibraryFiles).toBe(true);
   });
 });

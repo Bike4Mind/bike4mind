@@ -39,6 +39,7 @@ export default function useCreateDataLakeSession() {
         {
           name: 'New Notebook',
           forceKnowledgeRetrieval: true,
+          includeLibraryFiles: false,
           // lakeScopeExplicit rides along so the server stores the choice as deliberate. Sent only
           // when a scope was actually picked: an empty pair here would mean "grounds on no lake",
           // which is the opposite of the unscoped session this creates by default.

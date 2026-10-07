@@ -13,6 +13,11 @@ describe('includeLibraryFiles on the session PUT', () => {
     expect(put).toHaveBeenCalledWith('/api/sessions/s1', { id: 's1', name: 'renamed' });
   });
 
+  it('sends a deliberate choice under the stored name, over any echoed value', async () => {
+    await updateSessionToServer({ id: 's1', includeLibraryFiles: true, includeLibraryFilesChoice: false });
+    expect(put).toHaveBeenCalledWith('/api/sessions/s1', { id: 's1', includeLibraryFiles: false });
+  });
+
   it('sends exactly the flag from the dedicated setter', async () => {
     await setSessionIncludeLibraryFiles('s1', true);
     expect(put).toHaveBeenCalledWith('/api/sessions/s1', { includeLibraryFiles: true });

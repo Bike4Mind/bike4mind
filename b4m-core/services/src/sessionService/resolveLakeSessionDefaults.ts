@@ -36,6 +36,11 @@ export interface LakeSessionDefaults {
    * leaves it unset, which the plan treats as its pre-existing size-only behavior.
    */
   corpusGroundingMode?: DataLakeGroundingMode;
+  /**
+   * A chat started for a lake grounds on that lake alone, so the caller's own library is off until
+   * they opt back in. Explicit rather than left unset so the choice survives a later scope change.
+   */
+  includeLibraryFiles?: boolean;
 }
 
 /**
@@ -47,7 +52,7 @@ export interface LakeSessionDefaults {
 export function resolveLakeSessionDefaults(
   lake: Pick<IDataLake, 'datalakeTag' | 'preferredSystemPromptId' | 'groundingMode'>
 ): LakeSessionDefaults {
-  const defaults: LakeSessionDefaults = { forceKnowledgeRetrieval: true };
+  const defaults: LakeSessionDefaults = { forceKnowledgeRetrieval: true, includeLibraryFiles: false };
   // Scope to this lake only when it carries a join tag. Real lakes always do; a static-registry
   // fallback might not, and `retrievalTags: [undefined]` would scope retrieval to nothing.
   if (lake.datalakeTag) {
