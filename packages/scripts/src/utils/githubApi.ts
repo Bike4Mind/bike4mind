@@ -116,18 +116,24 @@ export async function getLatestRelease(tagPattern?: RegExp): Promise<GitHubRelea
  */
 export async function getCommitRange(base: string, head: string = 'HEAD'): Promise<GitHubCommit[]> {
   const { owner, repo } = getRepoInfo();
+  const commits: Array<{
+    sha: string;
+    commit: {
+      message: string;
+      author: { name: string; email: string; date: string };
+    };
+  }> = [];
 
-  const comparison = await githubRequest<{
-    commits: Array<{
-      sha: string;
-      commit: {
-        message: string;
-        author: { name: string; email: string; date: string };
-      };
-    }>;
-  }>(`/repos/${owner}/${repo}/compare/${base}...${head}`);
+  // Unpaginated, compare returns at most 250 commits; paged, it returns them all.
+  for (let page = 1; ; page++) {
+    const comparison = await githubRequest<{ total_commits: number; commits: typeof commits }>(
+      `/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100&page=${page}`
+    );
+    commits.push(...comparison.commits);
+    if (comparison.commits.length === 0 || commits.length >= comparison.total_commits) break;
+  }
 
-  return comparison.commits.map(c => ({
+  return commits.map(c => ({
     sha: c.sha,
     message: c.commit.message,
     author: c.commit.author.name,

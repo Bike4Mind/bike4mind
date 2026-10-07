@@ -13,12 +13,19 @@ import {
   type ReleaseNotesJobPayload,
 } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { createReleaseNotesCompleter, generateReleaseNotes, type TokenUsage } from './releaseNotes/generate';
+import {
+  createReleaseNotesCompleter,
+  triageReleaseNotes,
+  writeReleaseNotes,
+  type TokenUsage,
+} from './releaseNotes/generate';
 import { finalizeReleaseNote } from './releaseNotes/finalize';
 
 const SETTING_NAME = 'releaseNotesConfig';
 const MS_PER_HOUR = 60 * 60 * 1000;
 const TOKENS_PER_MILLION = 1_000_000;
+// Under the 5-minute Lambda timeout in infra/queues.ts, so a slow LLM still fails here and emits the Failure metric.
+const GENERATION_BUDGET_MS = 4 * 60 * 1000;
 
 // USD per 1M tokens. Unknown models price high on purpose so the EstimatedCost alarm notices them.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -61,16 +68,19 @@ const CATEGORY_LABEL: Record<ReleaseNote['items'][number]['category'], string> =
   fixed: 'Fixed',
 };
 
+// Slack mrkdwn control characters; escaping them keeps model output from forming <!channel> or links.
+const escapeSlack = (text: string): string => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 function buildSlackText(note: ReleaseNote, releaseUrl: string): string {
   const hours = Math.max(0, Math.round((note.publishAt.getTime() - Date.now()) / MS_PER_HOUR));
   const status =
     note.status === 'hidden'
       ? 'No customer-facing changes; stored hidden and will not publish.'
       : `Goes live in ${hours}h (${note.publishAt.toISOString()}). Edit it before then to change or hide it.`;
-  const lines = [`*Release notes for <${releaseUrl}|${note.releaseTag}>*`, status];
-  if (note.headline) lines.push('', `*${note.headline}*`);
-  if (note.summary) lines.push(note.summary);
-  for (const item of note.items) lines.push(`- [${CATEGORY_LABEL[item.category]}] ${item.text}`);
+  const lines = [`*Release notes for <${releaseUrl}|${escapeSlack(note.releaseTag)}>*`, status];
+  if (note.headline) lines.push('', `*${escapeSlack(note.headline)}*`);
+  if (note.summary) lines.push(escapeSlack(note.summary));
+  for (const item of note.items) lines.push(`- [${CATEGORY_LABEL[item.category]}] ${escapeSlack(item.text)}`);
   return lines.join('\n');
 }
 
@@ -110,18 +120,23 @@ async function postToSlack(
   }
 }
 
-/** Generates, finalizes and stores the note. A denylist hit in the headline or summary gets one rewrite. */
+/**
+ * Generates, finalizes and stores the note. A denylist hit in the headline or summary gets one editorial
+ * rewrite; triage is not repeated.
+ */
 async function generateAndStore(
   payload: ReleaseNotesJobPayload,
   config: ReleaseNotesConfig,
   logger: Logger
 ): Promise<{ note: ReleaseNote; preserved: boolean; usage: TokenUsage; modelId: string }> {
-  const { complete, modelId } = await createReleaseNotesCompleter(config, logger);
-  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+  const deadline = Date.now() + GENERATION_BUDGET_MS;
+  const { complete, modelId } = await createReleaseNotesCompleter(config, logger, deadline);
+  const triage = await triageReleaseNotes(payload.prs, complete);
+  const usage: TokenUsage = { ...triage.usage };
 
   let feedback: string[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
-    const generated = await generateReleaseNotes(payload.prs, complete, feedback);
+    const generated = await writeReleaseNotes(payload.prs, triage.notes, complete, feedback);
     usage.inputTokens += generated.usage.inputTokens;
     usage.outputTokens += generated.usage.outputTokens;
 

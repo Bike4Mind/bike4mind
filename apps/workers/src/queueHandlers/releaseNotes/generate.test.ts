@@ -19,6 +19,8 @@ import {
   DEFAULT_RELEASE_NOTES_MODEL,
   extractJson,
   generateReleaseNotes,
+  triageReleaseNotes,
+  writeReleaseNotes,
 } from './generate';
 
 const pr = (number: number, extra: Partial<ReleaseNotesJobPr> = {}): ReleaseNotesJobPr => ({
@@ -133,6 +135,23 @@ describe('generateReleaseNotes', () => {
   });
 });
 
+describe('triageReleaseNotes / writeReleaseNotes', () => {
+  it('caps an author-written customer note before it reaches the editorial prompt', async () => {
+    const complete = vi.fn();
+    const { notes } = await triageReleaseNotes([pr(1, { customerNote: 'x'.repeat(5000) })], complete);
+    expect(complete).not.toHaveBeenCalled();
+    expect(notes.get(1)).toHaveLength(600);
+  });
+
+  it('writes from already-triaged notes without calling triage again', async () => {
+    const complete = vi.fn().mockResolvedValueOnce(editorialReply([1]));
+    const { draft } = await writeReleaseNotes([pr(1)], new Map([[1, 'Search is quicker.']]), complete, ['fix it']);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][0]).toContain('You write the customer-facing release notes');
+    expect(draft.headline).toBe('Faster search');
+  });
+});
+
 describe('extractJson', () => {
   it('throws when there is no object', () => {
     expect(() => extractJson('no json here')).toThrow(/no JSON object/);
@@ -164,6 +183,35 @@ describe('createReleaseNotesCompleter', () => {
     expect(modelId).toBe(DEFAULT_RELEASE_NOTES_MODEL);
     expect(logger.warn).toHaveBeenCalled();
     await expect(complete('hi')).resolves.toBe('{"ok":true}');
+  });
+
+  it('refuses a call once the deadline has passed', async () => {
+    h.getAvailableModels.mockResolvedValue([{ id: DEFAULT_RELEASE_NOTES_MODEL }]);
+    const { complete } = await createReleaseNotesCompleter(
+      { modelId: DEFAULT_RELEASE_NOTES_MODEL },
+      logger as never,
+      Date.now() - 1
+    );
+    await expect(complete('hi')).rejects.toThrow(/time budget exhausted/);
+    expect(llm.complete).not.toHaveBeenCalled();
+  });
+
+  it('times a call out at the deadline when it is sooner than the per-call timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      h.getAvailableModels.mockResolvedValue([{ id: DEFAULT_RELEASE_NOTES_MODEL }]);
+      llm.complete.mockImplementationOnce(() => new Promise(() => {}));
+      const { complete } = await createReleaseNotesCompleter(
+        { modelId: DEFAULT_RELEASE_NOTES_MODEL },
+        logger as never,
+        Date.now() + 1000
+      );
+      const pending = expect(complete('hi')).rejects.toThrow(/timeout after 1000ms/);
+      await vi.advanceTimersByTimeAsync(1000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('throws when neither model is available', async () => {

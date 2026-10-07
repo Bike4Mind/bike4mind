@@ -129,23 +129,22 @@ function buildEditorialPrompt(notes: { number: number; title: string; note: stri
   ].join('\n');
 }
 
-/**
- * Two LLM passes over the release's PRs: a batched triage for PRs with no author-written customer note,
- * then an editorial pass over every customer-facing note. Each reply is Zod-validated with one repair
- * retry before throwing. `editorialFeedback` lets a caller ask for a rewrite (e.g. a denylist hit).
- */
-export async function generateReleaseNotes(
-  prs: ReleaseNotesJobPr[],
-  complete: CompleteFn,
-  editorialFeedback: string[] = []
-): Promise<GenerateResult> {
-  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
-  const empty: GenerateResult = { draft: { headline: '', summary: '', items: [] }, usage };
+// Author-written notes skip triage, so they are capped here as well as in the payload builder.
+const MAX_CUSTOMER_NOTE_CHARS = 600;
 
+export interface TriageResult {
+  /** Customer-facing note per PR number; PRs judged internal are absent. */
+  notes: Map<number, string>;
+  usage: TokenUsage;
+}
+
+/** Batched triage for PRs with no author-written customer note. Author notes pass through untriaged. */
+export async function triageReleaseNotes(prs: ReleaseNotesJobPr[], complete: CompleteFn): Promise<TriageResult> {
+  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
   const notes = new Map<number, string>();
   const untriaged: ReleaseNotesJobPr[] = [];
   for (const pr of prs) {
-    const authored = pr.customerNote?.trim();
+    const authored = pr.customerNote?.trim().slice(0, MAX_CUSTOMER_NOTE_CHARS);
     if (authored) notes.set(pr.number, authored);
     else untriaged.push(pr);
   }
@@ -172,8 +171,21 @@ export async function generateReleaseNotes(
       if (entry.customerFacing && entry.note.trim()) notes.set(entry.number, entry.note.trim());
     }
   }
+  return { notes, usage };
+}
 
-  if (notes.size === 0) return empty;
+/**
+ * Editorial pass over the triaged notes. `editorialFeedback` lets a caller ask for a rewrite (e.g. a
+ * denylist hit) without paying for triage again.
+ */
+export async function writeReleaseNotes(
+  prs: ReleaseNotesJobPr[],
+  notes: Map<number, string>,
+  complete: CompleteFn,
+  editorialFeedback: string[] = []
+): Promise<GenerateResult> {
+  const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+  if (notes.size === 0) return { draft: { headline: '', summary: '', items: [] }, usage };
 
   const titles = new Map(prs.map(pr => [pr.number, pr.title]));
   const input = [...notes].map(([number, note]) => ({ number, title: titles.get(number) ?? '', note }));
@@ -195,12 +207,34 @@ export async function generateReleaseNotes(
 }
 
 /**
+ * Two LLM passes over the release's PRs: triage, then an editorial pass over every customer-facing
+ * note. Each reply is Zod-validated with one repair retry before throwing.
+ */
+export async function generateReleaseNotes(
+  prs: ReleaseNotesJobPr[],
+  complete: CompleteFn,
+  editorialFeedback: string[] = []
+): Promise<GenerateResult> {
+  const triage = await triageReleaseNotes(prs, complete);
+  const written = await writeReleaseNotes(prs, triage.notes, complete, editorialFeedback);
+  return {
+    draft: written.draft,
+    usage: {
+      inputTokens: triage.usage.inputTokens + written.usage.inputTokens,
+      outputTokens: triage.usage.outputTokens + written.usage.outputTokens,
+    },
+  };
+}
+
+/**
  * Resolves the configured model (falling back to the default when it is unknown or has no key) and
- * returns a `CompleteFn` bound to it, with a response-size cap and a timeout.
+ * returns a `CompleteFn` bound to it, with a response-size cap and a per-call timeout. `deadline` (epoch
+ * ms) shortens each call's timeout so all calls together finish before it, and fails calls past it.
  */
 export async function createReleaseNotesCompleter(
   config: Pick<ReleaseNotesConfig, 'modelId'>,
-  logger: Logger
+  logger: Logger,
+  deadline = Number.POSITIVE_INFINITY
 ): Promise<{ complete: CompleteFn; modelId: string }> {
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
     'system',
@@ -229,6 +263,8 @@ export async function createReleaseNotesCompleter(
   const modelId = modelInfo.id;
 
   const complete: CompleteFn = async prompt => {
+    const timeoutMs = Math.min(LLM_TIMEOUT_MS, deadline - Date.now());
+    if (timeoutMs <= 0) throw new Error('[releaseNotes] generation time budget exhausted');
     let text = '';
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -246,10 +282,7 @@ export async function createReleaseNotesCompleter(
           }
         ),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error(`[releaseNotes] LLM timeout after ${LLM_TIMEOUT_MS}ms`)),
-            LLM_TIMEOUT_MS
-          );
+          timer = setTimeout(() => reject(new Error(`[releaseNotes] LLM timeout after ${timeoutMs}ms`)), timeoutMs);
         }),
       ]);
     } finally {

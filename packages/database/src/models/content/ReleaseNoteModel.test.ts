@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../__test__/createMongoServer';
@@ -62,6 +62,20 @@ describe('ReleaseNoteRepository.upsertGenerated', () => {
     expect(note.headline).toBe('Hand edited');
     expect(note.editedAt?.toISOString()).toBe(editedAt.toISOString());
     expect(await ReleaseNote.countDocuments()).toBe(1);
+  });
+
+  it('treats a duplicate key from a concurrent unedited insert as a race, not an edit', async () => {
+    await ReleaseNote.create({ ...makeNote(), editedAt: null });
+    const spy = vi
+      .spyOn(ReleaseNote, 'findOneAndUpdate')
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: 11000 }));
+    try {
+      const { note, preserved } = await releaseNoteRepository.upsertGenerated(makeNote({ headline: 'Regenerated' }));
+      expect(preserved).toBe(false);
+      expect(note.headline).toBe('Regenerated');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('enforces one note per release tag', async () => {

@@ -11,8 +11,10 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 
 // Two or more digits so ordinary copy such as "#1" and "GPT-4" survives.
 const PR_REF = /^#\d{2,}$/;
-const TICKET_KEY = /^[A-Z]{2,10}-\d{2,}$/;
-const GITHUB_URL = /^(?:https?:\/\/)?(?:www\.)?github\.com\//i;
+const TICKET_KEY = /^[A-Za-z]{2,10}-\d{2,}$/;
+const CROSS_REPO_REF = /^[\w.-]+\/[\w.-]+#\d+$/;
+const ANY_URL = /^(?:[a-z][a-z\d+.-]*:\/\/|www\.)/i;
+const GITHUB_URL = /^github\.com\//i;
 const REPO_PATH_ROOT = /^(?:apps|packages|b4m-core|infra|scripts|src|\.github)\//;
 const CODE_FILE_EXT = /\.(?:[cm]?[jt]sx?|json|ya?ml|md|py|go|sh|css|scss|html)$/i;
 const FEAT_OR_FIX_TITLE = /^(?:feat|fix)(?:\([^)]*\))?!?:/i;
@@ -24,11 +26,13 @@ const SENTENCE_PUNCT = '.,;:!?';
 const isInternalReference = (core: string): boolean =>
   PR_REF.test(core) ||
   TICKET_KEY.test(core) ||
+  CROSS_REPO_REF.test(core) ||
+  ANY_URL.test(core) ||
   GITHUB_URL.test(core) ||
   (core.includes('/') && (REPO_PATH_ROOT.test(core) || CODE_FILE_EXT.test(core)));
 
 /**
- * Removes PR refs, GitHub URLs, ticket keys and repo paths from customer copy. Works per whitespace
+ * Removes PR refs (incl. owner/repo#N), URLs, ticket keys and repo paths from customer copy. Works per whitespace
  * token so every check is anchored and linear; surrounding brackets go with the reference while
  * sentence punctuation stays.
  */

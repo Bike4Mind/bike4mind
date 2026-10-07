@@ -37,6 +37,10 @@ describe('parseCustomerNote', () => {
     expect(parseCustomerNote('')).toBeUndefined();
   });
 
+  it('caps a long note', () => {
+    expect(parseCustomerNote(`## Customer note\n${'x'.repeat(5000)}`)).toHaveLength(600);
+  });
+
   it('keeps ### subheadings inside the note', () => {
     expect(parseCustomerNote('## Customer note\nLine one\n### Detail\nmore\n## Changes')).toBe(
       'Line one\n### Detail\nmore'
@@ -84,6 +88,11 @@ describe('capPayloadSize', () => {
     expect(capped.prs.every(pr => pr.excerpt === '')).toBe(true);
   });
 
+  it('shortens customer notes only after excerpts are gone', () => {
+    const capped = capPayloadSize(payloadWith(500, 10, 600), 4_000);
+    expect(capped.prs.every(pr => pr.excerpt === '' && pr.customerNote?.length === 200)).toBe(true);
+  });
+
   it('throws when the payload is too big even without excerpts', () => {
     expect(() => capPayloadSize(payloadWith(500, 10, 1_000), 2_000)).toThrow(/exceeds 2000 bytes/);
   });
@@ -124,6 +133,15 @@ describe('buildReleaseNotesPayload', () => {
       },
     ]);
     expect(payload).toMatchObject({ releaseTag: 'v1.0.0.2', deployedSha: 'sha-v1.0.0.2', previousTag: 'v1.0.0.1' });
+  });
+
+  it('anchors deployedAt to enqueue time, not the release creation date', async () => {
+    const before = Date.now();
+    const payload = await buildReleaseNotesPayload(release('v1.0.0.0', '2020-01-01T00:00:00Z'), null, {
+      getCommitRange: vi.fn(),
+      getPRSummary: vi.fn(),
+    });
+    expect(payload.deployedAt.getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it('builds an empty PR list for the first release', async () => {

@@ -29,6 +29,10 @@ describe('scrubCustomerText', () => {
     ['See https://github.com/acme/repo/pull/9 for more', 'See for more'],
     ['See github.com/acme/repo.', 'See.'],
     ['Resolves ENG-1234, finally', 'Resolves, finally'],
+    ['Resolves eng-1234, finally', 'Resolves, finally'],
+    ['Same as acme/repo#77 upstream', 'Same as upstream'],
+    ['Details at https://linear.app/acme/issue/X-1.', 'Details at.'],
+    ['Docs at www.example.com/internal now', 'Docs at now'],
     ['Changed apps/client/server/foo.ts behavior', 'Changed behavior'],
     ['Updated `src/utils/thing` code', 'Updated code'],
     ['Edited config.yaml/x.json now', 'Edited now'],
@@ -36,12 +40,14 @@ describe('scrubCustomerText', () => {
     expect(scrubCustomerText(input)).toBe(expected);
   });
 
-  it.each(['Now supports GPT-4 and GPT-4o.', 'Use read/write access, 24/7.', 'Pick your #1 model.'])(
-    'leaves ordinary copy alone: %j',
-    input => {
-      expect(scrubCustomerText(input)).toBe(input);
-    }
-  );
+  it.each([
+    'Now supports GPT-4 and GPT-4o.',
+    'Use read/write access, 24/7.',
+    'Pick your #1 model.',
+    'Try gpt-4o-mini.',
+  ])('leaves ordinary copy alone: %j', input => {
+    expect(scrubCustomerText(input)).toBe(input);
+  });
 });
 
 describe('finalizeReleaseNote', () => {

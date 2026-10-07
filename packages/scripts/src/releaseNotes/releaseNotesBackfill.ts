@@ -1,7 +1,8 @@
 /**
  * Enqueues release-notes generation for every production release in a date range, oldest first,
- * each diffed against the release before it. Re-running is safe: the handler overwrites unedited
- * notes and keeps edited ones.
+ * each diffed against the release before it. Each note gets a fresh embargo from the time it is
+ * enqueued, so nothing backfilled publishes before it can be reviewed. Re-running overwrites unedited
+ * notes (restarting their embargo and re-announcing them) and keeps edited ones.
  *
  * Usage: pnpm release-notes:backfill [--since 2026-01-01] [--until 2026-02-01] [--queue-url <url>] [--dry-run]
  */

@@ -9,7 +9,8 @@ const h = vi.hoisted(() => ({
   emitModalGenerationMetrics: vi.fn(),
   upsertGenerated: vi.fn(),
   findWorkspace: vi.fn(),
-  generateReleaseNotes: vi.fn(),
+  writeReleaseNotes: vi.fn(),
+  triageReleaseNotes: vi.fn(),
   createCompleter: vi.fn(),
   fetch: vi.fn(),
 }));
@@ -21,7 +22,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/cloudwatch', () => ({ emitModalGenerationMetrics: h.emitModalGenerationMetrics }));
 vi.mock('./releaseNotes/generate', () => ({
-  generateReleaseNotes: h.generateReleaseNotes,
+  triageReleaseNotes: h.triageReleaseNotes,
+  writeReleaseNotes: h.writeReleaseNotes,
   createReleaseNotesCompleter: h.createCompleter,
 }));
 vi.stubGlobal('fetch', h.fetch);
@@ -68,7 +70,8 @@ describe('releaseNotes queue handler', () => {
     vi.clearAllMocks();
     setConfig({ enabled: false });
     h.createCompleter.mockResolvedValue({ complete: vi.fn(), modelId: 'gpt-4o-mini' });
-    h.generateReleaseNotes.mockResolvedValue(draft());
+    h.triageReleaseNotes.mockResolvedValue({ notes: new Map([[1, 'Search is faster']]), usage });
+    h.writeReleaseNotes.mockResolvedValue(draft());
     h.upsertGenerated.mockImplementation(async (note: unknown) => ({ note, preserved: false }));
     h.findWorkspace.mockResolvedValue({ slackBotToken: 'xoxb-test' });
     h.fetch.mockResolvedValue({ json: async () => ({ ok: true }) });
@@ -88,6 +91,13 @@ describe('releaseNotes queue handler', () => {
       /invalid job payload/
     );
   });
+
+  it.each(['http://example.com/r', 'https://example.com/r|spoof', 'https://example.com/<!channel>'])(
+    'rejects a release URL that could break the Slack link: %s',
+    async releaseUrl => {
+      await expect(run(JSON.stringify({ ...validPayload, releaseUrl }))).rejects.toThrow(/invalid job payload/);
+    }
+  );
 
   it('throws on a body that is not JSON', async () => {
     await expect(run('not json')).rejects.toThrow(SyntaxError);
@@ -154,24 +164,43 @@ describe('releaseNotes queue handler', () => {
 
   it('rewrites once when the headline hits the denylist, feeding the reason back', async () => {
     setConfig(enabledConfig);
-    h.generateReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft());
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Built for Acme')).mockResolvedValueOnce(draft());
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
-    expect(h.generateReleaseNotes).toHaveBeenCalledTimes(2);
-    expect(h.generateReleaseNotes.mock.calls[1][2]).toEqual([expect.stringContaining('acme')]);
+    expect(h.writeReleaseNotes).toHaveBeenCalledTimes(2);
+    expect(h.writeReleaseNotes.mock.calls[1][3]).toEqual([expect.stringContaining('acme')]);
+    expect(h.triageReleaseNotes).toHaveBeenCalledTimes(1);
     expect(h.upsertGenerated).toHaveBeenCalledWith(expect.objectContaining({ headline: 'Faster search' }));
   });
 
   it('throws and emits a failure metric when the rewrite still hits the denylist', async () => {
     setConfig(enabledConfig);
-    h.generateReleaseNotes.mockResolvedValue(draft('Built for Acme'));
+    h.writeReleaseNotes.mockResolvedValue(draft('Built for Acme'));
     await expect(run(JSON.stringify(validPayload))).rejects.toThrow(/denylist/);
     expect(h.upsertGenerated).not.toHaveBeenCalled();
     expect(metricNames()).toEqual(['Failure']);
   });
 
+  it('escapes Slack control characters in generated copy', async () => {
+    setConfig(enabledConfig);
+    h.writeReleaseNotes.mockResolvedValue(draft('Hi <!channel> & <https://evil.example|click>'));
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('Hi &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;');
+    expect(text).not.toContain('<!channel>');
+  });
+
+  it('gives the completer a deadline inside the Lambda timeout', async () => {
+    setConfig(enabledConfig);
+    const before = Date.now();
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const deadline = h.createCompleter.mock.calls[0][2];
+    expect(deadline - before).toBeGreaterThan(0);
+    expect(deadline - before).toBeLessThan(5 * 60 * 1000);
+  });
+
   it('emits a failure metric and rethrows when generation fails', async () => {
     setConfig(enabledConfig);
-    h.generateReleaseNotes.mockRejectedValue(new Error('LLM down'));
+    h.writeReleaseNotes.mockRejectedValue(new Error('LLM down'));
     await expect(run(JSON.stringify(validPayload))).rejects.toThrow('LLM down');
     expect(metricNames()).toEqual(['Failure']);
     expect(h.fetch).not.toHaveBeenCalled();

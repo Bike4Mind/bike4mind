@@ -58,18 +58,24 @@ export class ReleaseNoteRepository extends BaseRepository<IReleaseNoteDocument> 
   /**
    * Writes a generated note unless a human has edited the stored one. The filter only matches an
    * unedited row, so for an edited tag the upsert tries an insert and hits the unique releaseTag
-   * index; that E11000 is the "preserved" signal, and the edited row is returned untouched.
+   * index. An E11000 means "preserved" only when the stored row is edited; otherwise a concurrent
+   * insert won the race, and the update is retried against that row.
    */
   async upsertGenerated(note: GeneratedReleaseNote): Promise<{ note: IReleaseNoteDocument; preserved: boolean }> {
+    const filter = { releaseTag: note.releaseTag, editedAt: null };
+    const update = { $set: { ...note, editedAt: null } };
     try {
-      const saved = await this.model.findOneAndUpdate(
-        { releaseTag: note.releaseTag, editedAt: null },
-        { $set: { ...note, editedAt: null } },
-        { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
-      );
+      const saved = await this.model.findOneAndUpdate(filter, update, {
+        upsert: true,
+        new: true,
+        runValidators: true,
+        setDefaultsOnInsert: true,
+      });
       return { note: saved, preserved: false };
     } catch (err) {
       if (!isDuplicateKeyError(err)) throw err;
+      const saved = await this.model.findOneAndUpdate(filter, update, { new: true, runValidators: true });
+      if (saved) return { note: saved, preserved: false };
       const existing = await this.model.findOne({ releaseTag: note.releaseTag });
       if (!existing) throw err;
       return { note: existing, preserved: true };

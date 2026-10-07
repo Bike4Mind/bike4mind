@@ -5,22 +5,33 @@ import type { GitHubCommit, GitHubRelease, PRSummary } from '../utils/githubApi'
 
 export const PRODUCTION_TAG = /^v\d+\.\d+\.\d+\.\d+$/;
 export const EXCERPT_CHARS = 500;
+// Matches the editorial summary cap; author notes skip triage, so they are bounded here.
+export const CUSTOMER_NOTE_CHARS = 600;
 // SQS caps a message at 256 KiB; leave headroom for attributes and encoding.
 export const MAX_PAYLOAD_BYTES = 240_000;
-const EXCERPT_TIERS = [EXCERPT_CHARS, 200, 0];
+// Excerpts go first; customer notes are only shortened, never dropped, as the last resort.
+const SIZE_TIERS = [
+  { excerpt: EXCERPT_CHARS, note: CUSTOMER_NOTE_CHARS },
+  { excerpt: 200, note: CUSTOMER_NOTE_CHARS },
+  { excerpt: 0, note: CUSTOMER_NOTE_CHARS },
+  { excerpt: 0, note: 200 },
+];
 
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 const CUSTOMER_NOTE_HEADING = /^##\s+customer note\s*$/im;
 const PLACEHOLDER_NOTE = /^(n\/?a|none|-+)$/i;
 
-/** The `## Customer note` section of a PR description, or undefined when it is absent, empty or a placeholder. */
+/**
+ * The `## Customer note` section of a PR description, cut to `CUSTOMER_NOTE_CHARS`, or undefined when it
+ * is absent, empty or a placeholder.
+ */
 export function parseCustomerNote(body: string): string | undefined {
   const heading = CUSTOMER_NOTE_HEADING.exec(body);
   if (!heading) return undefined;
   const rest = body.slice(heading.index + heading[0].length);
   const nextHeading = rest.search(/^#{1,2}\s/m);
   const note = (nextHeading === -1 ? rest : rest.slice(0, nextHeading)).replace(HTML_COMMENT, '').trim();
-  return note && !PLACEHOLDER_NOTE.test(note) ? note : undefined;
+  return note && !PLACEHOLDER_NOTE.test(note) ? note.slice(0, CUSTOMER_NOTE_CHARS) : undefined;
 }
 
 /** PR description with template comments stripped and whitespace collapsed, cut to `maxChars`. */
@@ -32,18 +43,24 @@ export function excerptDescription(body: string, maxChars = EXCERPT_CHARS): stri
 const payloadBytes = (p: ReleaseNotesJobPayload): number => Buffer.byteLength(JSON.stringify(p), 'utf8');
 
 /**
- * Shrinks PR excerpts (500, then 200, then none) until the payload fits in `maxBytes`. Throws when even
- * excerpt-free it is too big, since dropping PRs or customer notes would silently lose content.
+ * Shrinks PR excerpts (500, then 200, then none), then customer notes (to 200), until the payload fits in
+ * `maxBytes`. Throws when it still does not fit, since dropping PRs would silently lose content.
  */
 export function capPayloadSize(payload: ReleaseNotesJobPayload, maxBytes = MAX_PAYLOAD_BYTES): ReleaseNotesJobPayload {
-  for (const chars of EXCERPT_TIERS) {
+  for (const tier of SIZE_TIERS) {
     const capped = {
       ...payload,
-      prs: payload.prs.map(pr => ({ ...pr, excerpt: pr.excerpt.slice(0, chars) })),
+      prs: payload.prs.map(pr => ({
+        ...pr,
+        excerpt: pr.excerpt.slice(0, tier.excerpt),
+        ...(pr.customerNote === undefined ? {} : { customerNote: pr.customerNote.slice(0, tier.note) }),
+      })),
     };
     if (payloadBytes(capped) <= maxBytes) return capped;
   }
-  throw new Error(`release notes payload for ${payload.releaseTag} exceeds ${maxBytes} bytes even without PR excerpts`);
+  throw new Error(
+    `release notes payload for ${payload.releaseTag} exceeds ${maxBytes} bytes even with excerpts and notes trimmed`
+  );
 }
 
 export interface PayloadDeps {
@@ -51,11 +68,16 @@ export interface PayloadDeps {
   getPRSummary: (prNumber: number) => Promise<PRSummary | null>;
 }
 
-/** Builds the job payload for `release`, covering the PRs merged since `previousTag`. */
+/**
+ * Builds the job payload for `release`, covering the PRs merged since `previousTag`. `deployedAt` anchors
+ * the embargo and defaults to now: CI enqueues right after the deploy, and a backfilled release gets a
+ * fresh embargo. GitHub's `created_at` is the release commit's date, not the deploy time.
+ */
 export async function buildReleaseNotesPayload(
-  release: Pick<GitHubRelease, 'tag_name' | 'html_url' | 'target_commitish' | 'created_at'>,
+  release: Pick<GitHubRelease, 'tag_name' | 'html_url' | 'target_commitish'>,
   previousTag: string | null,
-  deps: PayloadDeps
+  deps: PayloadDeps,
+  deployedAt: Date = new Date()
 ): Promise<ReleaseNotesJobPayload> {
   const commits = previousTag ? await deps.getCommitRange(previousTag, release.tag_name) : [];
   const numbers = [...new Set(commits.map(c => extractPRNumber(c.message)).filter((n): n is number => n !== null))];
@@ -82,7 +104,7 @@ export async function buildReleaseNotesPayload(
     releaseUrl: release.html_url,
     previousTag,
     deployedSha: release.target_commitish,
-    deployedAt: new Date(release.created_at),
+    deployedAt,
     prs,
   });
 }

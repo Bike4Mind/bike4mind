@@ -171,6 +171,7 @@ jobs:
       # Release notes are best-effort: a failure here must never fail the release itself.
       # The role and queue URL are provisioned outside this repo; RELEASE_NOTES_ENABLED gates the steps until then.
       - name: Configure AWS credentials for release notes
+        id: release-notes-creds
         if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != ''
         continue-on-error: true
         uses: aws-actions/configure-aws-credentials@v6
@@ -180,7 +181,7 @@ jobs:
           role-session-name: GitHubActions-${{ github.run_id }}-release-notes
 
       - name: Enqueue release notes
-        if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != ''
+        if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != '' && steps.release-notes-creds.outcome == 'success'
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

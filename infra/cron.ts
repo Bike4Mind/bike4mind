@@ -163,7 +163,7 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
  * Fetches latest What's New modal from production S3 and imports to local DB.
  *
  * CRITICAL: Only enabled for non-production environments (dev, staging, forks)
- * - production: DISABLED - production GENERATES modals, doesn't import them
+ * - production: DISABLED - production is the source the others import from
  * - dev/staging/forks: ENABLED - imports modals from production
  *
  * Schedule: Daily at 9am UTC (3am CST)
@@ -239,7 +239,7 @@ const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCro
  * Generates a weekly summary of What's New modals and posts to Slack.
  *
  * Schedule: Weekly on Saturday at 2am CST (8:00 UTC)
- * Only runs in production environment.
+ * Disabled; see `enabled` below.
  *
  * Workflow:
  * 1. Fetches What's New modals from the past 7 days
@@ -267,8 +267,9 @@ const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
       },
     ],
   },
-  // Only enabled in production - fork environments should not generate highlights
-  enabled: $app.stage === 'production',
+  // Disabled: its only input was the generated What's New modals, which release notes replaced, so it
+  // would post a "no modals" warning every week.
+  enabled: false,
 });
 
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation

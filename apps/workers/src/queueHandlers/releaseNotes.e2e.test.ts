@@ -12,7 +12,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const h = vi.hoisted(() => ({
   getSettingsByNames: vi.fn(),
-  generateReleaseNotes: vi.fn(),
+  writeReleaseNotes: vi.fn(),
   fetch: vi.fn(),
   findWorkspace: vi.fn(),
 }));
@@ -23,7 +23,11 @@ vi.mock('@server/queueHandlers/utils', () => ({
 vi.mock('@server/utils/cloudwatch', () => ({ emitModalGenerationMetrics: vi.fn() }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsByNames: h.getSettingsByNames }));
 vi.mock('./releaseNotes/generate', () => ({
-  generateReleaseNotes: h.generateReleaseNotes,
+  triageReleaseNotes: vi.fn(async () => ({
+    notes: new Map([[1, 'note']]),
+    usage: { inputTokens: 0, outputTokens: 0 },
+  })),
+  writeReleaseNotes: h.writeReleaseNotes,
   createReleaseNotesCompleter: vi.fn(async () => ({ complete: vi.fn(), modelId: 'gpt-4o-mini' })),
 }));
 vi.stubGlobal('fetch', h.fetch);
@@ -80,9 +84,9 @@ afterEach(async () => {
 
 describe('releaseNotes handler against real Mongo', () => {
   it('stores one scheduled note per tag and overwrites it on redelivery', async () => {
-    h.generateReleaseNotes.mockResolvedValueOnce(draft('Search is faster'));
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Search is faster'));
     await run();
-    h.generateReleaseNotes.mockResolvedValueOnce(draft('Search is much faster'));
+    h.writeReleaseNotes.mockResolvedValueOnce(draft('Search is much faster'));
     await run();
 
     const rows = await ReleaseNote.find({ releaseTag: 'v1.2.3.4' }).lean();
@@ -94,7 +98,7 @@ describe('releaseNotes handler against real Mongo', () => {
   });
 
   it('keeps a human-edited note and does not announce the regenerated one', async () => {
-    h.generateReleaseNotes.mockResolvedValue(draft('Search is faster'));
+    h.writeReleaseNotes.mockResolvedValue(draft('Search is faster'));
     await run();
     await ReleaseNote.updateOne({ releaseTag: 'v1.2.3.4' }, { $set: { headline: 'Edited', editedAt: new Date() } });
     h.fetch.mockClear();

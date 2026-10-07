@@ -16,6 +16,9 @@ const yaml = fs.readFileSync(path.join(REPO_ROOT, '.github', 'workflows', 'prod-
 
 const GATE =
   "if: success() && vars.RELEASE_NOTES_ENABLED == 'true' && github.event.inputs.dry_run != 'true' && steps.create.outputs.release_tag != ''";
+// continue-on-error keeps success() true when the assume fails, and the deploy role's credentials are
+// still in the env then, so the enqueue must also require the release-notes role step to have succeeded.
+const ENQUEUE_GATE = `${GATE} && steps.release-notes-creds.outcome == 'success'`;
 
 /** The text of one step, from its `- name:` line up to the next step. */
 function stepBlock(name: string): string {
@@ -32,10 +35,17 @@ describe('prod-release.yml release-notes steps', () => {
     expect(stepBlock('Create production release')).toMatch(/^\s+id: create$/m);
   });
 
-  it.each(STEPS)('%s carries the full gate and continue-on-error', name => {
+  it.each([
+    [STEPS[0], GATE],
+    [STEPS[1], ENQUEUE_GATE],
+  ])('%s carries the full gate and continue-on-error', (name, gate) => {
     const block = stepBlock(name);
-    expect(block.split('\n').map(l => l.trim())).toContain(GATE);
+    expect(block.split('\n').map(l => l.trim())).toContain(gate);
     expect(block).toMatch(/^\s+continue-on-error: true$/m);
+  });
+
+  it('gives the release-notes credentials step the id the enqueue gate reads', () => {
+    expect(stepBlock(STEPS[0])).toMatch(/^\s+id: release-notes-creds$/m);
   });
 
   it('runs both steps after the release is created', () => {

@@ -48,7 +48,8 @@ export const ReleaseNotesJobPayloadSchema = z.object({
   kind: z.literal('release-notes'),
   schemaVersion: z.number().int(),
   releaseTag: z.string().min(1),
-  releaseUrl: z.string(),
+  // Interpolated into a Slack <url|label> link, so no whitespace or link delimiters.
+  releaseUrl: z.string().regex(/^https:\/\/[^\s<>|]+$/),
   previousTag: z.string().nullable(),
   deployedSha: z.string().min(1),
   deployedAt: z.coerce.date(),
