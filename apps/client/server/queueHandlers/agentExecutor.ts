@@ -2941,8 +2941,8 @@ async function processExecution(
         await agentExecutionRepository.recordGateEmitted(executionId);
         await sendWs('confidence_gate', { executionId, ...gatePayload });
         // Emit a `progress` event with the paused status so the client's
-        // existing `progress` subscriber flips `ExecutionStatusBanner` to
-        // "Agent paused" without waiting for a refresh + `reconnect_result`.
+        // existing `progress` subscriber flips the client store's status to
+        // `paused` without waiting for a refresh + `reconnect_result`.
         // The DB-side status is the source of truth; this just keeps the
         // in-memory store in sync without adding a new client subscriber.
         await sendWs('progress', { executionId, status: 'paused' });

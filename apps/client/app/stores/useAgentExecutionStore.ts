@@ -530,7 +530,8 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   // has resolved or abandoned it. `PermissionCard` renders purely on
   // `pendingPermission` presence (not status), so a lingering value would leave a
   // dead permission prompt on a completed/failed/aborted run. Clear it on every
-  // terminal transition.
+  // terminal transition. `isAborting` is cleared too, so an abort racing a
+  // completed/failed event doesn't leave the flag set on a finished run.
   markCompleted: (executionId, answer, totalCreditsUsed) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
@@ -539,6 +540,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         answer,
         totalCreditsUsed,
         pendingPermission: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -550,6 +552,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         failureReason: reason,
         errorMessage: message,
         pendingPermission: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -595,6 +598,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         // permission card on an already-finished run - the reconnect arm of the
         // same bug the terminal transitions above guard against.
         pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
+        isAborting: isActiveStatus(snapshot.status) ? exec.isAborting : false,
         lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
         // Step replay. Replace iterations only when the server actually
         // supplied them - `undefined` means "live-only reconnect" (legacy
