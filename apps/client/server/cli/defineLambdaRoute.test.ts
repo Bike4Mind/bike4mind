@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { chatContract } from '@bike4mind/common';
+import { chatContract, NotFoundError } from '@bike4mind/common';
 
 // The adapter connects to the DB and authenticates before validating; mock those
 // so this stays a pure unit test of the adapter's parse/auth/validate/shape logic.
@@ -13,6 +13,7 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: class {
     updateMetadata() {}
     info() {}
+    warn() {}
     error() {}
   },
 }));
@@ -116,5 +117,29 @@ describe('defineLambdaRoute rate-limit ordering', () => {
     const res = asResult(await route(makeEvent({ message: 'hi' })));
     expect(res.statusCode).toBe(401);
     expect(rateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('defineLambdaRoute handler errors', () => {
+  beforeEach(() => {
+    mockResolveAuth.mockReset().mockResolvedValue({ method: 'jwt', userId: 'u1', user: {} });
+  });
+
+  it("keeps a thrown HTTPError's status in the error envelope", async () => {
+    const route = defineLambdaRoute(chatContract, async () => {
+      throw new NotFoundError('nope');
+    });
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body as string)).toEqual({ error: 'nope', request_id: expect.any(String) });
+  });
+
+  it('still shapes a plain Error into a 500', async () => {
+    const route = defineLambdaRoute(chatContract, async () => {
+      throw new Error('boom');
+    });
+    const res = asResult(await route(makeEvent({ message: 'hi' })));
+    expect(res.statusCode).toBe(500);
+    expect(JSON.parse(res.body as string)).toEqual({ error: 'boom', request_id: expect.any(String) });
   });
 });
