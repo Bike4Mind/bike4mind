@@ -175,6 +175,8 @@ by a password/OTC UI round-trip.
 
 `/api/test/create-user` also accepts **no `email`** (omit it or pass `null`) to mint an *emailless* account - the shape an OAuth signup with no provider-verified email produces (see `verifyCallback`'s create path). Such an account cannot receive a login one-time code, so enter it through the returned tokens or **Admin → Login as User**. The username must then end in `-e2e` so cleanup can still find it; the same two-tier rule as emails applies (`qa-emailless-e2e` is standing and never swept, `qa-emailless-12345678-e2e` is reclaimed by the aged sweep).
 
+Every created user gets the predefined tags (`Developer`, `Customer`, `Opti`) prepended to any `tags` you pass. Pass `includePredefinedTags: false` to get exactly the `tags` you pass (or none), e.g. a user without `Developer`. Only a boolean `false` opts out.
+
 Before setup runs, `global-setup.ts` calls `/api/test/cleanup` to remove stale test users from prior runs. After all tests, `global-teardown.ts` does the same.
 
 Both calls are **scoped to this run's `E2E_TEST_ID`**, so a run can only ever delete its own
