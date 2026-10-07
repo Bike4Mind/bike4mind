@@ -97,6 +97,44 @@ describe('gradeLakeRag - stale-same-name', () => {
     );
     expect(grade.staleRejected).toBe(true);
   });
+
+  it.each([
+    [
+      'si-same-name-kilogram-basis',
+      'It is defined by fixing the Planck constant [1], replacing the International Prototype of the Kilogram.',
+      'kilogram-definition.md',
+    ],
+    [
+      'census-same-name-california-seats',
+      'California has 52 seats [1], one fewer than its 53 in 2010.',
+      'apportionment.md',
+    ],
+    [
+      'census-different-name-center',
+      'It is near Hartville, Missouri [1]; in 2010 it was near Plato.',
+      'census-2020-highlights.md',
+    ],
+  ])('excuses a stale value contrasted with the current one (%s)', (id, reply, source) => {
+    expect(gradeLakeRag(row(id), reply, indexed(source)).staleRejected).toBe(true);
+  });
+
+  it('does not treat a bare past tense as a stale marker', () => {
+    const grade = gradeLakeRag(
+      row('census-different-name-center'),
+      'The mean center was near Plato [1].',
+      indexed('census-2020-highlights.md')
+    );
+    expect(grade.staleRejected).toBe(false);
+  });
+
+  it('quotes the sentence that asserted the stale value', () => {
+    const grade = gradeLakeRag(
+      saturn,
+      'Saturn has 146 confirmed moons [1]. It has 82 moons.',
+      indexed('giant-planet-moons.md')
+    );
+    expect(grade.reason).toContain('asserted stale value: 82 in "It has 82 moons"');
+  });
 });
 
 describe('gradeLakeRag - stale-different-name', () => {
@@ -152,6 +190,12 @@ describe('gradeLakeRag - absent', () => {
     });
     expect(grade.reason).toContain('without saying the lake lacks it');
   });
+
+  it('grades the disclosure only, so naming the gap and then answering still passes', () => {
+    const flux = row('si-absent-magnetic-flux');
+    const reply = 'The SI unit of magnetic flux is the weber. The documents do not mention it.';
+    expect(gradeLakeRag(flux, reply, indexed()).passed).toBe(true);
+  });
 });
 
 describe('gradeLakeRag - indexed citation', () => {
@@ -181,6 +225,15 @@ describe('gradeLakeRag - indexed citation', () => {
     const grade = gradeLakeRag(ganymede, 'Ganymede [1][3].', indexed('galilean-moons.md'));
     expect(grade.citation).toEqual({ status: 'dangling', markers: [3] });
     expect(grade.passed).toBe(false);
+  });
+
+  it('does not read a bracketed year or count as a marker', () => {
+    const grade = gradeLakeRag(
+      ganymede,
+      'Ganymede [1], per the [2016] survey of [146] moons.',
+      indexed('galilean-moons.md')
+    );
+    expect(grade.citation).toEqual({ status: 'matched' });
   });
 });
 

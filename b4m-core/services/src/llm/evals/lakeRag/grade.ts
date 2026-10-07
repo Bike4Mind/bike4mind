@@ -35,10 +35,20 @@ function numericSafeSentences(reply: string): string[] {
 /**
  * Marks a value as historical rather than current. A reply that says "146, up from an earlier
  * count of 82" has rejected the stale value, not asserted it, so the marker excuses its own
- * sentence only.
+ * sentence only. A bare `was`/`had` is deliberately not a marker: "the center was near Plato"
+ * asserts the stale value. A year only counts beside a past tense ("in 2010 it was near Plato").
  */
-const STALE_CONTEXT =
-  /\b(?:earlier|previous(?:ly)?|older|outdated|out\s+of\s+date|superseded|formerly|originally|prior|no\s+longer|used\s+to|stale|obsolete|replaced|until|before|up\s+from|down\s+from)\b/i;
+const STALE_CONTEXT = new RegExp(
+  [
+    /\b(?:earlier|previous(?:ly)?|older|outdated|out\s+of\s+date|superseded|formerly|originally|prior|no\s+longer|used\s+to|stale|obsolete|replac\w*|until|before|up\s+from|down\s+from)\b/,
+    /\b(?:fewer|more|less|lower|higher|smaller|larger|greater)\s+than\b/,
+    /\bin\s+(?:1[89]|20)\d\d\b.*\b(?:was|were|had)\b/,
+    /\b(?:was|were|had)\b.*\bin\s+(?:1[89]|20)\d\d\b/,
+  ]
+    .map(pattern => pattern.source)
+    .join('|'),
+  'i'
+);
 
 const NEGATION = `(?:could|can|did|do|does|is|are|was|were)(?:n['\\u2019]?t|['\\u2019]t|\\s*not)`;
 
@@ -77,21 +87,30 @@ export type LakeRagGrade = EvalGrade & {
 };
 
 function gradeAnswer(row: LakeRagBankRow, reply: string): boolean {
+  // `absent` grades the disclosure only: a reply that names the gap and then answers from general
+  // knowledge still passes, because it has not passed the outside answer off as the lake's.
   if (row.kind === 'absent') return ABSENCE.some(pattern => pattern.test(reply));
   return row.expect.every(source => tokenMatcher(source).test(reply));
 }
 
-/** The stale tokens the reply asserts as current - each one found in a sentence with no stale marker. */
-function assertedStaleTokens(row: LakeRagBankRow, reply: string): string[] {
+type StaleAssertion = { token: string; sentence: string };
+
+/**
+ * The stale tokens the reply asserts as current - each one found in a sentence with no stale
+ * marker - with that sentence, so a report shows a human what tripped a lexical false negative.
+ */
+function assertedStaleTokens(row: LakeRagBankRow, reply: string): StaleAssertion[] {
   const unmarked = numericSafeSentences(reply).filter(sentence => !STALE_CONTEXT.test(sentence));
-  return row.rejectTokens.filter(source => {
+  return row.rejectTokens.flatMap(source => {
     const matcher = tokenMatcher(source);
-    return unmarked.some(sentence => matcher.test(sentence));
+    const sentence = unmarked.find(candidate => matcher.test(candidate));
+    return sentence === undefined ? [] : [{ token: source, sentence: sentence.trim() }];
   });
 }
 
+/** At most two digits, so a bracketed year or count (`[2016]`, `[146]`) is not read as a marker. */
 function citedIndices(reply: string): number[] {
-  const markers = [...reply.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)];
+  const markers = [...reply.matchAll(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g)];
   return [...new Set(markers.flatMap(m => m[1].split(',').map(n => Number(n.trim()))))];
 }
 
@@ -152,7 +171,7 @@ export function gradeLakeRag(row: LakeRagBankRow, reply: string, context: LakeRa
     ...(answer
       ? []
       : [row.kind === 'absent' ? 'answered without saying the lake lacks it' : 'expected answer missing']),
-    ...(staleAsserted.length === 0 ? [] : [`asserted stale value: ${staleAsserted.join(', ')}`]),
+    ...staleAsserted.map(({ token, sentence }) => `asserted stale value: ${token} in "${sentence}"`),
     ...(citationOk ? [] : [describeCitationFailure(citation, row.expectSource)]),
   ];
   return {
