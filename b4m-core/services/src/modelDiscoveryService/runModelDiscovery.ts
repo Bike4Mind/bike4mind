@@ -408,8 +408,9 @@ async function executeRun(
 
       // A literal row records what the build already trusted, so it cannot change
       // what an aggregator join returns and is not worth another full re-fetch.
-      const literalPlanned = plan.prices.rows.filter(isAdapterLiteralRow).length;
-      const joinRelevantPrices = Math.max(0, pricesAppended - literalPlanned);
+      // Counted from what landed: a literal that lost a unique-index race must not
+      // cancel out an aggregator row that did.
+      const joinRelevantPrices = pricesAppended - (priceWrites.appendedLiteral ?? 0);
       if (ctx.mode !== 'write' || appended + joinRelevantPrices === 0 || globalDeadline.signal.aborted) break;
       if (pass === MAX_DISCOVERY_PASSES) {
         logger.warn(
@@ -1020,6 +1021,8 @@ async function appendRows(
 interface AppendOutcome {
   appended: number;
   failed: number;
+  /** Of `appended`, the rows recorded from an adapter literal. Set by appendPriceRows only. */
+  appendedLiteral?: number;
 }
 
 async function appendPriceRows(
@@ -1028,10 +1031,14 @@ async function appendPriceRows(
   logger: DiscoveryLogger
 ): Promise<AppendOutcome> {
   let appended = 0;
+  let appendedLiteral = 0;
   let failed = 0;
   for (const row of rows) {
     try {
-      if (await adapters.db.prices.append(row)) appended += 1;
+      if (await adapters.db.prices.append(row)) {
+        appended += 1;
+        if (isAdapterLiteralRow(row)) appendedLiteral += 1;
+      }
     } catch (error) {
       // Unlike the catalog, ModelPrice surfaces its unique index as a thrown
       // E11000: another driver already priced this model for this run window,
@@ -1041,7 +1048,7 @@ async function appendPriceRows(
       logger.error(`${LOG_PREFIX} price append failed for ${row.modelId}: ${describe(error)}`);
     }
   }
-  return { appended, failed };
+  return { appended, failed, appendedLiteral };
 }
 
 const isDuplicateKey = (error: unknown): boolean =>
