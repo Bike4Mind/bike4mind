@@ -1625,6 +1625,9 @@ async function processExecution(
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
+        // usageEvents is deliberately absent: onToolLlmUsage already folds tool COGS into the
+        // agent_execution event (billIteration), so wiring it would make
+        // recordToolOperationalUsage also write an 'operations' event and double-count costUsd.
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
