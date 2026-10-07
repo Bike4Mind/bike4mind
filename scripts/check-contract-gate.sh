@@ -20,6 +20,11 @@
 # ADDING A NEW PUBLIC ENDPOINT
 #   Use nextRouteForContract (see b4m-core/common/src/api-contract/README.md).
 #   Adding it to the allowlist instead is not allowed for new endpoints.
+#
+# COVERAGE
+#   This script covers pages/api/** (Next.js routes). Lambda handlers in
+#   apps/workers/ are not scanned here because none currently use requiredScopes;
+#   extend this script if that changes.
 
 set -euo pipefail
 
@@ -38,12 +43,15 @@ fi
 
 # Files that use baseApi( with requiredScopes but NOT the contract adapter.
 # nextRouteForContract and defineLambdaRoute both satisfy the requirement.
+# || true: grep -rLE exits 1 when every file matches (fully migrated = goal state);
+# xargs also exits 1 when its input is empty. Neither should abort the script.
 violators=$(
   grep -rLE "nextRouteForContract|defineLambdaRoute" "$API_DIR" --include="*.ts" --exclude-dir='premium-*' \
   | xargs grep -lE "baseApi\(" 2>/dev/null \
   | xargs grep -lE "requiredScopes" 2>/dev/null \
   | grep -v '__tests__' \
-  | sort
+  | sort \
+  || true
 )
 
 allowed=$(grep -v '^#' "$ALLOWLIST" | grep -v '^$' | sed 's/[[:space:]]*#.*//' | sed 's/[[:space:]]*$//' | sort)
@@ -68,6 +76,10 @@ if [ -z "$new_violators" ]; then
   echo "OK: No new contract-gate violations. Migration progress: ${total_migrated}/${total_backlog} handlers ported."
   exit 0
 fi
+
+new_count=$(echo "$new_violators" | grep -c '.' || true)
+# Surface in the GitHub Actions UI (annotation visible on the PR checks tab).
+echo "::warning::${new_count} API-key-authed handler(s) lack a contract -- see job log for details"
 
 echo "WARNING: The following API-key-authed handlers lack a contract (nextRouteForContract / defineLambdaRoute):"
 echo ""
