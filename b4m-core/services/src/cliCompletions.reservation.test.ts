@@ -38,6 +38,20 @@ const OPENAI_CACHED_MODEL_INFO = {
   pricing: { 200_000: { input: 2 / 1_000_000, output: 8 / 1_000_000, cache_read: 0.5 / 1_000_000 } },
 } as unknown as ModelInfo;
 
+const KIMI_CACHED_MODEL_ID = 'reservation-test-kimi-cached';
+const KIMI_CACHED_MODEL_INFO = {
+  ...OPENAI_CACHED_MODEL_INFO,
+  id: KIMI_CACHED_MODEL_ID,
+  backend: ModelBackend.Kimi,
+} as unknown as ModelInfo;
+
+const DEEPSEEK_CACHED_MODEL_ID = 'reservation-test-deepseek-cached';
+const DEEPSEEK_CACHED_MODEL_INFO = {
+  ...OPENAI_CACHED_MODEL_INFO,
+  id: DEEPSEEK_CACHED_MODEL_ID,
+  backend: ModelBackend.DeepSeek,
+} as unknown as ModelInfo;
+
 const BEDROCK_MODEL_ID = 'reservation-test-bedrock';
 // Explicit cache_read: the exclusion under test must come from the backend, not a missing rate.
 const CACHE_READ_PRICING = { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000, cache_read: 0.5 / 1_000_000 } };
@@ -98,6 +112,8 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
     REASONING_MODEL_INFO,
     OPENAI_MODEL_INFO,
     OPENAI_CACHED_MODEL_INFO,
+    KIMI_CACHED_MODEL_INFO,
+    DEEPSEEK_CACHED_MODEL_INFO,
     BEDROCK_MODEL_INFO,
     GEMINI_MODEL_INFO,
     XAI_MODEL_INFO,
@@ -263,7 +279,7 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it('breaks at the last flagged non-system message: a flagged system message mid-array does not cover the history', async () => {
+    it('does not move the conversation breakpoint when a system message mid-array is flagged', async () => {
       const { db, users } = buildDb();
       const messages = [
         { role: 'user' as const, content: text(20_000) },
@@ -330,18 +346,71 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it('prices an auto-caching backend with a published cache_read rate up to the last assistant message', async () => {
+    it.each([
+      ['OpenAI', OPENAI_CACHED_MODEL_ID, OPENAI_CACHED_MODEL_INFO],
+      ['Kimi', KIMI_CACHED_MODEL_ID, KIMI_CACHED_MODEL_INFO],
+      ['DeepSeek', DEEPSEEK_CACHED_MODEL_ID, DEEPSEEK_CACHED_MODEL_INFO],
+    ])('prices %s (auto-caching, published cache_read) up to the last assistant message', async (_name, id, info) => {
       const { db, users } = buildDb();
-      await executeCompletion({
-        ...roundParams,
-        model: OPENAI_CACHED_MODEL_ID,
-        db,
-        messages: toolLoop(false),
-      });
+      await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(false) });
 
-      const expected = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 38_000, OUTPUT, 30_000, 0));
-      const uncached = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 68_000, OUTPUT));
+      const expected = usdToCredits(getTextModelCost(info, 38_000, OUTPUT, 30_000, 0));
+      const uncached = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
       expect(expected).toBeLessThan(uncached);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('bills an auto-caching backend system message after the last assistant message as plain input', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'user' as const, content: text(20_000) },
+        { role: 'assistant' as const, content: text(30_000) },
+        { role: 'system' as const, content: text(8_000) },
+        { role: 'user' as const, content: text(5_000) },
+      ];
+      await executeCompletion({ ...roundParams, model: OPENAI_CACHED_MODEL_ID, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 43_000, OUTPUT, 20_000, 0));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('reads a system message that precedes the last assistant message on an auto-caching backend', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'user' as const, content: text(20_000) },
+        { role: 'system' as const, content: text(8_000) },
+        { role: 'assistant' as const, content: text(30_000) },
+        { role: 'user' as const, content: text(5_000) },
+      ];
+      await executeCompletion({ ...roundParams, model: OPENAI_CACHED_MODEL_ID, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 35_000, OUTPUT, 28_000, 0));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('prices a multi-round tool loop: read through the round before last, write for the last assistant and result', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'system' as const, content: text(10_000), cache: true },
+        { role: 'user' as const, content: text(2_000) },
+        { role: 'assistant' as const, content: text(500) },
+        { role: 'user' as const, content: text(3_000) },
+        { role: 'assistant' as const, content: text(500) },
+        { role: 'user' as const, content: text(8_000), cache: true },
+      ];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 15_500, 8_500));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('caches a conversation-flagged loop without any flagged system message', async () => {
+      const { db, users } = buildDb();
+      const messages = toolLoop(true);
+      messages[0] = { ...messages[0], cache: false };
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 8_000, OUTPUT, 30_000, 30_000));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 

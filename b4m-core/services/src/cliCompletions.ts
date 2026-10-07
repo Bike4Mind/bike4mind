@@ -182,8 +182,9 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
  * (non-system) messages read up to min(last flagged, message before the last assistant); from
  * there to the last flagged one they bill at cache_write (the new breakpoint writes them, the
  * last assistant message included); the rest is plain input. Auto-caching backends read the
- * system messages and the conversation up to the message before the last assistant, and bill the
- * rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
+ * system messages that precede the last assistant message (they preserve message order, so a later
+ * one is new content) and the conversation up to the message before the last assistant, and bill
+ * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
  * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
  * actual usage.
  *
@@ -199,39 +200,44 @@ function estimateReservationUsd(
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
   if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
 
-  const system = messages.filter(m => m.role === 'system');
+  const lastAssistantMessageIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
   const conversation = messages.filter(m => m.role !== 'system');
   const lastAssistantIndex = conversation.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
+  const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
 
-  let systemIsRead: boolean;
   let readEnd: number;
   let writeEnd = -1;
+  let hoistsSystem: boolean;
   if (modelInfo.backend === ModelBackend.Anthropic) {
     const lastFlagged = conversation.reduce((last, m, i) => (m.cache === true ? i : last), -1);
-    systemIsRead = lastFlagged >= 0 || system.some(m => m.cache === true);
-    if (!systemIsRead) return uncachedUsd;
+    if (lastFlagged < 0 && !messages.some(m => m.role === 'system' && m.cache === true)) return uncachedUsd;
     readEnd = Math.min(lastFlagged, lastAssistantIndex - 1);
     writeEnd = lastFlagged;
+    hoistsSystem = true;
   } else {
-    const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
     const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
     if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
-    systemIsRead = true;
     readEnd = lastAssistantIndex - 1;
+    hoistsSystem = false;
   }
 
-  const systemTokens = estimateInputTokens(system);
-  let readTokens = systemIsRead ? systemTokens : 0;
+  let readTokens = 0;
   let writeTokens = 0;
-  let plainTokens = systemIsRead ? 0 : systemTokens;
-  conversation.forEach((m, i) => {
+  let plainTokens = 0;
+  let conversationIndex = 0;
+  messages.forEach((m, index) => {
     const tokens = estimateInputTokens([m]);
+    if (m.role === 'system') {
+      if (hoistsSystem || index < lastAssistantMessageIndex) readTokens += tokens;
+      else plainTokens += tokens;
+      return;
+    }
+    const i = conversationIndex++;
     if (i <= readEnd) readTokens += tokens;
     else if (i <= writeEnd) writeTokens += tokens;
     else plainTokens += tokens;
   });
 
-  const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
   const tieredModel =
     tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
   return getTextModelCost(tieredModel, plainTokens, estimatedOutputTokens, readTokens, writeTokens);
