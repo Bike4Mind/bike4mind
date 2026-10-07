@@ -348,7 +348,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
   beforeEach(() => {
     mockOrganizationRepository = {
       findById: vi.fn().mockResolvedValue({ ...mockOrganization }),
-      update: vi.fn().mockImplementation(org => Promise.resolve(org)),
+      removeMember: vi.fn().mockResolvedValue(undefined),
     };
     // revokeAccess now purges the removed member's org group ids + adminUserIds (org-groups #1172),
     // and clears their organizationId when it pointed at this org (findById returns null here, so
@@ -392,7 +392,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
       }
     );
 
-    expect(mockOrganizationRepository.update).toHaveBeenCalled();
+    expect(mockOrganizationRepository.removeMember).toHaveBeenCalled();
     expect(result.users).toHaveLength(0);
     expect(result.userDetails).toHaveLength(0);
   });
@@ -439,7 +439,7 @@ describe('organizationService.revokeAccess - Manager Permissions', () => {
       }
     );
 
-    expect(mockOrganizationRepository.update).toHaveBeenCalled();
+    expect(mockOrganizationRepository.removeMember).toHaveBeenCalled();
     expect(result.users).toHaveLength(0);
   });
 });

@@ -114,6 +114,7 @@ export const updateFabFile = async (
       : found
   ) as IFabFileDocument;
 
+  const contentChanges: Partial<IFabFileDocument> = {};
   if (fileContent !== undefined && !fabFile.mimeType.startsWith('image/')) {
     const mimeType = params.mimeType ?? fabFile.mimeType;
     const ext = mime.extension(mimeType) || null;
@@ -128,15 +129,15 @@ export const updateFabFile = async (
       try {
         const metadata = await storage.getMetadata(filePath);
         if (metadata.size !== undefined) {
-          fabFile.fileSize = metadata.size;
+          contentChanges.fileSize = metadata.size;
         }
       } catch (error) {
         Logger.globalInstance.warn('Failed to retrieve file metadata from S3:', error);
       }
     }
 
-    fabFile.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
-    fabFile.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
+    contentChanges.fileUrl = await storage.generateSignedUrl(filePath, EXPIRE_IN_SECONDS);
+    contentChanges.fileUrlExpireAt = new Date(Date.now() + EXPIRE_IN_SECONDS * 1000);
 
     // The bytes just changed, so any cached extracted length now describes the previous content, and a
     // stale count leaves the pre-send attachment warning silent about a file that no longer fits.
@@ -144,7 +145,8 @@ export const updateFabFile = async (
     //
     // The shared patch rather than a literal: this is one of several rewrite sites, not "the one place"
     // an earlier version of this comment claimed, and a guard test enumerates them all.
-    Object.assign(fabFile, FAB_FILE_CONTENT_REWRITE_PATCH);
+    Object.assign(contentChanges, FAB_FILE_CONTENT_REWRITE_PATCH);
+    Object.assign(fabFile, contentChanges);
   }
 
   // A tag replacement can join a data lake but can never leave one - see reconcileLakeTags for
@@ -172,13 +174,14 @@ export const updateFabFile = async (
           }
         );
 
-  const updatedFabFile: Partial<IFabFileDocument> = {
-    ...fabFile,
+  const changes: Partial<IFabFileDocument> = {
+    ...contentChanges,
     ...params,
     ...(lakeTags ? { tags: lakeTags.tagsToPersist } : {}),
     systemPriority: params.system && params.systemPriority === undefined ? 999 : params.systemPriority,
     updatedAt: new Date(),
   };
+  const updatedFabFile: Partial<IFabFileDocument> = { ...fabFile, ...changes };
 
   // An edit (rename/tag/notes/etc.) must not echo back a working GET url for an image
   // that isn't clean (pending scan) or was quarantined (blocked) by upload moderation.
@@ -187,12 +190,16 @@ export const updateFabFile = async (
   // vanishing. MUST run BEFORE db.fabFiles.update() below - clearing after the write would
   // still persist the stale fileUrl (only the in-memory/returned object was cleared), so a
   // subsequent read would resurrect a working URL for a file that isn't serveable.
-  if (!isImageServeable(updatedFabFile)) {
+  const serveable = isImageServeable(updatedFabFile);
+  if (!serveable) {
     updatedFabFile.fileUrl = undefined;
     updatedFabFile.fileUrlExpireAt = undefined;
   }
 
-  await db.fabFiles.update(updatedFabFile);
+  await db.fabFiles.update(
+    { id: fabFile.id, ...changes },
+    serveable ? undefined : { unset: ['fileUrl', 'fileUrlExpireAt'] }
+  );
 
   // A whole-array write can never leave a lake (see reconcileLakeTags), so tagsToPersist - already
   // assigned into updatedFabFile above - is always the true final array; commit() only needs to

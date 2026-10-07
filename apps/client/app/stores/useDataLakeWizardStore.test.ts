@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { useDataLakeWizardStore } from './useDataLakeWizardStore';
+import { toWizardTargetLake, useDataLakeWizardStore } from './useDataLakeWizardStore';
 import type { WizardFile } from '../utils/folderTreeParser';
 import { MAX_TAG_PREFIX_LENGTH, tagPrefixIssue } from '@bike4mind/common';
 
@@ -213,5 +213,80 @@ describe('useDataLakeWizardStore - optional step opt-ins', () => {
 
     useDataLakeWizardStore.getState().setOptionalStep('taxonomy', false);
     expect(useDataLakeWizardStore.getState().optionalSteps).toEqual({ preview: true, taxonomy: false });
+  });
+});
+
+describe('useDataLakeWizardStore - GitHub repository picker', () => {
+  afterEach(() => useDataLakeWizardStore.setState({ gitHubRepoPickerLakeId: null }));
+
+  it('opens for a lake id and closes back to null', () => {
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+
+    useDataLakeWizardStore.getState().openGitHubRepoPicker('lake1');
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBe('lake1');
+
+    useDataLakeWizardStore.getState().closeGitHubRepoPicker();
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+  });
+
+  // The picker is mounted inside the manager: left set, it would reappear on the next manager open.
+  it('closes with the manager', () => {
+    useDataLakeWizardStore.getState().openManager('mine', 'lake1');
+    useDataLakeWizardStore.getState().openGitHubRepoPicker('lake1');
+    useDataLakeWizardStore.getState().closeManager();
+    expect(useDataLakeWizardStore.getState().gitHubRepoPickerLakeId).toBeNull();
+  });
+});
+
+describe('toWizardTargetLake', () => {
+  const lake = { id: 'lake1', slug: 'docs', name: 'Docs', fileTagPrefix: 'docs', isCreator: false };
+
+  it('carries the origin, so the GitHub connect control can ask to switch a curated lake', () => {
+    expect(toWizardTargetLake({ ...lake, origin: 'curated' }).origin).toBe('curated');
+    expect(toWizardTargetLake({ ...lake, origin: 'connector-fed' }).origin).toBe('connector-fed');
+  });
+
+  it('leaves an absent origin absent, which the control reads as curated', () => {
+    expect(toWizardTargetLake(lake).origin).toBeUndefined();
+  });
+});
+
+describe('useDataLakeWizardStore - adoptAutoTagPrefix', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  const store = () => useDataLakeWizardStore.getState();
+
+  it('adopts over an auto-derived prefix and keeps it re-derivable on rename', () => {
+    store().setConfig({ name: 'Acme' });
+    store().deriveTagPrefixFromName();
+
+    store().adoptAutoTagPrefix('acme-1:');
+    expect(store().config.tagPrefix).toBe('acme-1:');
+
+    store().setConfig({ name: 'Globex' });
+    store().deriveTagPrefixFromName();
+    expect(store().config.tagPrefix).toBe('globex:');
+  });
+
+  // Leaving Configure and coming back must not drop the free `-N` back to the held base: a retry
+  // would then miss the lake its failed attempt archived under that `-N`.
+  it('keeps an adopted prefix when the name is unchanged', () => {
+    store().setConfig({ name: 'Acme' });
+    store().deriveTagPrefixFromName();
+    store().adoptAutoTagPrefix('acme-1:');
+
+    store().deriveTagPrefixFromName();
+
+    expect(store().config.tagPrefix).toBe('acme-1:');
+  });
+
+  it('never overwrites a prefix the user typed', () => {
+    store().setConfig({ name: 'Acme' });
+    store().deriveTagPrefixFromName();
+    store().setTagPrefix('legal:');
+
+    store().adoptAutoTagPrefix('acme-1:');
+
+    expect(store().config.tagPrefix).toBe('legal:');
   });
 });

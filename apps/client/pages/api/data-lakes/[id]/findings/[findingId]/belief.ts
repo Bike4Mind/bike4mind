@@ -1,8 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
+import { dataLakeRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 
@@ -48,22 +50,34 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // forgets. Cheap to keep: the assert is synchronous and idempotent.
     assertDataLakeWriteScope(req);
 
-    // Before the first await: the crypto-shred fence refuses a write only when the purge lands at or
-    // after this instant, so stamping it later would let a purge that landed mid-request lift its own
-    // tombstone. See `recordFindingResolutionBelief`'s `startedAt`.
-    const startedAt = new Date();
+    // The request's arrival, stamped by baseApi ahead of connectDB and auth: the crypto-shred fence
+    // refuses a write only when the purge lands at or after this instant, so any later stamp would
+    // let a purge that landed mid-request lift its own tombstone. See `recordFindingResolutionBelief`.
+    const startedAt = req.receivedAt;
     const { id, findingId } = req.query as { id: string; findingId: string };
 
-    const { lake, finding } = await loadFindingForLake(req, { lakeId: id, findingId });
+    // Computed outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
-    // An open finding has no ruling to record. 400 rather than a quiet `{ recorded: false }`: the
-    // other non-recording outcomes are the system's state (memory is off), whereas this one is the
-    // caller asking for something that does not exist yet, and answering both the same way would let
-    // a UI show "nothing to record" for a finding that simply has not been triaged.
-    if (finding.status === 'open') throw new BadRequestError('This finding has not been ruled on yet');
+    // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
+    // on the lake doc and the retry re-reads live grants. The belief write is external to it and runs
+    // after commit, because the callback re-runs on retry.
+    const { lake, finding, status } = await withTransaction(async () => {
+      const loaded = await loadFindingForLake(req, { lakeId: id, findingId, ctx });
+      // Refused before the touch so a request that records nothing does not bump the lake's updatedAt.
+      // An open finding has no ruling to record. 400 rather than a quiet `{ recorded: false }`: the
+      // other non-recording outcomes are the system's state (memory is off), whereas this one is the
+      // caller asking for something that does not exist yet, and answering both the same way would let
+      // a UI show "nothing to record" for a finding that simply has not been triaged.
+      const { status } = loaded.finding;
+      if (status === 'open') throw new BadRequestError('This finding has not been ruled on yet');
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(loaded.lake.id);
+      return { ...loaded, status };
+    });
 
     const result = await recordFindingResolutionBelief(
-      { lake, finding, status: finding.status, resolution: finding.resolution, startedAt },
+      { lake, finding, status, resolution: finding.resolution, startedAt },
       { logger: req.logger }
     );
 

@@ -409,6 +409,21 @@ describe('POST /api/user-api-keys - scope allowlist guard', () => {
     expect(createUserApiKey).toHaveBeenCalled();
   });
 
+  // The service picks the per-user cap pool from metadata.createdFrom, so a body that could
+  // set it would let a dashboard mint dodge the 10-key cap (see ApiKeyCapPool).
+  it('ignores a body-supplied metadata, so a dashboard mint cannot claim the oauth-exchange cap pool', async () => {
+    const { req, res } = post({
+      name: 'plain',
+      scopes: ['notebooks:read'],
+      metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'spoofed-client' },
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    const [, forwarded] = createUserApiKey.mock.calls[0];
+    expect(forwarded.metadata.createdFrom).toBe('dashboard');
+    expect(forwarded.metadata).not.toHaveProperty('oauthClientId');
+  });
+
   it('allows embed:chat through the user endpoint', async () => {
     const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'a1' });
     await mockRefs.postHandler!(req, res);
@@ -491,5 +506,58 @@ describe('POST /api/user-api-keys - analytics is best effort', () => {
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(logEventSafe).toHaveBeenCalledWith(expect.anything(), expect.anything(), req.logger);
+  });
+});
+
+// Wiring only: the containment rule itself is covered by the service's create.test.ts.
+describe('POST /api/user-api-keys - caller key scopes forwarded for containment', () => {
+  beforeEach(() => createUserApiKey.mockClear());
+
+  it('forwards callerScopes undefined for a browser/JWT caller', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerScopes: undefined })
+    );
+  });
+
+  it("forwards the authenticating key's scopes for an API-key caller", async () => {
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    (req as any).apiKeyInfo = { scopes: ['ai:generate'] };
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerScopes: ['ai:generate'] })
+    );
+  });
+
+  it('forwards an empty array (deny) for an API-key caller whose key has no scopes', async () => {
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    (req as any).apiKeyInfo = {};
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerScopes: [] })
+    );
+  });
+
+  it("forwards the authenticating key's expiresAt as callerExpiresAt", async () => {
+    const expiresAt = new Date('2027-01-01');
+    const { req, res } = post({ name: 'k', scopes: ['files:write'] });
+    (req as any).apiKeyInfo = { scopes: ['ai:generate'], expiresAt };
+    await mockRefs.postHandler!(req, res);
+
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ callerExpiresAt: expiresAt })
+    );
   });
 });

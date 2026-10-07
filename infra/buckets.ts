@@ -78,6 +78,45 @@ const fabFileBucket = new sst.aws.Bucket(
   }
 );
 
+// Notebook exports (notebookExportService storeExportFile) are served via a 1h signed URL and never
+// deleted by the app; 1 day is S3's minimum expiration. Noncurrent rule covers versioned stages.
+const fabFileBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('fabFileBucketLifecycle', {
+  bucket: fabFileBucket.name,
+  rules: [
+    {
+      id: 'expire-notebook-exports',
+      status: 'Enabled',
+      filter: {
+        prefix: 'exports/',
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+      abortIncompleteMultipartUpload: {
+        daysAfterInitiation: 1,
+      },
+    },
+    {
+      // Oversized generated audio handed back as a 1h signed URL (generatedAudioDelivery.ts);
+      // nothing else deletes it. Prefix must stay in sync with GENERATED_AUDIO_OFFLOAD_PREFIX there.
+      id: 'expire-generated-audio-offload',
+      status: 'Enabled',
+      filter: {
+        prefix: 'generated-audio-offload/',
+      },
+      expiration: {
+        days: 1,
+      },
+      noncurrentVersionExpiration: {
+        noncurrentDays: 1,
+      },
+    },
+  ],
+});
+
 /**
  * ===============================
  * GeneratedImagesBucket
@@ -529,12 +568,41 @@ const publishedArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfiguratio
   }
 );
 
+/**
+ * ===============================
+ * QaArtifactsBucket
+ * ===============================
+ * Failure media (screenshots, videos, traces) and HTML reports for the admin
+ * /status page. Private and unversioned. CI writes through size-bound presigned
+ * PUTs from GitHub runners (server-to-server, so no CORS); admins read through
+ * presigned GETs and the /api/admin/qa/report proxy. Everything expires after 30
+ * days; run metadata in Mongo is kept. Keep in sync with QA_MEDIA_RETENTION_DAYS
+ * in b4m-core/common/src/schemas/qa.ts.
+ */
+const qaArtifactsBucket = new sst.aws.Bucket('qaArtifactsBucket', {});
+
+const qaArtifactsBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('qaArtifactsBucketLifecycle', {
+  bucket: qaArtifactsBucket.name,
+  rules: [
+    {
+      id: 'expire-qa-artifacts',
+      status: 'Enabled',
+      filter: { prefix: '' },
+      expiration: { days: 30 },
+      abortIncompleteMultipartUpload: { daysAfterInitiation: 1 },
+    },
+  ],
+});
+
 export {
   fabFileBucket,
+  fabFileBucketLifecycle,
   generatedImagesBucket,
   appFilesBucket,
   publishedArtifactsBucket,
   publishedArtifactsBucketLifecycle,
+  qaArtifactsBucket,
+  qaArtifactsBucketLifecycle,
   historyImportBucket,
   appFilesBucketNotification,
   historyImportBucketNotification,

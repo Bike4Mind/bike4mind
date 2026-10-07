@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
 import {
@@ -12,6 +12,9 @@ import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { getSettingsMap } from '@bike4mind/utils';
 import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
 import type { Logger } from '@bike4mind/observability';
+import { silentLogger, statusLog } from '../__tests__/utils/testUtils';
+import { getSettingsValue } from '@bike4mind/utils';
+import { deductCreditsWithOrgSupport } from '../creditService';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -25,29 +28,34 @@ vi.mock('../apiKeyService', async importOriginal => {
 
 const mockGeminiEdit = vi.fn();
 const mockGeminiGenerate = vi.fn();
+const mockKontextTransform = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
-    aiImageService: vi.fn(() => ({ edit: mockGeminiEdit, generate: mockGeminiGenerate })),
+    aiImageService: vi.fn(() => ({
+      edit: mockGeminiEdit,
+      generate: mockGeminiGenerate,
+      transform: mockKontextTransform,
+    })),
     getSettingsMap: vi.fn().mockResolvedValue({}),
+    getSettingsValue: vi.fn(actual.getSettingsValue),
     ClientMessageSender: vi.fn().mockImplementation(function () {
       return { sendToClient: vi.fn().mockResolvedValue(undefined) };
     }),
   };
 });
 
+vi.mock('../creditService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../creditService')>();
+  return { ...actual, deductCreditsWithOrgSupport: vi.fn(async () => undefined) };
+});
+
+vi.mock('./imageModerationGate', () => ({ moderateImageOrThrow: vi.fn(async () => undefined) }));
+
 vi.mock('./questHeartbeat', () => ({
   startQuestHeartbeat: vi.fn().mockResolvedValue(() => undefined),
 }));
-
-const silentLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  updateMetadata: vi.fn(),
-} as unknown as Logger;
 
 const makeService = (overrides: {
   invokeSummarizeSession?: ReturnType<typeof vi.fn>;
@@ -730,6 +738,142 @@ describe('ImageGenerationService.process (prompt truncation)', () => {
   });
 });
 
+describe('ImageGenerationService.process (usage event on a charged generation)', () => {
+  const PNG_DATA_URL = 'data:image/png;base64,AAAA';
+  const geminiModelInfo = {
+    id: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    type: 'image',
+    name: ImageModels.GEMINI_2_5_FLASH_IMAGE,
+    backend: ModelBackend.Gemini,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: false,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const runCharged = async (
+    record?: ReturnType<typeof vi.fn>,
+    {
+      model = ImageModels.GEMINI_2_5_FLASH_IMAGE,
+      n,
+      recentMessages = [],
+    }: { model?: ImageModels; n?: number; recentMessages?: unknown[] } = {}
+  ) => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined } as any;
+    const service = new ImageGenerationService({
+      db: {
+        quests: {
+          findById: vi.fn(async () => quest),
+          update: vi.fn(),
+          updateMany: vi.fn(),
+          getMostRecentChatHistory: vi.fn(async () => recentMessages),
+        },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        creditTransactions: { create: vi.fn() },
+        ...(record ? { usageEvents: { record } } : {}),
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {
+        upload: vi.fn().mockResolvedValue('generated/output.png'),
+        getSignedUrl: vi.fn().mockResolvedValue(PNG_DATA_URL),
+      } as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+    (service as any).validateUserCredits = vi.fn(async () => ({ requiredCredits: 40, usdCost: 0.04 }));
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model,
+        ...(n === undefined ? {} : { n }),
+      } as any,
+      logger: silentLogger,
+    });
+    return quest;
+  };
+
+  beforeEach(() => {
+    vi.mocked(deductCreditsWithOrgSupport).mockClear();
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    vi.mocked(getSettingsValue).mockImplementation(((name: string) => name === 'enforceCredits' || undefined) as never);
+    vi.mocked(silentLogger.warn).mockClear();
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue(['data:image/png;base64,AAAA']);
+  });
+
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import('@bike4mind/utils')>('@bike4mind/utils');
+    vi.mocked(getSettingsValue).mockImplementation(actual.getSettingsValue);
+  });
+
+  it('has landed the usage event by the time process() returns', async () => {
+    let landed = false;
+    // Settles on a later macrotask, so an unawaited write is still pending when process() resolves.
+    const record = vi.fn(
+      () =>
+        new Promise<void>(resolve =>
+          setTimeout(() => {
+            landed = true;
+            resolve();
+          }, 0)
+        )
+    );
+
+    const quest = await runCharged(record);
+
+    expect(quest.status).toBe('done');
+    expect(deductCreditsWithOrgSupport).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: 'quest1', feature: 'image_generation', creditsCharged: 40 })
+    );
+    expect(landed).toBe(true);
+  });
+
+  it('records the billed image count as units when Kontext is asked for several', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([{ ...geminiModelInfo, id: ImageModels.FLUX_KONTEXT_PRO }]);
+    mockKontextTransform.mockReset();
+    mockKontextTransform.mockResolvedValue(PNG_DATA_URL);
+    const record = vi.fn(async () => undefined);
+
+    await runCharged(record, {
+      model: ImageModels.FLUX_KONTEXT_PRO,
+      n: 3,
+      recentMessages: [{ id: 'm1', type: 'message', timestamp: new Date(0), images: ['generated/prior.png'] }],
+    });
+
+    expect(mockKontextTransform).toHaveBeenCalledTimes(1);
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ model: ImageModels.FLUX_KONTEXT_PRO, units: 1 }));
+  });
+
+  it('still completes the generation when the usage-event write fails', async () => {
+    const record = vi.fn(async () => {
+      throw new Error('usage store down');
+    });
+
+    const quest = await runCharged(record);
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(quest.type).not.toBe('error');
+    expect(quest.status).toBe('done');
+    expect(silentLogger.warn).toHaveBeenCalledWith('Failed to record usage event', expect.any(Error));
+  });
+
+  it('completes a charged run when db.usageEvents is absent', async () => {
+    const quest = await runCharged();
+
+    expect(quest.status).toBe('done');
+    expect(quest.type).not.toBe('error');
+  });
+});
+
 describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
   // GROK image quality has a flat usdCost, so requiredCredits is deterministic here.
   const modelInfo = { id: ImageModels.GROK_IMAGINE_IMAGE_QUALITY } as ModelInfo;
@@ -751,7 +895,7 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 500,
-      userDetails: [{ id: 'user1', usedCredits: 1000 }],
+      userDetails: [{ id: 'user1', usedCredits: 1000, periodStart: new Date() }],
     };
     await expect(validate(organization)).rejects.toThrow(/member credit limit/i);
   });
@@ -761,7 +905,7 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: 1_000_000,
-      userDetails: [{ id: 'user1', usedCredits: 0 }],
+      userDetails: [{ id: 'user1', usedCredits: 0, periodStart: new Date() }],
     };
     await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
   });
@@ -771,7 +915,7 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       id: 'org1',
       currentCredits: 1_000_000,
       maxCreditsPerMember: null,
-      userDetails: [{ id: 'user1', usedCredits: 999_999 }],
+      userDetails: [{ id: 'user1', usedCredits: 999_999, periodStart: new Date() }],
     };
     await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
   });
@@ -914,6 +1058,42 @@ describe('ImageGenerationService.process (size normalization)', () => {
     };
   };
 
+  it('holds credits for one image when a Kontext request asks for several', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      {
+        id: ImageModels.FLUX_KONTEXT_PRO,
+        type: 'image',
+        name: ImageModels.FLUX_KONTEXT_PRO,
+        backend: ModelBackend.Gemini,
+        contextWindow: 10000,
+        max_tokens: 10000,
+        supportsImageVariation: false,
+        pricing: { 1: { input: 0, output: 0 } },
+      } as unknown as ModelInfo,
+    ]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]);
+    const service = makeProcessService();
+    const validateUserCredits = vi
+      .spyOn(service as any, 'validateUserCredits')
+      .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: ImageModels.FLUX_KONTEXT_PRO,
+        n: 3,
+      } as any,
+      logger: silentLogger,
+    });
+
+    expect(validateUserCredits.mock.calls[0]?.[2]).toBe(1);
+  });
+
   it.each([
     [ImageModels.GPT_IMAGE_1_5, '1440x810', '1024x1024'],
     [ImageModels.GPT_IMAGE_1_5, '2048x2048', '1024x1024'],
@@ -942,10 +1122,350 @@ describe('ImageGenerationService.process (size normalization)', () => {
   });
 
   // The OpenAI size rule must not be applied to other providers: BFL takes its own
-  // dimensions, which the legacy dall-e list would reject.
-  it('forwards a BFL size to BFL untouched', async () => {
+  // dimensions, which the legacy dall-e list would reject. Only BFL's 32px grid applies
+  // (810 -> 800); Flux pricing ignores size, so the billed size stays as requested.
+  it('forwards a BFL size to BFL on its own grid', async () => {
     const { rendered, billed } = await generateWith(ImageModels.FLUX_PRO_1_1, ModelBackend.BFL, '1440x810');
-    expect(rendered).toMatchObject({ width: 1440, height: 810 });
+    expect(rendered).toMatchObject({ width: 1440, height: 800 });
     expect(billed).toMatchObject({ size: '1440x810' });
+  });
+});
+
+describe('ImageGenerationService.invoke (retry quest bound to its session)', () => {
+  const makeInvokeService = (questSessionId: string) => {
+    const update = vi.fn(async () => undefined);
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const service = new ImageGenerationService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
+        quests: {
+          update,
+          getMostRecentChatHistory: vi.fn(async () => []),
+          findById: vi.fn(
+            async () =>
+              ({
+                id: 'quest1',
+                sessionId: questSessionId,
+                // The prior run failed; the retry must not inherit its error state.
+                status: 'done',
+                type: 'error',
+                errorCode: 'insufficient_credits',
+              }) as any
+          ),
+        },
+      },
+      startImageGenerationProcess,
+    } as any);
+    const invoke = () =>
+      service.invoke({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'a cat',
+          model: ImageModels.FLUX_PRO_1_1,
+          fabFileIds: [],
+        } as any,
+        userId: 'user1',
+      });
+    return { invoke, update, startImageGenerationProcess };
+  };
+
+  it('refuses a questId from another session before touching the quest', async () => {
+    const { invoke, update, startImageGenerationProcess } = makeInvokeService('other-session');
+    await expect(invoke()).rejects.toThrow('Quest not found');
+    expect(update).not.toHaveBeenCalled();
+    expect(startImageGenerationProcess).not.toHaveBeenCalled();
+  });
+
+  it('retries a quest from the same session', async () => {
+    const { invoke, update } = makeInvokeService('session1');
+    await invoke();
+    expect(update).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: 'quest1', type: 'message' }), {
+      unset: ['status', 'errorCode'],
+    });
+  });
+
+  it('settles the quest as a done error when the process fails to start', async () => {
+    const { invoke, update, startImageGenerationProcess } = makeInvokeService('session1');
+    startImageGenerationProcess.mockRejectedValueOnce(new Error('queue unavailable'));
+    await invoke();
+    expect(update).toHaveBeenLastCalledWith({
+      id: 'quest1',
+      type: 'error',
+      status: 'done',
+      reply: 'queue unavailable',
+    });
+  });
+});
+
+describe('ImageGenerationService quest partial writes', () => {
+  const geminiModelInfo = {
+    id: ImageModels.GEMINI_3_PRO_IMAGE,
+    type: 'image',
+    name: ImageModels.GEMINI_3_PRO_IMAGE,
+    backend: ModelBackend.Gemini,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: true,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const makeService = (opts: { startImageGenerationProcess?: ReturnType<typeof vi.fn> } = {}) => {
+    const quest: Record<string, unknown> = {
+      id: 'quest1',
+      sessionId: 'session1',
+      prompt: 'make it blue',
+      type: 'message',
+      status: undefined,
+      promptMeta: { marker: 'meta' },
+    };
+    const update = vi.fn(async () => undefined);
+    const service = new ImageGenerationService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' }) as ISessionDocument) },
+        quests: {
+          findById: vi.fn(async () => quest as never),
+          update,
+          updateMany: vi.fn(async () => undefined),
+          getMostRecentChatHistory: vi.fn(async () => []),
+        },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        creditTransactions: {},
+        fabFiles: {
+          findAccessibleInIds: vi.fn(async () => [
+            { id: 'f1', filePath: 'data:image/png;base64,AAAA', mimeType: 'image/png', moderationStatus: 'clean' },
+          ]),
+        },
+      },
+      startImageGenerationProcess: opts.startImageGenerationProcess ?? vi.fn(async () => undefined),
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: { upload: vi.fn().mockResolvedValue('generated/output.png') },
+      fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => path) },
+      wsHttpsUrl: 'https://ws.example.com',
+    } as never);
+    return { service, update, quest };
+  };
+
+  // Turns credit enforcement on so quest.creditsUsed is a real number (7) on the partial writes.
+  const enforceCredits = (service: ImageGenerationService) => {
+    vi.spyOn(
+      service as unknown as { validateUserCredits: () => Promise<unknown> },
+      'validateUserCredits'
+    ).mockResolvedValue({ requiredCredits: 7, usdCost: 0 });
+    // process() reads the settings map once for the credit gate and once for moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+  };
+
+  // Drops any queued enforceCredits value that process() did not consume, so it cannot leak.
+  afterEach(() => {
+    vi.mocked(getSettingsMap).mockReset().mockResolvedValue({});
+  });
+
+  // The promptMeta invoke() builds for the `a cat` FLUX_PRO_1_1 body below.
+  const invokePromptMeta = {
+    model: { name: ImageModels.FLUX_PRO_1_1, parameters: { safety_tolerance: 2 }, type: 'image' },
+    session: { id: 'session1', userId: 'user1' },
+    prompt: 'a cat',
+    questId: 'quest1',
+    context: {
+      totalMessageCount: 1,
+      mementoCount: 0,
+      systemPrompt: 'Image generation request',
+      userPrompt: 'a cat',
+      attachedFiles: [],
+      sessionFileIds: [],
+      messageFileIds: [],
+      globalSystemFileIds: [],
+      userSystemFileIds: [],
+      projectSystemFileIds: [],
+      dedupedSystemPrompts: [],
+      totalSystemPromptCount: 0,
+      duplicateSystemPromptCount: 0,
+    },
+    performance: {},
+    statusLog: statusLog('Image generation started'),
+  };
+
+  const callArgs = (update: ReturnType<typeof vi.fn>) => update.mock.calls.map(c => c[0] as Record<string, unknown>);
+
+  const invoke = (service: ImageGenerationService, extra: Record<string, unknown> = {}) =>
+    service.invoke({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        prompt: 'a cat',
+        model: ImageModels.FLUX_PRO_1_1,
+        fabFileIds: [],
+        ...extra,
+      } as never,
+      userId: 'user1',
+    });
+
+  const processEdit = (service: ImageGenerationService) =>
+    service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: ImageModels.GEMINI_3_PRO_IMAGE,
+        fabFileIds: ['f1'],
+        intent: 'continuation',
+      } as never,
+      logger: silentLogger,
+    });
+
+  it('invoke retry writes exactly images, replies, type, promptMeta and an undefined promptEnhancement when none is given', async () => {
+    const { service, update } = makeService();
+    await invoke(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).toStrictEqual({
+      id: 'quest1',
+      images: [],
+      replies: [],
+      type: 'message',
+      promptMeta: invokePromptMeta,
+      promptEnhancement: undefined,
+    });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
+  });
+
+  it('invoke retry also persists the promptEnhancement when one is given', async () => {
+    const { service, update } = makeService();
+    const promptEnhancement = { originalPrompt: 'a cat', enhancedPrompt: 'a fluffy cat', promptWasEnhanced: true };
+    await invoke(service, { promptEnhancement });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0]).toStrictEqual({
+      id: 'quest1',
+      images: [],
+      replies: [],
+      type: 'message',
+      promptMeta: invokePromptMeta,
+      promptEnhancement,
+    });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
+  });
+
+  it('invoke catch writes exactly type, status and reply', async () => {
+    const startImageGenerationProcess = vi.fn(async () => {
+      throw new Error('queue down');
+    });
+    const { service, update } = makeService({ startImageGenerationProcess });
+    await invoke(service);
+
+    // The retry reset, then the error write; a third (e.g. a whole-quest write) is a regression.
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update.mock.calls[0][0]).toStrictEqual({
+      id: 'quest1',
+      images: [],
+      replies: [],
+      type: 'message',
+      promptMeta: invokePromptMeta,
+      promptEnhancement: undefined,
+    });
+    expect(update.mock.calls[0][1]).toStrictEqual({ unset: ['status', 'errorCode'] });
+    expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
+      id: 'quest1',
+      type: 'error',
+      status: 'done',
+      reply: 'queue down',
+    });
+  });
+
+  it('process success writes exactly reply, replies, images, status, promptMeta and creditsUsed', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockResolvedValue({ type: 'success', dataUrl: 'data:image/png;base64,RESULT' });
+    const { service, update } = makeService();
+    enforceCredits(service);
+    await processEdit(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(callArgs(update).find(arg => arg.status === 'done')).toStrictEqual({
+      id: 'quest1',
+      reply: '',
+      replies: [],
+      images: ['generated/output.png'],
+      status: 'done',
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        performance: { totalResponseTime: expect.any(Number), modelInferenceTime: expect.any(Number) },
+        generatedImageReferences: ['generated/output.png'],
+        statusLog: statusLog(
+          'Preparing to paint...',
+          'Now painting...',
+          'Tucking your image into storage...',
+          'Adding to the notebook...',
+          'Image generation completed'
+        ),
+      },
+      creditsUsed: 7,
+    });
+  });
+
+  it('process Gemini clarification writes exactly reply, type, status, promptMeta and creditsUsed', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockResolvedValue({
+      type: 'clarification',
+      clarificationId: 'clar1',
+      question: 'Which blue?',
+      originalPrompt: 'make it blue',
+    });
+    const { service, update } = makeService();
+    enforceCredits(service);
+    await processEdit(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    const call = callArgs(update).find(arg => arg.type === 'message');
+    expect(call).toStrictEqual({
+      id: 'quest1',
+      reply: expect.stringContaining('Which blue?'),
+      type: 'message',
+      status: 'done',
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        imageClarification: expect.any(Object),
+        statusLog: statusLog('Preparing to paint...', 'Now painting...', 'Clarification requested'),
+      },
+      creditsUsed: 7,
+    });
+    expect((call?.promptMeta as { imageClarification?: unknown }).imageClarification).toStrictEqual({
+      clarificationId: 'clar1',
+      question: 'Which blue?',
+      originalPrompt: 'make it blue',
+      timestamp: expect.any(Date),
+    });
+  });
+
+  it('process error writes exactly the seven error fields', async () => {
+    vi.mocked(getAvailableModels).mockResolvedValue([geminiModelInfo]);
+    mockGeminiEdit.mockReset();
+    mockGeminiEdit.mockRejectedValue(new Error('provider down'));
+    const { service, update } = makeService();
+    await processEdit(service);
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(callArgs(update).find(arg => arg.type === 'error')).toStrictEqual({
+      id: 'quest1',
+      prompt: 'make it blue',
+      reply: 'provider down',
+      type: 'error',
+      status: 'done',
+      errorCode: undefined,
+      // A literal, not quest.promptMeta: process() mutates that object in place, so comparing
+      // against it would pass whatever statusLog was written.
+      promptMeta: {
+        marker: 'meta',
+        session: { id: 'session1', userId: 'user1' },
+        statusLog: statusLog('Preparing to paint...', 'Now painting...', 'Error: provider down'),
+      },
+    });
   });
 });

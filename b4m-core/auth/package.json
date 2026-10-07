@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/auth",
-  "version": "0.8.10",
+  "version": "0.9.2",
   "publishConfig": {
     "access": "restricted"
   },
@@ -94,6 +94,6 @@
     "@types/speakeasy": "^2.0.10",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

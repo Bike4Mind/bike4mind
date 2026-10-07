@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ApiErrorSchema, BadRequestError } from '@bike4mind/common';
+import { API_KEY_USER_CAP_ERROR_CODE, ApiErrorSchema, BadGatewayError, BadRequestError } from '@bike4mind/common';
 import { z } from 'zod';
 import errorHandler from './errorHandler';
 
@@ -77,6 +77,24 @@ describe('errorHandler - the body carries no keys the envelope does not document
     });
   });
 
+  it('serializes the API key cap using the shared errorCode field', () => {
+    const { req, res, status, json } = makeReqRes();
+    errorHandler(
+      new BadRequestError('Maximum 10 active API keys allowed per user', {
+        errorCode: API_KEY_USER_CAP_ERROR_CODE,
+      }),
+      req,
+      res
+    );
+    expect(status).toHaveBeenCalledWith(400);
+    expect(json).toHaveBeenCalledWith({
+      errorCode: 'api_key_user_cap',
+      error: 'Maximum 10 active API keys allowed per user',
+      name: 'BadRequestError',
+      request_id: 'trace-err-1',
+    });
+  });
+
   // The HTTPError branch is the only one that reaches `additionalInfo`, so without a
   // case here the membership loop above never runs against a populated one and a new
   // subclass spreading an undocumented key would ship with CI green. additionalInfo's
@@ -112,6 +130,16 @@ describe('errorHandler - CastError only means 404 when the cast was on `_id`', (
     // 404 body; without it the raw cast message would ship on the wire.
     expect(json.mock.calls[0][0]).toMatchObject({ name: 'NotFoundError', error: 'Resource not found' });
     expect(JSON.stringify(json.mock.calls[0][0])).not.toContain('Feedback');
+  });
+
+  // The marker is what the production log query counts before the rule is removed, so its
+  // text is load-bearing: rename it only together with that query.
+  it('logs the original cast message under a stable marker, and still answers 404', () => {
+    const { req, res, status } = makeReqRes();
+    errorHandler(castError('_id'), req, res);
+    expect(status).toHaveBeenCalledWith(404);
+    expect(req.logger.warn).toHaveBeenCalledWith(`[cast-id-remap] POST /api/chat: ${castError('_id').message}`);
+    expect(req.logger.error).not.toHaveBeenCalled();
   });
 
   it('leaves a cast on any other field a 500 and logs it as a server error', () => {
@@ -208,5 +236,22 @@ describe('errorHandler - a ZodError becomes a 422', () => {
     expect(message).toMatch(/^Validation error: /);
     expect(message).not.toContain('invalid_type');
     expect(message).not.toContain('"path"');
+  });
+});
+
+describe('errorHandler - expected upstream failures', () => {
+  it('logs a 5xx marked expected at warn, keeping its status', () => {
+    const { req, res, status } = makeReqRes();
+    const err = Object.assign(new BadGatewayError('the source returned HTTP 404'), { expected: true });
+    errorHandler(err, req, res);
+    expect(status).toHaveBeenCalledWith(502);
+    expect(req.logger.warn).toHaveBeenCalled();
+    expect(req.logger.error).not.toHaveBeenCalled();
+  });
+
+  it('still logs an unmarked 5xx as a server error', () => {
+    const { req, res } = makeReqRes();
+    errorHandler(new BadGatewayError('provider down'), req, res);
+    expect(req.logger.error).toHaveBeenCalled();
   });
 });

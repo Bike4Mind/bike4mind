@@ -111,6 +111,35 @@ export interface BedrockFacts {
   availability?: ReadonlyMap<string, BedrockAvailability>;
 }
 
+/**
+ * Bedrock lists some models (every Claude 4.x among them) under a bare foundation-model id it will
+ * not serve on demand - only through a cross-region inference profile (`us.`/`global.`-prefixed) or
+ * provisioned throughput. The bare id is rejected by every InvokeModel/Converse call, so offering it
+ * guarantees a dispatch failure; the profile id is a separate catalog row this source never touches.
+ *
+ * Keyed on the ABSENCE of ON_DEMAND rather than on a profile value: the SDK's InferenceType enum
+ * names only ON_DEMAND and PROVISIONED, so the profile spelling is not a contract. An absent or
+ * empty list is "did not say".
+ */
+const isNotOnDemand = (summary: BedrockFoundationModelSummary): boolean => {
+  const types = summary.inferenceTypesSupported ?? [];
+  return types.length > 0 && !types.includes('ON_DEMAND');
+};
+
+/**
+ * Positive evidence on every clause this source disables for: listed ON_DEMAND, and an availability
+ * answer that says yes to all three. Only this clears an earlier disable (planOne in catalogWrite.ts);
+ * a missing field or a failed availability call is "did not say" and clears nothing.
+ */
+const isConfirmedInvocable = (
+  summary: BedrockFoundationModelSummary,
+  entitlement: BedrockAvailability | undefined
+): boolean =>
+  (summary.inferenceTypesSupported ?? []).includes('ON_DEMAND') &&
+  entitlement?.authorizationStatus === 'AUTHORIZED' &&
+  entitlement.entitlementAvailability === 'AVAILABLE' &&
+  entitlement.regionAvailability === 'AVAILABLE';
+
 export function normalizeBedrockModels({ summaries, availability }: BedrockFacts): DiscoveredModel[] {
   const records: DiscoveredModel[] = [];
 
@@ -129,6 +158,7 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
       (entitlement.authorizationStatus === 'NOT_AUTHORIZED' ||
         entitlement.entitlementAvailability === 'NOT_AVAILABLE' ||
         entitlement.regionAvailability === 'NOT_AVAILABLE');
+    const notOnDemand = isNotOnDemand(summary);
     const lifecycle = lifecycleOf(summary);
 
     records.push(
@@ -149,12 +179,17 @@ export function normalizeBedrockModels({ summaries, availability }: BedrockFacts
             typeof summary?.responseStreamingSupported === 'boolean' ? summary.responseStreamingSupported : undefined,
           supportsVision: inputs.length > 0 ? inputs.includes('IMAGE') : undefined,
           lifecycle,
-          // Only ever set true. An unentitled model is disabled with a reason; a
-          // model we never asked about, or one whose check failed, is left alone,
-          // because clearing this flag on no evidence would re-enable a model the
-          // account cannot call.
-          autoDisabled: unauthorized ? true : undefined,
-          autoDisabledReason: unauthorized ? 'not entitled in this AWS account' : undefined,
+          // An unentitled or not-on-demand model is disabled with a reason. False only on
+          // positive evidence for every clause (isConfirmedInvocable); a model we never
+          // asked about, or one whose check failed, is left alone, because clearing this
+          // flag on no evidence would re-enable a model the account cannot call.
+          autoDisabled:
+            unauthorized || notOnDemand ? true : isConfirmedInvocable(summary, entitlement) ? false : undefined,
+          autoDisabledReason: unauthorized
+            ? 'not entitled in this AWS account'
+            : notOnDemand
+              ? 'not invocable on demand; use its region-prefixed inference profile id'
+              : undefined,
         }),
       })
     );
@@ -219,7 +254,11 @@ async function checkAvailability(
   ctx: DiscoveryFetchContext
 ): Promise<Map<string, BedrockAvailability>> {
   const alreadyActive = (await options.activeModelIds?.()) ?? new Set<string>();
+  // A model this listing already shows as not on demand is disabled whatever availability says, so the
+  // call would buy nothing. The listing is re-read every run, so the model is asked the same run
+  // ON_DEMAND appears, which is when isConfirmedInvocable needs the answer to lift the disable.
   const pending = summaries
+    .filter(summary => !isNotOnDemand(summary))
     .map(summary => text(summary?.modelId))
     .filter((id): id is string => id !== undefined && !alreadyActive.has(id));
 

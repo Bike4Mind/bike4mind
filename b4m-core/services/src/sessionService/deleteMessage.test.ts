@@ -1,7 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { deleteSessionMessage } from './deleteMessage';
 
 describe('deleteSessionMessage', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const makeAdapters = () => ({
     db: {
       sessions: { findByIdAndUserId: vi.fn().mockResolvedValue({ id: 'session-1' }) },
@@ -43,5 +47,25 @@ describe('deleteSessionMessage', () => {
     await expect(deleteSessionMessage('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db })).rejects.toThrow(
       'Message not found'
     );
+  });
+
+  it('writes only { id, deletedAt }', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const { db } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({
+      id: 'm1',
+      prompt: 'kept off the write',
+      deletedAt: null,
+    });
+    db.chatHistories.update.mockResolvedValueOnce({ id: 'm1' });
+
+    await deleteSessionMessage('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.chatHistories.update).toHaveBeenCalledTimes(1);
+    expect(db.chatHistories.update.mock.calls[0][0]).toStrictEqual({
+      id: 'm1',
+      deletedAt: new Date('2026-01-01T00:00:00Z'),
+    });
   });
 });

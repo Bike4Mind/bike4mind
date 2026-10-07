@@ -14,6 +14,9 @@ import {
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
   driveLakeIngestQueue,
+  dataLakeResearchQueue,
+  generationCallbackQueue,
+  generationJobQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -23,7 +26,7 @@ const scheduleTaskCron = new sst.aws.Cron('scheduleTaskCron', {
   schedule: 'rate(5 minutes)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/scheduler.handler',
+    handler: 'apps/workers/src/cron/scheduler.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, researchEngineQueue, fabFileBucket, generatedImagesBucket],
     timeout: '10 minutes',
@@ -50,7 +53,7 @@ const agentProactiveMessageCron = new sst.aws.Cron('agentProactiveMessageCron', 
   schedule: 'rate(1 hour)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/agentProactiveMessaging.checkAndScheduleProactiveMessages',
+    handler: 'apps/workers/src/cron/agentProactiveMessaging.checkAndScheduleProactiveMessages',
     runtime: 'nodejs24.x',
     link: [...allSecrets, agentProactiveMessageQueue],
     timeout: '10 minutes',
@@ -66,7 +69,7 @@ const agentProactiveMessageCron = new sst.aws.Cron('agentProactiveMessageCron', 
 // Unified user activity report function (used by both daily and weekly schedules)
 const userActivityReportFunction = new sst.aws.Function('userActivityReportFunction', {
   vpc: lambdaVpc,
-  handler: 'apps/client/server/cron/userActivityReport.handler',
+  handler: 'apps/workers/src/cron/userActivityReport.handler',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
   link: [...allSecrets],
@@ -101,7 +104,7 @@ const secretRotationNotifierCron = new sst.aws.Cron('secretRotationNotifier', {
   schedule: 'cron(0 9 * * ? *)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/secretRotationNotifier.handler',
+    handler: 'apps/workers/src/cron/secretRotationNotifier.handler',
     runtime: 'nodejs24.x',
     timeout: '1 minute',
     link: [...allSecrets],
@@ -124,7 +127,7 @@ const apiKeyBaselineCalculation = new sst.aws.Cron('apiKeyBaselineCalculation', 
   schedule: 'cron(0 2 * * ? *)', // Daily at 2am UTC
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/apiKeyBaselineCalculation.handler',
+    handler: 'apps/workers/src/cron/apiKeyBaselineCalculation.handler',
     runtime: 'nodejs24.x',
     timeout: '15 minutes', // May need time for users with many API keys
     link: [...allSecrets],
@@ -143,7 +146,7 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
   schedule: 'rate(5 minutes)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/emailCampaignScheduler.handler',
+    handler: 'apps/workers/src/cron/emailCampaignScheduler.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, emailJobQueue],
     timeout: '2 minutes',
@@ -170,7 +173,7 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
 const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
   schedule: 'cron(0 9 * * ? *)', // 9am UTC daily (3am CST)
   function: {
-    handler: 'apps/client/server/cron/whatsNewSync.handler',
+    handler: 'apps/workers/src/cron/whatsNewSync.handler',
     vpc: lambdaVpc,
     link: [...allSecrets],
     timeout: '2 minutes',
@@ -206,7 +209,7 @@ const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
 const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCron', {
   schedule: 'cron(0 2,8,14,20 * * ? *)', // Every 6 hours UTC
   function: {
-    handler: 'apps/client/server/cron/liveopsTriageDispatcher.handler',
+    handler: 'apps/workers/src/cron/liveopsTriageDispatcher.handler',
     vpc: lambdaVpc,
     link: [...allSecrets, liveOpsTriageQueue],
     timeout: '2 minutes',
@@ -243,7 +246,7 @@ const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCro
 const whatsNewGenerationCron = new sst.aws.Cron('whatsNewGenerationCron', {
   schedule: 'cron(0 7 * * ? *)', // 7am UTC daily (1am CST)
   function: {
-    handler: 'apps/client/server/cron/whatsNewGeneration.handler',
+    handler: 'apps/workers/src/cron/whatsNewGeneration.handler',
     vpc: lambdaVpc,
     link: [...allSecrets, whatsNewGenerationQueue],
     timeout: '2 minutes',
@@ -285,7 +288,7 @@ const whatsNewGenerationCron = new sst.aws.Cron('whatsNewGenerationCron', {
 const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
   schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday (1hr after modal generation)
   function: {
-    handler: 'apps/client/server/cron/whatsNewHighlights.handler',
+    handler: 'apps/workers/src/cron/whatsNewHighlights.handler',
     vpc: lambdaVpc,
     link: [...allSecrets, whatsNewHighlightsQueue],
     timeout: '2 minutes',
@@ -313,7 +316,7 @@ const telemetryCleanupCron = new sst.aws.Cron('telemetryCleanup', {
   schedule: 'cron(0 3 * * ? *)', // Daily at 3am UTC
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/telemetryCleanup.handler',
+    handler: 'apps/workers/src/cron/telemetryCleanup.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     link: [...allSecrets],
@@ -332,7 +335,7 @@ const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
   schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/creditLotSweep.handler',
+    handler: 'apps/workers/src/cron/creditLotSweep.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     link: [...allSecrets],
@@ -350,7 +353,7 @@ const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
   schedule: 'rate(5 minutes)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/integrationHealthCheck.handler',
+    handler: 'apps/workers/src/cron/integrationHealthCheck.handler',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
     link: [...allSecrets],
@@ -430,7 +433,7 @@ const cloudSecurityScanCron = new sst.aws.Cron('CloudSecurityScan', {
 const liveOpsTriageJobCleanupCron = new sst.aws.Cron('liveOpsTriageJobCleanup', {
   schedule: 'rate(10 minutes)',
   function: {
-    handler: 'apps/client/server/cron/liveOpsTriageJobCleanup.handler',
+    handler: 'apps/workers/src/cron/liveOpsTriageJobCleanup.handler',
     vpc: lambdaVpc,
     link: [...allSecrets],
     timeout: '1 minute',
@@ -464,7 +467,7 @@ const securityScanSchedulerCron = new sst.aws.Cron('securityScanScheduler', {
   schedule: 'rate(1 hour)', // Check every hour
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/securityScanScheduler.handler',
+    handler: 'apps/workers/src/cron/securityScanScheduler.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '5 minutes',
@@ -491,9 +494,30 @@ const deepAgentWakeCron = new sst.aws.Cron('deepAgentWakeCron', {
   schedule: 'rate(5 minutes)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/deepAgentWake.handler',
+    handler: 'apps/workers/src/cron/deepAgentWake.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets, deepAgentWakeQueue],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+// Data Lake Research Schedule - fires research configs whose cadence is due, skipping any lake whose
+// pending-proposal queue is at the config's review limit. 15 minutes is plenty for a daily-at-most
+// cadence; self-host drives the same tick from apps/workers/src/selfhost/main.ts.
+const dataLakeResearchScheduleCron = new sst.aws.Cron('dataLakeResearchScheduleCron', {
+  schedule: 'rate(15 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/dataLakeResearchSchedule.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, dataLakeResearchQueue],
     timeout: '2 minutes',
     logging: {
       retention: '3 days',
@@ -516,7 +540,7 @@ const sreStaleDispatchCron = new sst.aws.Cron('SreStaleDispatchCron', {
   schedule: 'rate(15 minutes)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/sreStaleDispatch.handler',
+    handler: 'apps/workers/src/cron/sreStaleDispatch.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '2 minutes',
@@ -577,7 +601,7 @@ const attackSimulationCron = new sst.aws.Cron('attackSimulationCron', {
  */
 const modelDiscoveryFunction = new sst.aws.Function('modelDiscoveryFunction', {
   vpc: lambdaVpc,
-  handler: 'apps/client/server/cron/modelDiscovery.handler',
+  handler: 'apps/workers/src/cron/modelDiscovery.handler',
   runtime: 'nodejs24.x',
   timeout: '10 minutes',
   // Both entry points are async invokes, so Lambda's default of 2 retries would
@@ -644,7 +668,7 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
   schedule: 'cron(0 5 * * ? *)', // Daily at 5am UTC (after telemetry 3am / creditLot 4am)
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/dataLakeBatchReconcile.handler',
+    handler: 'apps/workers/src/cron/dataLakeBatchReconcile.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     // dataLakeTaxonomyQueue + websocketApi: the stuck-batch backstop calls
@@ -690,9 +714,11 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
   schedule: 'rate(5 minutes)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/questTimeoutSweep.handler',
+    handler: 'apps/workers/src/cron/questTimeoutSweep.handler',
     runtime: 'nodejs24.x',
-    link: [...allSecrets],
+    // generationCallbackQueue: a timed-out image/video generation job still owes its caller a
+    // completion callback, so the sweep enqueues one when it recovers a stuck quest.
+    link: [...allSecrets, generationCallbackQueue],
     timeout: '2 minutes',
     logging: {
       retention: '3 days',
@@ -711,6 +737,32 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
 });
 
 /**
+ * Generation Job Sweep
+ * Re-enqueues generation jobs whose SQS message was lost or whose worker died mid-step.
+ *
+ * Schedule: every 5 minutes
+ * Enabled: every stage, so previews and staging (where the test provider runs) get recovery too; it is a
+ * no-op when nothing is stalled.
+ * Self-host: apps/workers/src/selfhost/generationJobSweep.ts
+ */
+const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/generationJobSweep.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, generationJobQueue],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -724,7 +776,7 @@ const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandon
   schedule: 'rate(1 hour)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/agentExecutionAbandonedSweep.handler',
+    handler: 'apps/workers/src/cron/agentExecutionAbandonedSweep.handler',
     runtime: 'nodejs24.x',
     link: [...allSecrets],
     timeout: '2 minutes',
@@ -750,7 +802,7 @@ const spendReconciliationCron = new sst.aws.Cron('spendReconciliation', {
   schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/spendReconciliation.handler',
+    handler: 'apps/workers/src/cron/spendReconciliation.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     link: [...allSecrets],
@@ -777,7 +829,7 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
   schedule: 'rate(1 hour)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/driveLakeResyncPoll.handler',
+    handler: 'apps/workers/src/cron/driveLakeResyncPoll.handler',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
     // driveLakeIngestQueue: the poll enqueues each due connection onto the shared ingest handler,
@@ -844,7 +896,7 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   schedule: 'rate(6 hours)',
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/helpDatalakeIngest.handler',
+    handler: 'apps/workers/src/cron/helpDatalakeIngest.handler',
     runtime: 'nodejs24.x',
     // Generous: a first run after a docs-wide edit re-embeds the whole corpus one chunk at a
     // time. The steady state is a few seconds; the handler's own per-run create cap is what
@@ -888,7 +940,7 @@ const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
   schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/lakeHealthSweep.handler',
+    handler: 'apps/workers/src/cron/lakeHealthSweep.handler',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     link: [...allSecrets],
@@ -929,7 +981,7 @@ const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
   schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
   function: {
     vpc: lambdaVpc,
-    handler: 'apps/client/server/cron/lakeInconsistencySweep.handler',
+    handler: 'apps/workers/src/cron/lakeInconsistencySweep.handler',
     runtime: 'nodejs24.x',
     timeout: '15 minutes',
     link: [...allSecrets],
@@ -966,6 +1018,7 @@ export {
   liveOpsTriageJobCleanupCron,
   securityScanSchedulerCron,
   deepAgentWakeCron,
+  dataLakeResearchScheduleCron,
   telemetryCleanupCron,
   creditLotSweepCron,
   sreStaleDispatchCron,
@@ -974,6 +1027,7 @@ export {
   modelDiscoveryFunction,
   modelDiscoveryCron,
   questTimeoutSweepCron,
+  generationJobSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,

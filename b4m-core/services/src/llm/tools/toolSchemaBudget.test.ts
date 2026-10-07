@@ -23,7 +23,8 @@ import { createTokenizer } from '@bike4mind/utils';
  * Worst case for the set the server can attach without the caller naming a tool - NOT a per-turn
  * floor. Every one of these is conditional: `navigate_view` needs a navigable view context
  * (shouldAutoEnableNavigateView is false on the main chat page), the blog trio needs an admin with
- * a blog integration and blog intent in the turn, and `skill` needs invocable skills. A default
+ * a blog integration and blog intent in the turn, the data-lake trio needs EnableDataLakes and
+ * save-to-lake intent, and `skill` needs invocable skills. A default
  * non-admin turn on the main chat page pays none of it. `skipAutoOffers` suppresses all of them.
  */
 const PER_TOOL_CEILINGS: Record<string, number> = {
@@ -35,10 +36,10 @@ const PER_TOOL_CEILINGS: Record<string, number> = {
 
 /** Any tool without its own line above must stay under this. Catches re-inflating an unlisted tool. */
 const UNLISTED_TOOL_CEILING = 600;
-const AUTO_ADDED_CEILING = 1250;
-const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2100;
+const AUTO_ADDED_CEILING = 1500;
+const AUTO_ADDED_PLUS_KNOWLEDGE_CEILING = 2300;
 /** Headroom for a few new tools, so legitimate growth does not force a ceiling bump. */
-const WHOLE_REGISTRY_CEILING = 9600;
+const WHOLE_REGISTRY_CEILING = 10000;
 
 /**
  * Derived, never hand-copied: the knowledge offer drags its companions along via addPairedTool
@@ -128,7 +129,16 @@ describe('tool schema token budget', () => {
 
   it('pins the auto-added list the budget above is measured against', () => {
     expect([...AUTO_ADDED_TOOL_NAMES].sort()).toEqual(
-      ['blog_draft', 'blog_edit', 'blog_publish', 'navigate_view', 'skill'].sort()
+      [
+        'blog_draft',
+        'blog_edit',
+        'blog_publish',
+        'create_data_lake',
+        'list_my_data_lakes',
+        'navigate_view',
+        'save_content_to_data_lake',
+        'skill',
+      ].sort()
     );
   });
 
@@ -143,6 +153,17 @@ describe('tool schema token budget', () => {
    * nothing checks that chart data is numeric, and nothing re-renders a chart the model drew itself.
    */
   describe('descriptions keep the rules a ceiling would happily delete', () => {
+    it('save_content_to_data_lake still forbids guessing a lake id and only saves on request', () => {
+      const desc = descriptionOf('save_content_to_data_lake');
+      expect(desc).toMatch(/never guess/i);
+      expect(desc).toMatch(/only when asked/i);
+      expect(desc).toMatch(/list_my_data_lakes/);
+    });
+
+    it('create_data_lake still says a new lake starts as an unsearchable draft', () => {
+      expect(descriptionOf('create_data_lake')).toMatch(/draft/i);
+    });
+
     it('recharts still forbids images and hand-rolled components, and demands real numeric data', () => {
       const desc = descriptionOf('recharts');
       expect(desc).toMatch(/never emit an image/i);

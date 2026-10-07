@@ -2,32 +2,79 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IDataLakeFindingDocument } from '@bike4mind/common';
+import type { ILakeFindingListItem, LakeHealthApiResponse } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   findings: vi.fn(),
+  health: vi.fn(),
+  scan: vi.fn(),
+  scanLakeId: vi.fn(),
+  scanPending: { value: false },
+  rule: vi.fn(),
+  rulePending: { value: false },
+  access: vi.fn(),
+  applyCorpus: vi.fn(),
+  applyPending: { value: false },
+  applyVariables: { value: undefined as unknown },
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDataLakeFindings: (lakeId: string | null, filters?: unknown, opts?: unknown) => h.findings(lakeId, filters, opts),
+  useGetDataLakeHealth: (lakeId: string | null, enabled?: boolean) => h.health(lakeId, enabled),
+  useScanDataLakeFindings: (lakeId: string) => {
+    h.scanLakeId(lakeId);
+    return { mutate: h.scan, isPending: h.scanPending.value };
+  },
+  useRuleOnDataLakeFinding: () => ({ mutate: h.rule, isPending: h.rulePending.value }),
+  useLakeAccessView: (lakeId: string | null, enabled?: boolean) => h.access(lakeId, enabled),
+  // The detail view's corpus controls (#3612) reach these; stubbed so this file tests the dialog's
+  // wiring, not the mutation or the retag seed (FindingCorpusActions.test.tsx covers those).
+  useApplyCorpusAction: () => ({
+    mutate: h.applyCorpus,
+    isPending: h.applyPending.value,
+    variables: h.applyVariables.value,
+  }),
+  useLakeFileTags: () => ({ data: undefined, isLoading: false, isError: false }),
+}));
+
+// The assignee control reads the signed-in user to offer "Assign to me"; the real store is a
+// persisted zustand hook whose provider this file does not mount.
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: (selector: (state: { currentUser: { id: string } | null }) => unknown) =>
+    selector({ currentUser: { id: 'me' } }),
 }));
 
 // The panes fetch their own document; stubbed so this file tests the review surface rather than the
 // file-read stack (FindingSourcePane.test.tsx covers that side).
 vi.mock('./FindingSourcePane', () => ({
-  default: ({ source }: { source: { fabFileId: string } }) => (
-    <div data-testid={`finding-source-pane-${source.fabFileId}`} />
+  default: ({
+    source,
+    superseded,
+    returning,
+    onReturnToRanking,
+  }: {
+    source: { fabFileId: string };
+    superseded?: boolean;
+    returning?: boolean;
+    onReturnToRanking?: () => void;
+  }) => (
+    <div data-testid={`finding-source-pane-${source.fabFileId}`} data-returning={String(!!returning)}>
+      {superseded && onReturnToRanking && (
+        <button data-testid={`return-to-ranking-${source.fabFileId}`} onClick={onReturnToRanking} />
+      )}
+    </div>
   ),
 }));
 
 import LakeFindingsChip, { LakeFindingsDialog } from './LakeFindingsDialog';
+import { formatFindingDate } from './findingCopy';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const finding = (over: Partial<IDataLakeFindingDocument> = {}): IDataLakeFindingDocument =>
+const finding = (over: Partial<ILakeFindingListItem> = {}): ILakeFindingListItem =>
   ({
     id: 'finding-1',
     lakeId: 'lake-1',
@@ -36,6 +83,7 @@ const finding = (over: Partial<IDataLakeFindingDocument> = {}): IDataLakeFinding
     detector: 'lexical',
     documentCount: 2,
     status: 'open',
+    supersededFabFileIds: [],
     firstSeenAt: new Date('2026-03-01T00:00:00Z'),
     lastSeenAt: new Date('2026-03-08T00:00:00Z'),
     createdAt: new Date('2026-03-01T00:00:00Z'),
@@ -45,9 +93,9 @@ const finding = (over: Partial<IDataLakeFindingDocument> = {}): IDataLakeFinding
       { fabFileId: 'file-b', fileName: 'board-deck.md', excerpt: 'ARR reached $3.7M in Q1.' },
     ],
     ...over,
-  }) as IDataLakeFindingDocument;
+  }) as ILakeFindingListItem;
 
-const listing = (rows: IDataLakeFindingDocument[], over: Record<string, unknown> = {}) => ({
+const listing = (rows: ILakeFindingListItem[], over: Record<string, unknown> = {}) => ({
   data: rows,
   isLoading: false,
   error: null,
@@ -58,9 +106,32 @@ const listing = (rows: IDataLakeFindingDocument[], over: Record<string, unknown>
   ...over,
 });
 
+const scanned = (over: Partial<NonNullable<LakeHealthApiResponse['inconsistency']>> = {}) => ({
+  data: {
+    inconsistency: {
+      computedAt: '2026-03-08T12:00:00Z',
+      sampled: true,
+      memberSampled: false,
+      memberCount: 4,
+      findingCount: 0,
+      truncated: false,
+      countsByKind: {},
+      ...over,
+    },
+  },
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  h.scanPending.value = false;
+  h.rulePending.value = false;
+  h.applyPending.value = false;
+  h.applyVariables.value = undefined;
   h.findings.mockReturnValue(listing([finding()]));
+  h.health.mockReturnValue({ data: undefined });
+  // No access view by default: the assignee picker stays hidden and the self-assign controls stand
+  // on their own, which is all the ruling tests need.
+  h.access.mockReturnValue({ data: undefined });
 });
 
 const renderDialog = () =>
@@ -76,6 +147,10 @@ describe('LakeFindingsDialog', () => {
 
     expect(screen.getByTestId('lake-finding-row-finding-1')).toBeInTheDocument();
     expect(screen.getByTestId('lake-finding-subject')).toHaveTextContent('annual recurring revenue');
+    // Accessible names: close button and both filter selects carry an aria-label.
+    expect(screen.getByTestId('lake-findings-close-btn')).toHaveAttribute('aria-label', 'Close findings dialog');
+    expect(screen.getByTestId('lake-findings-status-filter')).toHaveAttribute('aria-label', 'Filter by status');
+    expect(screen.getByTestId('lake-findings-kind-filter')).toHaveAttribute('aria-label', 'Filter by finding kind');
     expect(h.findings).toHaveBeenCalledWith(
       'lake-1',
       { status: 'open', kind: undefined, limit: 50 },
@@ -120,16 +195,359 @@ describe('LakeFindingsDialog', () => {
     expect(screen.getByTestId('lake-finding-advisory')).toHaveTextContent(/not proven/i);
   });
 
-  // #3045 owns resolution and #3046 owns corpus changes; this surface reads. A button appearing
-  // here is the regression that matters, because it would be a write nobody argued for.
-  it('offers no way to rule on a finding or change the corpus', () => {
+  // This issue's controls are the corpus actions (#3612); the ruling controls (#3045) are their
+  // own and sit alongside them. Both act only on an open finding.
+  it('mounts the corpus controls on an open finding in the detail action area', () => {
     renderDialog();
     fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
 
-    const labels = screen.getAllByRole('button').map(b => b.textContent ?? '');
-    for (const forbidden of [/resolve/i, /dismiss/i, /assign/i, /merge/i, /supersede/i, /retag/i, /delete/i]) {
-      expect(labels.some(label => forbidden.test(label))).toBe(false);
-    }
+    expect(screen.getByTestId('lake-finding-action-area')).toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-merge-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-supersede-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('finding-corpus-retag-btn')).toBeInTheDocument();
+  });
+
+  it('returns a superseded cited file to ranking from the detail view', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-b'] })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.queryByTestId('return-to-ranking-file-a')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('return-to-ranking-file-b'));
+
+    expect(h.applyCorpus).toHaveBeenCalledWith({
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'unsupersede', fabFileId: 'file-b' },
+    });
+  });
+
+  it('spins only the file whose unsupersede is in flight', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-a', 'file-b'] })]));
+    h.applyPending.value = true;
+    h.applyVariables.value = {
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'unsupersede', fabFileId: 'file-b' },
+    };
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('finding-source-pane-file-b')).toHaveAttribute('data-returning', 'true');
+    expect(screen.getByTestId('finding-source-pane-file-a')).toHaveAttribute('data-returning', 'false');
+  });
+
+  it('does not spin a pane for a different corpus action in flight', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-b'] })]));
+    h.applyPending.value = true;
+    h.applyVariables.value = {
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'retag', fabFileId: 'file-b', tags: [] },
+    };
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('finding-source-pane-file-b')).toHaveAttribute('data-returning', 'false');
+  });
+
+  it('offers no return-to-ranking on a closed finding', () => {
+    h.findings.mockReturnValue(listing([finding({ status: 'resolved', supersededFabFileIds: ['file-b'] })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.queryByTestId('return-to-ranking-file-b')).not.toBeInTheDocument();
+  });
+
+  it('rules an open finding resolved with the note the curator typed', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    fireEvent.change(screen.getByTestId('lake-finding-resolution-input'), {
+      target: { value: 'The board deck was out of date.' },
+    });
+    fireEvent.click(screen.getByTestId('lake-finding-resolve-btn'));
+
+    expect(h.rule).toHaveBeenCalledWith({
+      findingId: 'finding-1',
+      action: 'resolve',
+      resolution: 'The board deck was out of date.',
+    });
+  });
+
+  it('dismisses an open finding, sending no note when the field is empty', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    fireEvent.click(screen.getByTestId('lake-finding-dismiss-btn'));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'dismiss', resolution: undefined });
+  });
+
+  it('does not send a whitespace-only note', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    fireEvent.change(screen.getByTestId('lake-finding-resolution-input'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByTestId('lake-finding-resolve-btn'));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'resolve', resolution: undefined });
+  });
+
+  it('blocks a second ruling while one is in flight', () => {
+    h.rulePending.value = true;
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-resolve-btn')).toBeDisabled();
+    expect(screen.getByTestId('lake-finding-dismiss-btn')).toBeDisabled();
+    expect(screen.getByTestId('lake-finding-assign-me-btn')).toBeDisabled();
+  });
+
+  it('blocks an assignment while a ruling is in flight', () => {
+    h.rulePending.value = true;
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'u2' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-unassign-btn')).toBeDisabled();
+  });
+
+  it('reads a closed finding as a ruling, with no way to rule on it again', () => {
+    h.findings.mockReturnValue(
+      listing([
+        finding({
+          status: 'resolved',
+          resolvedAt: new Date('2026-03-04T00:00:00Z'),
+          resolution: 'Both figures were reconciled in the Q2 update.',
+        }),
+      ])
+    );
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-ruling')).toHaveTextContent(/resolved/i);
+    expect(screen.getByTestId('lake-finding-ruling')).toHaveTextContent(/Both figures were reconciled/);
+    expect(screen.queryByTestId('lake-finding-resolve-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('lake-finding-dismiss-btn')).not.toBeInTheDocument();
+  });
+
+  it('dates a dismissed finding and marks it as seen again in the detail view', () => {
+    const ruledAt = new Date('2026-03-04T00:00:00Z');
+    h.findings.mockReturnValue(
+      listing([
+        finding({
+          status: 'dismissed',
+          resolvedAt: ruledAt,
+          lastSeenAt: new Date('2026-03-08T00:00:00Z'),
+        }),
+      ])
+    );
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    const ruling = screen.getByTestId('lake-finding-ruling');
+    expect(ruling).toHaveTextContent('Dismissed on');
+    expect(ruling).toHaveTextContent(formatFindingDate(ruledAt));
+    expect(within(ruling).getByTestId('lake-finding-recurred')).toBeInTheDocument();
+  });
+
+  it('assigns an unassigned finding to the current user', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Unassigned');
+    fireEvent.click(screen.getByTestId('lake-finding-assign-me-btn'));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: 'me' });
+  });
+
+  it('names a listed assignee and unassigns on request', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'u2' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Test Curator');
+    fireEvent.click(screen.getByTestId('lake-finding-unassign-btn'));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: null });
+  });
+
+  it('assigns a listed candidate chosen from the picker', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee-select')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+    fireEvent.click(screen.getByRole('option', { name: 'Test Curator' }));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: 'u2' });
+  });
+
+  it('clears the assignee through the picker', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'u2' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+    fireEvent.click(screen.getByRole('option', { name: 'Unassigned' }));
+
+    expect(h.rule).toHaveBeenCalledWith({ findingId: 'finding-1', action: 'assign', assigneeUserId: null });
+  });
+
+  it('lists only active owner and curator user grants as candidates', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            { principalType: 'user', principalId: 'u1', principalName: 'Owner One', role: 'owner', status: 'active' },
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Lapsed Curator',
+              role: 'curator',
+              status: 'expired',
+            },
+            { principalType: 'user', principalId: 'u3', principalName: 'A Reader', role: 'reader', status: 'active' },
+            {
+              principalType: 'organization',
+              principalId: 'o1',
+              principalName: 'An Org',
+              role: 'owner',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+
+    expect(screen.getByRole('option', { name: 'Owner One' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Lapsed Curator' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'A Reader' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'An Org' })).not.toBeInTheDocument();
+  });
+
+  it('falls back to a placeholder name for a grant the server could not resolve', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [{ principalType: 'user', principalId: 'u4', role: 'curator', status: 'active' }],
+        },
+      },
+    });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+
+    expect(screen.getByRole('option', { name: 'Unnamed curator' })).toBeInTheDocument();
+  });
+
+  it('names an assignee who holds no listed grant and keeps the picker on that value', () => {
+    h.access.mockReturnValue({
+      data: {
+        view: {
+          grants: [
+            {
+              principalType: 'user',
+              principalId: 'u2',
+              principalName: 'Test Curator',
+              role: 'curator',
+              status: 'active',
+            },
+          ],
+        },
+      },
+    });
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'org-admin-1' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Assigned to someone not listed');
+    // The Select's value must stay among its options, or the control renders blank.
+    fireEvent.click(screen.getByTestId('lake-finding-assignee-select'));
+    expect(screen.getByRole('option', { name: 'Assigned to someone not listed' })).toBeInTheDocument();
+  });
+
+  it('reads a finding already assigned to the current user without offering a self-assign', () => {
+    // The default access view has no grants, so "me" is not a listed candidate - the picker hides
+    // and the label alone carries the state.
+    h.findings.mockReturnValue(listing([finding({ assigneeUserId: 'me' })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('lake-finding-assignee')).toHaveTextContent('Assigned to you');
+    expect(screen.queryByTestId('lake-finding-assign-me-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('lake-finding-unassign-btn')).toBeInTheDocument();
+  });
+
+  // The route does not validate the assignee against the access view, so a refused picker must not
+  // take the self-assign controls down with it.
+  it('still allows self-assign when the assignee candidates are unavailable', () => {
+    h.access.mockReturnValue({ data: { view: { grants: [] } } });
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.queryByTestId('lake-finding-assignee-select')).not.toBeInTheDocument();
+    expect(screen.getByTestId('lake-finding-assign-me-btn')).toBeInTheDocument();
+  });
+
+  it('reads the access view only for a caller who can manage the lake', () => {
+    render(
+      <TestWrapper>
+        <LakeFindingsDialog open onClose={vi.fn()} dataLakeId="lake-1" lakeName="Acme Policies" canManage={false} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(h.access).toHaveBeenCalledWith('lake-1', false);
   });
 
   it('opens a finding from the keyboard, not only from a mouse', () => {
@@ -208,13 +626,52 @@ describe('LakeFindingsDialog', () => {
 
   it('says an empty list means no run found anything, not that the lake is clean', () => {
     h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: { computedAt: '2026-03-08T12:00:00Z' } } });
     renderDialog();
 
-    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/after a detection run/i);
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/after a scan/i);
+    expect(screen.getByTestId('lake-findings-empty')).not.toHaveTextContent(/clean/i);
+  });
+
+  it('says a never-scanned lake has not been scanned yet in the empty state', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: null } });
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-empty')).toHaveTextContent(/not been scanned yet/i);
+  });
+
+  it('runs detection on this lake when Scan now is pressed', () => {
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-findings-scan-btn'));
+
+    expect(h.scanLakeId).toHaveBeenCalledWith('lake-1');
+    expect(h.scan).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Scan now on an empty list, where a curator who just uploaded lands', () => {
+    h.findings.mockReturnValue(listing([]));
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-scan-btn')).toBeInTheDocument();
+  });
+
+  it('blocks a second scan while one is running', () => {
+    h.scanPending.value = true;
+    renderDialog();
+
+    expect(screen.getByTestId('lake-findings-scan-btn')).toBeDisabled();
+  });
+
+  it('withholds Scan now when the findings read was refused', () => {
+    h.findings.mockReturnValue(listing(undefined as unknown as ILakeFindingListItem[], { isForbidden: true }));
+    renderDialog();
+
+    expect(screen.queryByTestId('lake-findings-scan-btn')).not.toBeInTheDocument();
   });
 
   it('explains a permission refusal rather than painting an error', () => {
-    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[], { isForbidden: true }));
+    h.findings.mockReturnValue(listing(undefined as unknown as ILakeFindingListItem[], { isForbidden: true }));
     renderDialog();
 
     expect(screen.getByTestId('lake-findings-forbidden')).toBeInTheDocument();
@@ -259,6 +716,69 @@ describe('LakeFindingsChip', () => {
 
     expect(screen.queryByTestId('datalake-findings-chip-lake-1')).not.toBeInTheDocument();
     expect(h.findings).toHaveBeenCalledWith('lake-1', { status: 'open', limit: 50 }, { enabled: false });
+    expect(h.health).toHaveBeenCalledWith('lake-1', false);
+  });
+
+  const renderChip = () =>
+    render(
+      <TestWrapper>
+        <LakeFindingsChip lakeId="lake-1" lakeName="Acme Policies" canManage />
+      </TestWrapper>
+    );
+
+  it('says a never-scanned lake has not been scanned, rather than looking clean', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue({ data: { inconsistency: null } });
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('Not scanned yet');
+  });
+
+  it('dates a scanned lake with no open findings', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent(
+      `No open findings · checked ${formatFindingDate('2026-03-08T12:00:00Z')}`
+    );
+  });
+
+  // A run that read zero members is the same "not clean" distinction one level down.
+  it('does not call a run that read no documents clean', () => {
+    h.findings.mockReturnValue(listing([]));
+    h.health.mockReturnValue(scanned({ memberCount: 0 }));
+    renderChip();
+
+    const chip = screen.getByTestId('datalake-findings-chip-lake-1');
+    expect(chip).toHaveTextContent('Nothing scanned');
+    expect(chip).not.toHaveTextContent('No open findings');
+  });
+
+  // The open-findings query resolving to undefined (loading, or errored under `retry: false`) must
+  // not read as an empty list - that would claim a lake with unknown open work is clean.
+  it('stays on the bare label while the open-findings query has not resolved', () => {
+    h.findings.mockReturnValue(listing(undefined as unknown as ILakeFindingListItem[]));
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    const chip = screen.getByTestId('datalake-findings-chip-lake-1');
+    expect(chip).toHaveTextContent('Findings');
+    expect(chip).not.toHaveTextContent('No open findings');
+  });
+
+  it('lets open findings outrank the last run state', () => {
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1 conflict to review');
+  });
+
+  it('pluralises the conflict count past one', () => {
+    h.findings.mockReturnValue(listing([finding(), finding({ id: 'finding-2' })]));
+    renderChip();
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('2 conflicts to review');
   });
 
   // Terminal-only history (e.g. one dismissed finding, zero open) must not take the entry point
@@ -308,7 +828,7 @@ describe('LakeFindingsChip', () => {
       </TestWrapper>
     );
 
-    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ to review');
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ conflicts to review');
   });
 
   it('counts open findings and opens the review surface', () => {
@@ -319,7 +839,7 @@ describe('LakeFindingsChip', () => {
     );
 
     const chip = screen.getByTestId('datalake-findings-chip-lake-1');
-    expect(chip).toHaveTextContent('1 to review');
+    expect(chip).toHaveTextContent('1 conflict to review');
 
     // Joy renders the clickable chip as a button inside the chip root, which is what a curator
     // actually presses.

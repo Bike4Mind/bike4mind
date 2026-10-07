@@ -11,6 +11,7 @@ import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useConversationalVoiceStore } from '@client/app/components/Session/ConversationalVoice/useConversationalVoice';
 import { LLMSettings, handleLLMCommand } from '../commands/LLMCommand';
+import { selectTurnPreferences } from '../commands/turnPreferences';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import { INFINITE_VALUE } from '../FibonacciSlider';
@@ -42,6 +43,7 @@ import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
 import { buildChatHistory } from './buildChatHistory';
+import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -193,6 +195,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       s.imageModel,
     ])
   );
+  const turnPreferences = useLLM(useShallow(selectTurnPreferences));
 
   // Ensure max_tokens is never undefined
   const safeMaxTokens = max_tokens ?? 2048;
@@ -206,6 +209,32 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       return true;
     });
   }, [quests?.pages]);
+
+  // By timestamp, not list position: pages overlap and reorder as new quests land. A quest with no
+  // timestamp yet is the one being created, so it counts as newest and retires the old buttons.
+  const newestTurn = useMemo((): NewestTurn | undefined => {
+    let newest: (typeof flattenQuests)[number] | undefined;
+    let newestTime = Number.NEGATIVE_INFINITY;
+    for (const q of flattenQuests) {
+      const time = q.timestamp ? new Date(q.timestamp).getTime() : Number.POSITIVE_INFINITY;
+      if (time >= newestTime) {
+        newest = q;
+        newestTime = time;
+      }
+    }
+    return newest?.id ? { questId: newest.id, suggestedChoices: newest.suggestedChoices } : undefined;
+  }, [flattenQuests]);
+  const setNewestTurn = useReplyChoices(state => state.setNewestTurn);
+  useEffect(() => {
+    if (sessionId) setNewestTurn(sessionId, newestTurn);
+  }, [sessionId, newestTurn, setNewestTurn]);
+  // Safe only because SessionContainer renders at most one SessionMiddle per layout (main,
+  // floatingChat, dockRight/dockBottom are mutually exclusive) - a second concurrent instance for
+  // the same session would clear this on its own unmount and blank the other's buttons.
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => setNewestTurn(sessionId, undefined);
+  }, [sessionId, setNewestTurn]);
 
   // Clear the quest preparation overlay when quests data appears, so it stays
   // visible until the user can actually see their prompt in the chat.
@@ -352,6 +381,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
           projectId,
           organizationId,
           thinking,
+          ...turnPreferences,
           setChatCompletion,
           ...llmSettings,
           imageConfig: imageConfig,

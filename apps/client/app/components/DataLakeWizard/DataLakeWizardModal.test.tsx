@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useUser } from '@client/app/contexts/UserContext';
+import type { IUserDocument } from '@bike4mind/common';
 import DataLakeWizardModal from './DataLakeWizardModal';
 
 /**
@@ -27,19 +29,26 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useCreateLakeFromDrive: () => ({ mutate: driveCommitMutate, isPending: false }),
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
+  useBatchProgressListener: () => undefined,
   OFFLINE_MESSAGE: 'No internet connection. Check your network and try again.',
 }));
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
 const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
+const prefixPreview = vi.hoisted(() => ({
+  current: undefined as { slug: string; tagPrefix: string | null } | undefined,
+}));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: [] }),
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: () => ({ data: prefixPreview.current }),
+  usePromoteDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-// SourceSelectionStep now renders DriveConnectAction, which pulls in React Query (useConfig /
+// SourceSelectionStep renders LakeSourceConnectActions, which pulls in React Query (useConfig /
 // lake-connection hooks); stub it so this wizard test needs no QueryClientProvider.
-vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
+vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
   default: () => null,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
@@ -61,6 +70,7 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
 describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   beforeEach(() => {
     prefixClash.current = undefined;
+    prefixPreview.current = undefined;
     toastMock.error.mockClear();
     batchUploadMutate.mockClear();
     driveCommitMutate.mockClear();
@@ -109,6 +119,23 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(message);
 
     onLineSpy.mockRestore();
+  });
+
+  it.each([
+    ['complete', false],
+    ['error', true],
+  ] as const)('on the upload step, a %s upload shows the footer: %s', (status, footerShown) => {
+    useDataLakeWizardStore.setState({ step: 'upload' });
+    useDataLakeWizardStore.getState().updateUploadProgress({ status: 'uploading' });
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-footer')).toBeInTheDocument();
+
+    act(() => useDataLakeWizardStore.getState().updateUploadProgress({ status }));
+    expect(screen.queryByTestId('wizard-footer') !== null).toBe(footerShown);
   });
 
   it('calls the mutation directly when online', () => {
@@ -248,6 +275,30 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
   // "a:", so gating on the field's own length blocked a prefix the server accepts.
   it('leaves Start Upload enabled for a one-character prefix, which submits as a legal two', () => {
     useDataLakeWizardStore.setState(state => ({ config: { ...state.config, tagPrefix: 'a' } }));
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).not.toBeDisabled();
+  });
+
+  // The overlap lookup above only sees attachable lakes; an archived or deleted one still holds
+  // its prefix, and only the server preview knows.
+  it('disables Start Upload when the server reports the typed prefix held by a lake the form cannot see', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: 'docs-1:' };
+
+    render(
+      <TestWrapper>
+        <DataLakeWizardModal />
+      </TestWrapper>
+    );
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeDisabled();
+  });
+
+  it('leaves Start Upload enabled while the server preview has no answer', () => {
+    prefixPreview.current = { slug: 'x', tagPrefix: null };
 
     render(
       <TestWrapper>
@@ -430,6 +481,22 @@ describe('DataLakeWizardModal - Drive-only create', () => {
 
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
+    useUser.setState({ currentUser: null });
+  });
+
+  // Nothing uploads on this path (uploadBytes is 0), so a user already over quota must still be
+  // able to create-and-sync - the block exists to stop bytes the server would refuse, and this
+  // commit sends none.
+  it('is not blocked by a storage limit the commit sends no bytes against', () => {
+    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 1 } as IUserDocument });
+    seedDriveOnly({ step: 'config' });
+
+    renderModal();
+    const commitBtn = screen.getByTestId('wizard-start-upload-btn');
+
+    expect(commitBtn).toBeEnabled();
+    commitBtn.click();
+    expect(driveCommitMutate).toHaveBeenCalledTimes(1);
   });
 
   it('advances past the source step on a Drive folder alone, with no files', () => {
@@ -500,5 +567,60 @@ describe('DataLakeWizardModal - Drive-only create', () => {
 
     expect(useDataLakeWizardStore.getState().pendingDriveFolder).toEqual(driveFolder);
     confirmSpy.mockRestore();
+  });
+});
+
+describe('DataLakeWizardModal - storage limit', () => {
+  const refreshUser = vi.fn(() => Promise.resolve());
+  const seed = (step: 'source' | 'config', currentStorageSize: number) => {
+    // 1 MB limit, stored in MB like the real user document.
+    useUser.setState({ currentUser: { currentStorageSize, storageLimit: 1 } as IUserDocument, refreshUser });
+    useDataLakeWizardStore.setState({
+      isOpen: true,
+      step,
+      targetLake: null,
+      allFiles: [{ relativePath: 'a.txt', size: 10, type: 'text/plain', excluded: false, isDuplicate: false }] as never,
+      config: {
+        name: 'Test Lake',
+        description: '',
+        tagPrefix: 'test:',
+        requiredUserTag: '',
+        requiredEntitlement: '',
+        conflictResolution: 'skip',
+      },
+    });
+  };
+
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+    useDataLakeWizardStore.getState().resetWizard();
+    batchUploadMutate.mockClear();
+    refreshUser.mockClear();
+  });
+
+  it('warns a user at the limit as soon as a file is selected, before the lake is created', () => {
+    seed('source', 1_000_000);
+    render(<DataLakeWizardModal />, { wrapper: TestWrapper });
+    expect(screen.getByTestId('storage-limit-exceeded-alert')).toBeInTheDocument();
+    // Cached usage can be stale after deletes, so a block triggers a fresh read.
+    expect(refreshUser).toHaveBeenCalled();
+  });
+
+  it('disables Start Upload for a user at the limit, so no create request is sent', () => {
+    seed('config', 1_000_000);
+    render(<DataLakeWizardModal />, { wrapper: TestWrapper });
+    const start = screen.getByTestId('wizard-start-upload-btn');
+    expect(start).toBeDisabled();
+    start.click();
+    expect(batchUploadMutate).not.toHaveBeenCalled();
+  });
+
+  it('changes nothing for a user under the limit', () => {
+    seed('config', 0);
+    render(<DataLakeWizardModal />, { wrapper: TestWrapper });
+    expect(screen.queryByTestId('storage-limit-exceeded-alert')).toBeNull();
+    expect(screen.queryByTestId('storage-limit-near-alert')).toBeNull();
+    expect(screen.getByTestId('wizard-start-upload-btn')).toBeEnabled();
+    expect(refreshUser).not.toHaveBeenCalled();
   });
 });

@@ -81,13 +81,16 @@ describe('doors that can join a lake via its prefix arm also thread assertWriteS
  * request. A door that CREATES a file instead has no stored tags to diff against - for those,
  * `assertDataLakeTagWriteScope` itself resolves the caller's own lakes and checks the prefix arm,
  * via its optional `newFile` argument (see that function's doc comment). Listed by name rather
- * than scanned for a shared call, since these three doors call two different underlying creators
+ * than scanned for a shared call, since these entries call two different underlying creators
  * (`fabFilesService.createFabFile` vs the file manager's `createFabFile`) with no common substring
- * to key a scan on.
+ * to key a scan on. The presigned-upload entry is the shared helper, not a door; the doors that
+ * delegate to it are pinned below.
  */
 const NEW_FILE_TAG_WRITE_DOORS = [
   path.join(PAGES_API_DIR, 'files', 'createFabFile.ts'),
-  path.join(PAGES_API_DIR, 'files', 'generate-presigned-url.ts'),
+  // Shared by POST /api/files/generate-presigned-url and POST /api/v1/files; both doors are thin
+  // wrappers, so the scope call lives (and is pinned) here.
+  path.join(__dirname, '..', 'files', 'createPresignedUpload.ts'),
   path.join(PAGES_API_DIR, 'files', 'generate-presigned-urls-batch.ts'),
 ];
 
@@ -107,6 +110,21 @@ describe('doors that create a new file also gate its prefix-arm tag signal', () 
       'a door creating a new file with caller-supplied tags must pass a { userId, db } third argument to ' +
         'assertDataLakeTagWriteScope, or a fileTagPrefix content tag can join a lake with no datalake:write scope'
     ).toMatch(/assertDataLakeTagWriteScope\(\s*req,\s*[^;]*?\{\s*userId/);
+  });
+});
+
+// The helper entry above only covers these doors while they keep delegating to it.
+const PRESIGNED_UPLOAD_DOORS = [
+  path.join(PAGES_API_DIR, 'files', 'generate-presigned-url.ts'),
+  path.join(PAGES_API_DIR, 'v1', 'files', 'index.ts'),
+];
+
+describe('presigned-upload doors route through the gated createPresignedUpload helper', () => {
+  it.each(PRESIGNED_UPLOAD_DOORS.map(f => [path.relative(PAGES_API_DIR, f), f]))('%s', (_rel, file) => {
+    expect(
+      readFileSync(file, 'utf8'),
+      'a presigned-upload door must call createPresignedUpload, or it skips assertDataLakeTagWriteScope'
+    ).toContain('await createPresignedUpload(');
   });
 });
 

@@ -40,6 +40,10 @@ export const b4mLLMTools = z.enum([
   'count_knowledge_base',
   // Corpus shape - topics, folders, pipeline health (#1292), alongside the cardinality tool above
   'describe_knowledge_base',
+  // Saving assistant-generated content into a data lake the caller can write to
+  'list_my_data_lakes',
+  'create_data_lake',
+  'save_content_to_data_lake',
   // Agent delegation
   'delegate_to_agent',
   // OptiHashi optimization tools
@@ -60,6 +64,50 @@ export const b4mLLMTools = z.enum([
   'skill',
 ]);
 export type B4MLLMTools = z.infer<typeof b4mLLMTools>;
+
+/**
+ * The data-lake tools that write (make a lake, persist a file into one). A route withholds these
+ * from an API key without datalake:write (dataLakeToolsDeniedFor in the client's
+ * dataLakeScopes.ts).
+ */
+export const DATA_LAKE_WRITE_TOOL_NAMES = [
+  'create_data_lake',
+  'save_content_to_data_lake',
+] as const satisfies readonly B4MLLMTools[];
+
+/** The data-lake tools that only read; withheld from an API key without datalake:read the same way. */
+export const DATA_LAKE_READ_TOOL_NAMES = ['list_my_data_lakes'] as const satisfies readonly B4MLLMTools[];
+
+/** Every data-lake tool - offered, trimmed and paired together (see resolveEnabledTools in services). */
+export const DATA_LAKE_TOOL_NAMES = [
+  ...DATA_LAKE_READ_TOOL_NAMES,
+  ...DATA_LAKE_WRITE_TOOL_NAMES,
+] as const satisfies readonly B4MLLMTools[];
+
+/**
+ * Pair the save tool with its companions: it cannot name a target lake without the list, or make
+ * one without the create. Returns a new array and never adds a companion twice. Callers subtract
+ * their denylist before AND after this, so a denied save pairs nothing in and a denied companion
+ * stays denied. Shared by chat (resolveEnabledTools in services) and the agent paths
+ * (pickEffectiveEnabledTools in apps/client, applyAgentToolPolicy in agents).
+ *
+ * `allowlist`: an explicit whitelist the companions may not exceed. `withCreate: false` for a host
+ * with no approval gate, where an unrequested create would run unapproved (or kill a headless run).
+ */
+export function pairDataLakeTools<T extends string>(
+  tools: readonly T[],
+  options: { allowlist?: readonly string[]; withCreate?: boolean } = {}
+): T[] {
+  const out = [...tools];
+  if (!out.includes('save_content_to_data_lake' as T)) return out;
+  for (const name of DATA_LAKE_TOOL_NAMES) {
+    if (out.includes(name as T)) continue;
+    if (options.allowlist && !options.allowlist.includes(name)) continue;
+    if (options.withCreate === false && name === 'create_data_lake') continue;
+    out.push(name as T);
+  }
+  return out;
+}
 
 export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
 
@@ -122,6 +170,8 @@ export const FallbackInfoSchema = z.object({
    */
   primaryModelBackend: z.string().optional(),
   fallbackModelBackend: z.string().optional(),
+  /** The error that forced the first hop, PII-scrubbed and length-capped by sanitizeTelemetryError. */
+  reason: z.string().optional(),
   timestamp: z.number(),
 });
 

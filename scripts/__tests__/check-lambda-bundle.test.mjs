@@ -131,16 +131,16 @@ describe('listInfraSources', () => {
 
 describe('resolveHandlerFile', () => {
   it('strips the export name and finds the source file', () => {
-    const exists = existsIn(new Set(['apps/client/server/cron/warmer.ts']));
-    expect(resolveHandlerFile(repoRoot, 'apps/client/server/cron/warmer.dispatch', exists)).toBe(
-      'apps/client/server/cron/warmer.ts'
+    const exists = existsIn(new Set(['apps/workers/src/cron/warmer.ts']));
+    expect(resolveHandlerFile(repoRoot, 'apps/workers/src/cron/warmer.dispatch', exists)).toBe(
+      'apps/workers/src/cron/warmer.ts'
     );
   });
 
   it('splits on the last dot, so a dotted export name still resolves', () => {
-    const exists = existsIn(new Set(['apps/client/server/cron/a.b.ts']));
-    expect(resolveHandlerFile(repoRoot, 'apps/client/server/cron/a.b.handler', exists)).toBe(
-      'apps/client/server/cron/a.b.ts'
+    const exists = existsIn(new Set(['apps/workers/src/cron/a.b.ts']));
+    expect(resolveHandlerFile(repoRoot, 'apps/workers/src/cron/a.b.handler', exists)).toBe(
+      'apps/workers/src/cron/a.b.ts'
     );
   });
 

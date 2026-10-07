@@ -1,5 +1,5 @@
-import { Box, Divider, Stack, Typography } from '@mui/joy';
-import { useTheme } from '@mui/joy/styles';
+import { Box, Chip, Divider, Stack, Typography } from '@mui/joy';
+import { useTheme, type Theme } from '@mui/joy/styles';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Fragment, ReactNode } from 'react';
@@ -15,7 +15,6 @@ import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepart
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -27,9 +26,39 @@ import { useOptiAccess } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
-import { useGearUnlocks, type GearKey } from '@client/app/hooks/useGearsStatus';
+import { useGearsNavSignal } from '@client/app/hooks/useVisibleGears';
+import { neutralFrame, rewardGreen } from '@client/app/components/common/gearRewardStyles';
+import { gray } from '@client/app/utils/themes/colors';
 import { useNotebookLayout } from '..';
+
+const NAV_ROW_HEIGHT = 32;
+const NAV_TAG_HEIGHT = 24;
+/** A row's right padding when it carries a tag: the gap left above and below
+ *  the tag, so it sits evenly inset on three sides. */
+const NAV_TAG_INSET = (NAV_ROW_HEIGHT - NAV_TAG_HEIGHT) / 2;
+
+/** Shared by the tags on the right of a row: labels, not controls - the row
+ *  under them is what gets clicked. */
+const navTagSx = {
+  '--Chip-minHeight': `${NAV_TAG_HEIGHT}px`,
+  // 13px, as on the Gears page's credit chips.
+  fontSize: '13px',
+  pointerEvents: 'none',
+} as const;
+
+/**
+ * Start here: the Gears page's neutral marker in dark mode. In light mode that
+ * tint vanishes on the active row's blue wash, so it gets a white fill and the
+ * theme's solid light border instead - the same white the Gears cards use.
+ */
+const startHereTagSx = (theme: Theme) =>
+  theme.palette.mode === 'dark'
+    ? { ...neutralFrame(theme), color: theme.palette.text.primary }
+    : {
+        backgroundColor: gray[0],
+        border: `1px solid ${theme.palette.border.light}`,
+        color: theme.palette.text.primary,
+      };
 
 type NavItem = {
   key: string;
@@ -37,9 +66,11 @@ type NavItem = {
   icon: ReactNode;
   isActive: boolean;
   onClick: () => void;
-  // Renders a thin separator above this row - used to set utility items (Help)
-  // apart from the workspace destinations above them.
+  // Renders a thin separator above this row, to set a utility item apart from the
+  // workspace destinations above it.
   dividerAbove?: boolean;
+  // Pinned to the row's right edge.
+  trailing?: ReactNode;
 };
 
 /**
@@ -82,28 +113,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const isBobEnabled = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).some(
     item => item.path === '/bob'
   );
-  // Gears (earned nav): feature rows appear once the user has USED the feature -
-  // the permanent rail is New Chat / Gears / Help. Unlocks are derived server-side
-  // (has >=1 project, agent, lake, file, publication). While the status loads we
-  // show everything (the safe default for existing users; a brand-new user sees
-  // the rail settle once, on first paint only).
-  const gearUnlocks = useGearUnlocks();
-  // Fail OPEN unless a gear is EXPLICITLY present-and-unearned. These rows
-  // (Files, Projects, ...) were unconditional before Gears, so a loading state,
-  // a catalog that omits/renames the key, or an admin override that drops it
-  // must NOT silently remove core navigation app-wide - only a key the server
-  // returns as `false` (a known, genuinely-unearned gear) hides its row.
-  const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
-  // Fail CLOSED, for rows that did NOT exist before Gears. The fail-open above
-  // protects navigation users already had; a net-new earned row has nothing to
-  // preserve, and its failure modes run the other way. `/api/gears/status`
-  // omits admin-disabled gears from the response entirely, so under gearOpen
-  // turning a gear OFF in Manage Gears satisfied `!(key in gearUnlocks)` and
-  // pinned the unearned row visible for every flag-enabled user - the opposite
-  // of what the admin asked for. Same on any status error. Only an explicit
-  // `true` reveals these.
-  const gearEarned = (key: GearKey) => gearUnlocks?.[key] === true;
-  const helpOpen = useHelpPanel(s => s.open);
+  // Gears no longer gates navigation. A feature's row is always present; the gear
+  // still pays its one-time credit reward on first use, but discovery must not
+  // depend on having already discovered it - Hearth was only reachable from the
+  // Gears page, so its row could never appear on its own.
+
+  const gearsSignal = useGearsNavSignal();
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);
@@ -204,21 +219,17 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       : []),
     // No Data Lakes sidebar destination: the in-chat Data Lakes toggle is the only entry point,
     // and since #1943 the only surface - the standalone page is retired.
-    ...(gearOpen('files')
-      ? [
-          {
-            key: 'files',
-            label: t('files.manager', 'Files Manager'),
-            icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
-            isActive: fileBrowserOpen,
-            onClick: () => {
-              closeOnMobile();
-              setFileBrowserOpen(true);
-            },
-          },
-        ]
-      : []),
-    ...(isAgentsEnabled && gearOpen('agents')
+    {
+      key: 'files',
+      label: t('files.manager', 'Files Manager'),
+      icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
+      isActive: fileBrowserOpen,
+      onClick: () => {
+        closeOnMobile();
+        setFileBrowserOpen(true);
+      },
+    },
+    ...(isAgentsEnabled
       ? [
           {
             key: 'agents',
@@ -234,44 +245,34 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    ...(gearOpen('projects')
-      ? [
-          {
-            key: 'projects',
-            label: t('projects.projects'),
-            // Active only on the overall projects grid, not a specific project screen
-            // (/projects/:id), which highlights its own row in the list below instead.
-            icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname === '/projects',
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/projects' });
-            },
-          },
-        ]
-      : []),
-    ...(gearOpen('published')
-      ? [
-          {
-            // Live Artifacts (published shares) are the product's lead-gen surface -
-            // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
-            key: 'published',
-            label: t('sidenav.published', 'Live Artifacts'),
-            icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/profile', search: { tab: 'published' } });
-            },
-          },
-        ]
-      : []),
-    // Double-gated: the experimental flag says the feature exists for this user,
-    // the gear says they have actually used it (>=1 channel). Sits beside
-    // Tavern/Gears - the shared-log destination. Uses gearEarned, not gearOpen:
-    // this row is net-new, so an unknown gear state must hide it rather than
-    // reveal it.
-    ...(isFeatureEnabled('enableHearth') && gearEarned('hearth')
+    {
+      key: 'projects',
+      label: t('projects.projects'),
+      // Active only on the overall projects grid, not a specific project screen
+      // (/projects/:id), which highlights its own row in the list below instead.
+      icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname === '/projects',
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/projects' });
+      },
+    },
+    {
+      // Live Artifacts (published shares) are the product's lead-gen surface -
+      // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
+      key: 'published',
+      label: t('sidenav.published', 'Live Artifacts'),
+      icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/profile', search: { tab: 'published' } });
+      },
+    },
+    // Gated on the experimental flag alone: the flag says the feature exists for
+    // this user, and that is the whole question. Sits beside Tavern/Gears - the
+    // shared-log destination.
+    ...(isFeatureEnabled('enableHearth')
       ? [
           {
             key: 'hearth',
@@ -320,33 +321,59 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
         ]
       : []),
     {
-      // Permanent: the discovery surface for everything the rail hasn't earned yet.
+      // Permanent: the discovery surface for what the app can do, and where rewards are claimed.
+      // Also the only nav-level way into the Help Center, which it links out to -
+      // the rail no longer carries a row of its own.
       key: 'gears',
       label: t('sidenav.gears', 'Gears'),
       icon: iconSlot(<SettingsOutlinedIcon sx={{ fontSize: '18px' }} />),
       isActive: location.pathname === '/gears',
+      // One tag at a time: a waiting reward outranks the nudge to explore, and the
+      // row is too narrow to carry both.
+      trailing:
+        gearsSignal.claimableCount > 0 ? (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="success"
+            data-testid="sidenav-gears-rewards"
+            sx={{
+              ...navTagSx,
+              // The Gears page's claimable chip, so the two read as one signal.
+              color: rewardGreen(theme).ink,
+              backgroundColor: rewardGreen(theme).fill,
+              border: `1px solid ${rewardGreen(theme).stroke}`,
+            }}
+          >
+            {t('sidenav.gearsClaim', 'Claim {{count}}', { count: gearsSignal.claimableCount })}
+          </Chip>
+        ) : gearsSignal.startHere ? (
+          <Chip
+            size="sm"
+            variant="soft"
+            color="neutral"
+            data-testid="sidenav-gears-start-here"
+            sx={{
+              ...navTagSx,
+              // An invitation, kept quiet so the green Claim tag stays the only
+              // one asking for something.
+              ...startHereTagSx(theme),
+            }}
+          >
+            {t('sidenav.gearsStartHere', 'Start here')}
+          </Chip>
+        ) : undefined,
       onClick: () => {
         closeOnMobile();
         navigate({ to: '/gears' });
-      },
-    },
-    {
-      key: 'help',
-      label: t('sidenav.help', 'Help Center'),
-      icon: iconSlot(<HelpCenterOutlinedIcon sx={{ fontSize: '18px' }} />),
-      // The help panel is an overlay, not a route - highlight while it's open.
-      isActive: helpOpen,
-      onClick: () => {
-        closeOnMobile();
-        openHelpPanel();
       },
     },
   ];
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
   // pinned at the top. items[0] is always New Chat; items[1] is whichever conditional
-  // entry comes first for this user - OptiHashi, Bob, or the earned Files
-  // Manager - since each is elided when absent. The split is purely positional, so it
+  // entry comes first for this user - OptiHashi, Bob, or Files Manager - since each
+  // is elided when absent. The split is purely positional, so it
   // holds regardless of which entries are present.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
@@ -371,9 +398,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
-              px: '12px',
-              height: '32px',
-              minHeight: '32px',
+              pl: '12px',
+              pr: item.trailing ? `${NAV_TAG_INSET}px` : '12px',
+              height: `${NAV_ROW_HEIGHT}px`,
+              minHeight: `${NAV_ROW_HEIGHT}px`,
               borderRadius: '8px',
               cursor: 'pointer',
               color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary,
@@ -391,6 +419,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             <Typography level="body-sm" sx={{ fontSize: '14px', fontWeight: 400, color: 'inherit' }} noWrap>
               {item.label}
             </Typography>
+            {item.trailing && <Box sx={{ ml: 'auto', display: 'flex', flexShrink: 0 }}>{item.trailing}</Box>}
           </Box>
         </Fragment>
       ))}

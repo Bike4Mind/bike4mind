@@ -69,9 +69,13 @@ describe('Config eager-read hardening', () => {
     expect(Config.OVERWATCH_INGEST_ENABLED).toBeUndefined();
     expect(Config.OVERWATCH_INGEST_URL).toBeUndefined();
     expect(Config.OVERWATCH_INGEST_KEY).toBeUndefined();
+    expect(Config.OVERWATCH_PRODUCT_INGEST_KEYS).toBeUndefined();
     expect(Config.OVERWATCH_PSEUDONYM_SALT).toBeUndefined();
     expect(Config.B4M_ANALYTICS_ENABLED).toBeUndefined();
     expect(Config.OAUTH_RSA_PRIVATE_KEY).toBeUndefined();
+    expect(Config.GITHUB_LAKE_APP_ID).toBeUndefined();
+    expect(Config.GITHUB_LAKE_APP_PRIVATE_KEY).toBeUndefined();
+    expect(Config.GITHUB_LAKE_APP_CLIENT_SECRET).toBeUndefined();
     expect(Config.SECRET_ENCRYPTION_KEY_PREVIOUS).toBeUndefined();
 
     // Each unlinked field warns once with its own name, so a mis-provisioned

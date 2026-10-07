@@ -51,8 +51,11 @@ export class ChatCompletionInvoke {
   }
 
   /**
-   * Resolve the caller's entitlement keys for the admission-time model gate,
-   * mirroring `ChatCompletionProcess.resolveEntitlementKeys`. Fail-safe: an
+   * Resolve the caller's entitlement keys for the admission-time model gate.
+   * Same name as `ChatCompletionProcess.resolveEntitlementKeys` but a DIFFERENT
+   * shape and a different consumer: that one returns the keys with a completeness
+   * signal because a lake-access context reads it, this one is keys-only because
+   * the model gate has no "unknown" branch to take. Fail-safe: an
    * entitlement-resolution error (e.g. a subscription DB read failure) must
    * NEVER break the send path - degrade to tag-only matching ([]), the
    * pre-entitlement behavior. No injected resolver means [] means tag-only.
@@ -72,7 +75,16 @@ export class ChatCompletionInvoke {
    * Creates the quest record and enqueues it; the actual work happens in `process`.
    * Split this way so it can be driven from a queue handler (worker or serverless function).
    */
-  public async invoke({ body, userId }: { body: z.infer<typeof ChatCompletionInvokeParamsSchema>; userId: string }) {
+  public async invoke({
+    body,
+    userId,
+    apiKeyId,
+  }: {
+    body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
+    userId: string;
+    /** Server-derived from `req.apiKeyInfo` - never from `body` (see QuestStartBodySchema.apiKeyId). */
+    apiKeyId?: string;
+  }) {
     const now = new Date();
 
     const {
@@ -91,6 +103,8 @@ export class ChatCompletionInvoke {
       enableLattice,
       promptMode,
       skipAutoOffers,
+      skipReplyChoices,
+      deniedTools,
       systemPrompt,
       tools,
       projectId,
@@ -322,6 +336,7 @@ export class ChatCompletionInvoke {
             q.reply = null;
             q.replies = [];
             q.questMasterReply = null;
+            q.fallbackInfo = null;
             q.images = [];
             q.prompt = message;
             q.fabFileIds = messageFileIds || []; // ONLY message files
@@ -333,11 +348,27 @@ export class ChatCompletionInvoke {
             // succeeds (or fails for a different, uncoded reason) still reports the old code.
             // Two clears, both needed: this one is what the caller sees, because the function
             // returns this local `q` and not the update's result. It does NOT reach the database
-            // (`q` is a plain object, so the key survives with an `undefined` value and lands in
-            // the `$set` as an absence), which is what the `unset` option below is for. `null` is
-            // not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
+            // (a `$set` of `undefined` is dropped), which is what the `unset` option below is for.
+            // `null` is not an option: ChatAckSchema types errorCode as an optional enum and rejects null.
             q.errorCode = undefined;
-            await this.db.quests.update(q, { unset: ['errorCode'] });
+            await this.db.quests.update(
+              {
+                id: q.id,
+                type: q.type,
+                reply: q.reply,
+                replies: q.replies,
+                questMasterReply: q.questMasterReply,
+                fallbackInfo: q.fallbackInfo,
+                images: q.images,
+                prompt: q.prompt,
+                fabFileIds: q.fabFileIds,
+                timestamp: q.timestamp,
+                status: q.status,
+                promptMeta: q.promptMeta,
+                agentIds: q.agentIds,
+              },
+              { unset: ['errorCode'] }
+            );
             return q;
           })
         : this.db.quests.create({
@@ -433,6 +464,9 @@ export class ChatCompletionInvoke {
         // dispatchQuest ships to the async worker, so a field omitted here is silently dropped on
         // every path except `wait: true`.
         skipAutoOffers,
+        skipReplyChoices,
+        deniedTools,
+        apiKeyId,
         systemPrompt,
         promptMeta: PromptMetaZodSchema.parse(quest.promptMeta),
         sessionId: session.id,
@@ -476,7 +510,12 @@ export class ChatCompletionInvoke {
 
       quest.type = 'error';
       quest.reply = errorMessage;
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        promptMeta: quest.promptMeta,
+        type: quest.type,
+        reply: quest.reply,
+      });
     }
     return quest;
   }

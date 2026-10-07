@@ -7,9 +7,31 @@ const PATH_TRAVERSAL_PATTERN = /(\.\.[/\\])|([/\\]\.\.)|(\.\.%2[fF])|(%2[fF]\.\.
 const NULL_BYTE_PATTERN = /%00|\0/;
 const BACKSLASH_PATTERN = /\\/;
 
+// Stamped by the router's viewer-request function on every request it forwards; must stay in
+// sync with ORIGIN_VERIFY_HEADER in infra/router.ts. ORIGIN_VERIFY_SECRET is set only on
+// deployed stages (infra/web.ts), so self-host, local dev and tests are not gated.
+const ORIGIN_VERIFY_HEADER = 'x-b4m-origin-verify';
+
+// Hand-rolled constant-time compare so this does not depend on node:crypto in the proxy runtime.
+function originVerified(request: NextRequest, secret: string): boolean {
+  const value = request.headers.get(ORIGIN_VERIFY_HEADER) ?? '';
+  if (value.length !== secret.length) return false;
+  let diff = 0;
+  for (let i = 0; i < secret.length; i++) diff |= value.charCodeAt(i) ^ secret.charCodeAt(i);
+  return diff === 0;
+}
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const rawUrl = request.url;
+
+  // Blocks direct calls to the public server function URL, which would bypass the WAF and the
+  // CloudFront-stamped client IP headers.
+  const originSecret = process.env.ORIGIN_VERIFY_SECRET;
+  if (originSecret && !originVerified(request, originSecret)) {
+    console.warn(`[SECURITY] Blocked direct-origin request: ${request.method} ${pathname}`);
+    return new NextResponse('Forbidden', { status: 403 });
+  }
 
   if (
     PATH_TRAVERSAL_PATTERN.test(pathname) ||
@@ -40,8 +62,15 @@ export function proxy(request: NextRequest) {
     return new NextResponse('Bad Request', { status: 400 });
   }
 
-  // Clone the response headers for all routes
-  const response = NextResponse.next();
+  // Strip the origin secret before route handlers see it, so nothing that logs headers leaks it.
+  let response: NextResponse;
+  if (originSecret) {
+    const headers = new Headers(request.headers);
+    headers.delete(ORIGIN_VERIFY_HEADER);
+    response = NextResponse.next({ request: { headers } });
+  } else {
+    response = NextResponse.next();
+  }
 
   // Define Content Security Policy
   // blob: is required by Voice v2 (ElevenLabs Conversational AI loads its
@@ -138,7 +167,7 @@ export function proxy(request: NextRequest) {
     connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost};
     frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
-    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net https://*.googleapis.com;
+    media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net${filesHost} https://*.googleapis.com;
     base-uri 'self';
     frame-ancestors 'self';
     form-action 'self';

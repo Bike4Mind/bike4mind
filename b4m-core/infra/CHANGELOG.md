@@ -1,5 +1,45 @@
 # @bike4mind/infra
 
+## 2.0.0
+
+### Major Changes
+
+- [#3884](https://github.com/Bike4Mind/bike4mind/pull/3884) [`31d4623`](https://github.com/Bike4Mind/bike4mind/commit/31d46236619fd7e0c2be3f3bc4d34ee69314e682) Thanks [@onoya](https://github.com/onoya)! - deliver all generated audio through one shared module, by URL when oversized
+
+### Patch Changes
+
+- [#3891](https://github.com/Bike4Mind/bike4mind/pull/3891) [`c4d2bd4`](https://github.com/Bike4Mind/bike4mind/commit/c4d2bd49a6bc6bccec224924e899f89de9dca269) Thanks [@aflordelis](https://github.com/aflordelis)! - move comms and ops queue handlers into apps/workers
+
+## 1.2.1
+
+### Patch Changes
+
+- [#3754](https://github.com/Bike4Mind/bike4mind/pull/3754) [`1b883fa`](https://github.com/Bike4Mind/bike4mind/commit/1b883fac5df1d24f7cea23a5c3e72efcfd05ee70) Thanks [@aflordelis](https://github.com/aflordelis)! - move server/jobs and server/emailIngestion into apps/workers
+
+## 1.2.0
+
+### Minor Changes
+
+- [#3480](https://github.com/Bike4Mind/bike4mind/pull/3480) [`5e2879d`](https://github.com/Bike4Mind/bike4mind/commit/5e2879d909efb7efdc319bb72cce36c034b04aed) Thanks [@onoya](https://github.com/onoya)! - scope and publish file upload and download for API keys
+
+### Patch Changes
+
+- [#3501](https://github.com/Bike4Mind/bike4mind/pull/3501) [`448494a`](https://github.com/Bike4Mind/bike4mind/commit/448494ac1735f7e8e5d4781df76810e768b95031) Thanks [@aflordelis](https://github.com/aflordelis)! - move event handlers and self-host runner into apps/workers
+
+- [#3706](https://github.com/Bike4Mind/bike4mind/pull/3706) [`edfe671`](https://github.com/Bike4Mind/bike4mind/commit/edfe6718c78309af24d2057d0d428e5dea7f208d) Thanks [@erikbethke](https://github.com/erikbethke)! - bump vulnerable dependencies (HIGH)
+
+## 1.1.0
+
+### Minor Changes
+
+- [#3195](https://github.com/Bike4Mind/bike4mind/pull/3195) [`bef318c`](https://github.com/Bike4Mind/bike4mind/commit/bef318c78b56e34ab5c4b8f79a876a0d77f73479) Thanks [@onoya](https://github.com/onoya)! - capture real document vintage at ingest
+
+### Patch Changes
+
+- [#3156](https://github.com/Bike4Mind/bike4mind/pull/3156) [`34b7bdd`](https://github.com/Bike4Mind/bike4mind/commit/34b7bdd18eeab2a8c0798131587ea7915e926c3b) Thanks [@aflordelis](https://github.com/aflordelis)! - read the help corpus docs tree with execFileSync
+
+- [#3337](https://github.com/Bike4Mind/bike4mind/pull/3337) [`43974f8`](https://github.com/Bike4Mind/bike4mind/commit/43974f8ca8434c5aafc951a6099cc50724edbc52) Thanks [@aflordelis](https://github.com/aflordelis)! - stop copying tiktoken_bg.wasm onto the MCP Lambda
+
 ## 1.0.1
 
 ### Patch Changes

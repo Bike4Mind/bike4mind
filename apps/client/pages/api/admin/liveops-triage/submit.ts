@@ -8,6 +8,7 @@
  * Body: { dryRun: boolean }
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
@@ -29,7 +30,7 @@ const SubmitRequestSchema = z.object({
 // but types are auto-generated on deployment, so we need to tell TypeScript about it
 const liveOpsTriageQueue = (Resource as unknown as { liveOpsTriageQueue: { url: string } }).liveOpsTriageQueue;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: 5, windowMs: ONE_MINUTE_MS }))
   .post(async (req, res) => {
     // Check admin access

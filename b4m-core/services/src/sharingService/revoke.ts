@@ -6,9 +6,11 @@ import {
   ISessionRepository,
   IUserRepository,
   IUserShare,
+  RepositoryUpdate,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { grantWrite } from './grantWrite';
 
 const revokeSharingSchema = z.object({
   id: z.string(),
@@ -89,11 +91,13 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
 
   document.users = document.users.filter(user => !isRevoked(user));
 
+  let write: Partial<typeof document> = grantWrite(document);
   if (type === 'projects') {
     const project = document as IProjectDocument;
     const pruned = await revokeFromProject({ project, userIdToRevoke }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
+    write = { ...write, fileIds: pruned.fileIds, sessionIds: pruned.sessionIds };
   } else if (!projectId && type === 'sessions') {
     // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
     // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
@@ -102,9 +106,9 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     await revokeSessionKnowledgeFileGrants({ session: document as ISessionDocument, userIdToRevoke }, adapters);
   }
 
-  // This filters `document.users` in memory and writes the whole doc back - a lost-update-sensitive
-  // grant path, so it opts in to the version guard (`updateGuarded`). Because the doc carries `__v`, a
-  // racing whole-doc write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
+  // This filters `document.users` in memory and writes it back (see grantWrite) - a lost-update-sensitive
+  // grant path, so it opts in to the version guard (`updateGuarded`). Because the write carries `__v`, a
+  // racing write that ALSO goes through `updateGuarded` throws ConcurrencyConflictError (409,
   // surfaced by the shared errorHandler) instead of clobbering this revoke, and the route's
   // `withTransaction` rolls back the `revokeFromProject` side effects above on that conflict. Note the
   // guard only defends against other *guarded* writers: a plain `update` of the same doc (e.g. some
@@ -113,7 +117,9 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
   // isGlobalRead/isGlobalWrite with no `__v`, so it stays on the unguarded path.)
   // `updateGuarded` is optional on IBaseRepository (additive for external implementers), but every
   // in-repo repo is a concrete BaseRepository that provides it.
-  await dbModel.updateGuarded!(document);
+  // Typed as one repository: a union of the three repos' overloaded `updateGuarded`s is not callable.
+  const guarded: { updateGuarded?: RepositoryUpdate<typeof document> } = dbModel;
+  await guarded.updateGuarded!(write, { includeDeleted: true });
 
   return document;
 };
@@ -126,21 +132,22 @@ const revokeSessionKnowledgeFileGrants = async (
   const { db } = adapters;
 
   // Reach is bounded by knowledgeIds AS OF THIS CALL, and that list is client-writable by anyone
-  // holding update on the session (sessionService/update.ts validates shape only). A sharee can
-  // therefore detach a file before the owner revokes them and keep the tagged row: the cascade
-  // never visits it. The file's owner can still clear it with an unscoped revoke, but the session
-  // owner doing the revoking may not be that person. Closing it needs a
-  // `find({ 'users.sessionId': session.id })` sweep, which is an unindexed scan of a
-  // high-cardinality collection on every revoke - deliberately not paid here. The tag defends the
-  // destructive direction, which was the exposure; this is the evasive one.
+  // holding update on the session (sessionService/update.ts access-checks only the ids a write
+  // adds; removals are unchecked). A sharee can therefore detach a file before the owner revokes
+  // them and keep the tagged row: the cascade never visits it. The file's owner can still clear it
+  // with an unscoped revoke, but the session owner doing the revoking may not be that person.
+  // Closing it needs a `find({ 'users.sessionId': session.id })` sweep, which is an unindexed scan
+  // of a high-cardinality collection on every revoke - deliberately not paid here. The tag defends
+  // the destructive direction, which was the exposure; this is the evasive one.
   const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
   for (const file of files) {
     // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was
     // written by accept.ts's propagation, which already required the inviter to hold share on the
     // file, so matching on it cannot reach a grant this session did not create. knowledgeIds is
-    // client-writable (sessionService/update.ts validates shape only), and that is exactly why the
-    // filter keys on the tag rather than on the session owner's present authority - pointing your
-    // session at a stranger's file gives you nothing, because no row on it carries your session id.
+    // client-writable (update.ts checks only additions; removals, legacy rows and notebook import
+    // are not gated), and that is exactly why the filter keys on the tag rather than on the session
+    // owner's present authority - pointing your session at a stranger's file gives you nothing,
+    // because no row on it carries your session id.
     //
     // Untagged rows are left alone: a direct share of the same file to the same user is a separate
     // row, and deleting it here destroyed a grant a third party had made and the revoker had no say
@@ -152,9 +159,9 @@ const revokeSessionKnowledgeFileGrants = async (
     );
     if (remaining.length === file.users.length) continue;
     file.users = remaining;
-    // Whole-doc grant write on the revocation path, same reason the main revoke below takes the
-    // guard: a racing guarded write must conflict rather than silently resurrect this grant.
-    await db.fabFiles.updateGuarded!(file);
+    // Grant write on the revocation path, same reason the main revoke above takes the guard: a
+    // racing guarded write must conflict rather than silently resurrect this grant.
+    await db.fabFiles.updateGuarded!(grantWrite(file), { includeDeleted: true });
   }
 };
 

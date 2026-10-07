@@ -79,9 +79,79 @@ describe('bedrock normalization', () => {
       autoDisabled: true,
       autoDisabledReason: 'not entitled in this AWS account',
     });
-    expect(models.get('anthropic.claude-opus-4-5-20251101-v1:0')?.patch).not.toHaveProperty('autoDisabled');
     // Never asked about: absence of data must not read as absence of entitlement.
     expect(models.get('amazon.nova-canvas-v1:0')?.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  // The bare id of a profile-only model fails every dispatch (the Claude 4.x shape); offering it is
+  // how a picker hands a user a model that cannot answer. The profile-prefixed row is separate.
+  it('disables a model Bedrock serves only through an inference profile', () => {
+    const models = byId({ summaries, availability: new Map() });
+    expect(models.get('anthropic.claude-opus-4-5-20251101-v1:0')?.patch).toMatchObject({
+      autoDisabled: true,
+      autoDisabledReason: expect.stringMatching(/inference profile/),
+    });
+    expect(models.get('anthropic.claude-3-haiku-20240307-v1:0')?.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  it('keeps the entitlement reason when a profile-only model is also unentitled', () => {
+    const models = byId({ summaries, availability });
+    expect(models.get('meta.llama4-scout-17b-instruct-v1:0')?.patch.autoDisabledReason).toBe(
+      'not entitled in this AWS account'
+    );
+  });
+
+  it('disables a provisioned-throughput-only model, whose bare id fails on demand too', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: ['PROVISIONED'] }],
+    });
+    expect(record.patch).toMatchObject({ autoDisabled: true });
+  });
+
+  it('leaves a model alone when it is invocable on demand as well as by profile', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: ['ON_DEMAND', 'INFERENCE_PROFILE'] }],
+    });
+    expect(record.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  it('leaves a model alone when Bedrock did not say how it can be invoked', () => {
+    const [record] = normalizeBedrockModels({
+      summaries: [{ ...summaries[0], inferenceTypesSupported: undefined }],
+    });
+    expect(record.patch).not.toHaveProperty('autoDisabled');
+  });
+
+  describe('clearing an earlier disable', () => {
+    const confirmed: BedrockAvailability = {
+      authorizationStatus: 'AUTHORIZED',
+      entitlementAvailability: 'AVAILABLE',
+      regionAvailability: 'AVAILABLE',
+    };
+    const normalize = (inferenceTypesSupported: string[], entitlement?: BedrockAvailability) =>
+      normalizeBedrockModels({
+        summaries: [{ ...summaries[0], inferenceTypesSupported }],
+        availability: entitlement ? new Map([[String(summaries[0].modelId), entitlement]]) : undefined,
+      })[0].patch;
+
+    it('says false once it is listed on demand and every availability clause says yes', () => {
+      expect(normalize(['ON_DEMAND', 'INFERENCE_PROFILE'], confirmed)).toMatchObject({ autoDisabled: false });
+      expect(normalize(['ON_DEMAND'], confirmed)).not.toHaveProperty('autoDisabledReason');
+    });
+
+    it('says nothing without an availability answer', () => {
+      expect(normalize(['ON_DEMAND'])).not.toHaveProperty('autoDisabled');
+    });
+
+    it('says nothing when an availability clause is missing rather than positive', () => {
+      expect(normalize(['ON_DEMAND'], { ...confirmed, regionAvailability: undefined })).not.toHaveProperty(
+        'autoDisabled'
+      );
+    });
+
+    it('says nothing when the listing did not say how the model can be invoked', () => {
+      expect(normalize([], confirmed)).not.toHaveProperty('autoDisabled');
+    });
   });
 
   it('skips malformed entries and drops an unparseable lifecycle date', () => {
@@ -132,11 +202,47 @@ describe('bedrock source fetch', () => {
       new Set(['anthropic.claude-opus-4-5-20251101-v1:0', 'anthropic.claude-3-haiku-20240307-v1:0']);
 
     await createBedrockSource({ client, activeModelIds }).fetch(makeContext());
-    expect(asked.sort()).toEqual([
-      'amazon.nova-canvas-v1:0',
-      'amazon.titan-embed-text-v2:0',
-      'meta.llama4-scout-17b-instruct-v1:0',
-    ]);
+    // The profile-only llama id is not asked either: its listing already disables it.
+    expect(asked.sort()).toEqual(['amazon.nova-canvas-v1:0', 'amazon.titan-embed-text-v2:0']);
+  });
+
+  it('skips the availability call for a model the listing shows as not on demand', async () => {
+    const asked: string[] = [];
+    const client = fakeClient({
+      getFoundationModelAvailability: async (modelId: string) => {
+        asked.push(modelId);
+        return availability.get(modelId) ?? null;
+      },
+    });
+
+    const result = await createBedrockSource({ client }).fetch(makeContext());
+
+    expect(asked).not.toContain('anthropic.claude-opus-4-5-20251101-v1:0');
+    expect(asked).not.toContain('meta.llama4-scout-17b-instruct-v1:0');
+    if (result.ok) {
+      const opus = result.records.find(record => record.modelId === 'anthropic.claude-opus-4-5-20251101-v1:0');
+      expect(opus?.patch).toMatchObject({ autoDisabled: true, autoDisabledReason: /inference profile/ });
+    }
+  });
+
+  it('asks again the run a disabled model is first listed on demand, so the disable can lift', async () => {
+    const opus = 'anthropic.claude-opus-4-5-20251101-v1:0';
+    const asked: string[] = [];
+    const client = fakeClient({
+      listFoundationModels: async () =>
+        summaries.map(summary =>
+          summary.modelId === opus ? { ...summary, inferenceTypesSupported: ['ON_DEMAND'] } : summary
+        ),
+      getFoundationModelAvailability: async (modelId: string) => {
+        asked.push(modelId);
+        return availability.get(modelId) ?? null;
+      },
+    });
+
+    const result = await createBedrockSource({ client }).fetch(makeContext());
+
+    expect(asked).toContain(opus);
+    if (result.ok) expect(result.records.find(record => record.modelId === opus)?.patch.autoDisabled).toBe(false);
   });
 
   it('bounds concurrency so 300 models do not become 300 simultaneous calls', async () => {
@@ -168,7 +274,10 @@ describe('bedrock source fetch', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.records).toHaveLength(summaries.length);
-      expect(result.records.every(record => record.patch.autoDisabled === undefined)).toBe(true);
+      // Profile-only models are still disabled - that verdict comes from the listing, not this check.
+      expect(
+        result.records.some(record => record.patch.autoDisabledReason === 'not entitled in this AWS account')
+      ).toBe(false);
     }
   });
 

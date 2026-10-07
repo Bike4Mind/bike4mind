@@ -4,6 +4,8 @@ export type ToolsUsedEntry = {
   id?: string;
   returnValue?: string;
   success?: boolean;
+  /** Wall-clock ms the tool took to run, success or failure. Undefined when the backend has none. */
+  executionTime?: number;
 };
 
 export type MappedFunctionCall = {
@@ -12,6 +14,7 @@ export type MappedFunctionCall = {
   id?: string;
   returnValue?: string;
   success?: boolean;
+  executionTime?: number;
 };
 
 /**
@@ -36,6 +39,13 @@ export function toolsUsedToFunctionCalls(
         error: e instanceof Error ? e.message : String(e),
       });
     }
-    return { name: tool.name, parameters, id: tool.id, returnValue: tool.returnValue, success: tool.success };
+    return {
+      name: tool.name,
+      parameters,
+      id: tool.id,
+      returnValue: tool.returnValue,
+      success: tool.success,
+      executionTime: tool.executionTime,
+    };
   });
 }

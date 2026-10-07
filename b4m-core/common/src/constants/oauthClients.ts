@@ -4,8 +4,10 @@
  * routes (apps/client/pages/api/oauth/device/*, oauth/refresh.ts) all parse it
  * against this list, so a client absent here cannot authenticate at all.
  *
- * Must stay in sync with the id each client actually sends:
- * packages/cli/src/auth/OAuthClient.ts and apps/desktop.
+ * Must stay in sync with the id each client actually sends. The one client that
+ * lives in this repo is packages/cli/src/auth/OAuthClient.ts, which types its
+ * own id as OAuthDeviceClientId so a rename here fails its build; clients kept
+ * outside this repo have no such check, so removing an id here locks them out.
  */
 export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop'] as const;
 
@@ -19,7 +21,7 @@ export type OAuthDeviceClientId = (typeof OAUTH_DEVICE_CLIENT_IDS)[number];
 export const LEGACY_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-cli';
 
 const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
-  'b4m-cli': 'the B4M CLI',
+  'b4m-cli': 'B4M CLI',
   'b4m-desktop': 'B4M Desktop',
 };
 

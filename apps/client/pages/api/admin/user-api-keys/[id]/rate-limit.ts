@@ -6,7 +6,7 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { ApiKeyScope, UserApiKeyEvents } from '@bike4mind/common';
 
 /**
  * PATCH /api/admin/user-api-keys/[id]/rate-limit
@@ -18,7 +18,7 @@ import { UserApiKeyEvents } from '@bike4mind/common';
  * a ceiling below a live counter wedges the key until the window rolls over, or
  * until reset-rate-limit clears it.
  */
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .patch(
     asyncHandler(async (req, res) => {

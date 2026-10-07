@@ -3,7 +3,8 @@ import { render } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IFabFileDocument } from '@bike4mind/common';
+import type { IFabFileDocument, IUserDocument } from '@bike4mind/common';
+import { useUser } from '@client/app/contexts/UserContext';
 
 const mockCreateFabFile = vi.fn();
 const mockSetPendingMessageFiles = vi.fn();
@@ -35,6 +36,11 @@ vi.mock('@client/app/hooks/useSessionLayout', () => ({
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ getQueryData: () => undefined, invalidateQueries: vi.fn() }),
 }));
+
+const { toastMock } = vi.hoisted(() => ({
+  toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
+}));
+vi.mock('sonner', () => ({ toast: toastMock }));
 
 import { SessionFilePond } from './SessionFilePond';
 
@@ -68,6 +74,29 @@ async function upload(
   // Let the arrayBuffer + upload promise chain settle.
   await new Promise(r => setTimeout(r, 0));
   await new Promise(r => setTimeout(r, 0));
+}
+
+/** Same pipeline as `upload`, but returns the `error` callback FilePond would receive, so a
+ * storage-refusal test can assert what the caller sees alongside the toast. */
+async function uploadCapturingError(file: File) {
+  const errorFn = vi.fn();
+  render(
+    <Wrapper>
+      <SessionFilePond
+        pond={{ current: null }}
+        files={[]}
+        setFiles={vi.fn()}
+        maxFileSizeForFilePond="10MB"
+        attachScopeMode="auto"
+        currentSessionId={SID}
+        addToNotebookContext={vi.fn().mockResolvedValue(undefined)}
+      />
+    </Wrapper>
+  );
+  capturedProcess!('content', file, {}, vi.fn(), errorFn, vi.fn(), vi.fn());
+  await new Promise(r => setTimeout(r, 0));
+  await new Promise(r => setTimeout(r, 0));
+  return errorFn;
 }
 
 const makeFile = (name: string, type: string) => {
@@ -191,5 +220,73 @@ describe('SessionFilePond attachment scope', () => {
     // The swap matches on the temp id, which the test cannot know; assert instead that
     // a passthrough item is returned untouched and still carries its scope.
     expect(swapUpdater(before as never)[0]).toMatchObject({ scope: 'notebook' });
+  });
+});
+
+describe('SessionFilePond storage limit', () => {
+  const refreshUser = vi.fn(() => Promise.resolve());
+  // 1 MB limit, stored in MB like the real user document.
+  const setUsage = (currentStorageSize: number) =>
+    useUser.setState({ currentUser: { currentStorageSize, storageLimit: 1 } as IUserDocument, refreshUser });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedProcess = null;
+    refreshUser.mockClear().mockImplementation(() => Promise.resolve());
+  });
+
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+  });
+
+  it('refuses over the limit before any server call, and reports it both ways', async () => {
+    setUsage(1_000_000);
+    const errorFn = await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+
+    expect(mockCreateFabFile).not.toHaveBeenCalled();
+    expect(refreshUser).toHaveBeenCalled();
+    expect(toastMock.error).toHaveBeenCalledWith(expect.stringMatching(/Free up at least/), expect.anything());
+    expect(errorFn).toHaveBeenCalledWith(expect.stringMatching(/Free up at least/));
+  });
+
+  it('warns near the limit but still uploads', async () => {
+    setUsage(950_000);
+    mockCreateFabFile.mockResolvedValue({ id: 'f1', fileName: 'notes.txt', mimeType: 'text/plain' });
+
+    await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+
+    expect(toastMock.warning).toHaveBeenCalledWith(
+      expect.stringMatching(/close to your storage limit/),
+      expect.anything()
+    );
+    expect(mockCreateFabFile).toHaveBeenCalled();
+  });
+
+  it("surfaces the server's storage-limit refusal verbatim when the client check passed", async () => {
+    setUsage(0);
+    mockCreateFabFile.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 400',
+      response: { status: 400, data: { error: 'File size exceeds storage limit' } },
+    });
+
+    const errorFn = await uploadCapturingError(makeFile('notes.txt', 'text/plain'));
+
+    expect(toastMock.error).toHaveBeenCalledWith('File size exceeds storage limit', expect.anything());
+    expect(errorFn).toHaveBeenCalledWith('File size exceeds storage limit');
+  });
+
+  it('does not judge an oversized image against the flat resize cap alone', async () => {
+    // Matches the review's exact repro: limit 4 MB, used 1 MB, a 4,000,000-byte JPEG - the
+    // flat cap estimate (3 MB) would exceed, but the true post-resize size (as low as 85% of
+    // that cap) fits, so this must not be blocked client-side.
+    useUser.setState({ currentUser: { currentStorageSize: 1_000_000, storageLimit: 4 } as IUserDocument, refreshUser });
+    mockCreateFabFile.mockResolvedValue({ id: 'img1', fileName: 'shot.jpg', mimeType: 'image/jpeg' });
+    const big = makeFile('shot.jpg', 'image/jpeg');
+    Object.defineProperty(big, 'size', { value: 4_000_000 });
+
+    await uploadCapturingError(big);
+
+    expect(mockCreateFabFile).toHaveBeenCalled();
   });
 });

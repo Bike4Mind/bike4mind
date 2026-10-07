@@ -1,4 +1,5 @@
 import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
+import { ForbiddenError } from '@server/utils/errors';
 
 /**
  * Env var naming the scopes whose route gates are still being rolled out, e.g.
@@ -12,9 +13,9 @@ import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
  * docs/architecture/api-key-scope-rollout.md.
  *
  * Scoped deliberately to the `baseApi`/`apiKeyAuth` gate. The other scope check -
- * `verifyApiKey` (server/cli/auth.ts), which backs public contract routes, the
- * cc-bridge, and embed keys - has no staging path and needs none: every gate it
- * runs is either bound to a credential minted with that exact scope or belongs to
+ * `verifyApiKey` (server/cli/auth.ts), which backs Lambda-transport contract routes
+ * (resolveContractAuth), the cc-bridge, and embed keys - has no staging path and
+ * needs none: every gate it runs is either bound to a credential minted with that exact scope or belongs to
  * an endpoint that shipped with its scope from day one, so there is no
  * grandfathered population there to protect. Adding a second fail-open path would
  * be surface, not safety.
@@ -138,4 +139,31 @@ export function decideScopeGate(
     return { outcome: 'stagedAllow', stagedScopes: requiredScopes };
   }
   return { outcome: 'deny' };
+}
+
+export type ScopedRequest = {
+  apiKeyInfo?: { scopes?: ApiKeyScope[] };
+};
+
+/**
+ * In-handler counterpart of `baseApi`'s `requiredScopes` gate, for a route whose methods
+ * need different scopes (the gate is per route, not per method). Honors
+ * API_KEY_SCOPE_STAGING, so a grandfathered key rides the same grace window it would at
+ * the route gate. Family wrappers: server/dataLakes/dataLakeScopes.ts, server/files/fileScopes.ts.
+ *
+ * A caller with no `apiKeyInfo` is a JWT/browser caller - the key gate never ran for them
+ * and this must not either. The check is on `apiKeyInfo` itself, not on `scopes`: a key
+ * caller whose `scopes` came back undefined (apiKeyAuth.ts writes `scopes: validation.scopes!`)
+ * still has `apiKeyInfo` set, and letting a missing array through would fail open for exactly
+ * the caller this gate exists to check.
+ */
+export function holdsApiKeyScope(req: ScopedRequest, required: ApiKeyScope[]): boolean {
+  if (!req.apiKeyInfo) return true;
+  const held = req.apiKeyInfo.scopes ?? [];
+  const { staged } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
+  return decideScopeGate(required, held, staged).outcome !== 'deny';
+}
+
+export function assertApiKeyScope(req: ScopedRequest, required: ApiKeyScope[], message: string): void {
+  if (!holdsApiKeyScope(req, required)) throw new ForbiddenError(message);
 }

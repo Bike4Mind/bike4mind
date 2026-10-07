@@ -5,6 +5,7 @@ import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voice
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
 import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
+import { GenerationCallbackUrlSchema } from './schemas/generationCallback';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -53,6 +54,13 @@ export const ResearchModeParamsSchema = z.object({
 export const PromptIntentSchema = z.enum(['fresh', 'continuation']);
 export type PromptIntent = z.infer<typeof PromptIntentSchema>;
 
+/**
+ * How the image route treats the caller's prompt. `auto` runs the session-history resolver
+ * (pages/api/v1/image-generations.ts); `literal` sends it unchanged apart from truncation to the model's prompt limit.
+ */
+export const ImagePromptResolutionSchema = z.enum(['auto', 'literal']);
+export type ImagePromptResolution = z.infer<typeof ImagePromptResolutionSchema>;
+
 export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
@@ -66,8 +74,9 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
    * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
    * OpenAI receives them in this order - which matters, because a mask always applies to the
    * first image in the array. fabFile ids rather than URLs so the existing access +
-   * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
-   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
+   * moderation gates (findAccessibleInIds, isImageServeable) still apply. gpt-image only: the
+   * public endpoints reject them for any other model (assertReferenceImagesSupported) and the
+   * services drop them as a backstop. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
    * why the cap is 4 and not OpenAI's 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
@@ -90,10 +99,25 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
 });
 export type GenerateImageIvokeParams = z.infer<typeof GenerateImageIvokeParamsSchema>;
 
-export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.extend({
+// `intent` and `promptEnhancement` are outputs of the route's prompt resolver, which always sets
+// them, so they are not part of the public request (api-contract/contracts/imageGeneration.contract.ts).
+export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omit({
+  intent: true,
+  promptEnhancement: true,
+}).extend({
   sessionId: z.string().optional(),
   sessionName: z.string().optional(),
+  callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
+  prompt_resolution: ImagePromptResolutionSchema.optional().describe(
+    'How the prompt is treated before it reaches the image model. `"auto"` (the default) resolves it ' +
+      'against the session history, so a follow-up such as "make it darker" is rewritten to carry the ' +
+      'previous subject and the prior image is fed back as input. `"literal"` skips that step: the ' +
+      "prompt is sent unchanged (apart from truncation to the model's prompt limit), `intent` is " +
+      '`"fresh"`, `promptWasEnhanced` is `false`, and a prior session image is carried forward only ' +
+      'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
+      'self-contained, for example when an agent or pipeline builds it.'
+  ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
 
@@ -149,7 +173,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
    * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
    * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
+   * apply. gpt-image only: the public endpoint rejects them for BFL and Gemini
+   * (assertReferenceImagesSupported). Repeated ids collapse to one anchor. See
    * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
@@ -158,6 +183,9 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
   // ImageEditBodySchema's own (narrower) field.
   output_format: ImageOutputFormatSchema.nullable().optional(),
+  // Same `...rest` strip as output_format. Only BFL edits honour it; gpt-image and Gemini ignore it.
+  seed: z.number().nullable().optional(),
+  callbackUrl: GenerationCallbackUrlSchema.optional(),
 });
 
 /**
@@ -278,6 +306,19 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    */
   skipAutoOffers: z.boolean().optional(),
   /**
+   * Withhold only the reply-choices guidance, for a caller with no button UI (voice speaks the
+   * raw reply stream, so a choices block would be read aloud). Narrower than `skipAutoOffers`,
+   * which also withholds knowledge and MCP offers such a caller may still need.
+   */
+  skipReplyChoices: z.boolean().optional(),
+  /**
+   * Tools to withhold on this turn, unioned with `session.disabledTools` and applied at every
+   * denylist site including the final pass after buildTools. A client may send it, but it can only add:
+   * a route merges its own server-derived denials (dataLakeToolsDeniedFor) over any
+   * client value, so a caller can only ADD denials, never lift one.
+   */
+  deniedTools: z.array(z.string()).optional(),
+  /**
    * Caller-supplied system-prompt text. Rendered as a defended, deference-postured block
    * appended last in the system-prompt stack. Reached by both POST /api/chat and /api/ai/llm.
    *
@@ -341,6 +382,12 @@ export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
   sessionId: z.string().optional(),
   /** Notebook session name */
   sessionName: z.string().optional(),
+  /**
+   * Agents to stamp on a session this request creates (the composer's Agents panel on `/new`).
+   * Session-creation input, not a completion parameter, so it is applied only when `sessionId`
+   * is absent; ignored when an existing session is resolved.
+   */
+  agentIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 

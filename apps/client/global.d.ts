@@ -1,5 +1,11 @@
 import { Ability } from '@server/auth/ability';
-import { ApiKeyBillingOwnerType, ApiKeyScope, IUserApiKeyRateLimit, IUserDocument } from '@bike4mind/common';
+import {
+  ApiKeyBillingOwnerType,
+  ApiKeyCompletionSource,
+  ApiKeyScope,
+  IUserApiKeyRateLimit,
+  IUserDocument,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 
@@ -11,6 +17,7 @@ declare global {
       keyId: string;
       scopes: ApiKeyScope[];
       rateLimit: IUserApiKeyRateLimit;
+      expiresAt?: Date;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */
       productId?: string;
       /** Billing target. Organization -> usage bills `organizationId`'s credit pool. */
@@ -33,6 +40,8 @@ declare global {
       endpoint: string;
       method: string;
       startTime: number;
+      source: ApiKeyCompletionSource;
+      ownerType: ApiKeyBillingOwnerType;
     }
 
     interface Request {
@@ -40,6 +49,12 @@ declare global {
       logger: Logger;
       /** Correlation ID for this request, echoed back as the X-Request-ID header. */
       requestId: string;
+      /**
+       * When this request arrived, stamped by the FIRST `baseApi` middleware. The instant to hand the
+       * crypto-shred fence as `startedAt`: a handler-local `new Date()` is taken after connectDB and
+       * auth have awaited, and a purge landing in that gap would lift its own tombstone.
+       */
+      receivedAt: Date;
       /**
        * The authenticated user, plus the transient auth claims `verifyJwtPayload` attaches from
        * the access-token JWT (never persisted on the document): `sid` (session id, for per-device

@@ -9,11 +9,14 @@
  *   app/premium-generated/premiumNavItems.generated.ts  - nav/HUD slots
  *   app/premium-generated/premiumRouteIndexing.generated.ts - robots/sitemap policy
  *   app/premium-generated/premiumNotebookSidenav.generated.ts - notebook sidenav slot
+ *   app/premium-generated/premiumReplyAccessories.generated.ts - chat reply accessory slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
  *   server/premium-generated/premiumSystemPrompts.generated.ts - system prompt contributions
  *   app/premium-generated/premiumLocalStorageKeys.generated.ts - owned LS key prefixes
+ *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
+ *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec (null form)
  *
  * Two distinct "empty" forms when no premium packages are present:
  *   SPA/nav   -> emit the file with an empty exported array
@@ -24,7 +27,7 @@
  * real imports for an unlinked package fails typecheck/build repo-wide, which is
  * worse than the overlay's features being un-wired until it is linked.
  *
- * Relative-import glue (infra + migrations) is exempt: it imports overlay source by
+ * Relative-import glue (infra + migrations + contracts) is exempt: it imports overlay source by
  * relative path and needs no link. Note: infra glue itself is link-independent, but
  * the handler stubs it references (from generateServerHandlerStubs) are bare-specifier
  * and therefore omitted in the unlinked case. This is caught at deploy/bundle time
@@ -305,6 +308,52 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
   () => import('${spec}').then(m => ({ default: m.default })),
   { ssr: false }
 );
+`
+  );
+}
+
+// --- Generate reply accessories ---
+
+// A premium package can render a component at the foot of a completed chat reply
+// (b4mContributions.replyAccessoryExport -> a module default-exporting the component).
+// Unlike the sidenav this is a list: a reply can carry one accessory per overlay, and
+// each decides for itself whether the reply is one it has anything to add to.
+function generateReplyAccessories(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumReplyAccessories.generated.ts');
+  const typeImport = `import type { PremiumReplyAccessory } from '../premiumContract';`;
+
+  const contributors = packages.filter(p => p.contributions.replyAccessoryExport);
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.replyAccessoryExport, p.name, 'replyAccessoryExport')
+  );
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumReplyAccessories: PremiumReplyAccessory[] = [];\n`
+    );
+    return;
+  }
+
+  const entries = contributors
+    .map(
+      p => `  // Source: ${p.name} via b4mContributions.replyAccessoryExport
+  dynamic(() => import('${p.contributions.replyAccessoryExport}').then(m => ({ default: m.default })), {
+    ssr: false,
+  })`
+    )
+    .join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}
+import dynamic from 'next/dynamic';
+${typeImport}
+
+// Lazy-loaded (ssr: false) so an overlay's bundle is fetched once, not shipped with every chat.
+export const premiumReplyAccessories: PremiumReplyAccessory[] = [
+${entries},
+];
 `
   );
 }
@@ -700,6 +749,69 @@ function generateMigrations(packages) {
   );
 }
 
+// Premium overlays contribute API contracts for the public routes they mount
+// (b4mContributions.contractsExport -> a module exporting `contracts: EndpointContract[]`).
+// Consumed by b4m-core/common's openapi:generate:deployment, which builds this deployment's
+// spec from core CONTRACTS plus these. That package cannot bare-import an overlay, and the
+// file is loaded by path from there, so the import is relative - same reasoning and same
+// declared-path resolution as generateMigrations() above.
+//
+// Also resets the deployment spec module to its null form. The real document needs the
+// overlay SOURCE (a Docker install layer runs this script before sources are copied), so it
+// is written later, by the client prebuild/predev; until then the spec route falls back to
+// the committed core spec. Emitted here so the route's import always resolves.
+function generateContracts(packages) {
+  const outPath = join(CLIENT_ROOT, 'server/premium-generated/premiumContracts.generated.ts');
+  // Each contributor's module path, relative to the generated dir. loadDeploymentContracts
+  // (b4m-core/common/src/openapi/deployment.ts) must extend the zod each add-on resolves
+  // BEFORE importing the list, so it cannot read these off the list module itself.
+  const sourcesPath = join(CLIENT_ROOT, 'server/premium-generated/premiumContractSources.generated.json');
+  const typeImport = `import type { EndpointContract } from '@bike4mind/common';`;
+
+  writeFile(
+    join(CLIENT_ROOT, 'server/premium-generated/deploymentOpenApi.generated.ts'),
+    `${GENERATED_BANNER}// Overwritten by: pnpm --filter @bike4mind/common openapi:generate:deployment\n\n` +
+      `import type { DeploymentOpenApiSpec } from '../utils/openApiSpecHandler';\n\n` +
+      `export const deploymentOpenApiSpec: DeploymentOpenApiSpec | null = null;\n`
+  );
+
+  const contributors = packages.filter(p => p.contributions.contractsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumContracts: readonly EndpointContract[] = [];\n`
+    );
+    writeFile(sourcesPath, '[]\n');
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.contractsExport, p.name, 'contractsExport'));
+
+  const relSpecs = contributors.map(p => {
+    const sourceFile = resolveExportToDeclaredPath(p, p.contributions.contractsExport);
+    if (!sourceFile) {
+      throw new Error(
+        `[codegen] cannot resolve contractsExport ${JSON.stringify(p.contributions.contractsExport)} ` +
+          `from package "${p.name}" to a declared path - its package.json "exports" map has no ` +
+          `plain-string entry for that subpath. See generateContracts().`
+      );
+    }
+    let rel = relative(dirname(outPath), sourceFile).split(sep).join('/').replace(/\.ts$/, '');
+    if (!rel.startsWith('.')) rel = `./${rel}`;
+    return rel;
+  });
+
+  const imports = relSpecs.map((spec, i) => `import { contracts as contracts${i} } from '${spec}';`).join('\n');
+  const spreads = contributors.map((_, i) => `  ...contracts${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumContracts: readonly EndpointContract[] = [\n${spreads}\n];\n`
+  );
+  writeFile(sourcesPath, JSON.stringify(relSpecs, null, 2) + '\n');
+}
+
 // --- Generate infra glue ---
 
 // For each premium package that declares `b4mContributions.infra`, emit a thin
@@ -821,6 +933,7 @@ generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
 generateRouteIndexing(linkedPackages);
 generateNotebookSidenav(linkedPackages);
+generateReplyAccessories(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
@@ -828,6 +941,7 @@ generateSystemPrompts(linkedPackages);
 // Relative-import glue: needs no node_modules link, so it gets the full list.
 // Any NEW generator goes in whichever group matches how it imports the overlay.
 generateMigrations(packages);
+generateContracts(packages);
 generateInfraGlue(packages);
 // No-import glue: pure data copied out of package.json, so it imports the overlay
 // not at all and is link-independent for an even simpler reason than the group above.

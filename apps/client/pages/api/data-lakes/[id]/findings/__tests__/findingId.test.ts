@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   assertDataLakeWriteScope: vi.fn(),
   findById: vi.fn(),
@@ -44,7 +47,15 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess: h.assertLakeWriteAccess },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: {
     findById: h.findById,
@@ -66,13 +77,16 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const lake = { id: 'lakeDoc1' };
 const existing = { id: 'f1', lakeId: 'lakeDoc1', status: 'open' };
 
+// A fixed PAST instant, so a handler that re-stamps with `new Date()` cannot pass by coincidence.
+const receivedAt = new Date('2026-01-01T00:00:00.000Z');
+
 const invoke = (body: Record<string, unknown>, findingId = 'f1') => {
   const json = vi.fn();
   const res = { json, status: vi.fn(() => ({ json })) };
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' }, logger },
+      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' }, logger, receivedAt },
       res
     ),
   };
@@ -80,6 +94,7 @@ const invoke = (body: Record<string, unknown>, findingId = 'f1') => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.findById.mockResolvedValue(existing);
   h.resolveFinding.mockImplementation(async (_lakeId, _id, input) => ({ ...existing, ...input }));
@@ -168,6 +183,7 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     expect(json.mock.calls[0][0].data.assigneeUserId).toBe('curator-2');
 
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.assertLakeWriteAccess.mockResolvedValue(lake);
     h.findById.mockResolvedValue(existing);
     h.assignFinding.mockResolvedValue({ ...existing, assigneeUserId: null });
@@ -305,18 +321,13 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
       expect(json.mock.calls[0][0]).not.toHaveProperty('beliefSkipReason');
     });
 
-    it('stamps the shred fence before its own I/O', async () => {
-      // Taken on arrival, ahead of the access gate, the finding read and the CAS write - a purge
-      // landing in any of those windows must refuse the belief rather than lift its own tombstone.
-      const before = Date.now();
-      const { done } = invoke({ action: 'resolve', resolution: 'settled' });
-      await done;
-      const after = Date.now();
+    it("arms the shred fence with the request's arrival, not a handler-local stamp", async () => {
+      // Ahead of baseApi's connectDB and auth, the access gate, the finding read and the CAS write -
+      // a purge landing in any of those windows must refuse the belief rather than lift its own
+      // tombstone. baseApi.receivedAt.test.ts pins that the stamp is taken first.
+      await invoke({ action: 'resolve', resolution: 'settled' }).done;
 
-      const { startedAt } = h.recordFindingResolutionBelief.mock.calls[0][0];
-      expect(startedAt).toBeInstanceOf(Date);
-      expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
-      expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+      expect(h.recordFindingResolutionBelief.mock.calls[0][0].startedAt).toBe(receivedAt);
     });
 
     it('still returns the committed ruling when the memory write THROWS', async () => {
@@ -332,5 +343,62 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
       expect(json.mock.calls[0][0].beliefRecorded).toBe(false);
       expect(logger.warn).toHaveBeenCalled();
     });
+  });
+
+  it.each([
+    ['resolve', { action: 'resolve', resolution: 'fixed' }, 'resolveFinding'],
+    ['dismiss', { action: 'dismiss' }, 'resolveFinding'],
+    ['assign', { action: 'assign', assigneeUserId: 'u9' }, 'assignFinding'],
+  ] as const)(
+    '%s: gates and writes inside one transaction, then touches the resolved lake last',
+    async (_label, body, writeFn) => {
+      h.assertLakeWriteAccess.mockImplementation(async () => {
+        h.tx.push('gate');
+        return lake;
+      });
+      h[writeFn].mockImplementation(async (_lakeId: string, _id: string, input: unknown) => {
+        h.tx.push('write');
+        return { ...existing, ...(typeof input === 'object' ? input : {}) };
+      });
+      h.touchIfStable.mockImplementation(async () => {
+        h.tx.push('touch');
+        return true;
+      });
+
+      await invoke(body).done;
+
+      expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+      expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+    }
+  );
+
+  it('records the belief AFTER the transaction has committed', async () => {
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    h.recordFindingResolutionBelief.mockImplementation(async () => {
+      h.tx.push('belief');
+      return { recorded: true };
+    });
+
+    await invoke({ action: 'resolve', resolution: 'fixed' }).done;
+
+    expect(h.tx).toEqual(['enter', 'touch', 'exit', 'belief']);
+  });
+
+  it('neither writes nor touches when the gate throws', async () => {
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('Data lake not found'));
+
+    await expect(invoke({ action: 'resolve' }).done).rejects.toThrow(/not found/i);
+    expect(h.resolveFinding).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+
+  it('does not touch the lake when the ruling did not commit', async () => {
+    h.resolveFinding.mockResolvedValue(null);
+
+    await expect(invoke({ action: 'resolve' }).done).rejects.toThrow(/already been ruled on/i);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

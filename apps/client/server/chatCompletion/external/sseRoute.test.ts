@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import express from 'express';
+import { checkRateLimit } from '@server/cli/auth';
 
 // Real @bike4mind/common (pure SSE helpers + the published stream-event schema, which
 // these tests parse frames against). Only the seams below are mocked.
@@ -111,6 +112,41 @@ function post(body: unknown = COMPLETION) {
     body: JSON.stringify(body),
   });
 }
+
+/** Same POST, but with the caller's headers under test instead of the api-key default. */
+function postAs(headers: Record<string, string>, body: unknown = COMPLETION) {
+  return fetch(`${baseUrl}/api/ai/v1/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * The JWT branch, which is what carries a client's own rate-limit tier. The suite's default auth
+ * is an api key, so without this stub the branch never runs and the wiring below is unasserted.
+ */
+describe('JWT rate limiting', () => {
+  beforeEach(() => mockResolveContractAuth.mockResolvedValue({ method: 'jwt', userId: 'u1' }));
+
+  it('hands the calling client to the rate limiter, so its own cap applies', async () => {
+    expect((await postAs({ 'user-agent': 'b4m-desktop/0.1.0' })).status).toBe(200);
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'api', { client: 'b4m-desktop/0.1.0' });
+  });
+
+  /**
+   * User-Agent wins, and x-b4m-client is only consulted when there is none - the same precedence
+   * `resolveApiCompletionSource` uses, so the tier and the source attribution cannot disagree.
+   *
+   * Worth knowing: the fallback is nullish, so a transport that sets a User-Agent of its own
+   * reaches the limiter under that name and never consults x-b4m-client. Node's fetch sends
+   * `node`, which is what this asserts. A client wanting its own tier must set the User-Agent.
+   */
+  it('prefers the User-Agent over x-b4m-client, which the transport can therefore mask', async () => {
+    expect((await postAs({ 'x-b4m-client': 'b4m-desktop/0.1.0' })).status).toBe(200);
+    expect(vi.mocked(checkRateLimit)).toHaveBeenCalledWith('u1', 'api', { client: 'node' });
+  });
+});
 
 /** Every JSON `data:` frame in an SSE body, `[DONE]` excluded. */
 function frames(body: string): Record<string, unknown>[] {

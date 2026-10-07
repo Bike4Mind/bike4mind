@@ -62,7 +62,9 @@
       "supportsVision": true,
       "lifecycle": {
         "status": "active"
-      }
+      },
+      "autoDisabled": true,
+      "autoDisabledReason": "not invocable on demand; use its region-prefixed inference profile id"
     }
   },
   {

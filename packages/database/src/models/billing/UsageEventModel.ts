@@ -105,10 +105,10 @@ UsageEventSchema.index({ source: 1, createdAt: -1 });
 // Supports platformUsageSummary()'s byConsumer cut ($match apiKeyId present).
 UsageEventSchema.index({ apiKeyId: 1, createdAt: -1 });
 // Supports lakeUsageSummary()'s $match on dataLakeId (data-lake spend view).
-// partialFilterExpression (not sparse): dataLakeId is only ever set on ingestion-embed
-// rows, a small slice of this collection, unlike sessionId/apiKeyId below which are
-// populated on most rows via their own request paths. Same pattern as
-// SreErrorTrackingModel's fixVerdict.value index.
+// partialFilterExpression (not sparse): dataLakeId is only ever set on ingestion-embed and
+// research-run judge rows (at most one per run), a small slice of this collection, unlike
+// sessionId/apiKeyId below which are populated on most rows via their own request paths.
+// Same pattern as SreErrorTrackingModel's fixVerdict.value index.
 UsageEventSchema.index(
   { dataLakeId: 1, createdAt: -1 },
   { partialFilterExpression: { dataLakeId: { $exists: true } } }
@@ -606,7 +606,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
 
     // Same $facet shape as ownerUsageSummary minus byMember - a lake is just a different
-    // $match key over the same event set (only ingestion embeds carry dataLakeId), but the
+    // $match key over the same event set (only ingestion embeds and research-run judge calls
+    // carry dataLakeId, see recordOperationalUsage's own dataLakeId doc comment), but the
     // owner-facing spend view has no use for raw per-uploader userIds.
     const [result] = await this.model.aggregate<{
       overTime: IOwnerSpendDay[];
@@ -620,6 +621,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           overTime: [
             {
               $group: {
+                // UTC, deliberately - not the viewer's zone. No caller threads a timezone/offset
+                // through this method today, so bucketing by a per-viewer zone would need a new
+                // param end to end; the client instead labels this explicitly as UTC so an
+                // evening run's day is legible rather than silently wrong.
                 _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
                 ...spendSums,
               },
@@ -649,6 +654,15 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byFeature: result?.byFeature ?? [],
       totals: result?.totals?.[0] ?? emptyTotals,
     };
+  }
+
+  async lakeResearchLifetimeUsd(dataLakeId: string): Promise<number> {
+    const [result] = await this.model.aggregate<{ usd: number }>([
+      { $match: { dataLakeId, feature: 'operations' } },
+      { $group: { _id: null, usd: { $sum: '$costUsd' } } },
+      { $project: { _id: 0, usd: 1 } },
+    ]);
+    return result?.usd ?? 0;
   }
 }
 

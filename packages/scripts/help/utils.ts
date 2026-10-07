@@ -158,12 +158,32 @@ export function hasVideoExtension(target: string): boolean {
   return VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext));
 }
 
+/** A parsed YouTube link: the 11-character video id and the start offset in seconds (0 when absent). */
+export interface YouTubeRef {
+  id: string;
+  start: number;
+}
+
 /**
- * Extract the 11-character video id from a YouTube URL, or null if the URL is
+ * Seconds from a YouTube `t` / `start` value: bare seconds ("42") or the "1h2m3s"
+ * form with a unit on every part ("1h2" is rejected, not read as 1h + 2s).
+ * Anything unparseable counts as no offset.
+ */
+function parseYouTubeStart(raw: string | null): number {
+  if (!raw) return 0;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const m = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (!m || (!m[1] && !m[2] && !m[3])) return 0;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2] ?? 0) * 60 + Number(m[3] ?? 0);
+}
+
+/**
+ * Extract the video id and start offset from a YouTube URL, or null if the URL is
  * not a YouTube link. Handles watch, youtu.be, embed, shorts, the m. mobile
  * host, and the privacy-preserving -nocookie variant. Uses the URL parser so
  * the host is matched exactly (e.g. "notyoutube.com" is not YouTube), which
- * means authored links must be absolute https URLs.
+ * means authored links must be absolute https URLs. The start offset comes from
+ * `?t=` or `?start=`, whichever parses to a non-zero offset first ("42", "42s", "1m30s").
  *
  * Canonical helper shared by:
  * - The React media renderer (HelpContent.tsx) to render a YouTube embed
@@ -172,7 +192,7 @@ export function hasVideoExtension(target: string): boolean {
  *   media.
  * IMPORTANT: keep the renderer and validator in sync via this one helper.
  */
-export function parseYouTubeId(url: string): string | null {
+export function parseYouTube(url: string): YouTubeRef | null {
   if (!url) return null;
   let u: URL;
   try {
@@ -182,18 +202,20 @@ export function parseYouTubeId(url: string): string | null {
   }
   const host = u.hostname.replace(/^www\./, '').toLowerCase();
   const valid = (id: string | null | undefined) => (id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null);
-  if (host === 'youtu.be') return valid(u.pathname.slice(1).split('/')[0]);
+  const start = parseYouTubeStart(u.searchParams.get('t')) || parseYouTubeStart(u.searchParams.get('start'));
+  const ref = (id: string | null): YouTubeRef | null => (id ? { id, start } : null);
+  if (host === 'youtu.be') return ref(valid(u.pathname.slice(1).split('/')[0]));
   if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtube-nocookie.com') {
-    if (u.pathname === '/watch') return valid(u.searchParams.get('v'));
+    if (u.pathname === '/watch') return ref(valid(u.searchParams.get('v')));
     const m = u.pathname.match(/^\/(?:embed|shorts)\/([A-Za-z0-9_-]{11})/);
-    if (m) return m[1];
+    if (m) return ref(m[1]);
   }
   return null;
 }
 
 /** True when the URL is an embeddable YouTube link. */
 export function isYouTubeUrl(url: string): boolean {
-  return parseYouTubeId(url) !== null;
+  return parseYouTube(url) !== null;
 }
 
 /**
@@ -370,12 +392,35 @@ function splitAtH3(lines: string[], h2Heading: string): MarkdownSection[] {
   return sections;
 }
 
+// Opening `---` must be the first line (after an optional BOM) and the closing `---` must sit on its own line, so a `---` rule or a dashed run inside the body never ends the block early.
+const FRONTMATTER_BLOCK = /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)(?:[ \t]*\r?\n)*/;
+
+// An unquoted key may carry a leading `@` (JSON-LD `@context`) and inner spaces (`Last Updated`).
+// Trade-off: a prose line with a colon after plain words (`Important notice: please read`) also matches, so a
+// leading block holding only such lines and other YAML-shaped lines is stripped.
+const KEY_VALUE = /(?:"[^"]*"|'[^']*'|@?[\w.-]+(?:[ \t]+[\w.-]+)*)[ \t]*:(?:[ \t].*)?/;
+const KEY_VALUE_LINE = new RegExp(`^${KEY_VALUE.source}$`);
+// A frontmatter line is blank, a comment, a list item, an indented continuation, or `key: value`.
+const YAML_LINE = new RegExp(`^(?:\\s*|\\s+\\S.*|#.*|-(?:\\s.*)?|${KEY_VALUE.source})$`);
+
 /**
- * Strip YAML frontmatter (--- delimited block) from the start of a markdown file.
- * Used at runtime to get raw markdown content from help articles.
+ * Removes a leading YAML frontmatter block from markdown. Returns the input unchanged when there is
+ * no terminated block, or when the span between two `---` lines is not YAML: every line must be
+ * YAML-shaped AND at least one must be a real `key: value` (an empty block also counts). Without
+ * the second condition a lone heading or a bulleted list between two leading rules would be
+ * deleted, and a document that opens with a horizontal rule must not lose what follows it.
+ *
+ * Single implementation shared by the client renderer (MarkdownViewer, useHelpContent) and by
+ * help retrieval and ingestion, so rendering and retrieval agree on what counts as frontmatter.
  */
-export function stripFrontmatter(markdown: string): string {
-  return markdown.replace(/^---[\s\S]*?---\n*/, '');
+export function stripFrontmatter(content: string): string {
+  const match = FRONTMATTER_BLOCK.exec(content);
+  if (!match) return content;
+  const lines = (match[1] ?? '').split(/\r?\n/);
+  const isYaml =
+    lines.every(line => YAML_LINE.test(line)) &&
+    (lines.some(line => KEY_VALUE_LINE.test(line)) || lines.every(line => line.trim() === ''));
+  return isYaml ? content.slice(match[0].length) : content;
 }
 
 /**

@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'crypto';
 import type { Request, Response } from 'express';
-import { appendSetCookie, readCookie, secureAttribute } from './refreshCookie';
+import { appendSetCookie, readCookie, secureAttribute, type CookieResponse } from './refreshCookie';
 
 /**
  * Browser-binding cookies for OAuth/SSO flows.
@@ -13,7 +13,8 @@ import { appendSetCookie, readCookie, secureAttribute } from './refreshCookie';
  * param never reveals the cookie value.
  *
  * verifyStateToken enforces the match for callers that pass the cookie hash (the
- * Okta and passport login paths); linking callbacks that hand-roll or inject their
+ * Okta and passport login paths, and the Slack app-install callback via the
+ * installer state store); linking callbacks that hand-roll or inject their
  * own state verification call stateNonceMatches() directly.
  *
  * The PKCE code_verifier rides the same cookie transport (Okta): it is a
@@ -37,6 +38,8 @@ export const NONCE_SLOT = {
   driveConnect: 'google-drive',
   slackUserLink: 'slack-user-link',
   orgSlackConnect: 'org-slack-connect',
+  githubLakeConnect: 'github-lake-connect',
+  slackAppInstall: 'slack-app-install',
 } as const;
 
 // A slot suffixes the base cookie name; no slot keeps the base cookie unchanged.
@@ -50,14 +53,14 @@ const FLOW_COOKIE_TTL_SECONDS = 600;
 
 const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
 
-function setFlowCookie(res: Response, name: string, value: string): void {
+function setFlowCookie(res: CookieResponse, name: string, value: string): void {
   appendSetCookie(
     res,
     `${name}=${value}; Path=${FLOW_COOKIE_PATH}; Max-Age=${FLOW_COOKIE_TTL_SECONDS}; HttpOnly; SameSite=Lax${secureAttribute()}`
   );
 }
 
-function expireFlowCookie(res: Response, name: string): void {
+function expireFlowCookie(res: CookieResponse, name: string): void {
   appendSetCookie(res, `${name}=; Path=${FLOW_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=Lax${secureAttribute()}`);
 }
 
@@ -67,7 +70,7 @@ function expireFlowCookie(res: Response, name: string): void {
  * Pass a NONCE_SLOT to use a per-flow cookie so concurrent link flows do not evict
  * each other; the matching readStateNonceHash/clearStateNonce must pass the same slot.
  */
-export function issueStateNonce(res: Response, slot?: string): string {
+export function issueStateNonce(res: CookieResponse, slot?: string): string {
   const nonce = randomBytes(32).toString('hex');
   setFlowCookie(res, nonceCookieName(slot), nonce);
   return sha256(nonce);
@@ -91,8 +94,17 @@ export function stateNonceMatches(req: Pick<Request, 'headers'>, payload: { nh?:
 }
 
 /** Expire the nonce cookie once a flow completes (success or terminal failure). */
-export function clearStateNonce(res: Response, slot?: string): void {
+export function clearStateNonce(res: CookieResponse, slot?: string): void {
+  // Best-effort burn: a Set-Cookie after the response is flushed cannot take effect and must not throw over the real result.
+  if (res.headersSent) return;
   expireFlowCookie(res, nonceCookieName(slot));
+}
+
+/** Single-use read: burns the nonce cookie before the caller verifies or does any work. */
+export function consumeStateNonce(req: Pick<Request, 'headers'>, res: CookieResponse, slot?: string): string | null {
+  const nonceHash = readStateNonceHash(req, slot);
+  clearStateNonce(res, slot);
+  return nonceHash;
 }
 
 /** Store the PKCE code_verifier (Okta) in a browser-bound HttpOnly cookie at flow-start. */

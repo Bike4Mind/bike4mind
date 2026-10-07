@@ -230,6 +230,19 @@ function buildConfigItems(availableModels: ModelInfo[], pluginDescriptors: Plugi
       }),
     },
     {
+      key: 'postEditDiagnostics',
+      label: 'Post-Edit Diagnostics',
+      type: 'boolean' as const,
+      getValue: config => config.preferences.postEditDiagnostics ?? false,
+      setValue: (config, value) => ({
+        ...config,
+        preferences: {
+          ...config.preferences,
+          postEditDiagnostics: value as boolean,
+        },
+      }),
+    },
+    {
       key: 'featuresTavern',
       label: 'Tavern',
       type: 'boolean' as const,

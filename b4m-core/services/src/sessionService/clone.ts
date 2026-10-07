@@ -12,9 +12,12 @@ import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
+import { resolveCopySurface, targetSurfaceSchema, type ResolveSurfaceAccess } from './surfaceTransition';
 
 const cloneSessionSchema = z.object({
   id: z.string(),
+  // Absent: the clone inherits the source's surface. Present: checked by assertSurfaceTransition.
+  targetSurface: targetSurfaceSchema,
 });
 
 type CloneSessionParameters = z.infer<typeof cloneSessionSchema>;
@@ -29,6 +32,8 @@ type CloneSessionAdapters = {
       create: (chat: Omit<IChatHistoryItemDocument, 'id'>) => Promise<IChatHistoryItemDocument>;
     };
   };
+  /** Required to honor `targetSurface`; without it a targeted clone is refused. */
+  resolveSurfaceAccess?: ResolveSurfaceAccess;
 } & CreateSessionAdapters;
 
 export const cloneSession = async (
@@ -37,7 +42,7 @@ export const cloneSession = async (
   adapters: CloneSessionAdapters
 ) => {
   const { db } = adapters;
-  const { id } = secureParameters(parameters, cloneSessionSchema);
+  const { id, targetSurface } = secureParameters(parameters, cloneSessionSchema);
 
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError('User not found');
@@ -51,6 +56,8 @@ export const cloneSession = async (
   // Hoisted above the clone params because the lake scope below keys on it for the same reason.
   const isOwner = session.userId === userId;
 
+  const surface = await resolveCopySurface(session.surface, targetSurface, adapters.resolveSurfaceAccess);
+
   const buildCloneSession = {
     name: `Cloned ${session.name}`,
     knowledgeIds: session.knowledgeIds,
@@ -60,6 +67,13 @@ export const cloneSession = async (
     summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
     taggedAt: session.taggedAt,
     clonedSourceId: session.id,
+    // The session's home: without it a copy made inside a product surface lands in the main list.
+    surface,
+    // Create-only (not in SessionUpdateRequestSchema), so a copy that drops them can never get them back.
+    // Outside the isOwner gate: citationStyle is a rendering contract, and the retrieval keys only narrow.
+    citationStyle: session.citationStyle,
+    retrievalExcludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
+    retrievalVectorizedOnly: session.retrievalVectorizedOnly,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
     // and re-deriving here would go through the OWNERSHIP arm alone (no resolveLakeAccess is threaded
     // to this path), which cannot see a teammate-authored organization-lake file. That derives an
@@ -91,6 +105,8 @@ export const cloneSession = async (
           retrievalTags: session.retrievalTags,
           lakeScopeExplicit: session.lakeScopeExplicit,
           forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+          // Rides with the lake scope, which a non-owner does not inherit.
+          corpusGroundingMode: session.corpusGroundingMode,
         }
       : {}),
   };
@@ -98,7 +114,9 @@ export const cloneSession = async (
   // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
   // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
   // reach. fork/snip already forwarded; this brings clone in line.
-  const clonedSession = await createSession(user, buildCloneSession, adapters);
+  const clonedSession = await createSession(user, buildCloneSession, adapters, {
+    knowledgeIdsFromSourceSession: true,
+  });
 
   const messagesToClone = await db.chatHistories.findAllBySessionId(id);
 

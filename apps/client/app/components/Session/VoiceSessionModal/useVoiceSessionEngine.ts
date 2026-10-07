@@ -18,7 +18,7 @@ import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 import { ISessionDocument } from '@bike4mind/common';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
 import type { TranscriptItem } from './types';
 import { useVoiceKeepAlive } from './useVoiceKeepAlive';
 
@@ -411,19 +411,32 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
         }
         addDebugLog('[RT] Resuming voice connect after navigation');
       } else {
-        const { data } = await api.post<{
-          session: ISessionDocument;
-          model: string;
-          voice: string;
-          ephemeralKey: string;
-        }>('/api/ai/voice-sessions', {
-          // On reconnect, force the already-resolved session so we re-attach to it
-          // (and don't create a second empty session) rather than the prop.
-          sessionId: isReconnect ? connectedSessionIdRef.current : sessionId,
-          // Tell the server to reuse the existing credit hold rather than reserving
-          // (and charging) a second time for the same call.
-          isReconnect,
-        });
+        const response = await api
+          .post<{
+            session: ISessionDocument;
+            model: string;
+            voice: string;
+            ephemeralKey: string;
+          }>('/api/ai/voice-sessions', {
+            // On reconnect, force the already-resolved session so we re-attach to it
+            // (and don't create a second empty session) rather than the prop.
+            sessionId: isReconnect ? connectedSessionIdRef.current : sessionId,
+            // Tell the server to reuse the existing credit hold rather than reserving
+            // (and charging) a second time for the same call.
+            isReconnect,
+          })
+          .catch((error: unknown) => {
+            // A reconnect's caller owns the retry/backoff, so it must still see the rejection.
+            if (isReconnect) throw error;
+            const serverMessage = (error as { response?: { data?: { error?: unknown } } }).response?.data?.error;
+            toast.error(typeof serverMessage === 'string' ? serverMessage : 'Failed to start voice session.', {
+              id: 'voice-session-start-error',
+            });
+            setConnectionStatus('disconnected');
+            return null;
+          });
+        if (!response) return;
+        const { data } = response;
 
         resolvedSessionId = data.session.id;
         connectedSessionIdRef.current = resolvedSessionId;
@@ -816,7 +829,7 @@ export function useVoiceSessionEngine(options: UseVoiceSessionEngineOptions = {}
   useEffect(() => {
     if (!isActive || !enforceCredits) return;
     if ((currentUser?.currentCredits ?? 0) <= 0) {
-      toast.error('Out of Credits! Voice session ended.');
+      toast.error('Out of Credits! Voice session ended.', { id: 'voice-session-start-error' });
       endSession();
     }
   }, [isActive, enforceCredits, currentUser?.currentCredits, endSession]);

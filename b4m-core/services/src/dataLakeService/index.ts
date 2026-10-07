@@ -19,6 +19,7 @@ export {
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
+  resolveLakeManageRung,
   type LakeGrant,
 } from './manageRule';
 export * from './authorizeLakeManage';
@@ -30,6 +31,7 @@ export * from './lakeOwnershipOffer';
 export * from './lakeGrantWriteRule';
 export * from './manageLakeGrant';
 export * from './lapseDepartedMemberLakeAccess';
+export * from './reportKeptPersonalLakeShares';
 export * from './lakeOwnershipCandidates';
 export * from './authorizeBatchAccess';
 export * from './fallbackLakeTags';
@@ -38,6 +40,7 @@ export * from './computeLakeHealth';
 export * from './applyAdmissionDecision';
 export * from './detectAdmissionDuplicates';
 export * from './detectLakeInconsistencies';
+export * from './detectLakeInconsistenciesModel';
 export * from './convergeLakePolicy';
 export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';
@@ -56,6 +59,7 @@ export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';
 export * from './recordLakeMembershipChange';
+export * from './recordLakeUploadBatch';
 export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';
@@ -70,12 +74,16 @@ export * from './setDataLakeFileTags';
 export * from './acceptDataLakePurge';
 export * from './purgeDataLakeDocument';
 export * from './cleanupDeletedDataLake';
+export * from './purgeDataLakeConnectionFiles';
 export * from './recomputeLakeStats';
 export * from './reconcileStuckBatches';
 export * from './reconcileStuckTaxonomy';
 export * from './applyTaxonomySuggestions';
 export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
+export * from './narrowLakeAccessToSession';
+export * from './sessionLakeAdmission';
+export * from './vetPreauthorizedLakeIds';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
 export * from './supersession';
@@ -91,6 +99,7 @@ export * from './resolveLakeSpendAddressees';
 export * from './spendNotificationKeys';
 export * from './renderSpendNotificationEmail';
 export * from './renderOwnershipOfferEmail';
+export * from './notifyKeptPersonalLakeShares';
 export * from './sendDataLakeSpendNotification';
 export * from './resolveLakeAuditRetention';
 export * from './openSearchVectorSearch';
@@ -99,6 +108,7 @@ export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
 export * from './assembleLakeConfigHistory';
+export * from './diffLakeMembership';
 export * from './canonicalSourceKey';
 export * from './applyCorpusAction';
 export * from './recordLakeFindings';

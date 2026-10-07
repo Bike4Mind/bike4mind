@@ -1,6 +1,7 @@
-import { IChatHistoryItemRepository, ISessionRepository, sanitizeSessionTitle } from '@bike4mind/common';
+import { IChatHistoryItemRepository, ISessionRepository, IUserDocument, sanitizeSessionTitle } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { z } from 'zod';
 
 const autoNameParameterSchema = z.object({
@@ -24,7 +25,16 @@ interface AutoNameAdapters {
   logger: Logger;
 }
 
-export async function autoName(params: AutoNameParameters, adapters: AutoNameAdapters) {
+/**
+ * @param writer - the user a request-driven rename acts for. When set, the write re-checks their
+ *   update access (global-write included, matching the route's 'write' gate) and not-deleted, so a
+ *   revoke or delete during the LLM call makes it a NotFoundError. Omitted for the system rename.
+ */
+export async function autoName(
+  params: AutoNameParameters,
+  adapters: AutoNameAdapters,
+  writer?: Pick<IUserDocument, 'id' | 'groups'>
+) {
   const { db, createCompletion, logger } = adapters;
   const { sessionId, maxWords = 5 } = secureParameters(params, autoNameParameterSchema);
 
@@ -39,7 +49,7 @@ export async function autoName(params: AutoNameParameters, adapters: AutoNameAda
 
   const content = recentHistory
     .map(quest => {
-      const reply = quest.reply || quest.replies?.join('\n') || '';
+      const reply = stripToolOutputMarker(quest.reply || quest.replies?.join('\n') || '');
       const hasReply = reply.trim().length > 0;
 
       // For queries without replies (e.g., image generation), just show the request
@@ -62,6 +72,16 @@ ${content}`;
 
   const rawTitle = await createCompletion(prompt);
   const title = sanitizeSessionTitle(rawTitle);
+
+  if (writer) {
+    const updated = await db.sessions.updateWithUpdateAccess(
+      writer,
+      { id: sessionId, name: title, isAutoNamed: true },
+      { includeGlobalWrite: true }
+    );
+    if (!updated) throw new NotFoundError('Session not found');
+    return updated;
+  }
 
   await db.sessions.update({ id: sessionId, name: title, isAutoNamed: true });
   const updatedSession = await db.sessions.findById(sessionId);

@@ -1,10 +1,11 @@
 import { AuthenticatedApiClient } from '@bike4mind/client-auth';
+import { isProviderKeyFailure } from './providerKeyFailure';
 import { ConfigStore } from '../storage/ConfigStore';
 import { OAuthClient } from './OAuthClient';
 import { logger } from '../utils/Logger';
 import packageJson from '../../package.json';
 
-export { SessionRevokedError } from '@bike4mind/client-auth';
+export { NotAuthenticatedError, SessionRevokedError } from '@bike4mind/client-auth';
 
 const USER_AGENT = `b4m-cli/${packageJson.version}`;
 
@@ -47,7 +48,9 @@ export class ApiClient extends AuthenticatedApiClient {
       reauthMessages: {
         refreshFailed: 'Authentication expired. Please run `b4m login` again.',
         stillUnauthorized: 'Authentication failed. Please run /login to authenticate.',
+        notLoggedIn: 'Authentication failed: not logged in. Please run `b4m login` to authenticate.',
       },
+      isPassThrough401: isProviderKeyFailure,
     });
   }
 }

@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { ReviewGateResponse } from '../tools/reviewGateTool';
+import { escapeTerminalControlChars } from './PermissionPrompt';
 
 export interface ReviewGatePromptProps {
   description: string;
@@ -121,14 +122,14 @@ export function ReviewGatePrompt({ description, options, recommendation, onRespo
       </Box>
 
       <Box marginTop={1}>
-        <Text>{description}</Text>
+        <Text>{escapeTerminalControlChars(description)}</Text>
       </Box>
 
       {recommendation && (
         <Box marginTop={1} flexDirection="column">
           <Text bold>Recommendation:</Text>
           <Box paddingLeft={2}>
-            <Text dimColor>{recommendation}</Text>
+            <Text dimColor>{escapeTerminalControlChars(recommendation)}</Text>
           </Box>
         </Box>
       )}
@@ -139,7 +140,7 @@ export function ReviewGatePrompt({ description, options, recommendation, onRespo
           <Box paddingLeft={2} flexDirection="column">
             {options.map((opt, idx) => (
               <Text key={idx} dimColor>
-                • {opt}
+                • {escapeTerminalControlChars(opt)}
               </Text>
             ))}
           </Box>

@@ -53,7 +53,7 @@ describe('filterStillManagedLakes', () => {
   });
 
   // The one rung this MUST NOT inherit from canManageLake's defaults. The re-check builds its actor
-  // with isAdmin: false to mirror pages/api/sessions/create.ts, which also refuses to admit a lake
+  // with isAdmin: false to mirror pages/api/v1/sessions/index.ts, which also refuses to admit a lake
   // on platform-admin alone; a re-check that admitted admins would widen past its own create gate.
   it('does not admit a platform admin who manages nothing on this lake', async () => {
     const kept = await filterStillManagedLakes([lake()], 'a-platform-admin', readers());

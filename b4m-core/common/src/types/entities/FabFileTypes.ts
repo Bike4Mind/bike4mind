@@ -28,6 +28,8 @@ export enum KnowledgeType {
    * excluded from every LLM-attachment and vectorization path.
    */
   AUDIO = 'AUDIO',
+  /** Generated video. Media-only like AUDIO: storable and browsable, never ingested. */
+  VIDEO = 'VIDEO',
 }
 
 // Data Lake source types
@@ -38,6 +40,42 @@ export enum FabFileSourceType {
   SLACK = 'slack',
   /** Admitted by a human approving an acquisition proposal (#1671), never by the producer itself. */
   PROPOSAL_APPROVAL = 'proposal_approval',
+  GITHUB = 'github',
+  /**
+   * Produced by an in-chat tool (image/audio/music/Excel generation). `sourceMetadata.sessionId`
+   * links it to the notebook it was made in - see persistGeneratedFileAsFabFile for why that link
+   * is not the top-level `sessionId`.
+   */
+  TOOL_GENERATED = 'tool_generated',
+}
+
+/**
+ * Where a FabFile's `documentDate` came from. Stored alongside the date because the sources differ
+ * in how much they are worth: an embedded metadata slot is the document's own claim about itself,
+ * while a container timestamp is only the container's. Without this, a date that turns out to be
+ * wrong is unattributable - and the last time a wrong date reached a passage header (#3047) that is
+ * exactly what made it hard to see.
+ */
+export enum DocumentDateSource {
+  /** `CreationDate` from the PDF info dictionary. */
+  PDF_METADATA = 'pdf_metadata',
+  /**
+   * The container's own document-properties record: `dcterms:created` in an OOXML
+   * `docProps/core.xml` (docx/pptx/xlsx), or the equivalent summary stream in a legacy `.xls`.
+   */
+  DOCUMENT_PROPERTIES = 'document_properties',
+  /** A date key in a leading YAML frontmatter block. */
+  FRONTMATTER = 'frontmatter',
+  /**
+   * Drive's `createdTime`, and ONLY for a Google Editors document, where the file WAS authored in
+   * Drive at that moment. Never taken for a binary uploaded to Drive: there `createdTime` is the
+   * upload time, which is the same ingestion-time-as-document-date mistake #3047 removed.
+   *
+   * This value is pinned once set - see the precedence rule in `resolveDocumentDate`. An Editors
+   * file has no bytes of its own, so what the chunker reads is a rendition Drive generated at
+   * fetch time, and that rendition's embedded metadata dates the export rather than the document.
+   */
+  DRIVE_CREATED = 'drive_created',
 }
 
 // Data Lake metadata interface
@@ -471,6 +509,22 @@ export interface IFabFile {
   /** Original relative path from folder upload (preserves directory structure) */
   relativePath?: string;
 
+  /**
+   * The document's own vintage - when it was authored, not when we ingested it (#3048).
+   *
+   * Set only from a real signal (embedded metadata, or Drive's createdTime for a Drive-authored
+   * doc) and left undefined otherwise, which is the common case: there is no fallback to
+   * `createdAt`/`updatedAt`, because ingestion time presented as a document date is the bug #3047
+   * removed. Absent therefore means "no source offered one", never "the document is undated".
+   *
+   * Nullable, like `serverTextHash` and for the same reason: the chunk commit writes the pair on
+   * every pass, so an explicit null is how a re-chunk records "this document no longer carries a
+   * vintage" rather than leaving the previous one to outlive the content it described.
+   */
+  documentDate?: Date | null;
+  /** Provenance for `documentDate`. Always set when `documentDate` is, and never on its own. */
+  documentDateSource?: DocumentDateSource | null;
+
   // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
   /** Drive file id this FabFile was ingested from - the stable dedup key within a lake. */
   driveFileId?: string;
@@ -482,6 +536,14 @@ export interface IFabFile {
   sourceLakeId?: string;
   /** The OrgGoogleDriveConnection that ingested this file (provenance). */
   driveConnectionId?: string;
+
+  // GitHub repository ingest provenance. Populated when sourceType === GITHUB.
+  /** The OrgGitHubLakeConnection that ingested this file; the purge-by-source key. */
+  githubConnectionId?: string;
+  /** Repository-relative path at ingest: the re-sync identity key. */
+  githubPath?: string;
+  /** Git blob SHA at ingest: exact change detection on re-sync. */
+  githubBlobSha?: string;
 
   /**
    * Curator rulings that this file is an older generation of some sibling, one per lake.
@@ -548,10 +610,16 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  *
  * Also clears the chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
  * `embeddedCharCount`) and `serverTextHash`, the admission contract's fingerprint of the extracted text
- * (#1679): each is derived from the file's content, so a byte rewrite invalidates them, and the
- * re-chunk / re-vectorize that follows re-stamps them. Leaving the rollups would grade lake health
- * (#1666) against the PREVIOUS content's chunks - reporting a reachability the current bytes do not
- * have; leaving the hash would let a stale fingerprint claim text the file no longer holds.
+ * (#1679): each is derived from the file's content, so a byte rewrite invalidates them. Nothing here
+ * re-chunks: no rewrite site resets `chunked`, so they are re-stamped only by the next Reprocess /
+ * Rebuild / converge pass. Leaving the rollups would grade lake health (#1666) against the PREVIOUS
+ * content's chunks - reporting a reachability the current bytes do not have; leaving the hash would
+ * let a stale fingerprint claim text the file no longer holds.
+ *
+ * `documentDate` / `documentDateSource` are deliberately NOT cleared: they describe the chunks still
+ * being served, which a rewrite leaves in place, and the re-chunk that replaces those chunks
+ * re-derives the pair (prepareFabFileChunks). Clearing them here would only render the old, still
+ * accurately-dated passages undated. Pinned in fabFileExtractedCountInvalidation.test.ts.
  */
 export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   extractedCharCount: null,
@@ -718,12 +786,15 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
     limit?: number;
     afterChunkId?: string;
   }): Promise<Array<{ id: string; fabFileId: string; vectorLength: number }>>;
-  /** Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model. */
+  /**
+   * Atlas `$vectorSearch` over a bounded, already-eligibility-checked file subset for one embedding model.
+   * `includeText: false` skips the chunk body (returned as '') for callers that only rank by score.
+   */
   vectorSearch(
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
   /** Whether `model`'s Atlas vector index exists and is queryable (cached; see atlasSearchIndex.ts). */
   getAtlasIndexStatus(model: string): Promise<{ queryable: boolean; status: string } | null>;
@@ -804,6 +875,17 @@ export type DataLakeMembershipFileCounts = {
   total: number;
   /** Members with no tag under the lake's `fileTagPrefix`. 0 when the lake has no usable prefix. */
   uncategorized: number;
+};
+
+/**
+ * One currently-live member of a lake. `createdAt` rides along because the membership change log
+ * does not cover every join - the file-create doors record none - so a reader reconstructing
+ * membership over time needs the file's birth to tell a member that sat through a window from one
+ * that was uploaded into it.
+ */
+export type DataLakeLiveMember = {
+  id: string;
+  createdAt: Date;
 };
 
 /**
@@ -1091,6 +1173,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Mixed `sourceMetadata` included) to answer a question about existence.
    */
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
+  /**
+   * As `findExistingIdsByIds`, but a soft-deleted row counts as existing. The two answer different
+   * questions and a caller must pick deliberately: this one is "is there a row at all", which is the
+   * only safe basis for destroying a reference to it, because a soft delete is recoverable (a lake
+   * teardown soft-deletes its files and `restoreDeletedDataLake` revives them). Use the filtered
+   * sibling when the question is reachability - whether the document can be read right now.
+   */
+  findExistingIdsIncludingDeletedByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
   /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
@@ -1098,6 +1188,9 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
+
+  /** Every non-deleted file an in-chat tool generated in the given session (`FabFileSourceType.TOOL_GENERATED`). */
+  findToolGeneratedBySessionId(sessionId: string): Promise<IFabFileDocument[]>;
 
   /**
    * Atomic per-channel claim: appends a `dispatchedNotifications` entry for `channel` only if one
@@ -1388,6 +1481,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
    */
   getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
+  /**
+   * Which of `fabFileIds` carry a curator supersede ruling for `dataLakeId`, as a subset of the
+   * input. The batched read behind the findings list's "Return to ranking"; `supersededInLakes` is
+   * `select: false`, so this opts in explicitly rather than leaning on a plain find.
+   */
+  listLakeSupersededIds?(fabFileIds: string[], dataLakeId: string): Promise<string[]>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the
@@ -1481,8 +1580,53 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * a stored file whose driveFileId is absent from the walk was DELETED from the folder, and one
    * whose driveMd5Checksum/driveModifiedTime moved was EDITED - neither detectable from the walk
    * alone. Scoped to the connection so a re-sync only reconciles the files it owns.
+   *
+   * `includeDeleted` drops the archivedAt/deletedAt filters for the disconnect purge, which must
+   * reach an archived lake's members (every member is archivedAt-stamped when its lake archives)
+   * and soft-deleted rows, mirroring `hardDeleteByDataLakeTag`. `status: 'pending'` rows are
+   * excluded either way. `limit` caps the rows returned, so the queued disconnect purge can work
+   * through a large connection one bounded slice per invocation.
    */
-  findByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  findByDriveConnectionIdInDataLake(
+    driveConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean; limit?: number }
+  ): Promise<IFabFileDocument[]>;
+  /**
+   * Lightweight count of the `includeDeleted` set `findByDriveConnectionIdInDataLake` resolves -
+   * the disconnect-confirmation dialog needs a number, not every file's body, to warn how many
+   * documents a disconnect will actually delete, and that number must stay honest for an
+   * archived lake too.
+   */
+  countByDriveConnectionIdInDataLake(driveConnectionId: string, datalakeTag: string): Promise<number>;
+  /**
+   * Every live, non-member FabFile still carrying this connection's provenance - the disconnect
+   * backstop for a file the connector UNPICKED but never deleted. A file removed from the connected
+   * folder (or left behind by the edit path before this existed) keeps its `driveConnectionId`, its
+   * chunks and its stored object while losing the lake meta-tag, so it is invisible to
+   * `findByDriveConnectionIdInDataLake` (whose conjunct is the tag the unpick pulled) and would
+   * otherwise survive every disconnect, staying searchable and billed forever. The meta-tag check
+   * is deliberately `$ne` on the tag name: no element of `tags` may match. The default soft-delete
+   * filter stays ON (a soft-deleted row was already
+   * reaped by `deleteFabFile`) and `status: 'pending'` is excluded (an unconfirmed in-flight upload
+   * was never durable content). `archivedAt: null` is safe because archiving stamps members only
+   * (`archiveByDataLakeTag`), and a non-member is by definition not one.
+   */
+  findLiveNonMembersByDriveConnectionId(driveConnectionId: string, datalakeTag: string): Promise<IFabFileDocument[]>;
+  /**
+   * Every live, uploaded file a GitHub connection has ingested into a lake (META-TAG ONLY, same filter as
+   * findByDriveConnectionIdInDataLake). The set a re-sync diffs the repository tree against.
+   *
+   * `includeDeleted` mirrors findByDriveConnectionIdInDataLake's own option - the disconnect purge's
+   * finder, reaching an archived lake's members and soft-deleted rows.
+   */
+  findByGitHubConnectionIdInDataLake(
+    githubConnectionId: string,
+    datalakeTag: string,
+    options?: { includeDeleted?: boolean }
+  ): Promise<IFabFileDocument[]>;
+  /** countByDriveConnectionIdInDataLake's GitHub twin: the number a GitHub disconnect will purge. */
+  countByGitHubConnectionIdInDataLake(githubConnectionId: string, datalakeTag: string): Promise<number>;
   /**
    * The Drive file ids a given ingest batch has already UPLOADED a FabFile for. This is what a
    * resumed ingest slice subtracts from its fresh walk, so it must exclude a row whose bytes never
@@ -1789,7 +1933,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
    * back in for a file the rescue sweep has written off.
    */
-  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  resetChunkStateByIds(ids: string[], options?: { concurrency?: number }): Promise<string[]>;
   /**
    * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
    * chunkless reasons by whether a producer actually removed its passages, and clearing the
@@ -1834,15 +1978,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * "all lakes" figure sits above those per-lake rows, so the two describe one population.
    */
   countDistinctDataLakeFilesByMembership(scopes: DataLakeMembershipScope[]): Promise<number>;
-  /**
-   * The same distinct count narrowed to the files categorized under NONE of `tagPrefixes` - the
-   * bucket for a MERGED (all-lakes) tree. Not a sum of the per-lake `uncategorized` figures,
-   * which judge each lake on its own and so both double-count and over-count.
-   */
-  countDistinctUncategorizedDataLakeFilesByMembership(
-    scopes: DataLakeMembershipScope[],
-    tagPrefixes: string[]
-  ): Promise<number>;
   // The delete/restore pair is STAMP-KEYED. Phase-1 delete takes `at` and writes that one value
   // to every row it flips; it records the stamp on the lake and restore passes it back as
   // `stampedAt` to reverse exactly that batch. `stampedAt` matches by EQUALITY - deliberately not a
@@ -1948,4 +2083,22 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Members that are CURRENTLY live - the lake's membership as of now, which is what a reader
+   * reconstructing membership over time has to start from. Distinct from `findIdsByDataLakeTag`
+   * above because a soft delete leaves the lake tags in place, so that one keeps naming files the
+   * lake no longer holds.
+   */
+  findLiveMembersByDataLakeTag(scope: DataLakeMembershipScope): Promise<DataLakeLiveMember[]>;
+  /**
+   * Every stored object key of each row - the current `filePath` and each prior version's - with
+   * soft-deleted rows INCLUDED. The phase-2 lake purge needs this because every id it sweeps was
+   * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
+   *
+   * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
+   * requires it locally.
+   */
+  findStorageKeysByIds?(
+    fabFileIds: string[]
+  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
 }

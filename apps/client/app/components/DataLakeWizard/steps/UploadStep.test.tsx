@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -16,6 +17,11 @@ import UploadStep from './UploadStep';
 // The WebSocket listener is exercised elsewhere; here we drive the store directly.
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useBatchProgressListener: () => {},
+}));
+
+const promoteMutate = vi.fn();
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  usePromoteDataLake: () => ({ mutate: promoteMutate, isPending: false }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -198,6 +204,95 @@ describe('UploadStep - in-progress failure alert (#1412)', () => {
  * tell them apart: with zero files every counter is 0, and the file-count screens above would read
  * that as "nothing uploaded" - a failure - for what is a successful hand-off to Drive ingest.
  */
+/**
+ * #3222: a lake is born `draft` and grounds nothing until it is published (#3073 made publishing an
+ * explicit act rather than a side effect of the first upload). The Complete screen reported files
+ * "uploaded, chunked, and vectorized" and never said the assistant could not see any of them.
+ *
+ * Both completion screens are covered: the upload path and the fileless Drive commit are separate
+ * renders of the same fact, and a disclosure on only one of them is the bug half-fixed.
+ */
+describe('UploadStep - non-serving lake disclosure (#3222)', () => {
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('warns that a draft lake grounds no answers, beside the success copy', () => {
+    renderComplete({ totalFiles: 1, uploadedFiles: 1, chunkedFiles: 1, vectorizedFiles: 1, lakeStatus: 'draft' });
+    // The success claim still stands - the files really were processed. What is added is the part
+    // that was missing, so assert both: a fix that suppressed the summary would be the wrong fix.
+    expect(screen.getByText('1 file uploaded, chunked, and vectorized.')).toBeInTheDocument();
+    const notice = screen.getByTestId('wizard-lake-not-serving');
+    expect(notice).toHaveTextContent('This Data Lake is a draft, so it does not ground answers yet.');
+    expect(notice).toHaveTextContent('Publish the Data Lake from the Data Lakes list');
+  });
+
+  it('stays silent for a lake that already serves retrieval', () => {
+    renderComplete({ totalFiles: 1, uploadedFiles: 1, chunkedFiles: 1, vectorizedFiles: 1, lakeStatus: 'active' });
+    expect(screen.queryByTestId('wizard-lake-not-serving')).toBeNull();
+  });
+
+  it('claims nothing when the status is unknown (a fallback lake carries none and always serves)', () => {
+    renderComplete({ totalFiles: 1, uploadedFiles: 1, chunkedFiles: 1, vectorizedFiles: 1 });
+    expect(screen.queryByTestId('wizard-lake-not-serving')).toBeNull();
+  });
+
+  // Appending into an existing draft lake is the same failure: the new files ground nothing either.
+  it('warns when files are appended into a lake that is still a draft', () => {
+    useDataLakeWizardStore.setState({
+      targetLake: {
+        id: 'lake1',
+        slug: 'contracts',
+        name: 'Contracts',
+        fileTagPrefix: 'contracts:',
+        organizationId: null,
+        canManage: true,
+        status: 'draft',
+      },
+    });
+    renderComplete({ totalFiles: 2, uploadedFiles: 2, chunkedFiles: 2, vectorizedFiles: 2, lakeStatus: 'draft' });
+    expect(screen.getByTestId('wizard-lake-not-serving')).toBeInTheDocument();
+  });
+
+  // A non-draft, non-serving status must not be described with the Publish call to action - there is
+  // nothing to publish, and the sentence would send the user looking for a button that is not there.
+  it('names a non-draft non-serving status without offering Publish', () => {
+    renderComplete({ totalFiles: 1, uploadedFiles: 1, chunkedFiles: 1, vectorizedFiles: 1, lakeStatus: 'archived' });
+    const notice = screen.getByTestId('wizard-lake-not-serving');
+    expect(notice).toHaveTextContent(
+      'This Data Lake is not serving retrieval yet (archived), so it does not ground answers.'
+    );
+    expect(notice).not.toHaveTextContent('Publish');
+  });
+
+  it('publishes a draft in place when the lake id is known, and retires the notice on success', async () => {
+    promoteMutate.mockImplementationOnce((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+    const user = userEvent.setup();
+    renderComplete({
+      totalFiles: 1,
+      uploadedFiles: 1,
+      chunkedFiles: 1,
+      vectorizedFiles: 1,
+      lakeStatus: 'draft',
+      lakeId: 'lake1',
+    });
+    // The copy no longer sends the user to another surface when the action is right here.
+    expect(screen.getByTestId('wizard-lake-not-serving')).not.toHaveTextContent('from the Data Lakes list');
+
+    await user.click(screen.getByTestId('wizard-lake-publish-btn'));
+    expect(promoteMutate).toHaveBeenCalledWith('lake1', expect.anything());
+    expect(screen.queryByTestId('wizard-lake-not-serving')).toBeNull();
+  });
+
+  it('offers no Publish button without a lake id, or for a non-draft status', () => {
+    const { unmount } = renderComplete({ totalFiles: 1, uploadedFiles: 1, lakeStatus: 'draft' });
+    expect(screen.queryByTestId('wizard-lake-publish-btn')).toBeNull();
+    unmount();
+    renderComplete({ totalFiles: 1, uploadedFiles: 1, lakeStatus: 'archived', lakeId: 'lake1' });
+    expect(screen.queryByTestId('wizard-lake-publish-btn')).toBeNull();
+  });
+});
+
 describe('UploadStep - Drive-only commit (#1916)', () => {
   afterEach(() => {
     useDataLakeWizardStore.getState().resetWizard();
@@ -234,6 +329,19 @@ describe('UploadStep - Drive-only commit (#1916)', () => {
     expect(complete).toHaveTextContent('Contracts');
     expect(complete).toHaveTextContent('background');
     expect(screen.queryByText('Upload Complete!')).toBeNull();
+  });
+
+  // #3222: this screen is reached by its own commit path, so it needs the draft disclosure of its
+  // own - the upload path's copy never renders here.
+  it('warns that the newly created Drive lake is a draft that grounds no answers', () => {
+    renderDriveCommit('complete', { lakeStatus: 'draft' });
+    const notice = screen.getByTestId('wizard-lake-not-serving');
+    expect(notice).toHaveTextContent('This Data Lake is a draft, so it does not ground answers yet.');
+  });
+
+  it('stays silent on the Drive screen when the lake serves retrieval', () => {
+    renderDriveCommit('complete', { lakeStatus: 'active' });
+    expect(screen.queryByTestId('wizard-lake-not-serving')).toBeNull();
   });
 
   // Pins the word spacing, not just the words. Built from JSX text interleaved with {DATA_LAKE}

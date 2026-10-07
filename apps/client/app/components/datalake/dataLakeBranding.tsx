@@ -15,6 +15,10 @@ import type { ComponentProps } from 'react';
 /** Singular noun - use for actions and single-lake contexts ("Send to Data Lake"). */
 export const DATA_LAKE = 'Data Lake';
 
+/** Citation-chip origin labels for files from a user's library rather than a lake. */
+export const PERSONAL_LIBRARY = 'Personal library';
+export const SHARED_LIBRARY = 'Shared library';
+
 /**
  * Plural / collection - use for the nav destination and the manager header.
  * Must stay in sync with the `sidenav.dataLakes` key in `apps/client/app/locales/en.json`,

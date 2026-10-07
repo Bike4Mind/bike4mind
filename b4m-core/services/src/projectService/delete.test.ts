@@ -82,8 +82,9 @@ describe('projectService - delete', () => {
     expect(result.deletedAt).toBeInstanceOf(Date);
     expect(mockProjectRepo.findByIdAndUserId).toHaveBeenCalledWith(projectId, userId);
     expect(mockProjectRepo.update).toHaveBeenCalledWith({
-      ...existingProject,
+      id: projectId,
       deletedAt: expect.any(Date),
+      name: `[Deleted] ${projectId}`,
     });
   });
 
@@ -156,8 +157,12 @@ describe('projectService - delete', () => {
 
       await deleteProject(userId, { id: projectId }, adapters);
 
-      expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
-      expect(mockSessionRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }));
+      expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }), {
+        includeDeleted: true,
+      });
+      expect(mockSessionRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ users: [] }), {
+        includeDeleted: true,
+      });
     });
 
     // addFiles/addSessions mint the project OWNER a projectId-scoped read+update grant on content a
@@ -198,7 +203,9 @@ describe('projectService - delete', () => {
 
       await deleteProject(userId, { id: projectId }, adapters);
 
-      expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ id: fileId, users: [] }));
+      expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(expect.objectContaining({ id: fileId, users: [] }), {
+        includeDeleted: true,
+      });
       // The tombstone still records what the project held: the cascade's pruning is local to it.
       expect(project.fileIds).toEqual([fileId]);
     });

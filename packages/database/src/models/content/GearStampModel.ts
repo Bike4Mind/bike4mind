@@ -2,9 +2,9 @@ import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
- * GearStamp - a first-use record for Gears (the earned-nav progression) whose
+ * GearStamp - a first-use record for Gears (the feature tour and its rewards) whose
  * actions leave no other queryable trace. Most gears are DERIVED (see
- * pages/api/gears/status.ts); a stamp exists only where derivation is impossible.
+ * apps/client/server/services/gears/catalog.ts); a stamp exists only where derivation is impossible.
  *
  * One row per (userId, key), unique compound index; writers upsert and treat
  * E11000 as success. Rows are permanent.
@@ -44,18 +44,6 @@ export class GearStampRepository extends BaseRepository<IGearStampDocument> {
   /** Idempotent stamp: upsert; duplicate = already stamped = success. */
   async stamp(userId: string, key: string): Promise<void> {
     await this.model.updateOne({ userId, key }, { $setOnInsert: { userId, key } }, { upsert: true });
-  }
-
-  /**
-   * Race-safe one-time claim: returns true for EXACTLY ONE caller across
-   * concurrent requests (the one whose upsert inserted the row), false for the
-   * rest. The (userId, key) unique index is the arbiter. Used to decide which
-   * of N concurrent /gears/status calls announces a fresh reward, so the credit
-   * grant (idempotent on its own ledger key) is reported to the user only once.
-   */
-  async claimOnce(userId: string, key: string): Promise<boolean> {
-    const r = await this.model.updateOne({ userId, key }, { $setOnInsert: { userId, key } }, { upsert: true });
-    return (r.upsertedCount ?? 0) === 1;
   }
 
   async stampedKeys(userId: string): Promise<Set<string>> {

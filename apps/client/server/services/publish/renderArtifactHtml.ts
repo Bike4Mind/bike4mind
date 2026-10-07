@@ -36,6 +36,8 @@ export function renderArtifactIndexHtml(type: ArtifactType, content: string, tit
     return /<\/body>/i.test(content) ? content.replace(/<\/body>/i, `${footer}</body>`) : content + footer;
   }
 
+  // Baked unconditionally: the serve handler strips it per request (stripSignupGateHtml) for
+  // any viewer or visibility that should not see it, since visibility can change after publish.
   const gate = buildSignupGateHtml();
   const PAGE = (inner: string, extraStyle = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">

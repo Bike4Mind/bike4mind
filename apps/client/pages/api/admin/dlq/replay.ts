@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
 import { getDlqByLabel, getDlqUrl, getSourceQueueUrl } from '@server/utils/dlqRegistry';
@@ -45,7 +46,7 @@ interface ReplayResult {
  * - Batch: Receives messages from the DLQ (optionally filtered by `messageIds`),
  *   sends to source queue, then deletes from DLQ on success.
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const result = BodySchema.safeParse(req.body);

@@ -19,7 +19,7 @@ import {
   SettingScopeLevel,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
+import type { CitableSource, ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
@@ -31,6 +31,22 @@ vi.mock('../mementoService', async importOriginal => ({
   ...(await importOriginal<typeof import('../mementoService')>()),
   getRelevantMementos: getRelevantMementosMock,
 }));
+
+// Spy that KEEPS the real implementation - the reader opt-in tests below assert on the literal
+// options object this call site passes (including readerConsentDatalakeTags), which an outcome-only
+// assertion cannot pin: a resolver that quietly derived consent from something else could still
+// admit the same lake and pass every outcome check.
+const getAccessibleDataLakePromptsSpy = vi.hoisted(() => vi.fn());
+vi.mock('../dataLakeService/getDataLakePrompts', async importOriginal => {
+  const actual = await importOriginal<typeof import('../dataLakeService/getDataLakePrompts')>();
+  return {
+    ...actual,
+    getAccessibleDataLakePrompts: (...args: Parameters<typeof actual.getAccessibleDataLakePrompts>) => {
+      getAccessibleDataLakePromptsSpy(...args);
+      return actual.getAccessibleDataLakePrompts(...args);
+    },
+  };
+});
 
 const makeQuest = (overrides: Partial<IChatHistoryItemDocument> = {}): IChatHistoryItemDocument =>
   ({
@@ -414,13 +430,25 @@ describe('shouldSummarizeSession', () => {
 describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
-  const makeRetrievalContext = (overrides: { chunkText?: Record<string, string>; charBudget?: number } = {}) => {
+  const makeRetrievalContext = (
+    overrides: {
+      chunkText?: Record<string, string>;
+      charBudget?: number;
+      /** Per-file `documentDate` (#3048) override, keyed by file id - absent files stay undated. */
+      documentDates?: Record<string, Date | null>;
+    } = {}
+  ) => {
     // fileA deliberately carries a `createdAt` (its upload time) and fileB does not, so the
     // undated-heading test below proves the heading ignores it rather than merely lacking one.
-    const files = [
+    const baseFiles = [
       { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
+    const files = baseFiles.map(file =>
+      overrides.documentDates && file.id in overrides.documentDates
+        ? { ...file, documentDate: overrides.documentDates[file.id] }
+        : file
+    );
     const textOf = (chunkId: string, fallback: string) => overrides.chunkText?.[chunkId] ?? fallback;
     const chunksByFile: Record<string, unknown[]> = {
       fileA: [
@@ -446,7 +474,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
         },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -456,8 +484,11 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const runRetrieval = async (citationStyle?: 'named' | 'indexed') => {
-    const ctx = makeRetrievalContext();
+  const runRetrieval = async (
+    citationStyle?: 'named' | 'indexed',
+    contextOverrides?: Parameters<typeof makeRetrievalContext>[0]
+  ) => {
+    const ctx = makeRetrievalContext(contextOverrides);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
       undefined,
@@ -498,6 +529,28 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     const { content } = await runRetrieval();
     expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
     expect(content).not.toMatch(/dated|2026-08-14/);
+  });
+
+  /**
+   * Regression guard for #3047/#3113: a previous attempt at dated headers silently dropped the
+   * date on this exact (always-on) surface. `documentDate` (#3048) is the document's own authored
+   * vintage, not `createdAt` above - both citation styles must carry it identically.
+   */
+  it('appends the document date clause to both citation styles when the file carries a documentDate (#3048)', async () => {
+    const documentDates = { fileA: new Date('2019-03-04T00:00:00.000Z') };
+    const indexed = await runRetrieval('indexed', { documentDates });
+    expect(indexed.content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2019-03-04\n');
+    // fileB carries no override, so it stays undated - the clause is per-file, not per-turn.
+    expect(indexed.content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
+
+    const named = await runRetrieval('named', { documentDates });
+    expect(named.content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2019-03-04\n');
+  });
+
+  it('omits the date clause when documentDate is explicitly null', async () => {
+    const { content } = await runRetrieval('indexed', { documentDates: { fileA: null } });
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
+    expect(content).not.toContain('dated');
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
@@ -655,7 +708,7 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -739,10 +792,13 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       dataLakes: {
         findActiveByUserTags: vi.fn().mockResolvedValue([]),
         findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        // Also required rather than decorative: this site vouches for its entitlement keys, so the
+        // exclusion count actually runs and an absent method would throw into its swallowing catch.
+        countGateExcludedLakes: vi.fn().mockResolvedValue(0),
         findById,
       },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
   });
 
   /**
@@ -774,6 +830,48 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       expect.stringContaining('access-grant lookup failed'),
       expect.any(Error)
     );
+  });
+
+  /**
+   * A degraded key list can drop an entitlement-gated lake out of the resolved set, so a thrown
+   * entitlement lookup has to travel with the keys and land as `lakeViewComplete: false`. Without
+   * this the signal could be dropped at this call site and the suite would stay green.
+   */
+  it('reports an incomplete lake view when the entitlement lookup degraded the keys', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValue({ keys: [], resolved: false });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).toBe(false);
+  });
+
+  it('leaves the lake view complete when the entitlement lookup succeeded', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    // toBe(true), not `.not.toBe(false)`: the looser form also passes when the field is dropped
+    // entirely, which is the exact mistake this pair of cases exists to catch.
+    expect(access.lakeViewComplete).toBe(true);
   });
 
   const MANAGED_LAKE = {
@@ -859,6 +957,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       tags?: unknown[];
       embeddingModel?: string;
       vectorizedChunkCount?: number;
+      chunkEmbeddingModelStampedAt?: Date;
     }[];
     rows?: (ids: string[]) => unknown[];
     total?: number;
@@ -907,7 +1006,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           ),
         },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       embeddingBinding: opts.embeddingBinding,
     };
@@ -973,6 +1072,215 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
     expect(coverage?.reasons[0]).toContain('candidate cap');
     expect(coverage?.reasons[0]).toContain('selected alphabetically by file name');
     expect(coverage?.reasons[0]).toContain('the rest of the library is never reached');
+  });
+
+  describe('candidate selection on a scope larger than the candidate cap', () => {
+    // 150 files; the only one that answers the query sorts LAST by name, past the 100-file cap.
+    const STAMPED = new Date('2026-01-01T00:00:00Z');
+    const lakeFiles = Array.from({ length: 150 }, (_, i) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `f${n}`,
+        fileName: `doc-${n}.pdf`,
+        tags: [],
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: STAMPED,
+      };
+    });
+    const TARGET = 'f149';
+    // The query embeds to [1, 0]: the target's chunk scores 1, every other chunk 0 (below the floor).
+    const rows = (ids: string[]) =>
+      ids.map(id => ({ id: `ch-${id}`, fabFileId: id, text: `text ${id}`, vector: id === TARGET ? [1, 0] : [0, 1] }));
+    const targetHeading = `### doc-149.pdf (ID: ${TARGET})`;
+
+    const makeLargeScopeCtx = (opts: { vectorSearchEnabled: boolean }) => {
+      const ctx = makeCtx({
+        files: lakeFiles,
+        rows,
+        settings: { EnableDataLakeVectorSearch: opts.vectorSearchEnabled },
+      });
+      // The real listing honours `limit`; the fixture has to, or the cut under test never happens.
+      ctx.db.fabfiles.search = vi.fn((_u, _q, _f, page: { limit: number }) =>
+        Promise.resolve({
+          data: lakeFiles.slice(0, page.limit),
+          hasMore: lakeFiles.length > page.limit,
+          total: lakeFiles.length,
+        })
+      );
+      const annDb = {
+        getAtlasIndexStatus: vi.fn().mockResolvedValue({ queryable: true, status: 'READY' }),
+        vectorSearch: vi.fn().mockResolvedValue([
+          { id: `ch-${TARGET}`, fabFileId: TARGET, text: `text ${TARGET}`, score: 0.97 },
+          { id: 'ch-f000', fabFileId: 'f000', text: 'text f000', score: 0.2 },
+        ]),
+      };
+      Object.assign(ctx.db.fabfilechunks, annDb);
+      return { ctx, annDb, warn: (ctx.logger as unknown as { warn: ReturnType<typeof vi.fn> }).warn };
+    };
+
+    it('without vector search, keeps the alphabetical pick: the late-sorting answer is never served', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: false });
+      const { content } = await run(ctx);
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 100 }));
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('with vector search, picks candidates by relevance and serves the late-sorting answer', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const { quest, content } = await run(ctx);
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 1000 }));
+      // Scoped to the servable listing (all 150 here) in the turn's embedding space.
+      expect(annDb.vectorSearch).toHaveBeenCalledWith(
+        lakeFiles.map(f => f.id),
+        [1, 0],
+        'text-embedding-ada-002',
+        expect.objectContaining({ limit: expect.any(Number), includeText: false })
+      );
+      expect(content).toContain(targetHeading);
+      // The whole listing was ranked, so the cap limited breadth - not a partial-coverage turn.
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('candidate cap'));
+      expect((quest.promptMeta as { retrievalCoverage?: unknown }).retrievalCoverage).toBeUndefined();
+      // Exactly the cap's worth of files reached the chunk scan.
+      const scanned = new Set(ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]));
+      expect(scanned.size).toBe(100);
+    });
+
+    it('falls back to the alphabetical pick, and says so, when the ANN query fails', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockRejectedValue(new Error('mongot unavailable'));
+      const { content } = await run(ctx);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick failed'), expect.any(Error));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back without querying when the index is not queryable', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.getAtlasIndexStatus.mockResolvedValue({ queryable: false, status: 'BUILDING' });
+      const { content } = await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back, and reports the by-name cut, when a queryable index returns no hits', async () => {
+      // The mongot lag window: queryable, but no chunks indexed yet for the ready files. Ranking on
+      // [] would keep the by-name order while claiming a relevance pick and full coverage.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([]);
+      const { quest, content } = await run(ctx);
+      expect(annDb.vectorSearch).toHaveBeenCalledTimes(1);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
+    it('applies no score floor: a weak hit still ranks its file into the pick', async () => {
+      // A raw 0.1 denormalizes to -0.8, which any minScore the seam applied would drop.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([{ id: `ch-${TARGET}`, fabFileId: TARGET, text: '', score: 0.1 }]);
+      const { content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+    });
+
+    it('falls back, and reports the by-name cut, when every hit names a file outside the listing', async () => {
+      // Nothing to rank on: without this the pick would keep the input order while reporting relevance.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.vectorSearch.mockResolvedValue([{ id: 'ch-ghost', fabFileId: 'ghost', text: '', score: 0.99 }]);
+      const { quest, content } = await run(ctx);
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index returned no hits'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('selected alphabetically by file name'));
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
+    it('falls back without querying when the index status is unknown', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      annDb.getAtlasIndexStatus.mockResolvedValue(null);
+      const { content } = await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('vector index not queryable'));
+    });
+
+    it('fails closed to the by-name listing when the vector-search setting cannot be read', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const readSetting = ctx.db.adminSettings.getSettingsValue.getMockImplementation();
+      ctx.db.adminSettings.getSettingsValue.mockImplementation(async (name: string) => {
+        if (name === 'EnableDataLakeVectorSearch') throw new Error('settings store down');
+        return readSetting?.(name);
+      });
+      const { content } = await run(ctx);
+      expect(ctx.db.fabfiles.search.mock.calls[0][3]).toEqual(expect.objectContaining({ limit: 100 }));
+      expect(annDb.getAtlasIndexStatus).not.toHaveBeenCalled();
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('could not read EnableDataLakeVectorSearch - picking candidates by name'),
+        expect.any(Error)
+      );
+    });
+
+    it('issues no ANN query when the servable set already fits under the cap', async () => {
+      const { ctx, annDb } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const small = lakeFiles.slice(0, 50);
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: small, hasMore: false, total: small.length });
+      await run(ctx);
+      expect(annDb.getAtlasIndexStatus).not.toHaveBeenCalled();
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+    });
+
+    it('names the widened listing, not the candidate cap, when only the listing overflowed', async () => {
+      // <= 100 servable files, so nothing was chosen away by the cap - the 1000-row listing was the cut.
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const small = lakeFiles.slice(0, 50);
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: small, hasMore: true, total: 1500 });
+      await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('only the first 1000 by file name are considered, so'));
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('candidate cap'));
+    });
+
+    it('falls back when no candidate file is vector-index ready yet', async () => {
+      const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      const unstamped = lakeFiles.map(f => ({ ...f, chunkEmbeddingModelStampedAt: undefined }));
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: unstamped, hasMore: false, total: unstamped.length });
+      const { content } = await run(ctx);
+      expect(annDb.vectorSearch).not.toHaveBeenCalled();
+      expect(content).not.toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no candidate file is vector-index ready'));
+    });
+
+    it('still reports the by-name cut when the listing the relevance pick ranks overflowed', async () => {
+      const { ctx, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+      ctx.db.fabfiles.search = vi.fn().mockResolvedValue({ data: lakeFiles, hasMore: true, total: 1500 });
+      const { quest, content } = await run(ctx);
+      expect(content).toContain(targetHeading);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('only the first 1000 by file name are considered (and ranked by relevance)')
+      );
+      expect((quest.promptMeta as { retrievalCoverage?: { partial: boolean } }).retrievalCoverage?.partial).toBe(true);
+    });
+
+    it('falls back when the ANN query runs past its deadline', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const { ctx, annDb, warn } = makeLargeScopeCtx({ vectorSearchEnabled: true });
+        annDb.vectorSearch.mockReturnValue(new Promise(() => {}));
+        const pending = run(ctx);
+        await vi.advanceTimersByTimeAsync(3000);
+        const { content } = await pending;
+        expect(content).not.toContain(targetHeading);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick ran past 3000ms'));
+        expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('ANN candidate pick failed'), expect.anything());
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   // The injected context described the corpus only as "the curated library", while the product calls
@@ -1500,7 +1808,7 @@ describe('KnowledgeRetrievalFeature abstention when nothing is retrieved', () =>
       fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn().mockResolvedValue([]) },
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -1610,7 +1918,7 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
       },
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -1735,7 +2043,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
           ),
         },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -1886,7 +2194,7 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
   // no repo wired). Every file's single chunk scores a perfect 1.0 against the [1,0] query, so it
   // always clears the similarity floor and is injected.
   const makeCtx = (
-    files: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>,
+    files: Array<{ id: string; fileName: string; tags: Array<{ name: string }>; userId?: string }>,
     lakes?: Array<Record<string, unknown>>,
     opts: {
       dataLakesThrows?: boolean;
@@ -1938,7 +2246,7 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
             }
           : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2000,7 +2308,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     // that resolver instead: resolveEntitlementKeys resolves once (for retrieval) then rejects (for
     // the injection call), so only the wrapper's catch can save the turn.
     const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]);
-    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValueOnce([]).mockRejectedValue(new Error('boom'));
+    ctx.resolveEntitlementKeys = vi
+      .fn()
+      .mockResolvedValueOnce({ keys: [], resolved: true })
+      .mockRejectedValue(new Error('boom'));
     const contents = await run(ctx);
     expect(contents).toHaveLength(1);
     expect(contents[0]).toContain('[Knowledge Base');
@@ -2040,24 +2351,109 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
   });
 
-  it('leaves promptMeta.retrieval unset when no lake-tagged file was grounded on (site never ran)', async () => {
+  it("stamps each forced-retrieval chip with its file's lake or library origin", async () => {
     const quest = makeQuest();
     const feature = new KnowledgeRetrievalFeature(
-      makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]) as unknown as ConstructorParameters<
-        typeof KnowledgeRetrievalFeature
-      >[0]
+      makeCtx(
+        [
+          { ...lakeFile('fA', 'datalake:x'), userId: 'someone-else' },
+          { id: 'mine', fileName: 'mine.pdf', tags: [], userId: OWNER },
+        ],
+        [makeLake()]
+      ) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
     await feature.getContextMessages(
       quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'anything'
     );
-    // No datalake-tagged file was grounded on, so resolveRetrievedLakePromptMessage's own write
-    // never runs (contrast prependRetrievedLakePrompts, whose site runs even when its scoped tags
-    // resolve to no qualifying prompt) - only the coarser outcome-tracking write elsewhere in this
-    // feature touches promptMeta.retrieval here.
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toBeUndefined();
-    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBeUndefined();
+    const citables = (quest.promptMeta?.citables ?? []) as CitableSource[];
+    const originById = Object.fromEntries(citables.map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fA: { kind: 'lake', lakes: [{ id: 'lakeX', name: 'Lake X' }] },
+      mine: { kind: 'library', owned: true },
+    });
+  });
+
+  // The forced path's own lake set must keep a second lake and thread the file owner through, or a
+  // two-lake file loses a lake and the creator's prefix-only file reads as library.
+  it('names every lake a forced-retrieval file is in, and claims a prefix file only for the lake creator', async () => {
+    const quest = makeQuest();
+    const lakeY = makeLake({ id: 'lakeY', slug: 'y', name: 'Lake Y', fileTagPrefix: 'y:', datalakeTag: 'datalake:y' });
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx(
+        [
+          {
+            id: 'both',
+            fileName: 'both.pdf',
+            tags: [{ name: 'datalake:x' }, { name: 'datalake:y' }],
+            userId: 'someone-else',
+          },
+          { id: 'creatorPrefix', fileName: 'creator.pdf', tags: [{ name: 'x:notes' }], userId: OWNER },
+          { id: 'otherPrefix', fileName: 'other.pdf', tags: [{ name: 'x:notes' }], userId: 'someone-else' },
+        ],
+        [makeLake(), lakeY]
+      ) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    const citables = (quest.promptMeta?.citables ?? []) as CitableSource[];
+    const originById = Object.fromEntries(citables.map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      both: {
+        kind: 'lake',
+        lakes: [
+          { id: 'lakeX', name: 'Lake X' },
+          { id: 'lakeY', name: 'Lake Y' },
+        ],
+      },
+      creatorPrefix: { kind: 'lake', lakes: [{ id: 'lakeX', name: 'Lake X' }] },
+      otherPrefix: { kind: 'library', owned: false },
+    });
+  });
+
+  it('leaves the forced-retrieval origin off when the lake read failed', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([{ ...lakeFile('fA', 'datalake:x'), userId: 'someone-else' }], undefined, {
+        dataLakesThrows: true,
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    const citables = (quest.promptMeta?.citables ?? []) as CitableSource[];
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
+  });
+
+  it('records present-and-empty injectedLakePromptIds when no lake-tagged file was grounded on, without calling the resolver', async () => {
+    const quest = makeQuest();
+    const ctx = makeCtx([{ id: 'plain', fileName: 'plain.pdf', tags: [] }], [makeLake()]);
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    // The site still ran (it recorded attempted:true + present-and-empty ids) even though no
+    // datalake-tagged file was grounded on - "the site ran and found no lake file" must stay
+    // distinguishable from "the site never ran". But it returns BEFORE ever resolving prompts, so
+    // getAccessibleDataLakePrompts' own DB read never fires - only retrieval's OWN lake-access
+    // resolution (getDynamicDataLakeAccess) calls this same mock, once, to build the search scope.
+    // getAccessibleDataLakePrompts would be a SECOND call (with a 2-key options object, no
+    // orgGrantedLakes - getDynamicDataLakeAccess's own call carries that extra key), so pinning the
+    // count to 1 is what proves the injection resolver's read never happened.
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+    expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(0);
+    expect(ctx.db.dataLakes?.findActiveByUserTagsAndEntitlements).toHaveBeenCalledTimes(1);
   });
 
   // The field measures MEMBERSHIP in the admitted set, not causation: a lake the caller could
@@ -2204,6 +2600,69 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     );
     expect(quest.promptMeta?.retrieval?.grantedLakeIdsUsed).toBeUndefined();
   });
+
+  describe('reader opt-in arm (injectPromptForReaders)', () => {
+    // Not the creator, no org, no grant, no preauth - only the reader opt-in arm could admit this.
+    const makeReaderLake = () =>
+      makeLake({
+        createdByUserId: 'someone-else',
+        requiredUserTag: 'reader-team',
+        injectPromptForReaders: true,
+        systemPrompt: 'Reader-visible prompt.',
+      });
+
+    it('forwards the ctor readerConsentDatalakeTags arg into the injection call, admitting + recording the opt-in arm', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      getAccessibleDataLakePromptsSpy.mockClear();
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x'],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        // An extra tag for a lake this call never retrieved from - proves the resolver receives the
+        // constructor's OWN consent arg verbatim, not a derivation from retrievalTags/the retrieved
+        // datalakeTags list.
+        ['datalake:x', 'datalake:never-retrieved']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toEqual(['lakeX']);
+      expect(getAccessibleDataLakePromptsSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          readerConsentDatalakeTags: ['datalake:x', 'datalake:never-retrieved'],
+        })
+      );
+    });
+
+    it('does NOT admit the reader opt-in arm when the session grants no consent, even with retrievalTags set', async () => {
+      const quest = makeQuest();
+      const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeReaderLake()]);
+      ctx.user.tags = ['reader-team'];
+      // retrievalTags (scoping) is set, but the readerConsentDatalakeTags ctor arg (consent) is
+      // not - proving the two are independent: scoping retrieval to this lake is not, by itself,
+      // consent to inject its prompt (see ToolContext.sessionReaderConsentDatalakeTags).
+      const feature = new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        ['datalake:x']
+      );
+      await feature.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+        'anything'
+      );
+      expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual([]);
+      expect(quest.promptMeta?.retrieval?.readerOptInLakeIdsUsed).toBeUndefined();
+    });
+  });
 });
 
 /**
@@ -2244,7 +2703,7 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2410,7 +2869,7 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
         },
         ...(opts.scoped ? { scopedSettings } : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2605,7 +3064,7 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
         },
         ...(opts.withScopedOverlay === false ? {} : { scopedSettings: makeScopedSettings(opts.orgOverride) }),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2944,7 +3403,7 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         lakeAccessEvents: { record },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3127,7 +3586,13 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     createdAt: new Date(createdAt),
   });
 
-  const makeCtx = (opts: { files: Array<Record<string, unknown>>; collapseEnabled?: boolean; score?: number }) => {
+  const makeCtx = (opts: {
+    files: Array<Record<string, unknown>>;
+    collapseEnabled?: boolean;
+    score?: number;
+    hasMore?: boolean;
+    settings?: Record<string, unknown>;
+  }) => {
     const vector = vectorScoring(opts.score ?? 1);
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
@@ -3135,7 +3600,11 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
       db: {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         fabfiles: {
-          search: vi.fn().mockResolvedValue({ data: opts.files, hasMore: false, total: opts.files.length }),
+          search: vi.fn().mockResolvedValue({
+            data: opts.files,
+            hasMore: opts.hasMore ?? false,
+            total: opts.files.length,
+          }),
         },
         fabfilechunks: {
           findByFabFileId: vi.fn(),
@@ -3148,13 +3617,14 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
           findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([LAKE]),
         },
         adminSettings: {
-          getSettingsValue: vi.fn(async (key: string) =>
-            key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined
-          ),
+          getSettingsValue: vi.fn(async (key: string) => {
+            if (opts.settings && key in opts.settings) return opts.settings[key];
+            return key === 'EnableRetrievalSupersessionCollapse' ? (opts.collapseEnabled ?? false) : undefined;
+          }),
         },
         lakeAccessEvents: { record },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3248,6 +3718,8 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     expect(input).toMatchObject({
       surface: 'forced-retrieval',
       servedNothing: true,
+      // One file, whole listing: nothing was cut, so this row must not claim the cap was reached.
+      candidateCapReached: false,
       // The scope that was SEARCHED - there is no returned file whose tags could be reversed here.
       resolvedLakeIds: ['lakeZ'],
       fileIds: [],
@@ -3290,6 +3762,74 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     expect(recordedInput()).not.toHaveProperty('servedNothing');
     expect(recordedInput()?.fileIds).toEqual(['only']);
   });
+
+  it('records candidateCapReached: true on a zero row when the listing was cut off', async () => {
+    await run(makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1, hasMore: true }), ['datalake:z']);
+    expect(recordedInput()).toMatchObject({ servedNothing: true, candidateCapReached: true });
+  });
+
+  /**
+   * candidateCapReached after the >100-file candidate pick. The listing itself is whole here
+   * (`hasMore: false`), so only the pick decides the value: a relevance pick chose the candidates
+   * by ANN rank over the whole listing, so no file was cut by name, while the by-name fallback
+   * trimmed the servable set, which is a cut the row has to own. Vector search stays on in both, so
+   * the listing limit (1000) is the same and the ANN outcome is the only variable.
+   */
+  describe('candidateCapReached after candidate selection', () => {
+    const lakeFiles = Array.from({ length: 150 }, (_, i) => {
+      const n = String(i).padStart(3, '0');
+      return {
+        id: `f${n}`,
+        fileName: `doc-${n}.pdf`,
+        tags: [{ name: 'datalake:z' }],
+        vectorized: true,
+        embeddingModel: 'text-embedding-ada-002',
+        chunkCount: 1,
+        vectorizedChunkCount: 1,
+        chunkEmbeddingModelStampedAt: new Date('2026-01-01T00:00:00Z'),
+        createdAt: new Date('2025-01-01'),
+      };
+    });
+
+    const ROWS = {
+      grounded: { score: 1, retrievalTags: undefined, servedNothing: false },
+      'served-nothing': { score: 0.1, retrievalTags: ['datalake:z'], servedNothing: true },
+    } as const;
+
+    it.each([
+      { row: 'grounded', pick: 'relevance', expected: false },
+      { row: 'served-nothing', pick: 'relevance', expected: false },
+      { row: 'grounded', pick: 'by-name fallback', expected: true },
+      { row: 'served-nothing', pick: 'by-name fallback', expected: true },
+    ] as const)('$row row after a $pick pick: candidateCapReached $expected', async ({ row, pick, expected }) => {
+      const { score, retrievalTags, servedNothing } = ROWS[row];
+      const ctx = makeCtx({ files: lakeFiles, score, settings: { EnableDataLakeVectorSearch: true } });
+      const annDb = {
+        getAtlasIndexStatus: vi.fn().mockResolvedValue({ queryable: true, status: 'READY' }),
+        vectorSearch: vi.fn().mockResolvedValue([
+          { id: 'ch-f149', fabFileId: 'f149', score: 0.97 },
+          { id: 'ch-f000', fabFileId: 'f000', score: 0.2 },
+        ]),
+      };
+      if (pick === 'by-name fallback') annDb.vectorSearch.mockRejectedValue(new Error('mongot unavailable'));
+      Object.assign(ctx.db.fabfilechunks, annDb);
+
+      await run(ctx, retrievalTags ? [...retrievalTags] : undefined);
+
+      // Guards that the >100 pick ran (not the 'all' shortcut) and that the intended row fired.
+      expect(annDb.vectorSearch).toHaveBeenCalled();
+      const warnMessages = vi.mocked(ctx.logger.warn).mock.calls.map(([message]) => String(message));
+      if (pick === 'by-name fallback') {
+        expect(warnMessages).toContainEqual(expect.stringContaining('ANN candidate pick failed'));
+      } else {
+        expect(warnMessages.filter(m => m.includes('ANN candidate pick'))).toEqual([]);
+      }
+      const input = recordedInput();
+      if (servedNothing) expect(input).toMatchObject({ servedNothing: true });
+      else expect(input).not.toHaveProperty('servedNothing');
+      expect(input?.candidateCapReached).toBe(expected);
+    });
+  });
 });
 
 /**
@@ -3304,7 +3844,7 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
     personalCorpusOnly,
     // Present so a NON-skipping run gets far enough to prove it did not return early.
     db: { fabfiles: undefined, fabfilechunks: undefined },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -3384,7 +3924,7 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3525,7 +4065,7 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
       user: { id: 'u1', tags: [], groups: [] },
       personalCorpusOnly: true,
       db: {},
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       recallLakeMemory: vi.fn(),
     };
@@ -3571,7 +4111,7 @@ describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
         ),
       },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     recallLakeMemory: vi.fn().mockResolvedValue([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]),
   });
@@ -3799,7 +4339,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
             }
           : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -4146,7 +4686,7 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -4197,7 +4737,7 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };

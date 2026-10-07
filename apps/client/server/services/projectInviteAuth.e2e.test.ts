@@ -63,11 +63,6 @@ afterEach(async () => {
   await Promise.all([Project.deleteMany({}), Invite.deleteMany({})]);
 });
 
-// Each case seeds a project and drives createInvite against real Mongo. The shared 15s testTimeout
-// is sized for unit work; these need the same headroom the hooks above already take, so contention
-// shows up as slowness rather than a flaky red (vitest.shared.ts documents that intent).
-const E2E_TIMEOUT_MS = 30000;
-
 // Seeds a project owned by ownerUser, with a share-permission collaborator and an
 // update-only collaborator (no share).
 const seedProject = async () =>
@@ -91,83 +86,63 @@ const createProjectInvite = (user: unknown, projectId: string) =>
   );
 
 describe('project-invite authorization (end-to-end, real repos + Mongo)', () => {
-  it(
-    'lets the owner create a project invite',
-    async () => {
-      const project = await seedProject();
+  it('lets the owner create a project invite', async () => {
+    const project = await seedProject();
 
-      const invite = await createProjectInvite(ownerUser, String(project._id));
+    const invite = await createProjectInvite(ownerUser, String(project._id));
 
-      expect(invite.type).toBe(InviteType.Project);
-      expect(invite.name).toBe(PROJECT_NAME);
-    },
-    E2E_TIMEOUT_MS
-  );
+    expect(invite.type).toBe(InviteType.Project);
+    expect(invite.name).toBe(PROJECT_NAME);
+  });
 
-  it(
-    'lets a collaborator with share permission create a project invite',
-    async () => {
-      const project = await seedProject();
+  it('lets a collaborator with share permission create a project invite', async () => {
+    const project = await seedProject();
 
-      const invite = await createProjectInvite(shareMemberUser, String(project._id));
+    const invite = await createProjectInvite(shareMemberUser, String(project._id));
 
-      expect(invite.name).toBe(PROJECT_NAME);
-    },
-    E2E_TIMEOUT_MS
-  );
+    expect(invite.name).toBe(PROJECT_NAME);
+  });
 
-  it(
-    'rejects a collaborator who holds update but not share permission',
-    async () => {
-      const project = await seedProject();
+  it('rejects a collaborator who holds update but not share permission', async () => {
+    const project = await seedProject();
 
-      await expect(createProjectInvite(updateOnlyMemberUser, String(project._id))).rejects.toThrow(BadRequestError);
-      expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
-    },
-    E2E_TIMEOUT_MS
-  );
+    await expect(createProjectInvite(updateOnlyMemberUser, String(project._id))).rejects.toThrow(BadRequestError);
+    expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
+  });
 
-  it(
-    'rejects a caller with no relationship to the project, indistinguishably from a missing one',
-    async () => {
-      const project = await seedProject();
+  it('rejects a caller with no relationship to the project, indistinguishably from a missing one', async () => {
+    const project = await seedProject();
 
-      // Capture both rejections and compare them: asserting only a class for one and only a message
-      // for the other would let `BadRequestError('No share access to <name>')` keep this green while
-      // reintroducing the existence oracle the test is named for.
-      const denied = await createProjectInvite(outsiderUser, String(project._id)).catch((e: Error) => e);
-      const missing = await createProjectInvite(outsiderUser, '507f1f77bcf86cd799439011').catch((e: Error) => e);
+    // Capture both rejections and compare them: asserting only a class for one and only a message
+    // for the other would let `BadRequestError('No share access to <name>')` keep this green while
+    // reintroducing the existence oracle the test is named for.
+    const denied = await createProjectInvite(outsiderUser, String(project._id)).catch((e: Error) => e);
+    const missing = await createProjectInvite(outsiderUser, '507f1f77bcf86cd799439011').catch((e: Error) => e);
 
-      expect(denied).toBeInstanceOf(BadRequestError);
-      expect(missing).toBeInstanceOf(BadRequestError);
-      expect(denied.message).toBe(missing.message);
-      expect(denied.message).not.toContain(PROJECT_NAME);
-      // errorHandler spreads `additionalInfo` verbatim into the response body, so it is a second
-      // channel the message assertions above do not cover.
-      expect((denied as BadRequestError).additionalInfo).toEqual((missing as BadRequestError).additionalInfo);
+    expect(denied).toBeInstanceOf(BadRequestError);
+    expect(missing).toBeInstanceOf(BadRequestError);
+    expect(denied.message).toBe(missing.message);
+    expect(denied.message).not.toContain(PROJECT_NAME);
+    // errorHandler spreads `additionalInfo` verbatim into the response body, so it is a second
+    // channel the message assertions above do not cover.
+    expect((denied as BadRequestError).additionalInfo).toEqual((missing as BadRequestError).additionalInfo);
 
-      expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
-    },
-    E2E_TIMEOUT_MS
-  );
+    expect(await inviteRepository.findAllByDocumentId(String(project._id))).toHaveLength(0);
+  });
 
-  it(
-    'lets a collaborator whose share grant comes from a group create a project invite',
-    async () => {
-      // The third arm of findShareAccessById (groups[].share) is otherwise unexercised on this path.
-      const project = await Project.create({
-        name: PROJECT_NAME,
-        description: 'd',
-        userId: ownerUser.id,
-        sessionIds: [],
-        fileIds: [],
-        groups: [{ groupId: 'grp-1', permissions: [Permission.share] }],
-      });
+  it('lets a collaborator whose share grant comes from a group create a project invite', async () => {
+    // The third arm of findShareAccessById (groups[].share) is otherwise unexercised on this path.
+    const project = await Project.create({
+      name: PROJECT_NAME,
+      description: 'd',
+      userId: ownerUser.id,
+      sessionIds: [],
+      fileIds: [],
+      groups: [{ groupId: 'grp-1', permissions: [Permission.share] }],
+    });
 
-      const invite = await createProjectInvite({ ...outsiderUser, groups: ['grp-1'] }, String(project._id));
+    const invite = await createProjectInvite({ ...outsiderUser, groups: ['grp-1'] }, String(project._id));
 
-      expect(invite.name).toBe(PROJECT_NAME);
-    },
-    E2E_TIMEOUT_MS
-  );
+    expect(invite.name).toBe(PROJECT_NAME);
+  });
 });

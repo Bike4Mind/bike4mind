@@ -1,10 +1,11 @@
 {
   "name": "@bike4mind/utils",
-  "version": "6.2.0",
+  "version": "6.6.0",
   "publishConfig": {
     "access": "restricted"
   },
   "type": "module",
+  "sideEffects": false,
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.mts",
@@ -139,6 +140,16 @@
         "default": "./dist/registrableDomain.cjs"
       }
     },
+    "./videoProviders": {
+      "import": {
+        "types": "./dist/videoProviders/index.d.mts",
+        "default": "./dist/videoProviders/index.mjs"
+      },
+      "require": {
+        "types": "./dist/videoProviders/index.d.cts",
+        "default": "./dist/videoProviders/index.cjs"
+      }
+    },
     "./security": {
       "import": {
         "types": "./dist/security/index.d.mts",
@@ -177,12 +188,12 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
-    "axios": "1.18.0",
+    "axios": "1.20.0",
     "cheerio": "1.2.0",
     "csv-parse": "^7.0.2",
     "dayjs": "^1.11.23",
     "file-type": "^22.1.0",
-    "image-size": "^1.2.1",
+    "image-size": "^2.0.3",
     "jimp": "^1.6.1",
     "jszip": "^3.10.2",
     "lodash": "^4.18.1",
@@ -200,6 +211,7 @@
     "@types/aws-lambda": "^8.10.162",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
+    "esbuild": "0.28.1",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3"
   }

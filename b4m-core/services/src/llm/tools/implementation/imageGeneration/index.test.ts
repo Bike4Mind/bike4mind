@@ -201,6 +201,21 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
     expect(quality.enum).toEqual(['standard', 'hd', 'low', 'medium', 'high']);
   });
 
+  it('adds xhigh and max only when the configured model is a gpt-image-2.5 model', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.GPT_IMAGE_2_5_FLARE,
+    });
+    expect(toolSchema.parameters.properties.quality.enum).toEqual([
+      'standard',
+      'hd',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+  });
+
   // #2936: the schema advertised five sizes but the calculator prices three, so four of them
   // rendered at the asked-for size and billed at the 1024x1024 row. Offer only priceable sizes.
   it('offers only sizes the cost calculator can price in the tool schema', () => {
@@ -280,7 +295,8 @@ describe('image_generation BFL branch dimensions', () => {
 
     await toolFn({ prompt: 'a red bike' });
 
-    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1440, height: 810 }));
+    // 810 is off BFL's 32px grid, so it reaches BFL rounded to 800.
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1440, height: 800 }));
   });
 
   it('derives width/height from the tool call size when imageConfig has none', async () => {
@@ -301,12 +317,12 @@ describe('image_generation BFL branch dimensions', () => {
       model: ImageModels.FLUX_PRO_1_1,
       size: '1440x810',
       width: 800,
-      height: 600,
+      height: 640,
     });
 
     await toolFn({ prompt: 'a red bike' });
 
-    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 800, height: 600 }));
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 800, height: 640 }));
   });
 
   it('discards a preset BFL would reject rather than forwarding it', async () => {

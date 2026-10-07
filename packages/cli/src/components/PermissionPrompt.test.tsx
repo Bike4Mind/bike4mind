@@ -33,6 +33,11 @@ describe('escapeTerminalControlChars', () => {
     expect(escapeTerminalControlChars('a\u2066b')).toContain('\\u2066'); // isolate boundary
   });
 
+  it('escapes C1 controls such as the 8-bit CSI', () => {
+    const escaped = escapeTerminalControlChars('a\u009b2Kb\u0085c');
+    expect(escaped).toBe('a\\x9b2Kb\\x85c');
+  });
+
   it('leaves ordinary text, tabs and newlines intact', () => {
     const text = 'line one\n\tindented\nline two';
     expect(escapeTerminalControlChars(text)).toBe(text);
@@ -68,5 +73,21 @@ describe('PermissionPrompt Arguments block', () => {
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('\\u202e');
     expect(frame).not.toContain('\u202e');
+  });
+
+  it('escapes the tool name and description', () => {
+    const { lastFrame } = render(
+      <PermissionPrompt
+        toolName={'mcp_tool\u202eevil'}
+        toolDescription={'read file\rdelete file'}
+        args={{}}
+        canBeTrusted
+        onResponse={() => {}}
+      />
+    );
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('mcp_tool\\u202eevil');
+    expect(frame).toContain('read file\\x0ddelete file');
+    expect(frame).not.toContain('\r');
   });
 });

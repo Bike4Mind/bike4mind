@@ -50,6 +50,18 @@ describe('describeDriveConnection', () => {
     expect(color).toBe('success');
   });
 
+  it('labels a stalled sync as such and points at Re-sync', () => {
+    const { label, title, color } = describeDriveConnection(conn({ status: 'syncing', syncStale: true }));
+    expect(label).toBe('Sync stalled');
+    expect(title).toContain('Re-sync');
+    expect(color).toBe('warning');
+  });
+
+  it('lets a pending disconnect win over a stalled sync', () => {
+    const { label } = describeDriveConnection(conn({ status: 'syncing', syncStale: true, disconnecting: true }));
+    expect(label).toBe('Disconnecting');
+  });
+
   it('does not dress an in-flight sync as stopped-short using the PREVIOUS run error', () => {
     const { label, title } = describeDriveConnection(conn({ status: 'syncing', lastError: 'a previous failure' }));
     expect(label).toBe('Syncing');
@@ -62,6 +74,12 @@ describe('describeDriveConnection', () => {
     const rogue = conn({ status: 'a_status_from_the_future' as never });
     expect(() => describeDriveConnection(rogue)).not.toThrow();
     expect(describeDriveConnection(rogue).color).toBe('warning');
+  });
+
+  it('reports a pending disconnect ahead of any status or error', () => {
+    const { label, color } = describeDriveConnection(conn({ disconnecting: true, lastError: 'old failure' }));
+    expect(label).toBe('Disconnecting');
+    expect(color).toBe('warning');
   });
 
   it('falls back to the folder id when Drive gave us no folder name', () => {

@@ -31,7 +31,7 @@ export const remove = async (
 
   researchAgent.deletedAt = new Date();
 
-  await db.researchAgents.update(researchAgent);
+  await db.researchAgents.update({ id: researchAgent.id, deletedAt: researchAgent.deletedAt });
 
   await db.researchTasks.updateManyByResearchAgentId(id, {
     deletedAt: new Date(),

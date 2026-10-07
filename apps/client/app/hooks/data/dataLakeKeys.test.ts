@@ -27,6 +27,14 @@ describe('dataLakeKeys parity', () => {
     expect(dataLakeKeys.preauthorizableFor('u1')).not.toEqual(dataLakeKeys.preauthorizableFor('u2'));
   });
 
+  it('per-lake source connections: Drive and GitHub stay separate roots', () => {
+    expect(dataLakeKeys.driveConnection('lake1')).toEqual(['lake-drive-connection', 'lake1']);
+    expect(dataLakeKeys.driveConnectionRoot).toEqual(['lake-drive-connection']);
+    expect(dataLakeKeys.gitHubConnection('lake1')).toEqual(['lake-github-connection', 'lake1']);
+    expect(dataLakeKeys.gitHubConnectionRoot).toEqual(['lake-github-connection']);
+    expect(dataLakeKeys.gitHubRepositoryChoices('lake1')).toEqual(['lake-github-repository-choices', 'lake1']);
+  });
+
   it('per-lake files: query key, per-lake invalidation prefix, global root', () => {
     expect(dataLakeKeys.files('lake1', { limit: 100 })).toEqual(['dataLakeFiles', 'lake1', { limit: 100 }]);
     expect(dataLakeKeys.files('lake1', undefined)).toEqual(['dataLakeFiles', 'lake1', undefined]);

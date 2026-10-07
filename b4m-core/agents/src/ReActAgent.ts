@@ -9,6 +9,7 @@ import type {
   AgentResult,
   AgentRunOptions,
   AgentStep,
+  FeedbackDrainPhase,
   GatedToolCall,
   IterationResult,
   RunIterationOptions,
@@ -127,6 +128,33 @@ function appendWorkflowReminder(messages: IMessage[], provider?: () => string | 
   const body = provider()?.trim();
   if (body) {
     messages.push({ role: 'user', content: `${WORKFLOW_REMINDER_MARKER}\n${body}` });
+  }
+}
+
+const TOOL_RESULTS_NUDGE =
+  'Based on the tool results above, please provide a complete answer. If I asked for multiple things, make sure to address all of them.';
+
+/**
+ * The end-of-iteration nudge, with any drained host feedback folded in. Folding
+ * (rather than pushing a second plain-string user message) keeps exactly one
+ * iteration boundary for findIterationBoundary's trimming heuristic.
+ */
+function buildToolResultsNudge(feedback: string | null): string {
+  return feedback ? `${TOOL_RESULTS_NUDGE}\n\n${feedback}` : TOOL_RESULTS_NUDGE;
+}
+
+/** Calls the host's feedback drain. A failing drain is logged and treated as empty - it must never fail the run. */
+async function drainHostFeedback(
+  drain: AgentRunOptions['drainFeedback'],
+  phase: FeedbackDrainPhase,
+  logger: AgentContext['logger']
+): Promise<string | null> {
+  if (!drain) return null;
+  try {
+    return (await drain(phase))?.trim() || null;
+  } catch (error) {
+    logger.warn(`[ReActAgent] drainFeedback(${phase}) failed; continuing without feedback:`, error);
+    return null;
   }
 }
 
@@ -701,7 +729,13 @@ export class ReActAgent extends EventEmitter {
         // was visible mid-stream. When subagent LLM calls use `stream: true`,
         // an in-callback guard would fire on the model's preamble before
         // tool_use blocks assembled, terminating tool-using runs at iteration 1.
-        if (!hadToolCalls && currentText.trim()) {
+        const finalFeedback =
+          !hadToolCalls && currentText.trim() && iterations < maxIterations
+            ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+            : null;
+        if (finalFeedback) {
+          this.reopenAnswerWithFeedback(messages, currentText.trim(), finalFeedback);
+        } else if (!hadToolCalls && currentText.trim()) {
           finalAnswer = currentText.trim();
 
           // preCall* is the pre-LLM-call snapshot; nothing mutates the token
@@ -766,10 +800,8 @@ export class ReActAgent extends EventEmitter {
         // After tools complete, nudge the agent to provide the final answer
         // This prevents the agent from forgetting the user's specific requirements (e.g., "list in detail")
         if (!iterationComplete && hadToolCalls) {
-          messages.push({
-            role: 'user',
-            content: `Based on the tool results above, please provide a complete answer. If I asked for multiple things, make sure to address all of them.`,
-          });
+          const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+          messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
         }
 
         // Cost backstop: if cumulative tokens exceed the configured ceiling, exit cleanly.
@@ -942,6 +974,20 @@ BEHAVIOR GUIDELINES:
 - Only ask for clarification after exhausting reasonable attempts
 
 Remember: You are an autonomous AGENT. Act independently and solve problems proactively.`;
+  }
+
+  /**
+   * Demote a would-be final answer to a thought and hand the model drained host
+   * feedback (see AgentRunOptions.drainFeedback) as the next user message, so
+   * the loop runs another iteration instead of ending. The user message is a
+   * plain string and so is a normal iteration boundary for trimming.
+   */
+  private reopenAnswerWithFeedback(messages: IMessage[], answer: string, feedback: string): AgentStep {
+    const thoughtStep: AgentStep = { type: 'thought', content: answer, metadata: { timestamp: Date.now() } };
+    this.steps.push(thoughtStep);
+    this.emit('thought', thoughtStep);
+    messages.push({ role: 'assistant', content: answer }, { role: 'user', content: feedback });
+    return thoughtStep;
   }
 
   /**
@@ -1433,7 +1479,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       // Final-answer decision deferred from the streaming callback. See the
       // matching comment in `run()` for full rationale.
-      if (!hadToolCalls && currentText.trim()) {
+      const finalFeedback =
+        !hadToolCalls && currentText.trim() && this.iterations < maxIterations
+          ? await drainHostFeedback(options.drainFeedback, 'final', this.context.logger)
+          : null;
+      if (finalFeedback) {
+        iterationSteps.push(this.reopenAnswerWithFeedback(this.messages, currentText.trim(), finalFeedback));
+      } else if (!hadToolCalls && currentText.trim()) {
         finalAnswer = currentText.trim();
 
         const iterInputTokens = this.totalInputTokens - iterStartInputTokens;
@@ -1495,11 +1547,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       // Add nudge for next iteration if tools were called but no final answer
       if (!iterationComplete && hadToolCalls) {
-        this.messages.push({
-          role: 'user',
-          content:
-            'Based on the tool results above, please provide a complete answer. If I asked for multiple things, make sure to address all of them.',
-        } as IMessage);
+        const feedback = await drainHostFeedback(options.drainFeedback, 'turn', this.context.logger);
+        this.messages.push({ role: 'user', content: buildToolResultsNudge(feedback) });
       }
 
       // Cost backstop: if cumulative tokens exceeded the ceiling, terminate this run.
@@ -1997,7 +2046,7 @@ export function parseToolArgsLenient(
  */
 function stripCodeFence(input: string): string {
   const trimmed = input.trim();
-  const fenceMatch = trimmed.match(/^```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```$/);
+  const fenceMatch = trimmed.match(/^```(?:json|JSON)?([\s\S]*?)```$/);
   return fenceMatch ? fenceMatch[1].trim() : input;
 }
 

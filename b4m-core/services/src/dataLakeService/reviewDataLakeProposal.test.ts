@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeProposalDocument } from '@bike4mind/common';
 import { FabFileSourceType } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { approveDataLakeProposal, declineDataLakeProposal } from './reviewDataLakeProposal';
+import { approveDataLakeProposal, declineDataLakeProposal, restoreDataLakeProposal } from './reviewDataLakeProposal';
 import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 
 const OWNER = 'owner-1';
@@ -62,12 +62,14 @@ const adapters = (
   const recordAdmission = vi.fn(async () => undefined);
   const releaseClaim = vi.fn(async () => undefined);
   const admitSource = over.admitSource ?? vi.fn(async () => ({ id: 'file-9', fileName: 'Quarterly report' }));
+  const record = vi.fn(async () => undefined);
   return {
     deps: {
       db: {
         dataLakeProposals: { findById, claimForReview, recordAdmission, releaseClaim },
         dataLakes: { findById: vi.fn(async () => (over.lake === undefined ? lake() : over.lake)) },
         ...(over.grants ? { dataLakeAccessGrants: { listByLake: vi.fn(async () => over.grants as never) } } : {}),
+        lakeConfigChangeEvents: { record },
       },
       admitSource,
     },
@@ -76,6 +78,7 @@ const adapters = (
     recordAdmission,
     releaseClaim,
     admitSource,
+    record,
   };
 };
 
@@ -191,7 +194,10 @@ describe('approveDataLakeProposal', () => {
   // source, not their click) nor the consequence (nothing admitted, proposal still queued).
   it('rewrites a raw fetch failure into something the reviewer can act on', async () => {
     const admitSource = vi.fn(async () => {
-      throw Object.assign(new Error('Request failed with status code 404'), { response: { status: 404 } });
+      throw Object.assign(new Error('Request failed with status code 404'), {
+        response: { status: 404 },
+        isAxiosError: true,
+      });
     });
     const { deps, releaseClaim } = adapters({ admitSource });
 
@@ -199,6 +205,96 @@ describe('approveDataLakeProposal', () => {
       /Could not add this source: the source returned HTTP 404\. Nothing was added to the lake/
     );
     expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+  });
+
+  it('reports a source HTTP failure as a bad gateway, not a bad request', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('Request failed with status code 503'), {
+        response: { status: 503 },
+        isAxiosError: true,
+      });
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toMatchObject({ statusCode: 502 });
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a source timeout once and succeeds when the second fetch answers', async () => {
+    const timeout = Object.assign(new Error('timeout of 9725ms exceeded'), {
+      code: 'ECONNABORTED',
+      isAxiosError: true,
+    });
+    const { deps, admitSource, releaseClaim } = adapters();
+    admitSource.mockRejectedValueOnce(timeout);
+
+    const result = await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.fabFile.id).toBe('file-9');
+    expect(admitSource).toHaveBeenCalledTimes(2);
+    expect(admitSource.mock.calls[1][1]).toEqual(admitSource.mock.calls[0][1]);
+    expect(releaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('reports a timeout that survives the retry as a gateway timeout and releases the claim', async () => {
+    const admitSource = vi.fn(async () => {
+      throw new Error('timeout of 9725ms exceeded');
+    });
+    const { deps, releaseClaim } = adapters({ admitSource });
+
+    const rejection = approveDataLakeProposal('prop-1', ctx(), deps);
+    await expect(rejection).rejects.toMatchObject({ statusCode: 504, expected: true });
+    await expect(rejection).rejects.toThrow(/did not respond in time\. Nothing was added to the lake/);
+    expect(admitSource).toHaveBeenCalledTimes(2);
+    expect(releaseClaim).toHaveBeenCalledWith('prop-1');
+  });
+
+  // A storage socket timeout happens AFTER the row is written, so retrying it could admit twice.
+  it('does not retry an ETIMEDOUT that did not come from the source fetch', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('socket hang up'), { code: 'ETIMEDOUT' });
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow();
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an unreachable source as a bad gateway without retrying', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), {
+        code: 'ENOTFOUND',
+        isAxiosError: true,
+      });
+    });
+    const { deps } = adapters({ admitSource });
+
+    await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toMatchObject({ statusCode: 502 });
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  // createFabFileByUrl rethrows storage-upload errors from the same catch the fetch does, and a
+  // reset on that side is an infrastructure failure, not evidence the source site is down - it must
+  // not be misclassified as a "the reviewer can just retry" 502.
+  it('does not classify a storage-upload reset as an unreachable source', async () => {
+    const admitSource = vi.fn(async () => {
+      throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    });
+    const { deps } = adapters({ admitSource });
+
+    const rejection = approveDataLakeProposal('prop-1', ctx(), deps);
+    await expect(rejection).rejects.toMatchObject({ message: 'socket hang up', code: 'ECONNRESET' });
+    await expect(rejection).rejects.not.toHaveProperty('statusCode');
+    await expect(rejection).rejects.not.toHaveProperty('expected');
+    expect(admitSource).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the approver name on the admitted file when the route supplies one', async () => {
+    const { deps, admitSource } = adapters();
+
+    await approveDataLakeProposal('prop-1', ctx(), deps, { approverName: 'Pat Reviewer' });
+
+    expect(admitSource.mock.calls[0][1].provenance.sourceMetadata).toMatchObject({ approvedByName: 'Pat Reviewer' });
   });
 
   it('keeps a fetch failure with no status readable', async () => {
@@ -251,6 +347,40 @@ describe('approveDataLakeProposal', () => {
     await expect(approveDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(BadRequestError);
     expect(admitSource).not.toHaveBeenCalled();
   });
+
+  // Approving a proposal left no trace in the lake's History tab - reviewDataLakeProposal
+  // never called recordLakeConfigChange at all.
+  it('records an approve-proposal history event naming the source and the reviewer', async () => {
+    const { deps, record } = adapters();
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalId: OWNER,
+        dataLakeId: 'lake-1',
+        action: 'approve-proposal',
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'approved: Quarterly report (https://example.com/report)',
+          },
+        ],
+      })
+    );
+  });
+
+  it('still reports success when the history event fails to record', async () => {
+    const { deps, record } = adapters();
+    record.mockRejectedValue(new Error('replica set stepped down'));
+
+    // Best-effort like recordAdmission: an audit-write failure must never turn approved work into a
+    // reported failure the reviewer cannot act on.
+    const result = await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(result.fabFile.id).toBe('file-9');
+  });
 });
 
 describe('declineDataLakeProposal', () => {
@@ -291,6 +421,114 @@ describe('declineDataLakeProposal', () => {
     await declineDataLakeProposal('prop-1', ctx(), {}, deps);
 
     expect(claimForReview).toHaveBeenCalled();
+  });
+
+  it('records a decline-proposal history event', async () => {
+    const { deps, record } = adapters();
+
+    await declineDataLakeProposal('prop-1', ctx(), { reason: 'paywalled' }, deps);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'decline-proposal',
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'declined: Quarterly report (https://example.com/report)',
+          },
+        ],
+      })
+    );
+  });
+});
+
+describe('restoreDataLakeProposal', () => {
+  const declined = () => proposal({ status: 'declined', excerpt: null, declineReason: 'paywalled' });
+  const restoreAdapters = (
+    over: {
+      found?: IDataLakeProposalDocument | null;
+      latest?: IDataLakeProposalDocument | null;
+      result?: Awaited<ReturnType<typeof restoreDataLakeProposal>> | 'not_declined' | 'pending_exists';
+    } = {}
+  ) => {
+    const found = over.found === undefined ? declined() : over.found;
+    const restoreDeclined = vi.fn(async () =>
+      over.result === 'not_declined' || over.result === 'pending_exists'
+        ? ({ restored: false, reason: over.result } as const)
+        : ({ restored: true, proposal: { ...(found as IDataLakeProposalDocument), status: 'pending' } } as const)
+    );
+    const record = vi.fn(async () => undefined);
+    return {
+      deps: {
+        db: {
+          dataLakeProposals: {
+            findById: vi.fn(async () => found),
+            findLatestBySourceKey: vi.fn(async () => (over.latest === undefined ? found : over.latest)),
+            restoreDeclined,
+          },
+          dataLakes: { findById: vi.fn(async () => lake()) },
+          lakeConfigChangeEvents: { record },
+        },
+      },
+      restoreDeclined,
+      record,
+    };
+  };
+
+  it('returns a declined proposal to the pending queue', async () => {
+    const { deps, restoreDeclined } = restoreAdapters();
+
+    const result = await restoreDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(restoreDeclined).toHaveBeenCalledWith('prop-1');
+    expect(result.status).toBe('pending');
+  });
+
+  it('refuses a proposal that is not declined', async () => {
+    const { deps, restoreDeclined } = restoreAdapters({ found: proposal() });
+
+    await expect(restoreDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(BadRequestError);
+    expect(restoreDeclined).not.toHaveBeenCalled();
+  });
+
+  it('refuses a tombstone a later proposal for the same source has superseded', async () => {
+    const { deps, restoreDeclined } = restoreAdapters({ latest: proposal({ id: 'prop-2', status: 'approved' }) });
+
+    await expect(restoreDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/proposed again/);
+    expect(restoreDeclined).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the source already has a pending proposal', async () => {
+    const { deps } = restoreAdapters({ result: 'pending_exists' });
+
+    await expect(restoreDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/already waiting/);
+  });
+
+  it('refuses a caller who cannot manage the lake, as a 403', async () => {
+    const { deps, restoreDeclined } = restoreAdapters();
+
+    await expect(restoreDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(ForbiddenError);
+    expect(restoreDeclined).not.toHaveBeenCalled();
+  });
+
+  it('records a restore-proposal history event', async () => {
+    const { deps, record } = restoreAdapters();
+
+    await restoreDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'restore-proposal',
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'restored: Quarterly report (https://example.com/report)',
+          },
+        ],
+      })
+    );
   });
 });
 
@@ -334,6 +572,21 @@ describe('approveDataLakeProposal - admission runs the real lake-tag gate', () =
 
     expect(result.fabFile.id).toBe('file-9');
     expect(releaseClaim).not.toHaveBeenCalled();
+  });
+
+  // Pins the rung the History row is recorded under, not just that the approval succeeds - dropping
+  // the `grants` `resolveReviewable` returns would still let this approval through (the admission
+  // door re-gates independently) while silently mis-attributing the write to owner/system.
+  it('records the approval under the curator manage rung, not owner or system', async () => {
+    const admitSource = admitVia({
+      ...lakeDb,
+      dataLakeAccessGrants: grantsFor(curatorGrant),
+    } as never);
+    const { deps, record } = adapters({ lake: orgLake, admitSource, grants: curatorGrant });
+
+    await approveDataLakeProposal('prop-1', ctx({ userId: CURATOR }), deps);
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ manageRung: 'grant-curator' }));
   });
 
   it('lets an ORG ADMIN of the lake org complete an approval', async () => {

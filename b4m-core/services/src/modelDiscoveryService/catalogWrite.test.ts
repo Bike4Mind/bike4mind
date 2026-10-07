@@ -8,6 +8,11 @@ import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
 import { describe, expect, it } from 'vitest';
 import { testCredentials } from './__fixtures__/fakes';
 import { DISCOVERY_CONTRIBUTOR, planCatalogWrites, type CatalogWriteInput } from './catalogWrite';
+import {
+  normalizeBedrockModels,
+  type BedrockAvailability,
+  type BedrockFoundationModelSummary,
+} from './sources/bedrock';
 import type { DiscoveredModel } from './types';
 
 const RUN_AT = new Date('2026-07-26T10:00:00Z');
@@ -86,6 +91,211 @@ describe('planCatalogWrites', () => {
       lifecycle: { status: 'discovered' },
       autoDisabled: true,
       autoDisabledReason: 'discovered, awaiting price',
+    });
+  });
+
+  // A source that disabled the model this run (Bedrock: not invocable on demand, not entitled) has
+  // already answered the invocability question; promotion must not flip it back to enabled.
+  it('does not promote a model its source disabled this run, and keeps the source reason', () => {
+    const result = plan({
+      resolveDispatch: dispatchable,
+      contributions: [
+        {
+          name: 'openai',
+          kind: 'provider',
+          records: [
+            {
+              ...gpt6({ autoDisabled: true, autoDisabledReason: 'not invocable on demand' }),
+              pricing: { inputPerMTok: 2, outputPerMTok: 8 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.diff[0]).toMatchObject({
+      promoted: false,
+      lifecycleStatus: 'discovered',
+      blockedBy: ['disabled-by-source'],
+    });
+    expect(result.rows[0].patch).toMatchObject({
+      autoDisabled: true,
+      autoDisabledReason: 'not invocable on demand',
+    });
+  });
+
+  // The prod shape: a bare Bedrock id promoted on an earlier run is ACTIVE, so promotion never
+  // re-decides it. The source's disable still has to land on the row, or the fix never reaches it.
+  it('disables an already-active model when its source disables it', () => {
+    const priced = { name: 'openai', kind: 'provider' as const };
+    const first = plan({
+      resolveDispatch: dispatchable,
+      contributions: [{ ...priced, records: [{ ...gpt6(), pricing: { inputPerMTok: 2, outputPerMTok: 8 } }] }],
+    });
+    expect(first.diff[0]).toMatchObject({ promoted: true, lifecycleStatus: 'active' });
+
+    const second = plan({
+      resolveDispatch: dispatchable,
+      base: asBase(first.rows),
+      contributions: [
+        {
+          ...priced,
+          records: [
+            {
+              ...gpt6({ autoDisabled: true, autoDisabledReason: 'not invocable on demand' }),
+              pricing: { inputPerMTok: 2, outputPerMTok: 8 },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(second.rows[0].patch).toMatchObject({
+      autoDisabled: true,
+      autoDisabledReason: 'not invocable on demand',
+    });
+  });
+
+  // End to end through the real normalizer: what lifts a disable is the listing and the availability
+  // answer Bedrock gives, not a patch shape a test hand-writes.
+  describe('a disable the Bedrock source put on a row', () => {
+    const MODEL = 'anthropic.claude-opus-9-v1:0';
+    const available: BedrockAvailability = {
+      modelId: MODEL,
+      authorizationStatus: 'AUTHORIZED',
+      entitlementAvailability: 'AVAILABLE',
+      regionAvailability: 'AVAILABLE',
+    };
+    const summary = (inferenceTypesSupported: string[]): BedrockFoundationModelSummary => ({
+      modelId: MODEL,
+      modelName: 'Claude Opus 9',
+      providerName: 'Anthropic',
+      inputModalities: ['TEXT'],
+      outputModalities: ['TEXT'],
+      responseStreamingSupported: true,
+      inferenceTypesSupported,
+      modelLifecycle: { status: 'ACTIVE' },
+    });
+    const bedrockDispatch: CatalogWriteInput['resolveDispatch'] = record =>
+      record.backend === ModelBackend.Bedrock
+        ? {
+            adapterFamily: 'bedrock-anthropic',
+            dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+          }
+        : null;
+
+    const bedrockRun = (
+      inferenceTypes: string[],
+      entitlement?: BedrockAvailability,
+      previous?: IModelCatalogRowInput
+    ): Partial<CatalogWriteInput> => ({
+      contributions: [
+        {
+          name: 'bedrock',
+          kind: 'provider',
+          records: normalizeBedrockModels({
+            summaries: [summary(inferenceTypes)],
+            availability: entitlement ? new Map([[MODEL, entitlement]]) : undefined,
+          }).map(record => ({ ...record, pricing: { inputPerMTok: 15, outputPerMTok: 75 } })),
+        },
+      ],
+      coveredBackends: new Set<string>([ModelBackend.Bedrock]),
+      resolveDispatch: bedrockDispatch,
+      // What runModelDiscovery hands the next run: the discovery row in force, its groups and credits.
+      ...(previous && {
+        base: asBase([previous]),
+        priorDiscoveryGroups: new Map([[MODEL, previous.ownedGroups]]),
+        priorContributors: new Map([[MODEL, previous.contributors ?? []]]),
+      }),
+    });
+
+    /** Promoted on a healthy run, then disabled by a later listing that dropped ON_DEMAND. */
+    const disabledWhileActive = () => {
+      const first = plan(bedrockRun(['ON_DEMAND']));
+      expect(first.diff[0]).toMatchObject({ promoted: true, lifecycleStatus: 'active' });
+      const second = plan(bedrockRun(['INFERENCE_PROFILE'], undefined, first.rows[0]));
+      expect(second.rows[0].patch).toMatchObject({ autoDisabled: true, autoDisabledReason: /inference profile/ });
+      return second.rows[0];
+    };
+
+    it('promotes a discovered row once a later run lists it on demand', () => {
+      const first = plan(bedrockRun(['INFERENCE_PROFILE']));
+      expect(first.diff[0]).toMatchObject({ lifecycleStatus: 'discovered', blockedBy: ['disabled-by-source'] });
+
+      const second = plan(bedrockRun(['ON_DEMAND'], available, first.rows[0]));
+
+      expect(second.diff[0]).toMatchObject({ promoted: true, lifecycleStatus: 'active', blockedBy: [] });
+      expect(second.rows[0].patch).toMatchObject({ lifecycle: { status: 'active' }, autoDisabled: false });
+      expect(second.rows[0].patch).not.toHaveProperty('autoDisabledReason');
+    });
+
+    // Promotion never re-decides an active row, so without the clearance this disable was sticky.
+    it('re-enables an active row once its source confirms the model can be called', () => {
+      const disabled = disabledWhileActive();
+
+      const next = plan(bedrockRun(['ON_DEMAND'], available, disabled));
+
+      expect(next.diff[0]).toMatchObject({
+        lifecycleStatus: 'active',
+        changedKeys: ['autoDisabled', 'autoDisabledReason'],
+      });
+      expect(next.rows[0].patch).toMatchObject({ autoDisabled: false });
+      expect(next.rows[0].patch).not.toHaveProperty('autoDisabledReason');
+      expect(asBase(next.rows).get(MODEL)?.record).toMatchObject({ autoDisabled: false });
+    });
+
+    it('keeps the disable when the run had no availability answer to confirm it by', () => {
+      const disabled = disabledWhileActive();
+
+      expect(plan(bedrockRun(['ON_DEMAND'], undefined, disabled)).rows).toHaveLength(0);
+    });
+
+    it('keeps the entitlement disable while the account is still not entitled', () => {
+      const first = plan(bedrockRun(['ON_DEMAND']));
+      const unentitled = { ...available, authorizationStatus: 'NOT_AUTHORIZED' };
+      const disabled = plan(bedrockRun(['ON_DEMAND'], unentitled, first.rows[0])).rows[0];
+      expect(disabled.patch).toMatchObject({ autoDisabledReason: 'not entitled in this AWS account' });
+
+      expect(plan(bedrockRun(['ON_DEMAND'], unentitled, disabled)).rows).toHaveLength(0);
+    });
+
+    it('leaves a manual disable in force when it lifts its own', () => {
+      const disabled = disabledWhileActive();
+      const next = plan(bedrockRun(['ON_DEMAND'], available, disabled));
+
+      const merged = asBase(next.rows, [
+        operatorRow({ id: MODEL, disabled: true, disabledReason: 'paused by an operator' }, ['availability']),
+      ]);
+
+      expect(next.rows[0].patch).not.toHaveProperty('disabled');
+      expect(merged.get(MODEL)?.record).toMatchObject({ disabled: true, disabledReason: 'paused by an operator' });
+    });
+
+    it('does not lift a disable some other writer put on the row', () => {
+      const seeded = asBase(
+        [],
+        [
+          seedRow(
+            {
+              id: MODEL,
+              vendor: 'anthropic',
+              backend: 'bedrock',
+              type: 'text',
+              name: 'Claude Opus 9',
+              contextWindow: 200_000,
+              lifecycle: { status: 'active' },
+              autoDisabled: true,
+              autoDisabledReason: 'shipped disabled',
+            },
+            ['identity', 'limits', 'lifecycle', 'availability']
+          ),
+        ]
+      );
+
+      const result = plan({ ...bedrockRun(['ON_DEMAND'], available), base: seeded });
+
+      for (const row of result.rows) expect(row.ownedGroups).not.toContain('availability');
+      for (const entry of result.diff) expect(entry.changedKeys).not.toContain('autoDisabled');
     });
   });
 
@@ -565,6 +775,88 @@ describe('planCatalogWrites', () => {
     ]);
     expect(result.rows[0].patch).not.toHaveProperty('rank');
     expect(result.rows[0].patch).toMatchObject({ adapterFamily: 'openai-chat' });
+  });
+
+  describe('a feed-reported releaseDate', () => {
+    const withReleaseDate = (releaseDate?: string) => [
+      { name: 'openai', kind: 'provider' as const, records: [gpt6()] },
+      {
+        name: 'models.dev',
+        kind: 'aggregator' as const,
+        records: [{ modelId: 'gpt-6', patch: { supportsTools: true, ...(releaseDate ? { releaseDate } : {}) } }],
+      },
+    ];
+
+    it('claims presentation for a model no seed or operator row presents', () => {
+      const result = plan({ resolveDispatch: dispatchable, contributions: withReleaseDate('2026-09-01') });
+
+      expect(result.rows[0].patch).toMatchObject({ releaseDate: '2026-09-01' });
+      expect(result.rows[0].ownedGroups).toContain('presentation');
+      expect(result.rows[0].contributors).toContainEqual({ group: 'presentation', source: 'models.dev' });
+      expect(result.dropped.map(drop => drop.reason)).not.toContain('field "releaseDate" is seed- or operator-owned');
+    });
+
+    it('keeps the date in force when a later run reports none', () => {
+      const first = plan({ resolveDispatch: dispatchable, contributions: withReleaseDate('2026-09-01') });
+      const second = plan({
+        resolveDispatch: dispatchable,
+        base: asBase(first.rows),
+        priorDiscoveryGroups: new Map([['gpt-6', first.rows[0].ownedGroups]]),
+        contributions: [
+          { name: 'openai', kind: 'provider', records: [gpt6({ contextWindow: 1_000_000 })] },
+          { name: 'models.dev', kind: 'aggregator', records: [{ modelId: 'gpt-6', patch: { supportsTools: true } }] },
+        ],
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ releaseDate: '2026-09-01' });
+      expect(second.rows[0].ownedGroups).toContain('presentation');
+    });
+
+    it('leaves a seeded presentation group alone, date and all', () => {
+      const seeded = seedRow({ id: 'gpt-6', description: 'Seeded copy.', releaseDate: '2026-08-15' }, ['presentation']);
+      const first = plan({ resolveDispatch: dispatchable });
+      const result = plan({
+        resolveDispatch: dispatchable,
+        base: asBase(first.rows, [seeded]),
+        presentationOwnedElsewhere: new Set(['gpt-6']),
+        contributions: withReleaseDate('2026-09-01'),
+      });
+
+      for (const row of result.rows) {
+        expect(row.ownedGroups).not.toContain('presentation');
+        expect((row.patch as Record<string, unknown>).releaseDate).not.toBe('2026-09-01');
+      }
+    });
+
+    describe('once a seed row presents a model discovery already dated', () => {
+      const first = plan({ resolveDispatch: dispatchable, contributions: withReleaseDate('2026-09-01') });
+      const seeded = seedRow({ id: 'gpt-6', description: 'Seeded copy.' }, ['presentation']);
+      const later = (provider: DiscoveredModel) =>
+        plan({
+          resolveDispatch: dispatchable,
+          base: asBase(first.rows, [seeded]),
+          priorDiscoveryGroups: new Map([['gpt-6', first.rows[0].ownedGroups]]),
+          presentationOwnedElsewhere: new Set(['gpt-6']),
+          contributions: [
+            { name: 'openai', kind: 'provider', records: [provider] },
+            {
+              name: 'models.dev',
+              kind: 'aggregator',
+              records: [{ modelId: 'gpt-6', patch: { releaseDate: '2026-09-01' } }],
+            },
+          ],
+        });
+
+      it('appends no row just to give the group up, since the seed row already wins it at merge', () => {
+        expect(later(gpt6()).rows).toHaveLength(0);
+        expect(asBase(first.rows, [seeded]).get('gpt-6')?.record).toMatchObject({ description: 'Seeded copy.' });
+        expect(asBase(first.rows, [seeded]).get('gpt-6')?.record).not.toHaveProperty('releaseDate');
+      });
+
+      it('leaves the group out of the next row it writes for another reason', () => {
+        expect(later(gpt6({ contextWindow: 1_000_000 })).rows[0].ownedGroups).not.toContain('presentation');
+      });
+    });
   });
 
   it('leaves the lifecycle and auto-disable of an already-active model alone', () => {

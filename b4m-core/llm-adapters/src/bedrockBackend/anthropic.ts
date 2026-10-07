@@ -27,6 +27,7 @@ import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
 import { buildThinkingParams } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
+import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
 enum ClaudeChunkTypes {
   MESSAGE_START = 'message_start',
@@ -758,13 +759,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     // Append model identity so the model correctly identifies itself when asked.
     // Skipped for bare-completion callers (API promptMode raw) - must stay in sync
     // with the same flag in anthropicBackend.
-    const identityReminder = options.omitIdentityReminder
-      ? null
-      : `IMPORTANT! Only when someone asks, remember that you are specifically the ${model} model.`;
+    const identityReminder = options.omitIdentityReminder ? null : buildIdentityReminder(model);
 
     let systemMessage = systemBlocks.map(block => block.text).join('\n');
     if (identityReminder) {
-      systemMessage = systemMessage ? `${systemMessage}\n${identityReminder}` : identityReminder;
+      systemMessage = appendIdentityReminder(systemMessage, identityReminder);
     }
 
     // Check if model ID needs to be transformed
@@ -934,6 +933,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
   }
 
   formatMessages(messages: IMessage[]): IMessage[] {
+    // Pure: base.ts re-runs this over the SAME messages array every tool round, so the merges
+    // below push shallow copies (content arrays are replaced, never mutated in place).
+    // Regression context: anthropic.cacheControlToolRounds.test.ts.
     const formattedMessages = messages.reduce((cur, value) => {
       const previousMessage = cur[cur.length - 1];
 
@@ -958,7 +960,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
           // Only merge if current value.content is also a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -981,7 +983,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else {
           // Only merge if current value.content is a string (not an array with images)
           if (typeof value.content !== 'string') {
-            cur.push(value);
+            cur.push({ ...value });
             return cur;
           }
 
@@ -1007,7 +1009,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       }
 
       // Push the message if the role is different
-      cur.push(value);
+      cur.push({ ...value });
 
       return cur;
     }, [] as IMessage[]);

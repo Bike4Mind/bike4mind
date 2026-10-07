@@ -36,25 +36,16 @@ const handler = baseApi().post(async (req: Request<{}, {}, { clientFirstTokenTim
     throw new NotFoundError('Quest not found');
   }
 
-  const updatedQuest = await questRepository.update({
-    ...quest,
-    promptMeta: {
-      ...quest.promptMeta,
-      performance: {
-        ...quest.promptMeta?.performance,
-        clientFirstTokenTime,
-      },
-    },
-  });
+  const updated = await questRepository.setClientFirstTokenTime(quest.id, clientFirstTokenTime);
 
-  if (!updatedQuest) {
-    throw new Error('Failed to update quest');
+  if (!updated) {
+    throw new NotFoundError('Quest not found');
   }
 
   return res.json({
     success: true,
     clientFirstTokenTime,
-    questId: updatedQuest.id,
+    questId: quest.id,
   });
 });
 

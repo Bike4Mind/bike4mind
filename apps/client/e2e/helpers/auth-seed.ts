@@ -49,10 +49,10 @@ async function injectRefreshCookie(page: Page, tokens: SeedTokens): Promise<void
  *
  * Deliberately does NOT navigate: booting the app here would make the cold-load bootstrap exchange
  * (and rotate) the refresh token, leaving the saved cookie a spent generation. Every spec now
- * authenticates via /auth/success (fixtures.ts) and ignores this cookie, EXCEPT @realauth tests
- * (the hard-reload guard) which drive the app's real refresh-cookie bootstrap and need a PRISTINE,
- * never-yet-exchanged cookie. Leaving it unspent costs the other specs nothing and keeps that one
- * honest. storageState() serializes the context cookie jar with no navigation required.
+ * authenticates via /auth/success (fixtures.ts) and ignores this cookie. Do not boot from it in a
+ * @realauth test either: the first attempt rotates it and a retry replays the spent generation,
+ * which reuse detection answers by revoking the session. Mint a user per attempt instead
+ * (apiCreateThrowawayUser). storageState() serializes the cookie jar with no navigation required.
  */
 export async function seedAuthStorageState(page: Page, tokens: SeedTokens, path: string): Promise<void> {
   await injectRefreshCookie(page, tokens);

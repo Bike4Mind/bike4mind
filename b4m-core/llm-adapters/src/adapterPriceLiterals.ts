@@ -35,6 +35,19 @@ export const staticPriceBackends = () => [
 ];
 
 let cached: Promise<ReadonlyMap<string, IModelPriceTier>> | undefined;
+let cachedIds: Promise<ReadonlySet<string>> | undefined;
+
+/**
+ * Every model id the static adapter tables ship. The read path merges catalog rows
+ * over these literals, so discovery must not claim their hand-set presentation
+ * fields even when no seed row is in force.
+ */
+export async function adapterModelIds(): Promise<ReadonlySet<string>> {
+  cachedIds ??= Promise.all(staticPriceBackends().map(backend => backend.getModelInfo())).then(
+    tables => new Set(tables.flat().map(model => String(model.id)))
+  );
+  return cachedIds;
+}
 
 /**
  * The prices this build ships in code: the lowest-threshold tier of each priced

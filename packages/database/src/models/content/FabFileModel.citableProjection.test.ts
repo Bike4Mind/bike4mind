@@ -84,6 +84,40 @@ describe('FabFileRepository.findExistingIdsByIds', () => {
     ]);
     expect(await fabFileRepository.findExistingIdsByIds([])).toEqual([]);
   });
+
+  it('reports a soft-deleted row as absent, which is why the including-deleted probe exists', async () => {
+    const deleted = await makeFile('deleted.txt', { deletedAt: new Date() });
+
+    expect(await fabFileRepository.findExistingIdsByIds([String(deleted._id)])).toEqual([]);
+  });
+});
+
+describe('FabFileRepository.findExistingIdsIncludingDeletedByIds', () => {
+  it('counts a soft-deleted row as existing, and a hard-deleted one as gone', async () => {
+    // The distinction scrubMissingKnowledgeIds' second gate turns on: a lake teardown soft-deletes
+    // its members and restoreDeletedDataLake revives them, so detaching on a soft delete would strip
+    // the files from every notebook fleet-wide and leave the restore with nothing pointing at them.
+    const alive = await makeFile('alive.txt');
+    const softDeleted = await makeFile('lake-torn-down.txt', { deletedAt: new Date() });
+    const hardGone = new mongoose.Types.ObjectId();
+
+    const found = await fabFileRepository.findExistingIdsIncludingDeletedByIds([
+      String(alive._id),
+      String(softDeleted._id),
+      String(hardGone),
+    ]);
+
+    expect(found.sort()).toEqual([String(alive._id), String(softDeleted._id)].sort());
+  });
+
+  it('tolerates an unusable id, like its filtered sibling', async () => {
+    const alive = await makeFile('alive.txt');
+
+    expect(
+      await fabFileRepository.findExistingIdsIncludingDeletedByIds(['not-an-objectid', String(alive._id)])
+    ).toEqual([String(alive._id)]);
+    expect(await fabFileRepository.findExistingIdsIncludingDeletedByIds([])).toEqual([]);
+  });
 });
 
 describe('FabFileRepository.findCitableFieldsByIds', () => {

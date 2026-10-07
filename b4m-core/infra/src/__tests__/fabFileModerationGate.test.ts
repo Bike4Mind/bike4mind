@@ -28,7 +28,13 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 /** Directories swept for FabFile serve/distribution call sites. */
-const SCAN_ROOTS = ['apps/client/pages', 'apps/client/server', 'b4m-core/services/src', 'b4m-core/slack/src'];
+const SCAN_ROOTS = [
+  'apps/client/pages',
+  'apps/client/server',
+  'apps/workers/src',
+  'b4m-core/services/src',
+  'b4m-core/slack/src',
+];
 
 const EXCLUDED_DIR_NAMES = new Set(['__tests__', 'dist', '.next', 'node_modules']);
 const isTestFileName = (name: string): boolean => /\.test\.tsx?$/.test(name);
@@ -150,6 +156,8 @@ const ALLOWLIST: Record<string, string> = {
     'gated via generateSignedUrl choke (search -> get.ts) for reads; the other match is a delete-only storage.delete call',
   'apps/client/pages/api/files/[id]/index.ts':
     'GET/PUT route through fabFileService.getFabFile/updateFabFile (both gated: get.ts via the generateSignedUrl choke, update.ts imports isImageServeable directly); DELETE branch only calls storage.delete (delete.ts is delete-only)',
+  'apps/client/server/files/loadAccessibleFabFile.ts':
+    'DI passthrough - generateSignedUrl closure consumed by fabFileService.getFabFile and, on the data-lake fallback, fabFileService.generateSignedUrl directly; both return through the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/data-lakes/[id]/articles.ts':
     'DI passthrough — generateSignedUrl closure consumed by fabFileService.search, gated via the generateSignedUrl choke in fabFileService/get.ts',
   'apps/client/pages/api/files/createFabFileURL.ts':
@@ -158,13 +166,13 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough to fabFileService.createFabFileByUrl -> createFabFile (create.ts:175 withholds fileUrl for image/* at creation time); the adapter only forwards the mode createFabFile asks for, and never reads an existing FabFile',
   'apps/client/pages/api/notebooks/export.ts':
     'DI passthrough — fileStorageService adapter consumed by already-gated notebookExportService.exportKnowledge/processImages (both import isImageServeable)',
-  'apps/client/server/queueHandlers/researchEngineQueue.ts':
+  'apps/workers/src/queueHandlers/researchEngineQueue.ts':
     'DI passthrough — storage adapter consumed by already-gated researchTaskService.process/downloadRelevantLinks (routes through findOrUpdateExistingResearchData, gated commit 63cc8f9d3e, and createFabFile)',
-  'apps/client/server/queueHandlers/notebookCuration.ts':
+  'apps/workers/src/queueHandlers/notebookCuration.ts':
     'DI passthrough — storage adapter consumed by NotebookCurationService.storeFile, which calls the already-gated fabFileService.createFabFile with a converter-produced mimeType that is always markdown/txt/html, never an image',
-  'apps/client/server/events/sessionSummarization.ts':
+  'apps/workers/src/events/sessionSummarization.ts':
     'text-only mime (session summary is always SupportedFabFileMimeTypes.TXT_PLAIN) — DI passthrough to already-gated fabFileService.update/create',
-  'apps/client/server/emailIngestion/emailParser.ts':
+  'apps/workers/src/emailIngestion/emailParser.ts':
     'DI passthrough — storage adapter consumed by the email-ingestion pipeline (processAttachments/processEmailBody), which creates FabFiles via the already-gated fabFileService.create',
   'apps/client/server/queueHandlers/slackQuestProcessor.ts':
     'DI passthrough — raw storage object handed to ChatCompletionProcess/LLM tool implementations that already gate on isImageServeable before touching it (imageEdit/editFile); the imageGenerateStorage.download call is the generated-images bucket, not fabFileBucket',
@@ -183,6 +191,8 @@ const ALLOWLIST: Record<string, string> = {
     'DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; the adapter only forwards the mode createFabFile asks for',
 
   // --- Audio-only generation, never an image. ---
+  'apps/client/server/utils/generatedAudioDelivery.ts':
+    'audio-only - signs a GET for oversized generated audio it just uploaded under generated-audio-offload/ (no FabFile row, audio/* only); a saved copy is served by the fileUrl the already-gated createFabFile minted, so isImageServeable is inapplicable',
   'apps/client/server/utils/persistGeneratedAudio.ts':
     'audio-only (type AUDIO, audio/* mime from TTS/sound-effects) — DI passthrough to the already-gated fabFileService.createFabFile, which withholds fileUrl for images; audio is never image content, so isImageServeable is inapplicable',
 
@@ -196,9 +206,9 @@ const ALLOWLIST: Record<string, string> = {
 
   // --- `.getFileContent(`/`getFileContent(` match is githubService's GitHub-content
   // fetcher (SRE agent code review), unrelated to FabFile/S3 storage. ---
-  'apps/client/server/queueHandlers/sreRevision.ts':
+  'apps/workers/src/queueHandlers/sreRevision.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
-  'apps/client/server/queueHandlers/sreAnalysis.ts':
+  'apps/workers/src/queueHandlers/sreAnalysis.ts':
     'githubService.getFileContent — GitHub repo content fetch for SRE code review, unrelated to FabFile storage',
   'apps/client/server/services/whatsNewDataCollector.ts':
     'githubService.getFileContent — GitHub repo content fetch (CHANGELOG.md), unrelated to FabFile storage',

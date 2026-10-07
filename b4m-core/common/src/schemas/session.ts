@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
 
 // Shared by the request and response schemas below - kept to one definition so the two
 // can't quietly diverge on what a tag looks like.
@@ -87,12 +88,14 @@ export const SessionIdParamSchema = z.object({
 });
 
 /**
- * Practical response subset for PUT /api/sessions/{id} - the fields a caller needs to
- * confirm an update took effect. ISession (types/entities/SessionTypes.ts) carries many
+ * Practical response subset for GET and PUT /api/sessions/{id} - the fields a caller needs to
+ * read a session or confirm an update took effect. ISession (types/entities/SessionTypes.ts) carries many
  * more server-internal fields not documented as public API surface here.
  */
 export const SessionResponseSchema = z.object({
   id: z.string(),
+  // Same value as `id`. Existing callers read `_id` off the create response.
+  _id: z.string().optional(),
   name: z.string(),
   userId: z.string(),
   knowledgeIds: z.array(z.string()).optional(),
@@ -117,3 +120,65 @@ export const SessionResponseSchema = z.object({
 });
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+/** Response for DELETE /api/sessions/{id}. */
+export const SessionDeleteResponseSchema = z.object({
+  newLastNotebookId: z
+    .string()
+    .nullable()
+    .describe(
+      "The caller's most recently updated remaining session, which the product UI opens next; null when none remains."
+    ),
+});
+
+export type SessionDeleteResponse = z.infer<typeof SessionDeleteResponseSchema>;
+
+/**
+ * Request schema for POST /api/v1/sessions. Declares every client-settable field of
+ * createSessionParametersSchema (b4m-core/services/src/sessionService/create.ts), which stays the
+ * inner gate, plus the route-only `dataLakeId` and `preauthorizedLakeIds`. The copy-path fields
+ * (`summary`, `summaryAt`, `summaryTrigger`, `taggedAt`, `clonedSourceId`, `forkedSourceId`) are
+ * deliberately absent. A default (stripping) object: an unknown key is dropped, never rejected.
+ */
+export const CreateSessionRequestSchema = z.object({
+  name: z.string(),
+  projectId: z.string().optional().describe('Adds the new session to this project.'),
+  dataLakeId: z
+    .string()
+    .nullish()
+    .describe(
+      'Seeds retrieval defaults from this data lake and turns on forced retrieval. Get ids from `GET /api/v1/data-lakes`.'
+    ),
+  // Loose on purpose: the route ignores a non-array and filters non-string entries itself, so a
+  // typed array would newly reject bodies it accepts today.
+  preauthorizedLakeIds: z
+    .unknown()
+    .optional()
+    .describe('Data lakes the caller manages, armed for this session. At most 10; requires management rights.'),
+  knowledgeIds: z.array(z.string()).optional(),
+  artifactIds: z.array(z.string()).optional(),
+  agentIds: z.array(z.string()).optional(),
+  systemPromptText: z.string().optional().describe('Write-only: never returned in a session response.'),
+  systemPromptId: z.string().optional(),
+  surface: z.string().optional(),
+  enabledTools: z.array(z.string()).optional(),
+  disabledTools: z.array(z.string()).optional(),
+  disableUserIntegrations: z.boolean().optional(),
+  forceKnowledgeRetrieval: z.boolean().optional(),
+  retrievalTags: z.array(z.string()).optional(),
+  lakeScopeExplicit: z.boolean().optional(),
+  corpusGroundingMode: z
+    .enum(DATA_LAKE_GROUNDING_MODES)
+    .optional()
+    .describe('Honored only when a lake is named by `retrievalTags` without `dataLakeId`.'),
+  retrievalExcludeFilenameMarkers: z.array(z.string()).optional(),
+  retrievalVectorizedOnly: z.boolean().optional(),
+  citationStyle: z.enum(['named', 'indexed']).optional(),
+  temperature: z.number().optional(),
+  maxToolCalls: z.number().int().positive().optional(),
+  autoNamePlaceholder: z.string().optional(),
+  tags: z.array(SessionTagSchema).optional(),
+  lastUsedModel: z.string().nullish(),
+});
+
+export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;

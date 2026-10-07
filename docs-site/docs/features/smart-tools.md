@@ -13,7 +13,7 @@ Bike4Mind equips your AI conversations with a set of smart tools that extend wha
 
 ## Enabling Tools
 
-Tools are managed per-notebook. You can toggle them from either of two surfaces — both edit the same per-notebook state:
+Your tool selection is a single setting that applies across all your notebooks. You can toggle tools from either of two surfaces, and both edit the same setting:
 
 - **Smart Tools dropdown in the composer** (recommended) — click the **Smart Tools** button next to the message input. The dropdown shows the catalog inline and is the fastest way to toggle tools while you're chatting.
 - **AI Settings panel** — open a notebook, click the **AI Settings** panel, and scroll to the **Tools** section.
@@ -79,6 +79,14 @@ Search your uploaded documents in the Knowledge Base. The AI can find and refere
 **Example prompts:**
 - "Search my knowledge base for the Q3 report"
 - "What do my uploaded documents say about the deployment process?"
+
+### Save to Data Lake
+
+Save text the AI writes for you -- a summary, meeting notes, a table -- as a file in one of your [Data Lakes](./data-lakes.md). The AI saves only when you ask, lists the lakes you can add files to, and can create a new lake if you don't have one yet. A lake created from chat starts as a draft, so its files are not searchable until you publish it.
+
+**Example prompts:**
+- "Save that summary to my Research data lake"
+- "Put these notes in a new data lake called Onboarding"
 
 ---
 

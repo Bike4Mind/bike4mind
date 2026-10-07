@@ -12,7 +12,13 @@ import {
   ATTACHMENT_DELIVERED_NOTICE,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
-import { DEFAULT_HISTORY_FETCH_LIMIT, FORMAT_PROMPT_TEMPLATE, UNLIMITED_HISTORY_COUNT } from '@bike4mind/common';
+import {
+  DEFAULT_HISTORY_FETCH_LIMIT,
+  FORMAT_PROMPT_TEMPLATE,
+  UNLIMITED_HISTORY_COUNT,
+  extractChoicesBlock,
+  formatChoicesBlock,
+} from '@bike4mind/common';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
 
 // Define ITokenizer type locally since it's in @bike4mind/utils
@@ -1807,6 +1813,67 @@ describe('Context Management Tests', () => {
       });
     });
 
+    describe('Research Mode turns', () => {
+      // Research Mode stores its answers in researchModeResults and leaves replies empty.
+      const makeResearchItem = (n: number, researchModeResults: unknown[]) =>
+        makeItem(n, { reply: undefined, replies: [], researchModeResults });
+
+      it('carries the prior Research Mode answers so the follow-up is not read as unanswered', async () => {
+        const items = [
+          makeItem(2, { prompt: 'lighthouse story', replies: [] }),
+          makeResearchItem(1, [
+            { configurationId: 'a', success: true, response: 'cycling guide A' },
+            { configurationId: 'b', success: true, response: 'cycling guide B' },
+          ]),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(messages).toEqual([
+          { role: 'user', content: 'prompt 1' },
+          {
+            role: 'assistant',
+            content: '[Response 1 of 2]\ncycling guide A\n\n[Response 2 of 2]\ncycling guide B',
+          },
+        ]);
+      });
+
+      it('uses a single successful answer as-is and skips failed or empty results', async () => {
+        const items = [
+          makeItem(2),
+          makeResearchItem(1, [
+            { configurationId: 'a', success: false, error: 'Cancelled' },
+            { configurationId: 'b', success: true, response: '   ' },
+            { configurationId: 'c', success: true, response: 'only answer' },
+          ]),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [messages] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db });
+
+        expect(messages).toEqual([
+          { role: 'user', content: 'prompt 1' },
+          { role: 'assistant', content: 'only answer' },
+        ]);
+      });
+
+      it('counts Research Mode answers toward the verbatim token budget', async () => {
+        const big = 'x'.repeat(4000);
+        const items = [
+          makeItem(3),
+          makeResearchItem(2, [{ configurationId: 'a', success: true, response: big }]),
+          makeItem(1),
+        ];
+        const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+        const [, count] = await fetchAndProcessPreviousMessages(makeSession(), 10, { db, verbatimTokenBudget: 500 });
+
+        // Item 2 alone exceeds the budget, so the older item 1 is dropped.
+        expect(count).toBe(1);
+      });
+    });
+
     describe('priorToolNames', () => {
       const makeToolCallItem = (n: number, names: string[]) =>
         makeItem(n, { promptMeta: { functionCalls: names.map((name, i) => ({ id: `${n}-${i}`, name })) } });
@@ -1998,6 +2065,23 @@ describe('Context Management Tests', () => {
       expect(messages[messages.length - 1]).toEqual({ role: 'assistant', content: 'reply 3' });
       // The latest prior turn is present (would be dropped by a pop).
       expect(messages.some(m => m.role === 'user' && m.content === 'prompt 3')).toBe(true);
+    });
+
+    it('uses Research Mode answers when a turn has no replies', async () => {
+      const items = [
+        makeItem(1, {
+          replies: [],
+          researchModeResults: [{ configurationId: 'a', success: true, response: 'research answer' }],
+        }),
+      ];
+      const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue(items) } };
+
+      const messages = await fetchAgentConversationHistory(makeSession(), 20, { db });
+
+      expect(messages).toEqual([
+        { role: 'user', content: 'prompt 1' },
+        { role: 'assistant', content: 'research answer' },
+      ]);
     });
 
     it('respects the context-summary boundary', async () => {
@@ -4255,5 +4339,79 @@ describe('buildAndSortMessages - concurrent calls do not share truncation teleme
     expect(untouched.messageTruncation?.wasTruncated).toBe(false);
     expect(truncated.messageTruncation?.wasTruncated).toBe(true);
     expect(truncated.messageTruncation?.truncationMethod).toBe('token-budget');
+  });
+});
+
+describe('fetchAndProcessPreviousMessages - stored reply choices', () => {
+  const options = [
+    { label: 'Extend', description: 'Extend the brief.' },
+    { label: 'Ship', description: 'Ship it as is.' },
+  ];
+  const makeItem = (n: number, overrides: Record<string, unknown> = {}) => ({
+    id: String(n).padStart(24, '0'),
+    sessionId: 'session1',
+    prompt: `prompt ${n}`,
+    reply: `reply ${n}`,
+    replies: [`reply ${n}`],
+    timestamp: new Date(n * 1000),
+    type: 'message',
+    status: 'done',
+    ...overrides,
+  });
+  const session = { id: 'session1' } as unknown as ISessionDocument;
+  const fetchWith = async (item: Record<string, unknown>, includeReplyChoices?: boolean) => {
+    const db = { quests: { getMostRecentChatHistory: vi.fn().mockResolvedValue([makeItem(2), item]) } };
+    const [messages] = await fetchAndProcessPreviousMessages(session, 10, { db, includeReplyChoices });
+    return messages;
+  };
+
+  it('re-attaches stored choices to the assistant turn when the guidance is offered', async () => {
+    const item = makeItem(1, { suggestedChoices: { options, selectedIndex: 1 } });
+    const messages = await fetchWith(item, true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' + formatChoicesBlock(options) });
+    // The re-attached block parses back to exactly the stored options, and selectedIndex never leaks.
+    const content = messages[1].content as string;
+    expect(extractChoicesBlock(content).choices).toEqual(options);
+    expect(content).not.toContain('selectedIndex');
+    expect(item.replies).toEqual(['reply 1']);
+  });
+
+  it('leaves history alone when the guidance is withheld', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options } }), false);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('defaults to leaving history alone', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options } }));
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('skips a turn with fewer than two stored options', async () => {
+    const messages = await fetchWith(makeItem(1, { suggestedChoices: { options: [options[0]] } }), true);
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'reply 1' });
+  });
+
+  it('never attaches a block on a replayed tool turn, even when offered', async () => {
+    const item = makeItem(1, {
+      suggestedChoices: { options },
+      promptMeta: { functionCalls: [{ id: 'toolu_1', name: 'web_search', parameters: {}, returnValue: 'ok' }] },
+    });
+    const messages = await fetchWith(item, true);
+    const content = messages[1].content as Array<{ type: string; text?: string }>;
+    // historyTextReply returns the slot BEFORE the tool_use blocks (the pre-tool-call preamble),
+    // never the turn's final answer, so a block here would teach "choices before the tool call".
+    expect(content[0]).toEqual({ type: 'text', text: 'reply 1' });
+    expect(content[1].type).toBe('tool_use');
+  });
+
+  it('does not attach a block when the first visible slot is not the last', async () => {
+    const item = makeItem(1, {
+      replies: ['partial answer before tool call', 'final answer after tool call'],
+      suggestedChoices: { options },
+    });
+    const messages = await fetchWith(item, true);
+    // historyTextReply picks the FIRST non-<think> slot ('partial answer...'), which is not the
+    // last slot carrying visible text ('final answer...') - so no block is attached.
+    expect(messages[1]).toEqual({ role: 'assistant', content: 'partial answer before tool call' });
   });
 });

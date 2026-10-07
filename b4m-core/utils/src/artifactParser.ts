@@ -1,9 +1,12 @@
 import { Logger } from '@bike4mind/observability';
-import { ARTIFACT_ATTRS_PATTERN, ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
+import {
+  type ArtifactBlockMatch,
+  ArtifactOperation,
+  ArtifactType,
+  mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+} from '@bike4mind/common';
 
-// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
-// stays in sync with the client parser and PromptReplies truncation detector.
-const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
 // body, group 3 the single-quoted one; exactly one matches.
@@ -76,15 +79,10 @@ export function isSvgGraphicallyEmpty(svg: string): boolean {
 export function parseArtifacts(content: string): ArtifactParseResult {
   const artifacts: ParsedArtifact[] = [];
   let cleanedContent = content;
-  let match;
 
-  // Reset lastIndex; ARTIFACT_REGEX is a global regex and retains state between calls.
-  ARTIFACT_REGEX.lastIndex = 0;
-
-  while ((match = ARTIFACT_REGEX.exec(content)) !== null) {
-    const [fullMatch, attributesString, artifactContent] = match;
-    const startIndex = match.index;
-    const endIndex = match.index + fullMatch.length;
+  for (const block of matchArtifactBlocks(content)) {
+    const { index: startIndex, fullMatch, attrs: attributesString, body: artifactContent } = block;
+    const endIndex = startIndex + fullMatch.length;
 
     // Parse attributes
     const attributes: Record<string, string> = {};
@@ -272,10 +270,211 @@ function replaceMermaidFences(source: string, replace: (fullMatch: string, body:
 }
 
 /**
+ * Info-string token marking a fence that holds a verbatim quote of tool output. Such a
+ * region is never promoted to an artifact, by this parser or by the client mirror in
+ * apps/client/app/utils/artifactParser.ts. History replay must strip it before the model
+ * sees the reply again.
+ */
+export const TOOL_OUTPUT_MARKER = 'b4m-tool-output';
+
+const TOOL_OUTPUT_OPENER = new RegExp(`^ {0,3}(~{3,})[\\w-]*[ \\t]+${TOOL_OUTPUT_MARKER}[ \\t]*$`);
+
+export interface ToolOutputMask {
+  /** The content with every marked region replaced by an opaque placeholder. */
+  masked: string;
+  /** Registers one more region and returns its placeholder. */
+  protect(region: string): string;
+  /** Puts every region back in place of its placeholder. */
+  restore(value: string): string;
+  /** True when the value contains a placeholder, i.e. a span that must not be promoted. */
+  holds(value: string): boolean;
+}
+
+function stripLineEnd(line: string): string {
+  return line.endsWith('\r') ? line.slice(0, -1) : line;
+}
+
+/** Length of a line made only of tildes (surrounding whitespace allowed), else 0. */
+function tildeLineRun(line: string): number {
+  const trimmed = line.trim();
+  for (let i = 0; i < trimmed.length; i++) if (trimmed[i] !== '~') return 0;
+  return trimmed.length;
+}
+
+/**
+ * Hides every closed `~~~<lang> b4m-tool-output` fence behind a placeholder so no
+ * detector can promote its body or count the backticks inside it. An opener with no
+ * closer is not a region. The placeholder uses a private-use character absent from the
+ * content, so it cannot collide with reply text.
+ */
+export function maskToolOutputRegions(content: string): ToolOutputMask {
+  const used = new Set<number>();
+  for (let i = 0; i < content.length; i++) {
+    const c = content.charCodeAt(i);
+    if (c >= 0xe000) used.add(c);
+  }
+  let code = 0xe000;
+  while (used.has(code)) code++;
+  const sentinel = String.fromCharCode(code);
+  const regions: string[] = [];
+  const protect = (region: string): string => {
+    regions.push(region);
+    return `${sentinel}${regions.length - 1}${sentinel}`;
+  };
+  const restore = (value: string): string =>
+    regions.length === 0
+      ? value
+      : value.replace(new RegExp(`${sentinel}(\\d+)${sentinel}`, 'g'), (match, index: string) => {
+          const region = regions[Number(index)];
+          return region === undefined ? match : region;
+        });
+  const holds = (value: string): boolean => regions.length > 0 && value.includes(sentinel);
+
+  if (!content.includes(TOOL_OUTPUT_MARKER)) return { masked: content, protect, restore, holds };
+
+  // One pass collects openers and closers; a suffix max of closer lengths answers "is there
+  // any closer long enough ahead" in O(1), so an unclosed opener never rescans to the end.
+  const openers: { start: number; run: number }[] = [];
+  const closers: { start: number; end: number; run: number }[] = [];
+  for (let lineStart = 0; lineStart < content.length;) {
+    const newline = content.indexOf('\n', lineStart);
+    const lineEnd = newline === -1 ? content.length : newline;
+    const line = stripLineEnd(content.slice(lineStart, lineEnd));
+    const opener = TOOL_OUTPUT_OPENER.exec(line);
+    if (opener) {
+      openers.push({ start: lineStart, run: opener[1].length });
+    } else {
+      const run = tildeLineRun(line);
+      if (run >= 3) closers.push({ start: lineStart, end: lineStart + line.length, run });
+    }
+    lineStart = lineEnd + 1;
+  }
+  const longestAhead: number[] = new Array(closers.length + 1).fill(0);
+  for (let i = closers.length - 1; i >= 0; i--) longestAhead[i] = Math.max(closers[i].run, longestAhead[i + 1]);
+
+  let masked = '';
+  let copiedTo = 0;
+  let next = 0;
+  for (const opener of openers) {
+    if (opener.start < copiedTo) continue;
+    while (next < closers.length && closers[next].start < opener.start) next++;
+    if (longestAhead[next] < opener.run) continue;
+    let closer = next;
+    while (closers[closer].run < opener.run) closer++;
+    masked += content.slice(copiedTo, opener.start) + protect(content.slice(opener.start, closers[closer].end));
+    copiedTo = closers[closer].end;
+    next = closer + 1;
+  }
+  return { masked: masked + content.slice(copiedTo), protect, restore, holds };
+}
+
+const TOOL_OUTPUT_OPENER_MARK = new RegExp(`^( {0,3}~{3,}[\\w-]*)[ \\t]+${TOOL_OUTPUT_MARKER}([ \\t]*\\r?)$`, 'gm');
+
+/** Drops the marker from every tool-output fence opener so replayed history never shows it to the model. */
+export function stripToolOutputMarker(value: string): string {
+  return value.includes(TOOL_OUTPUT_MARKER) ? value.replace(TOOL_OUTPUT_OPENER_MARK, '$1$2') : value;
+}
+
+function longestTildeRun(value: string): number {
+  let longest = 0;
+  let run = 0;
+  for (let i = 0; i < value.length; i++) {
+    run = value[i] === '~' ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return longest;
+}
+
+/**
+ * The marked fence that replaces a promotable span found to be a tool echo. Body bytes are
+ * kept; a newline is added only where the fence would otherwise not start or end a line.
+ */
+function toolOutputFence(lang: string, body: string, before: string, after: string): string {
+  const tildes = '~'.repeat(Math.max(3, longestTildeRun(body) + 1));
+  const lead = before === '' || before.endsWith('\n') ? '' : '\n';
+  const open = body.startsWith('\n') || body.startsWith('\r\n') ? '' : '\n';
+  const close = body.endsWith('\n') ? '' : '\n';
+  const trail = after === '' || after.startsWith('\n') || after.startsWith('\r\n') ? '' : '\n';
+  return `${lead}${tildes}${lang} ${TOOL_OUTPUT_MARKER}${open}${body}${close}${tildes}${trail}`;
+}
+
+export interface ConvertCodeBlocksOptions {
+  /** True when a candidate body is a verbatim quote of this turn's tool output. */
+  isToolEcho?: (body: string) => boolean;
+}
+
+/**
  * Post-processes AI responses to detect code blocks that should be artifacts
  * and converts them to proper artifact syntax as a fallback
  */
-export function convertCodeBlocksToArtifacts(content: string): string {
+export function convertCodeBlocksToArtifacts(content: string, options: ConvertCodeBlocksOptions = {}): string {
+  return transformCodeBlocks(content, options, false);
+}
+
+/**
+ * Rewrites only the spans convertCodeBlocksToArtifacts would promote AND isToolEcho flags,
+ * into marked fences; everything else stays byte-identical. For replies stored raw and
+ * parsed later (the agent path), where promoting here would change what gets persisted.
+ */
+export function markToolEchoes(content: string, isToolEcho: (body: string) => boolean): string {
+  return transformCodeBlocks(content, { isToolEcho }, true);
+}
+
+const normalizeWhitespace = (value: string): string => value.trim().replace(/\s+/g, ' ');
+
+// Single-line only: the body lines of a multi-line `accDescr {` block still count.
+const MERMAID_DEDUPE_IGNORED_LINE = /^(?:title|accTitle|accDescr)\b|^%%/;
+
+/** Dedupe form of a mermaid body: title, accessibility and comment lines dropped, whitespace normalized. */
+const mermaidDedupeLines = (value: string): string[] =>
+  value.split('\n').filter(line => !MERMAID_DEDUPE_IGNORED_LINE.test(line.trim()));
+const normalizeMermaid = (value: string): string => normalizeWhitespace(mermaidDedupeLines(value).join('\n'));
+
+/**
+ * Protects every complete artifact span from the detectors and collects normalized mermaid bodies.
+ * A span wrapping a tool-output placeholder is not protected itself, but artifacts inside it still are.
+ */
+function protectArtifactSpans(content: string, mask: ToolOutputMask): { masked: string; mermaidBodies: Set<string> } {
+  const mermaidBodies = new Set<string>();
+  const spans: Array<[number, number]> = [];
+  // restore() is single-pass, so a span wrapping an already-protected region cannot itself be protected;
+  // the scan descends into it instead, so an inner artifact sharing its closer is still found.
+  const holdsPlaceholder = (block: ArtifactBlockMatch) => mask.holds(block.fullMatch);
+  for (const block of matchArtifactBlocks(content, holdsPlaceholder)) {
+    const type = Array.from(block.attrs.matchAll(ATTRIBUTE_REGEX))
+      .filter(m => m[1] === 'type')
+      .pop();
+    if ((type?.[2] ?? type?.[3]) === 'application/vnd.ant.mermaid') mermaidBodies.add(normalizeMermaid(block.body));
+    if (holdsPlaceholder(block)) continue;
+    // Ordered and disjoint: the scan only resumes inside a block that does not become a span.
+    spans.push([block.index, block.index + block.fullMatch.length]);
+  }
+
+  let masked = '';
+  let copiedTo = 0;
+  for (const [start, end] of spans) {
+    masked += content.slice(copiedTo, start) + mask.protect(content.slice(start, end));
+    copiedTo = end;
+  }
+  return { masked: masked + content.slice(copiedTo), mermaidBodies };
+}
+
+function transformCodeBlocks(content: string, options: ConvertCodeBlocksOptions, echoOnly: boolean): string {
+  const mask = maskToolOutputRegions(content);
+  const spans = protectArtifactSpans(mask.masked, mask);
+  content = spans.masked;
+  const { mermaidBodies } = spans;
+  const isDuplicateMermaid = (text: string) => mermaidBodies.size > 0 && mermaidBodies.has(normalizeMermaid(text));
+  const { isToolEcho } = options;
+  // Echoed spans become marked fences, protected at once so later passes skip them too.
+  // A span that holds a placeholder wraps a protected region (tool output or an existing artifact);
+  // promoting it would put that region back inside a new artifact when restore runs.
+  const { holds } = mask;
+  const echoFence = (lang: string, body: string, whole: string, start: number, end: number): string | null =>
+    isToolEcho?.(body)
+      ? mask.protect(toolOutputFence(lang, body, whole.slice(Math.max(0, start - 1), start), whole.slice(end, end + 2)))
+      : null;
+
   // The fence patterns below put no \s* in front of the body group: it is greedy over
   // characters the lazy body matches anyway, so a fence label followed by a long
   // whitespace run and no closer backtracks quadratically. Every callback trims. Mermaid
@@ -285,6 +484,7 @@ export function convertCodeBlocksToArtifacts(content: string): string {
   const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, codeContent) => {
+    if (echoOnly || holds(codeContent)) return match;
     // Anchor requirement the old regex encoded inline: a declaration + component token
     // on one line. Without it, this fence is not a React component - leave it alone.
     if (!hasReactComponentLine(codeContent)) return match;
@@ -313,8 +513,11 @@ ${codeContent.trim()}
   // them into one.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
-  content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
-    if (!hasFullHtmlDocument(codeContent)) return match;
+  content = content.replace(htmlCodeBlockRegex, (match, codeContent, offset: number, whole: string) => {
+    if (!hasFullHtmlDocument(codeContent) || holds(codeContent)) return match;
+    const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
+    if (echoed !== null) return echoed;
+    if (echoOnly) return match;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -328,9 +531,12 @@ ${codeContent.trim()}
   // so any remaining ```html fence is a fragment: still better presented as a
   // previewable artifact than left as a raw code block (parser gap C).
   const htmlFragmentFenceRegex = /```html([\s\S]*?)```/gi;
-  content = content.replace(htmlFragmentFenceRegex, (match, codeContent) => {
+  content = content.replace(htmlFragmentFenceRegex, (match, codeContent, offset: number, whole: string) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
-    if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
+    if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent) || holds(codeContent)) return match;
+    const echoed = echoFence('html', codeContent, whole, offset, offset + match.length);
+    if (echoed !== null) return echoed;
+    if (echoOnly) return match;
     const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Snippet');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -342,6 +548,7 @@ ${codeContent.trim()}
   const svgCodeBlockRegex = /```svg([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
+    if (echoOnly || holds(codeContent)) return match;
     // Not a complete <svg>...</svg> - leave the fence unchanged.
     if (!hasCompleteSvg(codeContent)) return match;
     const identifier = 'svg-graphic';
@@ -353,6 +560,7 @@ ${codeContent.trim()}
 
   // Detect Mermaid code blocks and mixed content.
   content = replaceMermaidFences(content, (fullMatch, codeContent) => {
+    if (echoOnly || holds(codeContent) || isDuplicateMermaid(codeContent)) return fullMatch;
     // Clean and validate the Mermaid syntax
     const { isValid, cleanedContent, errors } = validateMermaidSyntax(codeContent);
 
@@ -369,37 +577,15 @@ ${codeContent.trim()}
     }
   });
 
-  // Also handle raw Mermaid content (no code blocks) mixed with other content,
-  // e.g. when an LLM outputs raw Mermaid plus code blocks.
-  const rawMermaidRegex =
-    /((?:^|\n)(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|gantt|pie|mindmap)[\s\S]*?)(?=\n```|$)/gm;
+  content = promoteToolCallJsonArtifact(content, echoFence, echoOnly, holds);
 
-  content = content.replace(rawMermaidRegex, (fullMatch, mermaidContent) => {
-    // Skip if this is already inside a code block or artifact
-    if (fullMatch.includes('```') || fullMatch.includes('<artifact')) {
-      return fullMatch;
-    }
+  content = promoteBareHtmlDocument(content, echoFence, echoOnly, holds);
 
-    const { isValid, cleanedContent } = validateMermaidSyntax(mermaidContent);
-
-    if (isValid && cleanedContent.trim()) {
-      const diagramType = extractMermaidDiagramType(cleanedContent);
-      const identifier = `mermaid-${diagramType}`;
-      const title = `${diagramType.charAt(0).toUpperCase() + diagramType.slice(1)} Diagram`;
-
-      return `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">${cleanedContent}</artifact>`;
-    } else {
-      // If validation fails, return original content
-      return fullMatch;
-    }
-  });
-
-  content = promoteToolCallJsonArtifact(content);
-
-  content = promoteBareHtmlDocument(content);
-
-  return content;
+  return mask.restore(content);
 }
+
+/** Returns the protected marked fence when the span is a tool echo, else null. */
+type EchoFence = (lang: string, body: string, whole: string, start: number, end: number) => string | null;
 
 /**
  * Promotes an artifact that a small local model emitted as a hallucinated tool
@@ -416,21 +602,39 @@ ${codeContent.trim()}
  * model that merely SHOWS such tool-call JSON as an example from having it
  * swallowed and re-rendered as an artifact.
  *
- * MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts
- * so client render and server persistence never diverge.
+ * Recognition must stay identical to the twin in apps/client/app/utils/artifactParser.ts.
+ * Only this copy marks tool echoes; the client never sees tool output and relies on the
+ * fences marked here.
  */
-function promoteToolCallJsonArtifact(content: string): string {
+function promoteToolCallJsonArtifact(
+  content: string,
+  echoFence: EchoFence,
+  echoOnly: boolean,
+  holds: (value: string) => boolean
+): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
-  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
-  const afterFences = content.replace(fenceRegex, (match, body) => toolCallJsonToArtifact(body) ?? match);
+  const fenceRegex = /```(json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
+  const afterFences = content.replace(
+    fenceRegex,
+    (match, label: string, body: string, offset: number, whole: string) => {
+      if (holds(body)) return match;
+      const artifact = toolCallJsonToArtifact(body);
+      if (!artifact) return match;
+      return echoFence(label, body, whole, offset, offset + match.length) ?? (echoOnly ? match : artifact);
+    }
+  );
   if (afterFences !== content) return afterFences;
 
   // A model may also return the bare object as its entire reply (no fence).
   const trimmed = content.trim();
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+  if (trimmed.startsWith('{') && trimmed.endsWith('}') && !holds(trimmed)) {
     const artifact = toolCallJsonToArtifact(trimmed);
-    if (artifact) return content.replace(trimmed, () => artifact);
+    if (artifact) {
+      const start = content.indexOf(trimmed);
+      const echoed = echoFence('json', trimmed, content, start, start + trimmed.length);
+      return content.replace(trimmed, () => echoed ?? (echoOnly ? trimmed : artifact));
+    }
   }
   return content;
 }
@@ -498,12 +702,18 @@ function looksLikeHtml(value: string): boolean {
  * otherwise render as raw HTML in the chat (parser gap B). Runs last so the
  * fence/artifact guards see all earlier conversions.
  */
-function promoteBareHtmlDocument(content: string): string {
+function promoteBareHtmlDocument(
+  content: string,
+  echoFence: EchoFence,
+  echoOnly: boolean,
+  holds: (value: string) => boolean
+): string {
   // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
   // accumulate over the gap since the previous document instead of re-reading the whole
   // prefix: both of the old shapes re-scanned from the start of the message on every
   // candidate, so this pass cost time quadratic in the message length.
-  // MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts.
+  // Detection must stay identical to the twin in apps/client/app/utils/artifactParser.ts;
+  // only this copy marks tool echoes.
   const openRegex = /<!DOCTYPE\s+html|<html/gi;
   const closeRegex = /<\/html\s*>/gi;
   let out = '';
@@ -534,14 +744,20 @@ function promoteBareHtmlDocument(content: string): string {
     if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
 
     const doc = content.slice(start, end);
+    if (holds(doc)) continue;
+    out += content.slice(copiedTo, start);
+    copiedTo = end;
+    promoted = true;
+    const echoed = echoFence('html', doc, content, start, end);
+    if (echoed !== null || echoOnly) {
+      out += echoed ?? doc;
+      continue;
+    }
     const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    out += content.slice(copiedTo, start);
     out += `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${doc.trim()}
 </artifact>`;
-    copiedTo = end;
-    promoted = true;
   }
   return promoted ? out + content.slice(copiedTo) : content;
 }
@@ -565,9 +781,28 @@ function extractComponentName(code: string): string | null {
   return null;
 }
 
-function extractHTMLTitle(code: string): string | null {
-  const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
+// Same result as code.match(/<title>(.*?)<\/title>/i)?.[1] ?? null in one forward pass: that
+// regex rescans to the line end from every opener, so repeated `<title>` runs in quadratic time.
+export function extractHTMLTitle(code: string): string | null {
+  const opener = /<title>/gi;
+  const closer = /<\/title>/gi;
+  const lineEnd = /[\n\r\u2028\u2029]/g;
+  let closeAt = -1;
+  let lineEndAt = -1;
+  for (let open = opener.exec(code); open; open = opener.exec(code)) {
+    const bodyStart = opener.lastIndex;
+    if (closeAt < bodyStart) closeAt = nextMatchIndex(closer, code, bodyStart);
+    if (closeAt === Infinity) return null;
+    if (lineEndAt < bodyStart) lineEndAt = nextMatchIndex(lineEnd, code, bodyStart);
+    if (closeAt < lineEndAt) return code.slice(bodyStart, closeAt);
+  }
+  return null;
+}
+
+function nextMatchIndex(re: RegExp, text: string, from: number): number {
+  re.lastIndex = from;
+  const m = re.exec(text);
+  return m ? m.index : Infinity;
 }
 
 // Strip <, >, and " before interpolating a document-controlled title into title="...".
@@ -602,6 +837,7 @@ export function cleanMermaidSyntax(content: string): string {
   const mermaidLines: string[] = [];
   let foundMermaidStart = false;
   let foundInvalidContent = false;
+  let sequence = false;
 
   for (const line of lines) {
     const trimmedLine = line.trim();
@@ -618,6 +854,7 @@ export function cleanMermaidSyntax(content: string): string {
     if (!foundMermaidStart) {
       if (isMermaidDiagramStart(trimmedLine)) {
         foundMermaidStart = true;
+        sequence = /^sequenceDiagram\b/.test(trimmedLine);
         mermaidLines.push(line);
         continue;
       }
@@ -627,7 +864,7 @@ export function cleanMermaidSyntax(content: string): string {
 
     // If we've started Mermaid content, check if this line is valid Mermaid
     if (foundMermaidStart && !foundInvalidContent) {
-      if (isMermaidSyntax(trimmedLine)) {
+      if (isMermaidSyntax(trimmedLine, sequence)) {
         mermaidLines.push(line);
       } else {
         // Found invalid content, stop processing
@@ -730,10 +967,24 @@ function isMermaidDiagramStart(line: string): boolean {
   );
 }
 
+// Only valid inside a sequenceDiagram: words like `option` or `title` are ordinary prose elsewhere.
+const SEQUENCE_PATTERNS = [
+  /^(participant|actor)\s+\S/,
+  /^(create\s+(participant|actor)|destroy)\s+\S/,
+  /^box(\s|$)/,
+  // A hyphen joins word runs (`Auth-Service`); in the sender never before `x`, so it cannot also read as
+  // the `-x` arrow, an ambiguity that backtracks quadratically on a long `A-xA-x...` line with no colon.
+  /^[\w.]+(?:-(?!x)[\w.]+)*(?: [\w.]+(?:-(?!x)[\w.]+)*)*\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+(?:-[\w.]+)*(?: [\w.]+(?:-[\w.]+)*)*\s*:/,
+  /^Note\s+(left of|right of|over)\s+\S/,
+  /^(loop|alt|else|opt|par|and|critical|option|break|rect)(\s|$)/,
+  /^(autonumber|activate|deactivate|links?)(\s|$)/,
+  /^(title|accTitle|accDescr)\b/,
+];
+
 /**
- * Checks if a line contains valid Mermaid syntax
+ * Checks if a line contains valid Mermaid syntax. `sequence` also accepts sequence-diagram-only lines.
  */
-export function isMermaidSyntax(line: string): boolean {
+export function isMermaidSyntax(line: string, sequence = false): boolean {
   // Empty lines are valid
   if (!line.trim()) return true;
 
@@ -777,5 +1028,8 @@ export function isMermaidSyntax(line: string): boolean {
   }
 
   // If it matches a valid Mermaid pattern, it's valid
-  return mermaidPatterns.some(pattern => pattern.test(line));
+  return (
+    mermaidPatterns.some(pattern => pattern.test(line)) ||
+    (sequence && SEQUENCE_PATTERNS.some(pattern => pattern.test(line)))
+  );
 }

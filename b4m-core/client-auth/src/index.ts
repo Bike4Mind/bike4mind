@@ -9,6 +9,7 @@ export {
 
 export {
   AuthenticatedApiClient,
+  NotAuthenticatedError,
   SessionRevokedError,
   type AuthenticatedApiClientOptions,
   type ReauthMessages,

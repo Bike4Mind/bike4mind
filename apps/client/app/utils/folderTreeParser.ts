@@ -278,6 +278,7 @@ export const EXT_TO_SUPPORTED_MIME: Record<string, SupportedFabFileMimeTypes> = 
   conf: M.TXT_PLAIN,
   md: M.TXT_MARKDOWN,
   mdx: M.TXT_MARKDOWN,
+  mmd: M.TXT_PLAIN, // Mermaid diagram source.
   csv: M.CSV,
   json: M.JSON,
   html: M.HTML,

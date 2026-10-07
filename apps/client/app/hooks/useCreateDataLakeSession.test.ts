@@ -15,8 +15,9 @@ vi.mock('@tanstack/react-router', () => ({
 
 const setCurrentSession = vi.fn();
 const setCurrentSessionId = vi.fn();
+let mockWorkBenchAgents: { id: string }[] = [];
 vi.mock('@client/app/contexts/SessionsContext', () => ({
-  useSessions: () => ({ setCurrentSession, setCurrentSessionId }),
+  useSessions: () => ({ setCurrentSession, setCurrentSessionId, workBenchAgents: mockWorkBenchAgents }),
 }));
 
 const apiPost = vi.fn();
@@ -38,6 +39,7 @@ beforeEach(() => {
   setCurrentSessionId.mockClear();
   apiPost.mockReset();
   usePendingLakeScope.getState().setLakeTags([]);
+  mockWorkBenchAgents = [];
 });
 
 describe('useCreateDataLakeSession', () => {
@@ -100,6 +102,23 @@ describe('useCreateDataLakeSession', () => {
         lakeScopeExplicit: true,
         knowledgeIds: ['file-1'],
       },
+      { timeout: 60_000 }
+    );
+  });
+
+  // Send clears the workbench after turn 1, so without these turn 2 would resolve no agent.
+  it('creates the session holding the agents attached on /new', async () => {
+    apiPost.mockResolvedValue({ data: { id: 'session-agents' } });
+    mockWorkBenchAgents = [{ id: 'agent-1' }, { id: 'agent-2' }];
+    const { result } = renderWithClient(() => useCreateDataLakeSession());
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/sessions/create',
+      { name: 'New Notebook', forceKnowledgeRetrieval: true, agentIds: ['agent-1', 'agent-2'] },
       { timeout: 60_000 }
     );
   });

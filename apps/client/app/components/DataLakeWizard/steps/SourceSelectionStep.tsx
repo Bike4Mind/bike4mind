@@ -25,14 +25,15 @@ import { toast } from 'sonner';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { countExcludedFiles, formatBytes } from '@client/app/utils/folderTreeParser';
-import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
-import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+import { MIN_DATA_LAKE_SLUG_LENGTH, slugifyDataLakeName } from '@bike4mind/common';
 import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { useWizardLakeSlug } from '@client/app/components/DataLakeWizard/useWizardLakeSlug';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
-import DriveConnectAction from './DriveConnectAction';
+import LakeSourceConnectActions from './LakeSourceConnectActions';
 import DrivePendingConnectAction from './DrivePendingConnectAction';
+import DriveConnectUnavailableButton, { DRIVE_PERSONAL_OWNER_ONLY_REASON } from './DriveConnectUnavailableButton';
 
 const supportsWebkitDirectory =
   typeof HTMLInputElement !== 'undefined' && 'webkitdirectory' in HTMLInputElement.prototype;
@@ -77,8 +78,10 @@ export default function SourceSelectionStep() {
   // Gates on the same MIN_DATA_LAKE_SLUG_LENGTH the create schema validates against, so a name
   // that slugifies to empty/too-short is caught before the user commits files instead of failing
   // at the final upload step.
-  const slug = slugifyDataLakeName(config.name);
-  const slugTooShort = config.name.trim().length > 0 && slug.length < MIN_DATA_LAKE_SLUG_LENGTH;
+  // Validated locally, never against the server preview, so the gate doesn't wait on the network.
+  const localSlug = slugifyDataLakeName(config.name);
+  const slugTooShort = config.name.trim().length > 0 && localSlug.length < MIN_DATA_LAKE_SLUG_LENGTH;
+  const displaySlug = useWizardLakeSlug();
 
   const includedFiles = allFiles.filter(f => !f.excluded);
   const includedSize = includedFiles.reduce((sum, f) => sum + f.size, 0);
@@ -174,7 +177,7 @@ export default function SourceSelectionStep() {
             autoFocus
           />
           <FormHelperText>
-            Slug: <code>{slug || '...'}</code>
+            Slug: <code data-testid="source-name-slug">{displaySlug || '...'}</code>
           </FormHelperText>
           {slugTooShort && (
             <FormHelperText data-testid="source-name-slug-error">
@@ -310,8 +313,24 @@ export default function SourceSelectionStep() {
         </Box>
 
         {/* Append mode has a lake to bind to, so the folder connects on the spot. Create mode
-            does not, so the selection is parked and connected on commit. */}
-        {targetLake ? canConnectDrive && <DriveConnectAction lake={targetLake} /> : <DrivePendingConnectAction />}
+            does not, so the selection is parked and connected on commit; GitHub is not offered
+            there, since its install round-trip leaves the page and must sign a real lake id into
+            its state. Someone else's personal lake gets the control disabled with its reason, so
+            Drive stays discoverable where it cannot connect. */}
+        {targetLake ? (
+          canConnectDrive ? (
+            <LakeSourceConnectActions lake={targetLake} />
+          ) : (
+            !targetLake.organizationId && (
+              <DriveConnectUnavailableButton
+                testId="drive-connect-personal-lake-btn"
+                reason={DRIVE_PERSONAL_OWNER_ONLY_REASON}
+              />
+            )
+          )
+        ) : (
+          <DrivePendingConnectAction />
+        )}
       </Stack>
 
       {/* Once files are in hand: what was picked up, plus the two opt-in steps. Both default

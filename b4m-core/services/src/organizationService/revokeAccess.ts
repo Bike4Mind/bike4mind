@@ -85,7 +85,7 @@ export const revokeAccess = async (
   organization.adminUserIds = purged.adminUserIds;
   organization.managerId = purged.managerId;
 
-  await adapters.db.organizations.update(organization);
+  await adapters.db.organizations.removeMember(organization.id, userId);
 
   // Mirror leave.ts: if the org we just removed them from was the user's currently-selected org,
   // clear it - otherwise org-scoped access (data-lake AccessContext, team-wide prompts) and billing
