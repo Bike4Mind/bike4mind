@@ -667,7 +667,7 @@ async function trySemanticKbSearch(
     if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
     // Library off: only lake arms may match. With none, the keyword arm reports the empty corpus
     // (an ownership query with zero arms would throw on restrictToDataLake).
-    const excludesLibrary = sessionExcludesLibrary(context);
+    const excludesLibrary = await sessionExcludesLibrary(context);
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -1408,7 +1408,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Same degraded-read rule as the semantic arm's origin lakes.
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
-            const excludesLibrary = sessionExcludesLibrary(context);
+            const excludesLibrary = await sessionExcludesLibrary(context);
             if (excludesLibrary && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
               await context.statusUpdate({
                 promptMeta: {

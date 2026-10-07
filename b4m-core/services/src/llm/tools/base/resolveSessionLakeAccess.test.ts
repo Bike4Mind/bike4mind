@@ -152,12 +152,14 @@ describe('resolveSessionLakeAccess', () => {
 
 describe('sessionExcludesLibrary', () => {
   const ctx = (o: Partial<ToolContext>) => o as ToolContext;
+  const owner = () => Promise.resolve(RESOLVED);
 
   it.each([
     ['plain chat', {}, false],
-    ['derived lake tag without the sidecar', { sessionRetrievalTags: ['datalake:a'] }, false],
+    ['legacy lake chat (named lake, no sidecar)', { sessionRetrievalTags: ['datalake:alpha'] }, true],
+    ['lake named by its file-tag prefix', { sessionRetrievalTags: ['alpha:'] }, true],
     ['explicit named lake, unset', { sessionRetrievalTags: ['datalake:a'], sessionLakeScopeExplicit: true }, true],
-    ['explicit content tag, unset', { sessionRetrievalTags: ['legal:x'], sessionLakeScopeExplicit: true }, false],
+    ['content tag naming no lake, unset', { sessionRetrievalTags: ['legal:x'], sessionLakeScopeExplicit: true }, false],
     [
       'explicit named lake, on',
       { sessionRetrievalTags: ['datalake:a'], sessionLakeScopeExplicit: true, sessionIncludeLibraryFiles: true },
@@ -165,7 +167,17 @@ describe('sessionExcludesLibrary', () => {
     ],
     ['all lakes, off', { sessionRetrievalTags: [], sessionIncludeLibraryFiles: false }, true],
     ['agent kbScope, off', { kbScope: { fileIds: ['f'] }, sessionIncludeLibraryFiles: false }, false],
-  ])('%s -> %s', (_, overrides, expected) => {
-    expect(sessionExcludesLibrary(ctx(overrides as Partial<ToolContext>))).toBe(expected);
+  ])('%s -> %s', async (_, overrides, expected) => {
+    expect(await sessionExcludesLibrary(ctx(overrides as Partial<ToolContext>), owner)).toBe(expected);
+  });
+
+  it('does not resolve lake access when the answer cannot depend on it', async () => {
+    const loader = vi.fn(owner);
+    await sessionExcludesLibrary(
+      ctx({ sessionRetrievalTags: ['datalake:a'], sessionIncludeLibraryFiles: false }),
+      loader
+    );
+    await sessionExcludesLibrary(ctx({}), loader);
+    expect(loader).not.toHaveBeenCalled();
   });
 });

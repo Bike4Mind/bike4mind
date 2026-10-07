@@ -1457,7 +1457,11 @@ describe('retrieve_knowledge_content narrows lake access to the session lake', (
   it('attributes the audit against OWNER-WIDE lakes, not the narrowed set', async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(twoLakes);
     const record = vi.fn();
-    const ctx = makeContext({ retrievalFilter: undefined, sessionRetrievalTags: ['datalake:mine'] } as never);
+    const ctx = makeContext({
+      retrievalFilter: undefined,
+      sessionRetrievalTags: ['datalake:mine'],
+      sessionIncludeLibraryFiles: true,
+    } as never);
     // The audit block is gated on this repository being present - without it the assertion below
     // would pass vacuously by never entering the branch at all.
     (ctx.db as Record<string, unknown>).lakeAccessEvents = { record };
@@ -1802,6 +1806,26 @@ describe('retrieve_knowledge_content with the library off', () => {
     );
 
     expect(await runById(ctx)).toContain('Retrieved content from');
+  });
+
+  // A child agent carries no attachedFileIds; that must only matter where the library is excluded.
+  it('opens an owned file with no attachedFileIds in an unscoped chat', async () => {
+    const ctx = makeContext({ attachedFileIds: undefined, sessionRetrievalTags: [] });
+    (ctx.db.fabfiles!.findByIdAndUserId as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf' })
+    );
+
+    expect(await runById(ctx)).toContain('Retrieved content from');
+  });
+
+  it('does not open an unattached owned file in a legacy lake chat with the flag unset', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = makeContext({ sessionRetrievalTags: ['datalake:acme'] });
+    (ctx.db.fabfiles!.findById as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeFile({ fileName: 'Notes.pdf', userId: 'u1', tags: [] })
+    );
+
+    expect(await runById(ctx)).not.toContain('Retrieved content from');
   });
 
   it('opens an owned personal file through the fast path when the library is on', async () => {

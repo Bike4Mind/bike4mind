@@ -1,3 +1,4 @@
+import { effectiveIncludeLibraryFiles } from '@bike4mind/common';
 import type { getDynamicDataLakeAccess } from './getDynamicDataLakeTags';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
@@ -34,6 +35,21 @@ export function sessionNamesALake(access: ResolvedLakeAccessSet, sessionRetrieva
   if (!sessionRetrievalTags?.length) return false;
   if (datalakeTagsFrom(sessionRetrievalTags).length > 0) return true;
   return access.lakes.some(lake => !!lake.fileTagPrefix && sessionRetrievalTags.includes(lake.fileTagPrefix));
+}
+
+/**
+ * Whether a session leaves the caller's own/shared/group library out of its grounding (the
+ * "+ My files" chip off). The ONE derivation forced retrieval (KnowledgeRetrievalFeature) and every
+ * knowledge tool (resolveSessionLakeAccess.ts sessionExcludesLibrary) share: unset excludes exactly
+ * when the session names a lake, which is the same predicate the narrowing uses. `access` is the
+ * caller's PRE-narrowing lake access (it only matters for prefix-named lakes).
+ */
+export function sessionExcludesLibraryFiles(
+  includeLibraryFiles: boolean | undefined,
+  access: ResolvedLakeAccessSet,
+  sessionRetrievalTags: string[] | undefined
+): boolean {
+  return !effectiveIncludeLibraryFiles(includeLibraryFiles, sessionNamesALake(access, sessionRetrievalTags));
 }
 
 /**

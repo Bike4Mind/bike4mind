@@ -3439,6 +3439,8 @@ async function processSubagentDispatch(
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
       sessionIncludeLibraryFiles: session.includeLibraryFiles,
+      // Without it a library-off session's delegated agent cannot open the files attached to it.
+      attachedFileIds: session.knowledgeIds ?? [],
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

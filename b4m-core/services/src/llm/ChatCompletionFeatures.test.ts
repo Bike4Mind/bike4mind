@@ -10,6 +10,9 @@ import {
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
+import { sessionExcludesLibrary } from './tools/base/resolveSessionLakeAccess';
+import type { ToolContext } from './tools/base/types';
+import type { ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
 import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
@@ -4073,6 +4076,41 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
         expect.anything(),
         expect.objectContaining({ restrictToDataLake: restrict })
       );
+    });
+
+    // Forced retrieval and the knowledge tools must answer "is the library excluded?" identically,
+    // or a turn grounds lake-only while the tool the model calls re-admits the library.
+    it.each([
+      ['a legacy lake chat (named lake, no lakeScopeExplicit)', ['datalake:acme'], true],
+      ['a lake named by its file-tag prefix', ['acme:'], true],
+      ['a plain chat', [], false],
+      ['a content-tag session', ['legal:review'], false],
+    ])('forced retrieval and the knowledge tools agree for %s with the flag unset', async (_, tags, excluded) => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, tags as string[], undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+      const ownerAccess = {
+        dataLakeTags: [LAKE_DOC.datalakeTag],
+        dataLakeTagPrefixes: [],
+        scopedTagPrefixes: [LAKE_DOC.fileTagPrefix],
+        lakes: [{ ...LAKE_DOC, membership: { kind: 'owned' }, source: 'dynamic' }],
+      } as unknown as ResolvedLakeAccessSet;
+      const toolExcludes = await sessionExcludesLibrary({ sessionRetrievalTags: tags as string[] } as ToolContext, () =>
+        Promise.resolve(ownerAccess)
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: excluded })
+      );
+      expect(toolExcludes).toBe(excluded);
     });
 
     it('abstains as no_lakes for an all-lakes session excluding the library with no lake to reach', async () => {

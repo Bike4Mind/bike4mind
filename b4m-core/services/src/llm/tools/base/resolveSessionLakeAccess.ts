@@ -1,7 +1,9 @@
-import { effectiveIncludeLibraryFiles } from '@bike4mind/common';
-import { datalakeTagsFrom } from '../../../dataLakeService/getDataLakePrompts';
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
-import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
+import {
+  sessionExcludesLibraryFiles,
+  sessionGroundsOnNoLake,
+  type ResolvedLakeAccessSet,
+} from '../../../dataLakeService/narrowLakeAccessToSession';
 import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
 import type { ToolContext } from './types';
 
@@ -44,16 +46,20 @@ export async function resolveOwnerLakeAccess(context: ToolContext): Promise<Reso
 
 /**
  * Whether the knowledge tools must leave the caller's own/shared library out of this session's
- * corpus (the "+ My files" chip off). An explicit flag wins; unset excludes only in a session
- * deliberately scoped to a named lake, so derived-tag plain chats and content-tag API sessions keep
- * their library. Forced retrieval decides the same flag in KnowledgeRetrievalFeature. An agent
- * kbScope is already its own fail-closed corpus and is never narrowed here.
+ * corpus (the "+ My files" chip off). Same derivation and input as forced retrieval
+ * (sessionExcludesLibraryFiles on the pre-narrowing owner access), so a tool can never re-admit
+ * what forced retrieval left out. An agent kbScope is already its own fail-closed corpus and is
+ * never narrowed here. Owner access is resolved only when the answer depends on it.
  */
-export function sessionExcludesLibrary(context: ToolContext): boolean {
+export async function sessionExcludesLibrary(
+  context: ToolContext,
+  ownerAccess: () => Promise<ResolvedLakeAccessSet> = () => resolveOwnerLakeAccess(context)
+): Promise<boolean> {
   if (context.kbScope) return false;
-  const namesALake =
-    context.sessionLakeScopeExplicit === true && datalakeTagsFrom(context.sessionRetrievalTags ?? []).length > 0;
-  return !effectiveIncludeLibraryFiles(context.sessionIncludeLibraryFiles, namesALake);
+  const tags = context.sessionRetrievalTags;
+  const needsAccess = context.sessionIncludeLibraryFiles === undefined && !!tags?.length;
+  const access = needsAccess ? await ownerAccess() : noSessionLakes();
+  return sessionExcludesLibraryFiles(context.sessionIncludeLibraryFiles, access, tags);
 }
 
 /** What a knowledge tool says when the library is off and no lake is left to search. */

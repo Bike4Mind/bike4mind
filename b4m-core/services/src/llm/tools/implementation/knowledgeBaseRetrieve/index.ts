@@ -155,7 +155,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           let files: IFabFileDocument[] = [];
           // Library off: only lake members, plus what the user attached, may be opened. The
           // not-found wording stays identical so an id probe cannot tell "off" from "missing".
-          const excludesLibrary = sessionExcludesLibrary(context);
+          const excludesLibrary = await sessionExcludesLibrary(context, ownerAccess);
           const attachedFileIds = new Set(context.attachedFileIds ?? []);
 
           // Path A: direct file_id lookup

@@ -3654,12 +3654,12 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     });
   }
 
-  // Unset excludes only in a session explicitly scoped to a named lake; a set flag wins.
+  // Unset excludes whenever the session names a lake (with or without the sidecar); a set flag wins.
   it.each([
     ['explicit lake, unset', ['datalake:mine'], true, undefined, true],
     ['explicit lake, off', ['datalake:mine'], true, false, true],
     ['explicit lake, on', ['datalake:mine'], true, true, false],
-    ['derived lake tag, unset', ['datalake:mine'], undefined, undefined, false],
+    ['legacy lake chat, unset', ['datalake:mine'], undefined, undefined, true],
     ['all lakes, off', undefined, undefined, false, true],
     ['plain chat, unset', undefined, undefined, undefined, false],
   ])('%s -> restrictToDataLake %s on both arms', async (_, tags, explicit, flag, restrict) => {

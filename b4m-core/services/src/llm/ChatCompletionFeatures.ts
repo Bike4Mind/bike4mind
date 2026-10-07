@@ -72,7 +72,6 @@ import {
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
-  effectiveIncludeLibraryFiles,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -81,6 +80,7 @@ import {
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   narrowLakeAccessToSession,
+  sessionExcludesLibraryFiles,
   sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
@@ -2043,7 +2043,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
    */
   private readerConsentTags: string[];
-  /** `session.includeLibraryFiles` - resolve through effectiveIncludeLibraryFiles, never raw. */
+  /** `session.includeLibraryFiles` - resolve through sessionExcludesLibraryFiles, never raw. */
   private includeLibraryFiles: boolean | undefined;
 
   constructor(
@@ -2843,7 +2843,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // lake-scoped - silently confining its grounding to lake content and losing the caller's own
       // files. `restrictToDataLake` must mean "the session excludes the library", not "this code
       // ran": `lakeScoped` while `includeLibraryFiles` is unset, the explicit flag once set. Explicit
-      // false therefore also confines an all-lakes session (no lake named) to lake content.
+      // false therefore also confines an all-lakes session (no lake named) to lake content. The
+      // knowledge tools derive it through the same sessionExcludesLibraryFiles call, so they agree.
       //
       // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
       // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
@@ -2857,7 +2858,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
-      const excludeLibrary = !effectiveIncludeLibraryFiles(this.includeLibraryFiles, lakeScoped);
+      const excludeLibrary = sessionExcludesLibraryFiles(this.includeLibraryFiles, resolvedAccess, this.retrievalTags);
       const hasLakeArms = dataLakeTags.length > 0 || dataLakeTagPrefixes.length > 0 || lakeMemberships.length > 0;
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived
