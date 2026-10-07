@@ -69,6 +69,7 @@ beforeEach(() => {
   sessionStorage.clear();
   takeDrivePickerResume();
   useDataLakeWizardStore.getState().resetWizard();
+  useDataLakeWizardStore.getState().closeManager();
 });
 
 describe('GoogleDriveCallbackPage', () => {
@@ -230,6 +231,39 @@ describe('GoogleDriveCallbackPage', () => {
       await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
       expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
       expect(takeDrivePickerResume()).toBe(false);
+    });
+  });
+
+  describe('returning to an existing lake', () => {
+    const saveLakeHandoff = () =>
+      saveDriveConnectHandoff(
+        { kind: 'lake', userId: 'user-1', organizationId: 'org-1', dataLakeId: 'lake-7' },
+        'https://accounts.google.com/auth?state=signed-state'
+      );
+
+    it('reopens that lake in the manager without touching the Create wizard', async () => {
+      saveLakeHandoff();
+      h.apiGet.mockResolvedValue({ data: undefined });
+
+      render(<GoogleDriveCallbackPage />);
+
+      await waitFor(() => expect(useDataLakeWizardStore.getState().isManagerOpen).toBe(true));
+      const store = useDataLakeWizardStore.getState();
+      expect(store.managerTab).toBe('mine');
+      expect(store.managerLakeId).toBe('lake-7');
+      expect(store.isOpen).toBe(false);
+      expect(takeDrivePickerResume()).toBe(false);
+      expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
+    });
+
+    it('does not reopen the lake when the connect failed', async () => {
+      saveLakeHandoff();
+      rejectWithCode('GOOGLE_DRIVE_CONNECT_EXPIRED');
+
+      render(<GoogleDriveCallbackPage />);
+
+      await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+      expect(useDataLakeWizardStore.getState().isManagerOpen).toBe(false);
     });
   });
 });

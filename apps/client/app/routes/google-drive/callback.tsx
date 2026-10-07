@@ -49,14 +49,18 @@ const reportConnectFailure = (error: unknown) => {
 
 /**
  * Puts the user back where the connect started, when that surface saved a handoff for this exact
- * OAuth attempt (see driveConnectHandoff). Today that is the Create wizard: reopen it with the
- * typed-in config and have its Drive action open the folder picker.
+ * OAuth attempt (see driveConnectHandoff): the Create wizard reopens with the typed-in config and
+ * opens the folder picker; an existing lake reopens in the manager, where the user picks the folder.
  */
 const resumeDriveConnect = (oauthState: string) => {
   const userId = useUser.getState().currentUser?.id;
   if (!userId) return;
   const handoff = consumeDriveConnectHandoff({ userId, organizationId: activeOrgId() ?? null, oauthState });
-  if (handoff?.kind !== 'createWizard') return;
+  if (!handoff) return;
+  if (handoff.kind === 'lake') {
+    useDataLakeWizardStore.getState().openManager('mine', handoff.dataLakeId);
+    return;
+  }
   useDataLakeWizardStore.getState().openWizard();
   useDataLakeWizardStore.setState({
     step: 'source',
