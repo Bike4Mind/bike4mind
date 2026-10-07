@@ -5,6 +5,7 @@ import {
   AWAITING_APPROVAL_REASON,
   AWAITING_PRICE_REASON,
   NOT_INVOCABLE_REASON,
+  PRICED_IN_BUILD_REASON,
   UNCORROBORATED_PRICE_REASON,
   evaluatePromotion,
 } from './promotion';
@@ -74,14 +75,29 @@ describe('evaluatePromotion', () => {
   });
 
   it('words the denial differently when an aggregator quoted a price nobody corroborated', () => {
-    const decision = evaluate({ hasTrustedPrice: false, aggregatorPriceUncorroborated: true });
+    const decision = evaluate({ hasTrustedPrice: false, awaitingPrice: 'aggregator-quote' });
 
     expect(decision.blockedBy).toEqual(['no-trusted-price']);
     expect(decision.autoDisabledReason).toBe(UNCORROBORATED_PRICE_REASON);
   });
 
+  it('words the denial as priced in this build when only a non-per-token literal stands behind it', () => {
+    const decision = evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' });
+
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(PRICED_IN_BUILD_REASON);
+  });
+
+  it('does not let the priced-in-build flag change a verdict', () => {
+    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'build-literal' })).toEqual({
+      promote: true,
+      blockedBy: [],
+    });
+    expect(evaluate({ hasTrustedPrice: false, awaitingPrice: 'build-literal' }).promote).toBe(false);
+  });
+
   it('does not let the uncorroborated flag change a verdict', () => {
-    expect(evaluate({ hasTrustedPrice: true, aggregatorPriceUncorroborated: true })).toEqual({
+    expect(evaluate({ hasTrustedPrice: true, awaitingPrice: 'aggregator-quote' })).toEqual({
       promote: true,
       blockedBy: [],
     });
