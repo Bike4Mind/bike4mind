@@ -7,7 +7,7 @@ import {
   User,
   withTransaction,
 } from '@bike4mind/database';
-import { moderateImageOrThrow } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { isMediaOnlyMimeType } from '@bike4mind/common';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
 import { isUntrackedFabFileKey } from '@server/s3/untrackedFabFileKey';

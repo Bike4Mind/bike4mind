@@ -54,7 +54,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 // generation/edit, chat completion, etc.) stays real. This lets tests drive both a clean
 // pass and an infrastructure failure directly, instead of only through the B4M_SELF_HOST
 // bypass built into the real gate.
-vi.mock('@bike4mind/services/llm', async importOriginal => {
+vi.mock('@bike4mind/services/llm/imageModerationGate', async importOriginal => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,

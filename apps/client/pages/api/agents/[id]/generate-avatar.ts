@@ -14,7 +14,7 @@ import {
 import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
-import { moderateImageOrThrow } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 
