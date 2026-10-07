@@ -6,14 +6,16 @@
  *   button (pages/api/data-lakes/[id]/github-connection/sync.ts), as a non-manual run: githubLakeIngest
  *   no-ops when HEAD already matches the last synced commit (so a redelivery is harmless), and defers
  *   behind a sync that is already in flight for up to ~18 min (its MAX_GITHUB_LAKE_REDRIVES redrives
- *   at REDRIVE_DELAY_SECONDS apart) before dropping the message. A sync that runs longer than that
- *   silently misses this push; the next push, or a manual Sync, picks up the missed commit.
+ *   at REDRIVE_DELAY_SECONDS apart) before dropping the message. A push missed that way, or never
+ *   delivered at all, is caught by the scheduled reconcile when its flag is on
+ *   (apps/workers/src/cron/githubLakeReconcile.ts); otherwise the next push or a manual Sync picks it up.
  * - `installation.deleted` / `installation_repositories.removed`: the App lost access, so each
  *   affected connection is queued on githubLakeRevokeQueue for purge (queueHandlers/githubLakeRevoke.ts).
  *   It only enqueues: GitHub never redelivers on its own and a live sync makes the purge 409, so the
  *   queue owns the retries. The affected connections are pinned per delivery id, so a redelivery
  *   re-sends the same revokes and never reaches a connection made after the original event.
  * - Everything else (ping, the reversible `suspend`, other actions) is acknowledged and ignored.
+ *   Every ignored delivery is logged with a reason code, so a push that queued nothing can be explained.
  *
  * There is no user here; the App's webhook HMAC is the only auth.
  *
@@ -46,8 +48,6 @@ const PushEventSchema = z.object({
   installation: z.object({ id: z.number() }),
 });
 
-type PushEvent = z.infer<typeof PushEventSchema>;
-
 type AuditLogger = ReturnType<typeof IntegrationAuditLogger.create>;
 
 type DeliveryContext = {
@@ -57,8 +57,38 @@ type DeliveryContext = {
   deliveryId: string | undefined;
 };
 
-const isDefaultBranchPush = (event: PushEvent): boolean =>
-  !event.deleted && event.ref === `refs/heads/${event.repository.default_branch}`;
+type IgnoredReason =
+  | 'unhandled_event'
+  | 'not_default_branch'
+  | 'branch_deleted'
+  | 'no_connection'
+  | 'connection_disabled'
+  | 'not_revoking_action';
+
+// The response text predates the reason codes and stays as it was; the codes only go to the log.
+const IGNORED_RESPONSE: Record<IgnoredReason, string> = {
+  unhandled_event: 'not a handled event',
+  not_default_branch: 'not the default branch',
+  branch_deleted: 'not the default branch',
+  no_connection: 'no enabled lake for this repository',
+  connection_disabled: 'no enabled lake for this repository',
+  not_revoking_action: 'not a revoking action',
+};
+
+function ignore(
+  res: NextApiResponse,
+  logger: Logger,
+  reason: IgnoredReason,
+  fields: { deliveryId: string | undefined; event: string } & Record<string, unknown>
+) {
+  logger.info('[githubLakeWebhook] ignored delivery', { reason, ...fields });
+  return res.status(200).json({ status: 'ignored', reason: IGNORED_RESPONSE[reason] });
+}
+
+const actionOf = (body: unknown): string | undefined =>
+  typeof body === 'object' && body !== null && typeof (body as { action?: unknown }).action === 'string'
+    ? (body as { action: string }).action
+    : undefined;
 
 const connectToDatabase = (logger: Logger) => connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
 
@@ -124,7 +154,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ message: 'Missing x-github-event header' });
   }
   if (eventType !== 'push' && !isGitHubLakeRevocationEvent(eventType)) {
-    return res.status(200).json({ status: 'ignored', reason: 'not a handled event' });
+    return ignore(res, logger, 'unhandled_event', { deliveryId, event: eventType });
   }
 
   let body: unknown;
@@ -145,12 +175,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 async function handlePush(body: unknown, { res, logger, auditLogger, deliveryId }: DeliveryContext) {
   const parsed = PushEventSchema.safeParse(body);
   if (!parsed.success) {
+    logger.warn('[githubLakeWebhook] push payload has an unexpected shape', {
+      deliveryId,
+      error: parsed.error.message,
+    });
     auditLogger.failure('invalid_payload_shape');
     return res.status(400).json({ message: 'Not a GitHub App push payload' });
   }
   const event = parsed.data;
-  if (!isDefaultBranchPush(event)) {
-    return res.status(200).json({ status: 'ignored', reason: 'not the default branch' });
+  const defaultBranch = event.repository.default_branch;
+  if (event.ref !== `refs/heads/${defaultBranch}`) {
+    return ignore(res, logger, 'not_default_branch', { deliveryId, event: 'push', ref: event.ref, defaultBranch });
+  }
+  if (event.deleted) {
+    return ignore(res, logger, 'branch_deleted', { deliveryId, event: 'push', ref: event.ref, defaultBranch });
   }
 
   await connectToDatabase(logger);
@@ -158,8 +196,16 @@ async function handlePush(body: unknown, { res, logger, auditLogger, deliveryId 
   // installation from resyncing a repo bound through another.
   const connections = await orgGitHubLakeConnectionRepository.findByInstallationId(event.installation.id);
   const conn = connections.find(c => c.repositoryId === event.repository.id);
-  if (!conn || conn.enabled === false) {
-    return res.status(200).json({ status: 'ignored', reason: 'no enabled lake for this repository' });
+  if (!conn) {
+    return ignore(res, logger, 'no_connection', {
+      deliveryId,
+      event: 'push',
+      installationId: event.installation.id,
+      repositoryId: event.repository.id,
+    });
+  }
+  if (conn.enabled === false) {
+    return ignore(res, logger, 'connection_disabled', { deliveryId, event: 'push', connectionId: conn.id });
   }
 
   try {
@@ -192,7 +238,7 @@ async function handleRevocation(
 ) {
   const target = parseGitHubLakeRevocation(eventType, body);
   if (target === null) {
-    return res.status(200).json({ status: 'ignored', reason: 'not a revoking action' });
+    return ignore(res, logger, 'not_revoking_action', { deliveryId, event: eventType, action: actionOf(body) });
   }
   if ('malformed' in target) {
     logger.warn('[githubLakeWebhook] malformed payload for a revoking event', {
