@@ -154,7 +154,11 @@ export function useCompleteLakeGitHubConnect() {
     onSuccess: (connection, { dataLakeId }) => {
       // Seed the bound connection and refetch in the background: an awaited invalidation would hold
       // the picker's spinner until every observer of the key refetched.
-      queryClient.setQueryData(dataLakeKeys.gitHubConnection(dataLakeId), connection);
+      // Only a caller who passed the connect gate reaches here, so the seeded envelope can manage.
+      queryClient.setQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId), {
+        connection,
+        canManage: true,
+      });
       void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
       // The picker's list is now stale (the bound repository must show as taken); a closed picker
       // just refetches fresh next time it opens rather than carrying this invalidation forward.
@@ -193,8 +197,18 @@ export function useDisconnectLakeGitHub() {
     onSuccess: ({ disconnecting }, dataLakeId) => {
       // Show the outcome now and refresh in the background: awaiting the refetches (the tag-count
       // prefix spans every lake) held the confirm spinner for the length of the slowest one.
-      queryClient.setQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
-        disconnecting ? previous && { ...previous, disconnecting: true, disconnectStalled: false } : null
+      // The disconnect route is manage-gated, so the caller can manage whichever envelope this leaves behind.
+      queryClient.setQueryData<LakeGitHubConnectionResponse>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
+        disconnecting
+          ? previous && {
+              ...previous,
+              connection: previous.connection && {
+                ...previous.connection,
+                disconnecting: true,
+                disconnectStalled: false,
+              },
+            }
+          : { connection: null, canManage: true }
       );
       void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
       void invalidateLakeFileQueries(queryClient, dataLakeId);

@@ -334,7 +334,7 @@ describe('useCompleteLakeGitHubConnect', () => {
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnection('lake1'));
     const removedKeys = removeSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(removedKeys).toContainEqual(dataLakeKeys.gitHubRepositoryChoices('lake1'));
-    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual(connection);
+    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual({ connection, canManage: true });
   });
 
   it('settles as soon as the POST does, without waiting on the connection refetch', async () => {
@@ -436,7 +436,10 @@ describe('useDisconnectLakeGitHub', () => {
   it('still shows a repeat disconnect as disconnecting when its 202 says no new purge was queued', async () => {
     del.mockResolvedValue({ status: 202, data: { success: true, queued: false } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), { ...connected, disconnecting: true });
+    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), {
+      connection: { ...connected, disconnecting: true },
+      canManage: true,
+    });
     const { result } = renderHook(() => useDisconnectLakeGitHub(), { wrapper: wrapperFor(queryClient) });
 
     await act(async () => {
@@ -444,22 +447,24 @@ describe('useDisconnectLakeGitHub', () => {
     });
 
     expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual({
-      ...connected,
-      disconnecting: true,
-      disconnectStalled: false,
+      connection: { ...connected, disconnecting: true, disconnectStalled: false },
+      canManage: true,
     });
   });
 
   it('clears the cached connection on a 204 (nothing was connected)', async () => {
     del.mockResolvedValue({ status: 204, data: '' });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), connected);
+    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), { connection: connected, canManage: true });
     const { result } = renderHook(() => useDisconnectLakeGitHub(), { wrapper: wrapperFor(queryClient) });
 
     await act(async () => {
       await result.current.mutateAsync('lake1');
     });
 
-    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toBeNull();
+    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual({
+      connection: null,
+      canManage: true,
+    });
   });
 });
