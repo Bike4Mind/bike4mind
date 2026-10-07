@@ -782,11 +782,10 @@ export const RetrievalSummarySchema = z.object({
    * an archived or quota-limited lake) adds an enum value here rather than a description.
    *
    * 'access' is the only reason today: the caller could see the lake exists (their org membership,
-   * the lake's public listing, or having created it; for a lake named by identity, also administering
-   * its org; an admin may see any lake) but they hold neither its own gate/entitlement nor an
-   * ownership or grant exception for it. A lake the caller could not see is never counted, so the
-   * count cannot confirm that a guessed lake tag exists. The account-wide count still bounds on
-   * membership only.
+   * the lake's public listing, or having created it; administering its org; an admin may see any
+   * lake) but they hold neither its own gate/entitlement nor an ownership or grant exception for
+   * it. A lake the caller could not see is never counted, so the count cannot confirm that a
+   * guessed lake tag exists.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement

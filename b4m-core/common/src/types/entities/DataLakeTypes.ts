@@ -741,7 +741,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   ): Promise<IDataLakeDocument[]>;
   /**
    * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055). Account-wide: active
-   * lakes the caller can see exist - by org membership or public listing - but whose own
+   * lakes the caller can see exist - by org membership, administering the org, or public listing - but whose own
    * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
    * through the owner or grant bypass (those are never "excluded"; the resolver restores them
    * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
@@ -775,10 +775,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        */
       callerMaySeeAllLakes?: boolean;
       /**
-       * Only read with `restrictToTags`. Orgs the caller holds admin rights in (pre-resolved via
-       * `findIdsWithAdminRights`). Their lakes count as already visible, matching browse's org-admin
-       * arm, so a non-member org admin is not told nothing was excluded. Widens visibility only,
-       * never reach.
+       * Orgs the caller holds admin rights in (pre-resolved via `findIdsWithAdminRights`), read by
+       * both the scoped and the account-wide count. Their lakes count as already visible, matching
+       * browse's org-admin arm, so a non-member org admin is not told nothing was excluded. Widens
+       * visibility only, never reach.
        */
       administeredOrgIds?: string[];
     }

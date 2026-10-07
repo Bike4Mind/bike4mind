@@ -340,6 +340,23 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
   });
 
+  it('counts a gated lake in an org the caller administers but is not a member of, and not for a stranger', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-x', organizationId: 'orgX', createdByUserId: 'alice', requiredUserTag: 'tag' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: ['orgX'] })
+    ).toBe(1);
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: ['orgY'] })
+    ).toBe(0);
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', { administeredOrgIds: [] })).toBe(
+      0
+    );
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
   it('counts a gated PUBLIC lake app-wide, even with no shared org', async () => {
     await dataLakeRepository.create(
       baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
