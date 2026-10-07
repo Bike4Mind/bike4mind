@@ -382,6 +382,11 @@ describe('mergeRetrievalSummary', () => {
       expect(merged && 'preauthorizedLakeIdsUsed' in merged).toBe(false);
     });
 
+    it('is present-and-empty when a side ran but reached no pre-authorized lake', () => {
+      const merged = mergeRetrievalSummary(base(), base({ preauthorizedLakeIdsUsed: [] }));
+      expect(merged?.preauthorizedLakeIdsUsed).toEqual([]);
+    });
+
     it('survives a side that never asserted the field', () => {
       const merged = mergeRetrievalSummary(base({ preauthorizedLakeIdsUsed: ['lake1'] }), base());
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['lake1']);
@@ -402,6 +407,11 @@ describe('mergeRetrievalSummary', () => {
       expect(merged && 'grantedLakeIdsUsed' in merged).toBe(false);
     });
 
+    it('is present-and-empty when a side ran but reached no lake by grant', () => {
+      const merged = mergeRetrievalSummary(base(), base({ grantedLakeIdsUsed: [] }));
+      expect(merged?.grantedLakeIdsUsed).toEqual([]);
+    });
+
     it('survives a side that never asserted the field', () => {
       const merged = mergeRetrievalSummary(base({ grantedLakeIdsUsed: ['lake1'] }), base());
       expect(merged?.grantedLakeIdsUsed).toEqual(['lake1']);
@@ -416,6 +426,31 @@ describe('mergeRetrievalSummary', () => {
       );
       expect(merged?.grantedLakeIdsUsed).toEqual(['both', 'granted']);
       expect(merged?.preauthorizedLakeIdsUsed).toEqual(['both']);
+    });
+  });
+
+  describe('readerOptInLakeIdsUsed', () => {
+    it('unions ids without duplicates, independent of injectedLakePromptIds', () => {
+      const merged = mergeRetrievalSummary(
+        base({ injectedLakePromptIds: ['lake1'], readerOptInLakeIdsUsed: ['lake1'] }),
+        base({ injectedLakePromptIds: ['lake1', 'lake2'], readerOptInLakeIdsUsed: ['lake2'] })
+      );
+      expect(merged?.readerOptInLakeIdsUsed).toEqual(['lake1', 'lake2']);
+    });
+
+    it('stays absent when neither side used the reader opt-in arm', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'readerOptInLakeIdsUsed' in merged).toBe(false);
+    });
+
+    it('is present-and-empty when a side ran but the reader opt-in arm admitted nothing', () => {
+      const merged = mergeRetrievalSummary(base(), base({ readerOptInLakeIdsUsed: [] }));
+      expect(merged?.readerOptInLakeIdsUsed).toEqual([]);
+    });
+
+    it('survives a side that never asserted the field', () => {
+      const merged = mergeRetrievalSummary(base({ readerOptInLakeIdsUsed: ['lake1'] }), base());
+      expect(merged?.readerOptInLakeIdsUsed).toEqual(['lake1']);
     });
   });
 
@@ -503,6 +538,37 @@ describe('mergeRetrievalSummary', () => {
     it('picks it up from the incoming side when the existing side never wrote one', () => {
       const merged = mergeRetrievalSummary(base(), base({ excludedLakes: { count: 2, reason: 'access' } }));
       expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+  });
+
+  // Same seed and same first-writer-wins rule as excludedLakes above. This is the field that lets
+  // the diagnosis tell a draft-lake abstain apart from a real zero, and the outcome merge ranks the
+  // forced arm's 'no_lakes' below a tool's 'ok', so it must survive whatever a surface writes.
+  describe('notServingLakes', () => {
+    const seed = base({ lakeScope: [], notServingLakes: { count: 1, reason: 'draft' } });
+    const toolOk = base({
+      attempted: true,
+      outcome: 'ok',
+      surfaces: ['knowledgeBaseSearch'],
+      injected: { chunks: 0, chars: 0 },
+    });
+
+    it('keeps the seed value when the seed is written first', () => {
+      expect(mergeRetrievalSummary(seed, toolOk)?.notServingLakes).toEqual({ count: 1, reason: 'draft' });
+    });
+
+    it('keeps the seed value when the seed is merged onto an earlier tool write', () => {
+      expect(mergeRetrievalSummary(toolOk, seed)?.notServingLakes).toEqual({ count: 1, reason: 'draft' });
+    });
+
+    it('does not sum two writes', () => {
+      const merged = mergeRetrievalSummary(seed, base({ notServingLakes: { count: 3, reason: 'draft' } }));
+      expect(merged?.notServingLakes).toEqual({ count: 1, reason: 'draft' });
+    });
+
+    it('stays absent on a turn nothing measured', () => {
+      const merged = mergeRetrievalSummary(base(), toolOk);
+      expect(merged && 'notServingLakes' in merged).toBe(false);
     });
   });
 });

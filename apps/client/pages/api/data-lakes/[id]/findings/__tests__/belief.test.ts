@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeWriteAccess: vi.fn(),
   assertDataLakeWriteScope: vi.fn(),
   findById: vi.fn(),
@@ -42,7 +45,15 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { assertLakeWriteAccess: h.assertLakeWriteAccess },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: { findById: h.findById },
 }));
@@ -62,13 +73,16 @@ const resolvedFinding = {
   resolution: 'different fiscal years',
 };
 
+// A fixed PAST instant, so a handler that re-stamps with `new Date()` cannot pass by coincidence.
+const receivedAt = new Date('2026-01-01T00:00:00.000Z');
+
 const invoke = (findingId = 'f1') => {
   const json = vi.fn();
   const res = { json, status: vi.fn(() => ({ json })) };
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1', findingId }, body: {}, user: { id: 'curator-1' }, logger },
+      { method: 'POST', query: { id: 'lake1', findingId }, body: {}, user: { id: 'curator-1' }, logger, receivedAt },
       res
     ),
   };
@@ -76,9 +90,11 @@ const invoke = (findingId = 'f1') => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.assertLakeWriteAccess.mockResolvedValue(lake);
+  h.tx.length = 0;
+  h.assertLakeWriteAccess.mockImplementation(async () => (h.tx.push('gate'), lake));
   h.findById.mockResolvedValue(resolvedFinding);
-  h.recordFindingResolutionBelief.mockResolvedValue({ recorded: true });
+  h.touchIfStable.mockImplementation(async () => void h.tx.push('touch'));
+  h.recordFindingResolutionBelief.mockImplementation(async () => (h.tx.push('belief'), { recorded: true }));
 });
 
 describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => {
@@ -90,6 +106,30 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     // dataLakeApiKeyScopeCoverage.test.ts can see it) and `loadFindingForLake` asserts it again for
     // any future caller. Both land on this spy; what matters is that the gate ran, not how often.
     expect(h.assertDataLakeWriteScope).toHaveBeenCalled();
+  });
+
+  it('gates and touches the lake inside the transaction; the belief write runs after commit', async () => {
+    await invoke().done;
+
+    expect(h.tx).toEqual(['enter', 'gate', 'touch', 'exit', 'belief']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lakeDoc1');
+  });
+
+  it('resolves the access context before the transaction opens', async () => {
+    h.toAccessContext.mockImplementationOnce(async () => (h.tx.push('ctx'), { userId: 'curator-1', isAdmin: false }));
+
+    await invoke().done;
+
+    expect(h.tx.slice(0, 2)).toEqual(['ctx', 'enter']);
+  });
+
+  it('does not touch the lake or write a belief when the in-transaction gate refuses', async () => {
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('forbidden'));
+
+    await expect(invoke().done).rejects.toThrow('forbidden');
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.recordFindingResolutionBelief).not.toHaveBeenCalled();
   });
 
   it("refuses another lake's finding, so a manager cannot project a foreign ruling into their lake", async () => {
@@ -114,6 +154,7 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     h.findById.mockResolvedValue({ ...resolvedFinding, status: 'open', resolution: null });
 
     await expect(invoke().done).rejects.toThrow(/not been ruled on/i);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
     expect(h.recordFindingResolutionBelief).not.toHaveBeenCalled();
   });
 
@@ -161,19 +202,13 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     expect(h.findById).toHaveBeenCalledWith('not-an-object-id');
   });
 
-  it('stamps the shred fence before its own I/O', async () => {
-    // The instant must predate the access gate, the finding read and the settings read inside the
-    // recorder - a purge landing in any of those windows has to refuse the write rather than lift
-    // its own tombstone. Bracketed rather than compared to a fixed value so the assertion says the
-    // thing that matters: taken on arrival, not on the way to the append.
-    const before = Date.now();
+  it("arms the shred fence with the request's arrival, not a handler-local stamp", async () => {
+    // The instant must predate baseApi's connectDB and auth as well as this handler's own I/O - a
+    // purge landing in any of those windows has to refuse the write rather than lift its own
+    // tombstone. baseApi.receivedAt.test.ts pins that the stamp is taken first.
     await invoke().done;
-    const after = Date.now();
 
-    const { startedAt } = h.recordFindingResolutionBelief.mock.calls[0][0];
-    expect(startedAt).toBeInstanceOf(Date);
-    expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
-    expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+    expect(h.recordFindingResolutionBelief.mock.calls[0][0].startedAt).toBe(receivedAt);
   });
 
   it('PROPAGATES a recorder fault instead of swallowing it, unlike the resolve sibling', async () => {

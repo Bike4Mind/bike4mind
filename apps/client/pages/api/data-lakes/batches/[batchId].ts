@@ -1,9 +1,14 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import {
+  dataLakeAccessGrantRepository,
+  dataLakeBatchRepository,
+  dataLakeRepository,
+  fabFileRepository,
+} from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
-import { BATCH_TERMINAL_STATUSES, type BatchStatus } from '@bike4mind/common';
+import { BATCH_TERMINAL_STATUSES, type BatchStatus, type IDataLakeBatchDocument } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -27,13 +32,31 @@ const UpdateBatchInput = z.object({
 const recomputeLakeAfterTerminal = async (
   status: BatchStatus,
   dataLakeId: string,
-  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void }
+  logger: { warn: (msg: string, ...args: unknown[]) => void; error: (msg: string) => void },
+  /** The cancelled batch, when this is the DELETE door: its History row is written here, since it
+   * never reaches finalizeBatchIfComplete. Files still in flight at the cancel may land after it. */
+  cancelledBatch?: IDataLakeBatchDocument
 ): Promise<void> => {
   if (!BATCH_TERMINAL_STATUSES.includes(status)) return;
 
   try {
     const lake = await dataLakeRepository.findById(dataLakeId);
     if (!lake) return;
+    if (cancelledBatch) {
+      await dataLakeService.recordLakeUploadBatch(
+        lake,
+        cancelledBatch,
+        {
+          db: {
+            batches: dataLakeBatchRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger,
+        },
+        'cancelled'
+      );
+    }
     await dataLakeService.recomputeLakeStats(lake, {
       db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
       logger,
@@ -112,7 +135,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       return res.status(400).json({ error: `Batch is already ${batch.status}` });
     }
 
-    await recomputeLakeAfterTerminal('cancelled', batch.dataLakeId, req.logger);
+    await recomputeLakeAfterTerminal('cancelled', batch.dataLakeId, req.logger, cancelled);
 
     return res.json({ success: true });
   });

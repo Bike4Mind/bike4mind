@@ -15,10 +15,10 @@ import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
 import {
-  bestEffortSetDriveConnectionEnabled,
+  bestEffortSetConnectionEnabled,
   bestEffortAdjustOwnerStorage,
   groupStorageDeltaByOwner,
-  type DriveConnectionEnablePort,
+  type ConnectionEnablePort,
 } from './ports';
 
 interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
@@ -45,7 +45,9 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMe
       users: Pick<IUserRepository, 'incrementCurrentStorage'>;
     };
   /** Re-enable the lake's Drive connection, reversing archive/delete's disable. See ports.ts. */
-  enableDriveConnection?: DriveConnectionEnablePort;
+  enableDriveConnection?: ConnectionEnablePort;
+  /** Re-enable the lake's GitHub connection, reversing archive/delete's disable. See ports.ts. */
+  enableGitHubConnection?: ConnectionEnablePort;
 }
 
 /**
@@ -69,7 +71,7 @@ interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMe
 export const restoreDeletedDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, enableDriveConnection, logger }: RestoreDeletedDataLakeAdapters
+  { db, enableDriveConnection, enableGitHubConnection, logger }: RestoreDeletedDataLakeAdapters
 ): Promise<UnarchiveResult> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -188,7 +190,8 @@ export const restoreDeletedDataLake = async (
       { db, logger }
     );
     // Reverses archive/delete's disable - best-effort, see ports.ts.
-    await bestEffortSetDriveConnectionEnabled(enableDriveConnection, dataLakeId, logger);
+    await bestEffortSetConnectionEnabled(enableDriveConnection, dataLakeId, 'Drive', logger);
+    await bestEffortSetConnectionEnabled(enableGitHubConnection, dataLakeId, 'GitHub', logger);
   }
   // Logger forwarded for parity with every other recompute call, not because an audit row is
   // expected here: this runs AFTER the status move, which puts the lake beyond activateIfDraft's

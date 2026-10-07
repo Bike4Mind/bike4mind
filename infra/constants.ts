@@ -1,7 +1,9 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
-/** Stages that run at full production scale (reserved concurrency, full memory, etc.) */
-export const PRODUCTION_STAGES: readonly string[] = ['production', 'dev'];
+/** Stages that run at full production scale (reserved concurrency, full memory, etc.).
+ * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
+import { PRODUCTION_STAGES } from '@bike4mind/infra';
+export { PRODUCTION_STAGES };
 
 /**
  * Subscriber options for a single-record queue handler (one that reads only
@@ -18,6 +20,14 @@ export const PRODUCTION_STAGES: readonly string[] = ['production', 'dev'];
  */
 export const SINGLE_RECORD_BATCH = { batch: { size: 1 } } as const;
 
+/**
+ * Registers the fake video provider so the generation-job path can be exercised end to end without a paid
+ * provider key. Never set on production-scale stages, which must only ever reach real providers.
+ */
+export const TEST_VIDEO_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
+  ? {}
+  : { ENABLE_TEST_VIDEO_PROVIDER: 'true' };
+
 export const DEFAULT_LAMBDA_ENVIRONMENT = {
   SEED_APP_NAME: $app.name,
   SEED_STAGE_NAME: $app.stage,
@@ -27,10 +37,6 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // NOTE: APP_URL is NOT set here — it is injected per-construct (see infra/web.ts). Any
   // handler that calls requireEnv('APP_URL') must run in a lambda whose env includes APP_URL.
   SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
-  // Production domain (account-tied, no brand fallback), available on every stage so non-prod
-  // jobs that pull config FROM production (see dataSyncerHandler) target the prod host rather
-  // than the deploying stage's own domain. Empty when unset.
-  PROD_SERVER_DOMAIN: process.env.PROD_SERVER_DOMAIN || '',
   // Brand identity, externalized for open-core (issue #9310). All three carry NO brand
   // fallback — empty when unset — so a fresh clone never ships the "Bike4Mind" literal.
   // APP_NAME: product/display name; WEBSITE_URL: marketing site URL; PLATFORM_EMAIL_DOMAIN:

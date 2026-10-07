@@ -4,28 +4,27 @@ import {
   TTS_MAX_INPUT_CHARS,
   VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
-  VoiceGenerationVendor,
+  DEFAULT_TTS_PROVIDER,
+  shouldPersistGeneratedAudio,
   type ApiErrorCode,
 } from '@bike4mind/common';
 import { TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { synthesizeTts, upstreamStatus, isCredentialRejection } from '@server/utils/synthesizeTts';
-import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
 import {
   assertTtsCreditsAvailable,
   deductTtsCredits,
   InsufficientTtsCreditsError,
 } from '@server/utils/deductTtsCredits';
 import { persistGeneratedAudio } from '@server/utils/persistGeneratedAudio';
-
-const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
+import { deliverGeneratedAudio } from '@server/utils/generatedAudioDelivery';
 
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
  *
  * Body: { text, provider?, model?, voice?, format?, encoding?, stability?, similarityBoost?, languageCode? }
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
- * - encoding 'binary' (default) streams raw audio bytes with an audio/* Content-Type;
- *   'base64' returns JSON { audio, format, contentType }.
+ * - the response (encoding, oversized-audio URL, save headers) is written by the
+ *   shared deliverGeneratedAudio, like every generated-audio route.
  * - when the chosen provider has no usable key or rejects our credentials, another
  *   configured provider stands in (see synthesizeTts) and the response reports the
  *   substitution via { provider, fallbackFrom } / the X-B4M-Tts-Provider* headers.
@@ -42,7 +41,7 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
   const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode, preview } =
     req.validated;
 
-  const vendor = provider ?? DEFAULT_PROVIDER;
+  const vendor = provider ?? DEFAULT_TTS_PROVIDER;
 
   const maxChars = TTS_MAX_INPUT_CHARS[vendor];
   if (text.length > maxChars) {
@@ -112,9 +111,8 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       res.setHeader('X-B4M-Tts-Provider-Fallback-From', fallbackFrom);
     }
 
-    // Charge for the successful synthesis. Done before the size guard below
-    // because the provider cost is already incurred regardless of whether we
-    // can return the bytes over this endpoint.
+    // Charge for the successful synthesis before delivery: the provider cost is
+    // already incurred however the bytes end up being returned.
     if (userId) {
       await deductTtsCredits({
         userId,
@@ -125,59 +123,32 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
       });
     }
 
-    // Persist a browsable copy of the audio. On by default; a user can opt out
-    // via the saveGeneratedAudio preference, and the Settings voice-audition
-    // player passes preview:true to skip throwaway previews. Best-effort: a save
-    // failure (e.g. over quota) never blocks returning the audio already paid for.
-    const shouldSave = !preview && !!userId && (req.user?.preferences?.saveGeneratedAudio ?? true);
-    const save = shouldSave
-      ? await persistGeneratedAudio({
-          userId: userId!,
-          audio: result.audio,
-          contentType: result.contentType,
-          format: result.format,
-          source: 'tts',
-          text,
-          logger: req.logger,
-        })
-      : undefined;
+    // Persist a browsable copy of the audio unless the user opted out or the
+    // call is a throwaway preview (the Settings voice audition). Best-effort: a
+    // save failure (e.g. over quota) never blocks returning the audio already paid for.
+    const save =
+      userId &&
+      shouldPersistGeneratedAudio({ userId, saveGeneratedAudio: req.user?.preferences?.saveGeneratedAudio, preview })
+        ? await persistGeneratedAudio({
+            userId,
+            audio: result.audio,
+            contentType: result.contentType,
+            format: result.format,
+            source: 'tts',
+            text,
+            logger: req.logger,
+          })
+        : undefined;
 
-    const saveInfo = save
-      ? save.saved
-        ? ({ saved: true, fabFileId: save.fabFileId, fileUrl: save.fileUrl } as const)
-        : ({ saved: false, saveSkippedReason: save.reason } as const)
-      : undefined;
-
-    if (saveInfo) {
-      res.setHeader('X-B4M-Audio-Saved', String(saveInfo.saved));
-      if (saveInfo.saved) res.setHeader('X-B4M-Audio-Fab-File-Id', saveInfo.fabFileId);
-    }
-
-    // Serverless response-size guard: a buffered audio body over ~4MB exceeds the
-    // Lambda/API Gateway payload cap and would fail as an opaque CloudFront 502.
-    // If a browsable copy was saved, the caller can still retrieve the audio from
-    // its FabFile url instead of hitting a dead end (partially addresses #745).
-    if (exceedsTtsResponseLimit(result.audio.length)) {
-      return res.status(413).json({
-        error: TTS_RESPONSE_TOO_LARGE_MESSAGE,
-        provider: usedVendor,
-        ...(saveInfo?.saved ? { saved: true, fabFileId: saveInfo.fabFileId, fileUrl: saveInfo.fileUrl } : {}),
-      });
-    }
-
-    if (encoding === 'base64') {
-      return res.json({
-        audio: result.audio.toString('base64'),
-        format: result.format,
-        contentType: result.contentType,
-        ...(saveInfo ?? {}),
-        ...(providerInfo ?? {}),
-      });
-    }
-
-    res.setHeader('Content-Type', result.contentType);
-    res.setHeader('Content-Length', result.audio.length);
-    return res.send(result.audio);
+    return await deliverGeneratedAudio(res, {
+      audio: result.audio,
+      contentType: result.contentType,
+      encoding: encoding ?? 'binary',
+      save,
+      fields: { format: result.format, ...providerInfo },
+      tooLargeFields: { provider: usedVendor },
+      logger: req.logger,
+    });
   } catch (error) {
     // No provider is usable (the requested one and every alternate lack a key).
     // errorCode lets the client separate this from a configured-but-rejected
@@ -188,12 +159,11 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
         .json({ error: error.message, errorCode: 'provider_not_configured' satisfies ApiErrorCode });
     }
 
-    // Pass through client-actionable upstream errors (bad voice/param, invalid
-    // key, rate limit) with a generic body so the provider's raw error text
-    // never leaks; treat everything else as an upstream (502) failure.
+    // Client-actionable upstream errors get a generic body so the provider's raw
+    // error text never leaks; treat everything else as an upstream (502) failure.
     const status = upstreamStatus(error);
     if (typeof status === 'number' && status >= 400 && status < 500) {
-      return res.status(status).json({
+      return res.status(documentedStatusForUpstream4xx(error, status)).json({
         error: `TTS request rejected by the ${vendor} provider`,
         provider: vendor,
         // Reaching here on a credential rejection means no alternate could
@@ -206,6 +176,18 @@ const handler = nextRouteForContract(synthesizeSpeechContract).post(async (req, 
     return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
   }
 });
+
+/**
+ * Folds a provider 4xx onto a status tts.contract.ts documents, so a generated
+ * client has a case for every response: a credential rejection (401 or 403) is a
+ * 401, a provider rate limit stays a 429, and any other rejection of the request
+ * (bad voice, bad parameter, oversized input) is a 422.
+ */
+function documentedStatusForUpstream4xx(error: unknown, status: number): 401 | 422 | 429 {
+  if (isCredentialRejection(error)) return 401;
+  if (status === 429) return 429;
+  return 422;
+}
 
 export const config = {
   api: {

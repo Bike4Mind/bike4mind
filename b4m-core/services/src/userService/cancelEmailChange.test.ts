@@ -80,6 +80,7 @@ describe('cancelEmailChange', () => {
     await cancelEmailChange(baseParams, mockAdapters);
 
     const updatedUser = mockAdapters.db.users.update.mock.calls[0][0];
-    expect(updatedUser.email).toBe(originalEmail);
+    expect(updatedUser).not.toHaveProperty('email');
+    expect(mockUser.email).toBe(originalEmail);
   });
 });

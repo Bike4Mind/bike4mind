@@ -43,7 +43,7 @@ export function buildKnowledgeModerationDeps(
     // can reclaim a stale 'scanning' row mid-scan and a successor can re-claim it, and an
     // unguarded write here would then land on a claim this run no longer owns - clobbering a
     // successor's terminal verdict, or clearing its claim and re-opening the row to a third runner.
-    // Same identity-guard shape as the chunk claim's release in queueHandlers/fabFileChunk.ts.
+    // Same identity-guard shape as the chunk claim's release in apps/workers/src/queueHandlers/fabFileChunk.ts.
     persist: async (_id, patch, claimedAt) => {
       const res = await FabFile.updateOne(
         { _id: _id as Types.ObjectId, moderationStatus: 'scanning', moderationClaimedAt: claimedAt },

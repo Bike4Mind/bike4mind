@@ -72,7 +72,7 @@ describe('POST /api/oauth/device/verify consent screen client', () => {
     const res = await call();
 
     expect(res.body?.device_info?.client_type).toBe('b4m-cli');
-    expect(res.body?.device_info?.client_name).toBe('the B4M CLI');
+    expect(res.body?.device_info?.client_name).toBe('B4M CLI');
   });
 
   it('reports the desktop app when the desktop app initiated the flow', async () => {

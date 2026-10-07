@@ -17,6 +17,8 @@ export * from './OverwatchRollupModel';
 export * from './OverwatchSeenEventModel';
 export * from './OverwatchUserDayModel';
 export * from './OverwatchUserFirstSeenModel';
+export * from './QaRunModel';
+export * from './QaTestResultModel';
 export * from './RateLimitSnapshotModel';
 export * from './ScopedSettingModel';
 export * from './SreErrorPatternModel';

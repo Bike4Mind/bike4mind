@@ -37,6 +37,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   // Chat mode resolves the lake list for delete gating; no lakes means no delete affordance,
   // which is fine here - this suite only asserts the tree's isLoading wiring.
   useGetDataLakes: () => ({ data: [] }),
+  useGetDataLakesWithRetrievability: () => ({ data: [] }),
   useRemoveFileFromDataLake: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 

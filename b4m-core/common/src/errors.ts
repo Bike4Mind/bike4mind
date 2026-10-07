@@ -10,14 +10,22 @@ export enum HttpStatus {
   Unauthorized = 401,
   Forbidden = 403,
   NotFound = 404,
+  MethodNotAllowed = 405,
   Conflict = 409,
   UnprocessableEntity = 422,
   TooManyRequests = 429,
   InternalServerError = 500,
   BadGateway = 502,
+  GatewayTimeout = 504,
 }
 
 export class HTTPError extends Error {
+  /**
+   * Set on a 5xx that reports a third party's failure the server handled correctly (a source site
+   * timing out), so `errorHandler` logs it at warn rather than paging as a server fault.
+   */
+  public expected?: boolean;
+
   constructor(
     public statusCode: number,
     message?: string,
@@ -88,6 +96,17 @@ export class ForbiddenError extends HTTPError {
   }
 }
 
+/** 405: the route exists but does not serve this HTTP method. Set an `Allow` header before throwing. */
+export class MethodNotAllowedError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.MethodNotAllowed, message, additionalInfo);
+    this.name = 'MethodNotAllowedError';
+  }
+}
+
 /** 409: the request conflicts with current state - e.g. a per-user concurrency cap. */
 export class ConflictError extends HTTPError {
   constructor(
@@ -130,6 +149,17 @@ export class BadGatewayError extends HTTPError {
   ) {
     super(HttpStatus.BadGateway, message, additionalInfo);
     this.name = 'BadGatewayError';
+  }
+}
+
+/** 504: an upstream we depend on did not answer in time. Retrying later may succeed. */
+export class GatewayTimeoutError extends HTTPError {
+  constructor(
+    message?: string,
+    public additionalInfo?: Record<string, unknown>
+  ) {
+    super(HttpStatus.GatewayTimeout, message, additionalInfo);
+    this.name = 'GatewayTimeoutError';
   }
 }
 

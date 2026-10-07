@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
-import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { getThemeConfig } from '@client/app/utils/themes';
 import CombinedNotebooks from './CombinedNotebooks';
 import { useBulkActions } from './useBulkActions';
@@ -23,12 +23,17 @@ vi.mock('@client/config/general', () => ({ APP_NAME: 'TestApp' }));
 // Parent layout store (selector-aware)
 const mockSetOpenSideNav = vi.fn();
 const mockSetShowMessageCounts = vi.fn();
+const mockListFilters = vi.hoisted(() => ({ contentFilter: 'all', originFilter: 'all' }));
 vi.mock('..', () => ({
   useNotebookLayout: vi.fn((sel: unknown) => {
     const state = {
       showMessageCounts: false,
       setShowMessageCounts: mockSetShowMessageCounts,
       setOpenSideNav: mockSetOpenSideNav,
+      contentFilter: mockListFilters.contentFilter,
+      setContentFilter: vi.fn(),
+      originFilter: mockListFilters.originFilter,
+      setOriginFilter: vi.fn(),
     };
     return typeof sel === 'function' ? (sel as (s: typeof state) => unknown)(state) : state;
   }),
@@ -250,5 +255,50 @@ describe('CombinedNotebooks — project-session deduplication', () => {
 
     expect(selectableIds).not.toContain('session-p1');
     expect(selectableIds).toContain('session-loose');
+  });
+});
+
+describe('CombinedNotebooks - content and origin filters', () => {
+  const projectSession = makeSession('session-p1');
+  const project = makeProject('project-1', ['session-p1']);
+
+  beforeEach(() => {
+    mockUseGetOwnSessions.mockReturnValue({
+      data: { pages: [{ data: [projectSession], hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetching: false,
+    });
+    mockUseSearchProjects.mockReturnValue({
+      data: { pages: [{ data: [project], hasMore: false }] },
+      isLoading: false,
+    });
+  });
+
+  afterEach(() => {
+    mockListFilters.contentFilter = 'all';
+    mockListFilters.originFilter = 'all';
+  });
+
+  it('requests the default lists with no server filters', () => {
+    renderComponent();
+    expect(mockUseGetOwnSessions).toHaveBeenLastCalledWith('', undefined, undefined);
+    expect(mockUseGetSharedSessions).toHaveBeenLastCalledWith('', undefined);
+  });
+
+  it('passes the chosen filters to both server-paginated lists', () => {
+    mockListFilters.contentFilter = 'images';
+    mockListFilters.originFilter = 'hideApi';
+    renderComponent();
+    const filters = { hasImages: true, excludeOrigin: 'api' };
+    expect(mockUseGetOwnSessions).toHaveBeenLastCalledWith('', undefined, filters);
+    expect(mockUseGetSharedSessions).toHaveBeenLastCalledWith('', filters);
+  });
+
+  it('hides the Projects section and keeps its sessions in the list under a narrowing filter', () => {
+    mockListFilters.originFilter = 'onlyApi';
+    renderComponent();
+    expect(screen.queryByTestId('project-item-project-1')).toBeNull();
+    expect(screen.getByTestId('loose-item-session-p1')).toBeInTheDocument();
   });
 });

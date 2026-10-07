@@ -3,6 +3,7 @@ import {
   AudioGenerationToolCall,
   extensionFromMimeType,
   KnowledgeType,
+  shouldPersistGeneratedAudio,
   SOUND_EFFECTS_MAX_INPUT_CHARS,
   SoundGenerationVendor,
   TTS_MAX_INPUT_CHARS,
@@ -285,7 +286,12 @@ async function persistAndUpload(
   // saveGeneratedAudio preference - the same gate the direct /api/ai/tts and
   // sound-effects endpoints apply (defaults on). AUDIO type so the file is never
   // chunked/vectorized/attached to a completion.
-  if (context.user?.preferences?.saveGeneratedAudio ?? true) {
+  if (
+    shouldPersistGeneratedAudio({
+      userId: context.userId,
+      saveGeneratedAudio: context.user?.preferences?.saveGeneratedAudio,
+    })
+  ) {
     await persistGeneratedFileAsFabFile(context, {
       fileName: `generated-${source}-${filename.slice(0, 8)}.${ext}`,
       mimeType: contentType,

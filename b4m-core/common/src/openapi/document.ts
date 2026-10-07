@@ -1,6 +1,7 @@
 import { OpenApiGeneratorV31 } from '@asteasolutions/zod-to-openapi';
 import { registry } from './registry';
 import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
+import { API_KEY_RATE_LIMIT_DEFAULTS } from '../types/entities/UserApiKeyTypes';
 
 // Importing these modules is what registers their schemas/paths against the
 // shared registry (side-effect imports). Keep them before generateDocument().
@@ -45,6 +46,16 @@ function infoDescription(): string {
       'against that handler rather than runtime-validated, and can drift if the handler changes ' +
       'without a matching schema update.',
     '',
+    '## Getting started',
+    '1. Create a key in the web app under **Profile > API Keys** (pick a scope preset).',
+    '2. Make a first call: `GET /api/v1/me` with `Authorization: Bearer b4m_live_<key>`. It needs only the ' +
+      '`me:read` scope, spends no credits, and returns your identity, plan tier and credit balance.',
+    '3. Read the rest of this page for the behaviour shared across endpoints: rate limits, credits, errors ' +
+      'and async jobs.',
+    '',
+    'Endpoints are grouped by tag: **AI** (chat, completions, embeddings, agent runs, tools, quest polling), ' +
+      '**Images**, **Audio**, **Sessions**, **Files**, **Data Lakes** and **Account**.',
+    '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
       '(legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the ' +
@@ -57,6 +68,61 @@ function infoDescription(): string {
     'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +
       "a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no " +
       '`x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).',
+    '',
+    '## Rate limits',
+    `Each API key has a per-minute and a per-day request ceiling, by default ` +
+      `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerMinute} requests/minute and ` +
+      `${API_KEY_RATE_LIMIT_DEFAULTS.requestsPerDay} requests/day (a key can be minted with its own ceilings). ` +
+      'Rate-limited operations return the current window state on every response:',
+    ...Object.keys(RATE_LIMIT_HEADER_SPEC).map(header => `- \`${header}\``),
+    '',
+    'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
+      'that long before retrying. `GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
+      'limit applies. A ' +
+      'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
+      'no rate-limit headers.',
+    '',
+    '## Credits',
+    'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
+      "caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, " +
+      'which accepts `ai:chat` and `ai:generate` too. A synchronous call that cannot be paid for fails with ' +
+      '`422` and ' +
+      '`errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead ' +
+      '(see Async jobs), so check both places.',
+    '',
+    '## Errors',
+    'Error bodies use one envelope, the `ErrorResponse` schema: `{ "error": string, "request_id"?: string }`, ' +
+      'plus an `errorCode` on failures a client is expected to branch on (`insufficient_credits`, ' +
+      '`spend_cap_exceeded`, `provider_not_configured`, ...). A deprecated `name` field may also appear until ' +
+      'its sunset date; do not rely on it. Branch on the HTTP status and `errorCode`, never on the `error` ' +
+      'prose. A few operations declare a bespoke error shape for a specific status (e.g. the `500` of the ' +
+      'tools endpoint and the `413` of text-to-speech); each operation lists the statuses it can return and ' +
+      'the body for each.',
+    '',
+    '## Async jobs',
+    'Work that is not provably fast is queued and polled rather than held open:',
+    '- **Chat** (`POST /api/chat`) and **image generation/editing** (`POST /api/v1/image-generations`, ' +
+      '`POST /api/v1/image-edits`) return a quest. Poll `GET /api/v1/quests/{id}` until `status` is `done` or `stopped`; ' +
+      'chat text arrives in `reply`, generated images in `images`, edited images in `files[].url`. Check for ' +
+      'failure before reading results: a job that ends `done` with `type: "error"` failed (the reason is in ' +
+      '`reply`), and a job that ends `stopped` also failed even when `type` is not `"error"` (its `reply` ' +
+      'carries an explanation, not an answer). The outcome schema of each of these quest handoffs is linked ' +
+      'from its response via the `x-poll-result` extension. Chat also accepts `wait: true` to block until ' +
+      'the reply is ready.',
+    '- **Agent runs** (`POST /api/v1/agent-executions`) return `202`. Poll ' +
+      '`GET /api/v1/agent-executions/{id}` until `status` is `completed`, `failed` or `aborted`.',
+    '- **File uploads** (`POST /api/v1/files`) return a presigned `upload_url`; after the `PUT`, poll ' +
+      '`GET /api/v1/files/{id}` until `moderation_status` is `clean` before passing the id elsewhere.',
+    '- **Audio** endpoints are synchronous and return the result directly.',
+    '',
+    'Poll with a backoff of a few seconds: each poll counts against the per-minute limit.',
+    '',
+    '## Versioning',
+    'New endpoints live under `/api/v1`. Published endpoints are forward-only: a live URL is never renamed or ' +
+      'removed, and a breaking change ships as a new path while the old one keeps working. Nothing published is ' +
+      'removed silently - a deprecated field or endpoint is marked `deprecated` in this spec with a sunset date ' +
+      'in its description, and keeps working until that date.',
     '',
     '## CORS',
     'The spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints ' +
@@ -105,7 +171,14 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  */
 const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
 
-function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string, method: string) {
+function codeSamples(
+  path: string,
+  body: unknown,
+  streaming: boolean,
+  authToken: string,
+  method: string,
+  hasBody: boolean
+) {
   // A raw OpenAPI path template (`/api/sessions/{id}`) is not a runnable URL - swap each
   // `{param}` for a `<param>` placeholder, matching this file's existing `<key>`/`<fabFileId>`
   // convention for "substitute your own value here", so a copy-pasted sample doesn't 404.
@@ -117,10 +190,6 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
   // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
   // matching the lowercase HTTP method name exactly.
   const pyMethod = method.toLowerCase();
-  // A GET/HEAD request cannot carry a body: browser and Node `fetch` both throw
-  // `TypeError: Request with GET/HEAD method cannot have body`, so a sample that
-  // sent one would be copy-paste-broken rather than merely redundant.
-  const hasBody = !['get', 'head'].includes(pyMethod);
   return [
     {
       lang: 'curl',
@@ -235,9 +304,10 @@ const RATE_LIMIT_HEADER_SPEC = {
 };
 
 /**
- * The auth failures `registerContract` INJECTS carry no rate-limit headers:
+ * The failures `registerContract` INJECTS carry no rate-limit headers:
  * `apiKeyAuth` throws on an invalid key (401) or an under-scoped one (403), and
- * `apiKeyRateLimit` is mounted AFTER it, so it never runs.
+ * the method guard 405s ahead of the whole auth chain (baseApi `allowedMethods`,
+ * defineLambdaRoute). `apiKeyRateLimit` is mounted AFTER all of them, so it never runs.
  *
  * That reasoning covers only the injected pair. A contract declaring its own 401
  * or 403 means something else entirely - `/api/ai/tts` 401s `provider_not_configured`
@@ -246,10 +316,10 @@ const RATE_LIMIT_HEADER_SPEC = {
  * status alone. 429 is never excluded: the middleware sets the headers before
  * throwing TooManyRequests.
  */
-const INJECTED_AUTH_STATUSES = new Set(['401', '403']);
+const INJECTED_PRE_LIMIT_STATUSES = new Set(['401', '403', '405']);
 
-function isInjectedAuthFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
-  return INJECTED_AUTH_STATUSES.has(status) && !declaredStatuses?.has(status);
+function isInjectedPreLimitFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
+  return INJECTED_PRE_LIMIT_STATUSES.has(status) && !declaredStatuses?.has(status);
 }
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
@@ -270,17 +340,31 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       title: 'Bike4Mind API',
       version,
       description: infoDescription(),
-      contact: { name: 'Bike4Mind', url: 'https://your-deployment.example.com' },
+      contact: { name: 'Bike4Mind', url: prodUrl() },
       license: { name: 'Proprietary' },
     },
     servers: servers(),
   });
 
   doc.tags = [
-    { name: 'AI', description: 'Chat, completions, and server-side tool execution.' },
+    { name: 'AI', description: 'Chat, completions, embeddings, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
+    { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
+    { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Voice',
+      description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
+    },
+    { name: 'Models', description: 'The models the caller can use, and the parameters each one accepts.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
+    {
+      name: 'Data Lakes',
+      description:
+        'Curated document collections: list and inspect the lakes you can reach, manage which files belong ' +
+        "to one, check each file's ingestion status, and run semantic search over a single lake.",
+    },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
@@ -298,7 +382,18 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const scopes = meta.scopes[opId];
       if (scopes) op['x-required-scopes'] = scopes;
       const sample = meta.codeSamples[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
+      // Send a body only when the operation declares one. That keeps GET/HEAD samples runnable
+      // (`fetch` throws on a GET/HEAD body) and stops a body-less DELETE or POST from sending `{}`.
+      if (sample) {
+        op['x-codeSamples'] = codeSamples(
+          pathKey,
+          sample.body,
+          sample.streaming,
+          sample.authToken,
+          method,
+          op.requestBody !== undefined
+        );
+      }
 
       const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
       const declaredStatuses = meta.declaredStatuses.get(opId);
@@ -313,7 +408,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         if (pollResultStatuses?.has(status)) {
           response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}${status}PollResult` } };
         }
-        if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
+        if (emitsRateLimitHeaders && !isInjectedPreLimitFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
         }
       }

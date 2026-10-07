@@ -13,12 +13,13 @@ import {
   liveopsTriageRunRepository,
   liveopsTriageConfigAuditLogRepository,
 } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
 import { isValidObjectId } from '@server/utils/objectId';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import type { LiveOpsTriageJobMessage } from '@server/cron/liveopsTriageDispatcher';
+import type { LiveOpsTriageJobMessage } from '@server/utils/liveopsTriageJobMessage';
 
 const DEBOUNCE_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -30,7 +31,7 @@ const TriggerRequestSchema = z.object({
   lookbackHours: z.number().int().min(1).max(168).optional(),
 });
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   try {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

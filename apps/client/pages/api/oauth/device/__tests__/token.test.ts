@@ -1,122 +1,118 @@
-import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
- * POST /api/oauth/device/token: the allowlist must admit every known client, and
- * a device code must only be redeemable by the client it was issued to
- * (RFC 8628 s3.4) - the approval screen named that client.
+ * The global poll ceiling is keyed on a constant: IP headers and device_code are both
+ * caller-rotatable. It answers slow_down (not 429) so the CLI backs off instead of aborting.
  */
 
-const h = vi.hoisted(() => ({
-  findByDeviceCode: vi.fn(),
-  update: vi.fn(async () => undefined),
-  findById: vi.fn(async () => ({ id: 'u1', tokenVersion: 0 })),
-  issueSessionForRequest: vi.fn(async () => ({ accessToken: 'a.jwt', refreshToken: 'r.jwt' })),
-}));
+const mockRefs = vi.hoisted(() => ({ handler: null as null | ((req: any, res: any) => unknown) }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
-    const chain: Record<string, unknown> = {
+    const chain: any = {
       use: () => chain,
-      post: (fn: (req: unknown, res: unknown) => unknown) => (req: unknown, res: unknown) => fn(req, res),
+      post: (fn: any) => {
+        mockRefs.handler = fn;
+        return chain;
+      },
     };
     return chain;
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => undefined }));
+vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: vi.fn() }));
+vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 3600 }));
+
+const repo = vi.hoisted(() => ({ findByDeviceCode: vi.fn(), update: vi.fn() }));
+const tryIncrement = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
-  deviceAuthorizationRepository: { findByDeviceCode: h.findByDeviceCode, update: h.update },
-  userRepository: { findById: h.findById },
+  deviceAuthorizationRepository: repo,
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: tryIncrement },
+  userRepository: {},
 }));
-vi.mock('@server/auth/issueSession', () => ({ issueSessionForRequest: h.issueSessionForRequest }));
-vi.mock('@server/auth/tokenGenerator', () => ({ ACCESS_TOKEN_TTL_SECONDS: 1800 }));
 
-import handler from '../token';
+import '../token';
 
-type Res = {
-  statusCode: number;
-  body?: { error?: string; error_description?: string; access_token?: string };
-  status: (c: number) => Res;
-  json: (b: unknown) => Res;
-};
-function mockRes(): Res {
-  const res = { statusCode: 200 } as Res;
-  res.status = (c: number) => {
-    res.statusCode = c;
-    return res;
-  };
-  res.json = (b: unknown) => {
-    res.body = b as Res['body'];
-    return res;
-  };
-  return res;
-}
-
-const call = (clientId: unknown) => {
-  const res = mockRes();
-  const req = {
-    body: {
-      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-      device_code: 'dc',
-      client_id: clientId,
+function request(deviceCode: string, ip = '203.0.113.1') {
+  const res: any = {
+    statusCode: 200,
+    body: undefined as unknown,
+    status(code: number) {
+      this.statusCode = code;
+      return this;
+    },
+    json(payload: unknown) {
+      this.body = payload;
+      return this;
     },
   };
-  return (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)(req, res).then(() => res);
-};
+  const req: any = {
+    body: { grant_type: 'urn:ietf:params:oauth:grant-type:device_code', device_code: deviceCode, client_id: 'b4m-cli' },
+    headers: { 'x-forwarded-for': ip, 'cloudfront-viewer-address': `${ip}:443` },
+    socket: { remoteAddress: ip },
+    logger: { warn: vi.fn() },
+  };
+  return { req, res };
+}
 
-const approvedFor = (clientId?: string) => ({
-  id: 'auth-1',
-  clientId,
-  status: 'approved',
-  userId: 'u1',
-  expiresAt: new Date(Date.now() + 600_000),
-  lastPolledAt: null,
-  pollCount: 0,
-});
-
-describe('POST /api/oauth/device/token client binding', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('still issues tokens for b4m-cli', async () => {
-    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-cli'));
-
-    const res = await call('b4m-cli');
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body?.access_token).toBe('a.jwt');
+describe('POST /api/oauth/device/token global poll ceiling', () => {
+  beforeEach(() => {
+    repo.findByDeviceCode.mockReset();
+    repo.update.mockReset();
+    tryIncrement.mockReset();
   });
 
-  it('issues tokens for b4m-desktop', async () => {
-    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-desktop'));
-
-    const res = await call('b4m-desktop');
-
-    expect(res.statusCode).toBe(200);
-    expect(res.body?.access_token).toBe('a.jwt');
-  });
-
-  it('refuses a code issued to another client, without advancing poll state', async () => {
-    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor('b4m-cli'));
-
-    const res = await call('b4m-desktop');
-
+  it('answers slow_down without a lookup once the global window is exhausted', async () => {
+    tryIncrement.mockResolvedValue({ success: false });
+    const { req, res } = request('dc-1');
+    await mockRefs.handler!(req, res);
     expect(res.statusCode).toBe(400);
-    expect(res.body?.error).toBe('invalid_grant');
-    expect(h.update).not.toHaveBeenCalled();
-    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ error: 'slow_down' });
+    expect(req.logger.warn).toHaveBeenCalledTimes(1);
+    expect(repo.findByDeviceCode).not.toHaveBeenCalled();
   });
 
-  it('reads a row predating the clientId field as the CLI', async () => {
-    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor(undefined));
-
-    expect((await call('b4m-cli')).statusCode).toBe(200);
-
-    vi.clearAllMocks();
-    (h.findByDeviceCode as Mock).mockResolvedValue(approvedFor(undefined));
-    expect((await call('b4m-desktop')).statusCode).toBe(400);
+  it('uses the same key regardless of IP headers and device_code', async () => {
+    tryIncrement.mockResolvedValue({ success: false });
+    for (const [code, ip] of [
+      ['dc-a', '198.51.100.1'],
+      ['dc-b', '198.51.100.2'],
+    ]) {
+      const { req, res } = request(code, ip);
+      await mockRefs.handler!(req, res);
+    }
+    expect(tryIncrement.mock.calls).toEqual([
+      ['rate-limit:device-token-global', 6000, 60_000],
+      ['rate-limit:device-token-global', 6000, 60_000],
+    ]);
   });
 
-  it('rejects a client_id that is not on the allowlist', async () => {
-    await expect(call('b4m-rogue')).rejects.toThrow();
-    expect(h.findByDeviceCode).not.toHaveBeenCalled();
+  it('keeps pending behavior under the ceiling', async () => {
+    tryIncrement.mockResolvedValue({ success: true });
+    repo.findByDeviceCode.mockResolvedValue({
+      id: 'auth-1',
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 60_000),
+      lastPolledAt: null,
+      pollCount: 2,
+    });
+    const { req, res } = request('dc-1');
+    await mockRefs.handler!(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toMatchObject({ error: 'authorization_pending' });
+    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'auth-1', pollCount: 3 }));
+  });
+
+  it('keeps expired and unknown-code behavior under the ceiling', async () => {
+    tryIncrement.mockResolvedValue({ success: true });
+    repo.findByDeviceCode.mockResolvedValueOnce({ id: 'a', status: 'pending', expiresAt: new Date(Date.now() - 1) });
+    const expired = request('dc-old');
+    await mockRefs.handler!(expired.req, expired.res);
+    expect(expired.res.body).toMatchObject({ error: 'expired_token' });
+
+    repo.findByDeviceCode.mockResolvedValueOnce(null);
+    const unknown = request('dc-nope');
+    await mockRefs.handler!(unknown.req, unknown.res);
+    expect(unknown.res.body).toMatchObject({ error: 'invalid_grant' });
   });
 });

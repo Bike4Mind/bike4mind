@@ -7,6 +7,7 @@
 import type { Searcher, SearchResult } from '@bike4mind/services/llm';
 import type { IChatHistoryItemRepository, IChatHistoryItemDocument } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 export interface DatabaseSearcherOptions {
   questsRepository: IChatHistoryItemRepository;
@@ -40,7 +41,7 @@ export function createDatabaseSearcher(options: DatabaseSearcherOptions): Search
         return sortedQuests.map((quest: IChatHistoryItemDocument) => ({
           title: `Quest: ${quest.prompt.substring(0, 100)}${quest.prompt.length > 100 ? '...' : ''}`,
           description: `From session on ${quest.timestamp.toLocaleDateString()}`,
-          content: `Prompt: ${quest.prompt}\n\nReply: ${quest.reply || 'No reply'}`,
+          content: `Prompt: ${quest.prompt}\n\nReply: ${stripToolOutputMarker(quest.reply || 'No reply')}`,
           url: `/notebooks/${quest.sessionId}?questId=${quest.id}`, // Path to the quest in the notebook
           type: 'database',
         }));

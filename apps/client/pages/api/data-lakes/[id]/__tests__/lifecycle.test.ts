@@ -21,11 +21,17 @@ const h = vi.hoisted(() => ({
   loadActiveLakeGrants: vi.fn().mockResolvedValue([]),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   sendToQueue: vi.fn(),
+  loggerError: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/data-lake-cleanup'),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   disableDriveConnectionForLake: vi.fn(),
   enableDriveConnectionForLake: vi.fn(),
+  disableGitHubConnectionForLake: vi.fn(),
+  enableGitHubConnectionForLake: vi.fn(),
+  inTransaction: [] as string[],
+  commitError: undefined as Error | undefined,
+  retryAfterAbort: false,
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the serve/gears tests).
@@ -58,6 +64,19 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.inTransaction.push('enter');
+    try {
+      // Simulates a transient abort after a successful first attempt, then the retry.
+      if (h.retryAfterAbort) await fn();
+      const result = await fn();
+      // Simulates a commit that fails AFTER the callback succeeded (e.g. an unknown commit result).
+      if (h.commitError) throw h.commitError;
+      return result;
+    } finally {
+      h.inTransaction.push('exit');
+    }
+  },
   dataLakeRepository: { releasePurgingToDeleted: h.releasePurgingToDeleted },
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
   // omitted because the mock replaces the whole module: a missing export is an import-time
@@ -91,16 +110,29 @@ vi.mock('@server/integrations/google/drive/common', () => ({
   disableDriveConnectionForLake: h.disableDriveConnectionForLake,
   enableDriveConnectionForLake: h.enableDriveConnectionForLake,
 }));
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+  disableGitHubConnectionForLake: h.disableGitHubConnectionForLake,
+  enableGitHubConnectionForLake: h.enableGitHubConnectionForLake,
+}));
 
 import handler from '../lifecycle';
-import { fabFileChunkRepository } from '@bike4mind/database';
+import { fabFileChunkRepository, userRepository } from '@bike4mind/database';
 
 const makeRes = () => {
   const json = vi.fn();
   const res = { json, status: vi.fn(() => ({ json })) } as never;
   return { res, json, statusJson: json };
 };
-const req = (body: unknown) => ({ method: 'POST', query: { id: 'lake1' }, body }) as never;
+const req = (body: unknown) =>
+  ({ method: 'POST', query: { id: 'lake1' }, body, logger: { error: h.loggerError } }) as never;
+
+// The route must release with the very claim id it handed the service, so the release can only
+// match a claim this request took.
+const expectReleasedOwnClaim = () => {
+  const claimId = h.acceptDataLakePurge.mock.calls[0][2];
+  expect(claimId).toEqual(expect.any(String));
+  expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', claimId);
+};
 
 describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)', () => {
   beforeEach(() => {
@@ -118,7 +150,10 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/data-lake-cleanup', {
       dataLakeId: 'lake1',
       actor: { userId: 'u1', isAdmin: false },
+      purgeClaimId: expect.any(String),
     });
+    // The message carries the very claim the request accepted, so the consumer's release is keyed.
+    expect(h.sendToQueue.mock.calls[0][1].purgeClaimId).toBe(h.acceptDataLakePurge.mock.calls[0][2]);
     expect(h.cleanupDeletedDataLake).not.toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(202);
   });
@@ -134,7 +169,12 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     // Ordering is the fix, not an implementation detail: enqueue-first leaves the accept window
     // this issue is about wide open, because the sweep can complete before the status ever moves.
     expect(order).toEqual(['accept', 'enqueue']);
-    expect(h.acceptDataLakePurge).toHaveBeenCalledWith({ userId: 'u1', isAdmin: false }, 'lake1', expect.anything());
+    expect(h.acceptDataLakePurge).toHaveBeenCalledWith(
+      { userId: 'u1', isAdmin: false },
+      'lake1',
+      expect.any(String),
+      expect.anything()
+    );
   });
 
   it('releases the claim when the enqueue fails, so the lake cannot strand in purging', async () => {
@@ -147,8 +187,80 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
       (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
     ).rejects.toThrow(/sqs unavailable/);
 
-    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expectReleasedOwnClaim();
     expect(res.status).not.toHaveBeenCalledWith(202);
+  });
+
+  it('rethrows the original enqueue error when the release itself fails', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.sendToQueue.mockRejectedValue(new Error('sqs unavailable'));
+    h.releasePurgingToDeleted.mockRejectedValueOnce(new Error('mongo down'));
+    const { res } = makeRes();
+    await expect(
+      (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+    ).rejects.toThrow(/sqs unavailable/);
+
+    expectReleasedOwnClaim();
+    expect(h.loggerError).toHaveBeenCalledWith(
+      expect.stringContaining('could not release the purge claim'),
+      expect.objectContaining({ dataLakeId: 'lake1', error: 'mongo down' })
+    );
+  });
+
+  it('releases the claim when the transaction fails after the claim, so the lake cannot strand in purging', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.commitError = new Error('commit result unknown');
+    const { res } = makeRes();
+    try {
+      await expect(
+        (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+      ).rejects.toThrow(/commit result unknown/);
+    } finally {
+      h.commitError = undefined;
+    }
+
+    expectReleasedOwnClaim();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('releases only its own claim id when a retry loses the claim its aborted first attempt had taken', async () => {
+    // Attempt 1 claimed and was then aborted (rolled back); attempt 2 finds a concurrent purge holds
+    // the claim. An anonymous release would put THAT purge's lake back in the deleted list mid-sweep;
+    // keyed to our id it matches nothing.
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.acceptDataLakePurge
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Data lake must be soft-deleted before cleanup'));
+    h.retryAfterAbort = true;
+    const { res } = makeRes();
+    try {
+      await expect(
+        (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
+      ).rejects.toThrow(/soft-deleted/i);
+    } finally {
+      h.retryAfterAbort = false;
+    }
+
+    expect(h.acceptDataLakePurge).toHaveBeenCalledTimes(2);
+    expect(h.acceptDataLakePurge.mock.calls[0][2]).toBe(h.acceptDataLakePurge.mock.calls[1][2]);
+    expectReleasedOwnClaim();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('enqueues once and releases nothing when an aborted first attempt is retried successfully', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.retryAfterAbort = true;
+    const { res } = makeRes();
+    try {
+      await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+    } finally {
+      h.retryAfterAbort = false;
+    }
+
+    expect(h.acceptDataLakePurge).toHaveBeenCalledTimes(2);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
   });
 
   it('does NOT release on a successful enqueue', async () => {
@@ -167,6 +279,9 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     await expect(
       (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res)
     ).rejects.toThrow(/soft-deleted/i);
+    // The callback threw, so the transaction rolled the claim back; the release is keyed to our own
+    // claim id, so it cannot undo a concurrent purge that won it.
+    expectReleasedOwnClaim();
 
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalledWith(202);
@@ -324,11 +439,10 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
 
-    expect(h[serviceName as keyof typeof h]).toHaveBeenCalledWith(
-      expect.anything(),
-      'lake1',
-      expect.objectContaining({ db: expect.objectContaining({ fabFileChunks: fabFileChunkRepository }) })
-    );
+    // toHaveBeenCalledWith(expect.objectContaining(...)) is a deep-equality check, not identity: a
+    // spread copy of fabFileChunkRepository would still pass. Pull the actual argument and use .toBe.
+    const call = h[serviceName as keyof typeof h].mock.calls[0][2] as Record<string, unknown>;
+    expect((call.db as Record<string, unknown>).fabFileChunks).toBe(fabFileChunkRepository);
   });
 
   // Unwired, an archived/deleted lake's Drive connection keeps polling forever - see
@@ -349,5 +463,90 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
     await port({ dataLakeId: 'lake1' });
     expect(h[portName]).toHaveBeenCalledWith('lake1');
+  });
+
+  it.each([
+    ['archive', 'archiveDataLake', 'disableGitHubConnection', 'disableGitHubConnectionForLake'],
+    ['delete', 'deleteDataLake', 'disableGitHubConnection', 'disableGitHubConnectionForLake'],
+    ['unarchive', 'unarchiveDataLake', 'enableGitHubConnection', 'enableGitHubConnectionForLake'],
+    ['restore', 'restoreDeletedDataLake', 'enableGitHubConnection', 'enableGitHubConnectionForLake'],
+  ] as const)('%s wires the GitHub connection %s port', async (action, serviceName, portKey, portName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
+    await port({ dataLakeId: 'lake1' });
+    expect(h[portName]).toHaveBeenCalledWith('lake1');
+  });
+});
+
+describe('POST /api/data-lakes/[id]/lifecycle - db.users wiring (delete/restore/unarchive)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeWritable.mockReturnValue(undefined);
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
+    h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+    h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+  });
+
+  // Same identity pin as the db.fabFileChunks test: a stub wired into db.users would still pass a
+  // shape check while the owner's storage counter never moves. Archive doesn't touch storage.
+  it.each([
+    ['delete', 'deleteDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+    ['unarchive', 'unarchiveDataLake'],
+  ] as const)('%s wires the real userRepository into db.users', async (action, serviceName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    // toHaveBeenCalledWith(expect.objectContaining(...)) is a deep-equality check, not identity: a
+    // spread copy of userRepository would still pass. Pull the actual argument and use .toBe.
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    expect((call.db as Record<string, unknown>).users).toBe(userRepository);
+  });
+});
+
+describe('POST /api/data-lakes/[id]/lifecycle - transaction scope (promote/demote/cleanup)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.inTransaction.length = 0;
+    h.assertLakeWritable.mockReturnValue(undefined);
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.archiveDataLake.mockResolvedValue({ archivedCount: 0 });
+  });
+
+  // The services gate internally, so wrapping the call puts their grant read inside the transaction
+  // that also writes the lake doc - the collision a concurrent grant revoke serializes against.
+  it.each([
+    ['promote', 'promoteDataLake'],
+    ['demote', 'demoteDataLake'],
+  ] as const)('%s runs the service inside a transaction', async (action, serviceName) => {
+    h[serviceName].mockImplementation(async () => {
+      h.inTransaction.push('service');
+      return { id: 'lake1' };
+    });
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'service', 'exit']);
+  });
+
+  it('cleanup claims the purge inside a transaction and enqueues only after it commits', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
+    h.acceptDataLakePurge.mockImplementation(async () => void h.inTransaction.push('claim'));
+    h.sendToQueue.mockImplementation(async () => void h.inTransaction.push('enqueue'));
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'claim', 'exit', 'enqueue']);
+  });
+
+  it('leaves the long cascades (archive) outside a transaction', async () => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'archive' }), res);
+
+    expect(h.archiveDataLake).toHaveBeenCalled();
+    expect(h.inTransaction).toEqual([]);
   });
 });

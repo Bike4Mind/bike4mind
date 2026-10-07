@@ -1,25 +1,27 @@
 import { ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
-import { CitableSource, IFabFileDocument } from '@bike4mind/common';
+import { citationTagDescription, CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import { resolveOwnerLakeAccess, resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import {
-  getDynamicDataLakeAccess,
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
+  type ResolvedLakeAccess,
 } from '../../../../dataLakeService/getDynamicDataLakeTags';
+import type { ResolvedLakeAccessSet } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMembership';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { buildRetrievalConflictSignal, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
-import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
+import { attributeAccessedLakeIds, citableOriginFor } from '../../../../dataLakeService/attributeAccessedLakes';
 import { recordLakeAccessEvent } from '../../../../dataLakeService/recordLakeAccessEvent';
 
 interface KnowledgeBaseRetrieveParams {
@@ -135,15 +137,15 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         }
 
         try {
-          // Memoized per call: Path A's shared-file fallback, Path B's search, and the audit
-          // attribution below each need the caller's dynamic lake access, but at most one of the
-          // first two ever runs (Path A returns before Path B on a resolved/missing file_id) - this
-          // makes whichever one runs first, plus the attribution step, share a single round trip
-          // instead of each re-resolving it.
-          let dynamicAccessPromise: ReturnType<typeof getDynamicDataLakeAccess> | undefined;
+          // Memoized per call so each path resolves lake access at most once: the owner-wide set feeds
+          // chip and audit attribution below, and dynamicAccess() (Path A's shared-file fallback,
+          // Path B's search) narrows that same promise to the session instead of re-resolving it.
+          let ownerAccessPromise: Promise<ResolvedLakeAccessSet> | undefined;
+          const ownerAccess = () => (ownerAccessPromise ??= resolveOwnerLakeAccess(context));
           // Narrowed INSIDE the chain so the memo stays a Promise (it is shared by several later
           // awaits) and so every consumer sees the session-scoped set, not the owner-wide one.
-          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context));
+          let dynamicAccessPromise: Promise<ResolvedLakeAccessSet> | undefined;
+          const dynamicAccess = () => (dynamicAccessPromise ??= resolveSessionLakeAccess(context, ownerAccess));
 
           let files: IFabFileDocument[] = [];
 
@@ -425,11 +427,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             // name and tag list are attacker-influenced too, and a newline in either would carry a
             // forged marker into the header lines. See renderRetrievedContentBlock.
             //
-            // Undated, as all three retrieval channels are: `file.createdAt` is when the file was
-            // uploaded, and heading a decade-old document with last week's date is a claim the
-            // model has no way to discount. Nothing captures the document's own date yet.
+            // Dated only from `documentDate` - the document's OWN vintage, captured at ingest
+            // (#3048) - and silently undated otherwise. Never from `file.createdAt`, which is when
+            // the file was uploaded: heading a decade-old document with last week's date is a claim
+            // the model has no way to discount (#3047).
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.documentDate)}\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
@@ -447,9 +450,8 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           if (retrievedFiles.length === 0) {
             // Ran to completion (documents were located) and legitimately found no stored text -
             // must be distinguishable from "never asked" (#1867). No prior statusUpdate call
-            // exists on this branch; dataLakeTags is left empty rather than resolved synchronously
-            // - see the audit-write comment below on why dynamicAccess() is deliberately deferred
-            // off this path.
+            // exists on this branch; dataLakeTags is left empty, matching the success path below,
+            // rather than paying a session lake-access resolution (dynamicAccess()) just to stamp it.
             await context.statusUpdate({
               promptMeta: {
                 retrieval: {
@@ -502,15 +504,32 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             );
           }
 
-          // Best-effort audit write, computed and recorded OFF the critical path: Path A's owned-
-          // file fast path (the common case - a caller retrieving their own file_id) never touches
-          // dynamicAccess() at all, so awaiting it here would add a full entitlement-resolution
-          // round trip to that common case purely for the audit's sake. Deferred into the same
-          // fire-and-forget shape as the write itself instead, with its own .catch() so a failure
-          // resolving dynamic access can only ever drop the audit row - never (as an inline
-          // `await` here would) propagate into the outer catch and turn a successful retrieval
-          // into "An error occurred while retrieving document content."
-          // Shared by both branches below - only resolvedLakeIds and the await-vs-defer timing differ.
+          // Owner-wide lakes (plus pre-authorized ones) for chip attribution and the audit, shared with
+          // dynamicAccess() through ownerAccess(). Deliberately NOT dynamicAccess(): that is the
+          // session-narrowed set, and both ask a different question - "what lake was this content",
+          // not "what may this session search".
+          // A file served by the ownership fast path consults no lake state, so under a narrowed or
+          // suppressed session it would attribute to zero lakes - dropping the audit row for access
+          // that still happened and mislabelling a lake file's chip as library. Awaited because the
+          // chips need it; a failure only drops the origins and the audit row, never the retrieval
+          // (an uncaught throw here would reach the outer catch and fail a successful read).
+          // undefined on the scoped branch, which has no lake concept, so its chips carry no origin.
+          let attributionLakes: ResolvedLakeAccess[] | undefined;
+          // The chips' copy: dropped when the lake read degraded, which would otherwise read every
+          // lake file as library. The audit keeps attributing against what was seen.
+          let originLakes: ResolvedLakeAccess[] | undefined;
+          if (!scope) {
+            try {
+              const owner = await ownerAccess();
+              attributionLakes = owner.lakes;
+              if (owner.lakeViewComplete !== false) originLakes = owner.lakes;
+            } catch (err) {
+              context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err);
+            }
+          }
+
+          // Best-effort audit write, recorded off the critical path (recordLakeAccessEvent is not awaited).
+          // Shared by both branches below - only resolvedLakeIds differs.
           const baseAuditPayload = {
             // Always 'user', including an agent-executor run - see ToolContext.userId's doc comment.
             principalKind: 'user' as const,
@@ -525,39 +544,32 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           if (scope) {
             // Scoped branch has no lake concept at all (resolvedLakeIds is always []) but is
             // recorded regardless, same as the search tool's scoped arm - membership IS the
-            // authorization, so there is nothing to await here either.
+            // authorization.
             recordLakeAccessEvent(
               context.db.lakeAccessEvents,
               { ...baseAuditPayload, resolvedLakeIds: [] },
               context.logger,
               context.db.adminSettings
             );
-          } else if (context.db.lakeAccessEvents) {
-            const fileTagLists = retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []);
-            // Deliberately NOT dynamicAccess(): that is the session-narrowed set, and attribution
-            // asks a different question - "what lake was this content", not "what may this session
-            // search". A file served by the ownership fast path consults no lake state, so under a
-            // narrowed or suppressed session it attributes to zero lakes and the row is dropped by
-            // the guard below - losing the audit trail for access that still happened.
-            getDynamicDataLakeAccess(context)
-              .then(({ lakes }) => {
-                // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
-                // Path B's search is owner+shared+org+lake too), so a retrieved file with no
-                // recoverable datalake tag may just be the caller's own private file - never fall
-                // back to the full scope, and skip the row entirely if nothing retrieved is
-                // actually attributable to a lake.
-                const resolvedLakeIds = attributeAccessedLakeIds(fileTagLists, lakes, {
-                  allowFullScopeFallback: false,
-                });
-                if (resolvedLakeIds.length === 0) return;
-                return recordLakeAccessEvent(
-                  context.db.lakeAccessEvents,
-                  { ...baseAuditPayload, resolvedLakeIds },
-                  context.logger,
-                  context.db.adminSettings
-                );
-              })
-              .catch(err => context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err));
+          } else if (context.db.lakeAccessEvents && attributionLakes) {
+            // This tool's corpus is always mixed (a direct id can be owned, shared, or lake;
+            // Path B's search is owner+shared+org+lake too), so a retrieved file with no
+            // recoverable datalake tag may just be the caller's own private file - never fall
+            // back to the full scope, and skip the row entirely if nothing retrieved is
+            // actually attributable to a lake.
+            const resolvedLakeIds = attributeAccessedLakeIds(
+              retrievedFiles.map(f => f.tags?.map(t => t.name) ?? []),
+              attributionLakes,
+              { allowFullScopeFallback: false }
+            );
+            if (resolvedLakeIds.length > 0) {
+              recordLakeAccessEvent(
+                context.db.lakeAccessEvents,
+                { ...baseAuditPayload, resolvedLakeIds },
+                context.logger,
+                context.db.adminSettings
+              );
+            }
           }
 
           // Create citable source chips for the UI - mirrors web_search pattern.
@@ -573,26 +585,31 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
           const citables: CitableSource[] = retrievedFiles.map((file, index) => {
             const conflictsWith = conflict.conflictsByFileId.get(file.id);
-            const fileTags = (file.tags?.map(t => t.name) || [])
-              .filter(t => !t.startsWith('datalake:')) // Hide internal meta-tags
-              .slice(0, 4) // Keep chip description concise
-              .join(', ');
+            const fileTagNames = file.tags?.map(t => t.name) || [];
             return {
               id: file.id,
               type: 'document' as const,
               title: file.fileName,
               url: `/opti?mode=datalake&article=${file.id}`,
-              description: fileTags || undefined,
+              description: citationTagDescription(fileTagNames),
               timestamp: new Date().toISOString(),
               status: 'complete' as const,
               metadata: {
                 sourceSystem: 'knowledge_base',
-                tags: file.tags?.map(t => t.name) || [],
+                tags: fileTagNames,
                 relevanceScore: 1 - index * 0.1,
                 // Spread and COPIED: an absent key must leave the field off entirely rather than
                 // stamping an empty array the chip would badge with no partner to name, and the
                 // chip must not alias the detector's own array.
                 ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
+                ...(originLakes
+                  ? {
+                      sourceOrigin: citableOriginFor(
+                        { tags: fileTagNames, ownerUserId: normalizeId(file.userId), callerUserId: context.userId },
+                        originLakes
+                      ),
+                    }
+                  : {}),
               },
             };
           });

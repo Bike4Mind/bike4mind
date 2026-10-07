@@ -161,12 +161,13 @@ const saveSelectionHandler = asyncHandler(async (req, res) => {
     return { fullName, owner, repo };
   });
 
-  if (!mcpServer.metadata) {
-    mcpServer.metadata = {};
+  // Leaf path: `metadata` also holds webhook/OAuth state that other writers set concurrently.
+  // A stored `metadata: null` cannot take a dotted `$set`, so seed the object instead.
+  if (mcpServer.metadata == null) {
+    await mcpServerRepository.update({ id: mcpServer.id, metadata: { selectedRepositories: formattedRepos } });
+  } else {
+    await mcpServerRepository.update({ id: mcpServer.id, 'metadata.selectedRepositories': formattedRepos });
   }
-  mcpServer.metadata.selectedRepositories = formattedRepos;
-
-  await mcpServerRepository.update(mcpServer);
 
   req.logger.info('Successfully updated repository selection', {
     userId,

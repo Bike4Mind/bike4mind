@@ -4,8 +4,8 @@ import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { registerContracts } from './operations';
 import { assertUniqueOperations } from './assertUniqueOperations';
 import { assertContractConventions } from '../api-contract/assertContractConventions';
-import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
-import { chatContract, synthesizeSpeechContract } from '../api-contract';
+import { API_KEY_RATE_LIMIT_DEFAULTS, ApiKeyScope } from '../types/entities/UserApiKeyTypes';
+import { CONTRACTS, chatContract, synthesizeSpeechContract } from '../api-contract';
 import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
@@ -112,12 +112,34 @@ describe('buildOpenApiDocument', () => {
     // dropping it silently narrows /api/chat's published spec and generated SDKs
     // stop modelling the missing-credential / under-scoped-key paths.
     expect(chat.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
-    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // The scope 403 extends the envelope with the route's required scopes (apiKeyAuth.ts).
+    expect(chat.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
     // Streaming completions opens the stream first, so auth/scope failures are
     // in-band SSE events - it must NOT declare HTTP 401/403 even though it is
     // authenticated and scoped.
     expect(completions.responses['401']).toBeUndefined();
     expect(completions.responses['403']).toBeUndefined();
+  });
+
+  it('publishes a declared scope 403 as ScopeForbiddenResponse, keeping its own description', () => {
+    // These contracts declare their own 403 (it also covers a feature-disabled answer), which
+    // bypasses the injection above - so the schema they declare is what reaches the spec.
+    for (const op of [doc.paths['/api/v1/data-lakes'].get, doc.paths['/api/v1/sessions'].post]) {
+      expect(op.responses['403'].content['application/json'].schema).toEqual(ref('ScopeForbiddenResponse'));
+      expect(op.responses['403'].description).not.toBe('The API key does not hold any of the required scopes.');
+    }
+  });
+
+  it('auto-injects 405 with an Allow header on every operation, streaming and Lambda-served included', () => {
+    // Every transport serving a contract guards its method ahead of auth and before a stream opens
+    // (baseApi `allowedMethods`, defineLambdaRoute, and the Express completions route in
+    // chatCompletion/external/sseRoute.ts), so unlike 401/403 there is no exclusion.
+    for (const op of [chat, completions, tools]) {
+      expect(op.responses['405'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+      expect(op.responses['405'].headers.Allow).toBeDefined();
+      // Answered ahead of apiKeyRateLimit, so the limiter never sets its headers on it.
+      expect(op.responses['405'].headers['X-RateLimit-Limit-Minute']).toBeUndefined();
+    }
   });
 
   it('documents OR semantics for required scopes in info.description', () => {
@@ -147,6 +169,24 @@ describe('buildOpenApiDocument', () => {
     }
   });
 
+  it('sends a request body in code samples only when the operation declares one', () => {
+    const sessionPath = doc.paths['/api/sessions/{id}'];
+    const sources = (op: typeof completions) =>
+      op['x-codeSamples'].map((s: { source: string }) => s.source) as string[];
+    // DELETE and GET declare no requestBody, so no sample sends Content-Type or a `{}` body.
+    for (const op of [sessionPath.delete, sessionPath.get]) {
+      expect(op.requestBody).toBeUndefined();
+      for (const source of sources(op)) {
+        expect(source).not.toContain('Content-Type');
+        expect(source).not.toContain('B4M_REQUEST_BODY');
+        expect(source).not.toContain('JSON.stringify');
+        expect(source).not.toContain('json=');
+      }
+    }
+    // PUT on the same path declares one, so its samples still carry it.
+    for (const source of sources(sessionPath.put)) expect(source).toContain('knowledgeIds');
+  });
+
   it('sources the code-sample URL from the same env as servers() (B4M_OPENAPI_PROD_URL)', () => {
     const original = process.env.B4M_OPENAPI_PROD_URL;
     process.env.B4M_OPENAPI_PROD_URL = 'https://api.test.example';
@@ -154,6 +194,7 @@ describe('buildOpenApiDocument', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
       const rebuilt = buildOpenApiDocument('9.9.9') as any;
       expect(rebuilt.servers[0].url).toBe('https://api.test.example');
+      expect(rebuilt.info.contact.url).toBe('https://api.test.example');
       const curl = rebuilt.paths['/api/ai/v1/completions'].post['x-codeSamples'].find(
         (s: { lang: string }) => s.lang === 'curl'
       ).source as string;
@@ -178,6 +219,37 @@ describe('buildOpenApiDocument', () => {
     expect(doc.info.description).toContain(ApiKeyScope.READ_FILES);
     // The aspirational vocab from the issue must NOT leak in (Decision 2).
     expect(doc.info.description).not.toContain('ai.completions:write');
+  });
+
+  it('quotes the enforced rate-limit defaults and every published rate-limit header in info.description', () => {
+    const { requestsPerMinute, requestsPerDay } = API_KEY_RATE_LIMIT_DEFAULTS;
+    expect(doc.info.description).toContain(`${requestsPerMinute} requests/minute`);
+    expect(doc.info.description).toContain(`${requestsPerDay} requests/day`);
+    // Hardcoded rather than read back from the spec, so a header dropped from RATE_LIMIT_HEADER_SPEC
+    // can't vanish from both sides of the comparison at once.
+    const expectedHeaders = [
+      'X-RateLimit-Limit-Minute',
+      'X-RateLimit-Remaining-Minute',
+      'X-RateLimit-Reset-Minute',
+      'X-RateLimit-Limit-Day',
+      'X-RateLimit-Remaining-Day',
+      'X-RateLimit-Reset-Day',
+    ];
+    const publishedHeaders = Object.keys(chat.responses['200'].headers).filter(h => h.startsWith('X-RateLimit-'));
+    expect(new Set(publishedHeaders)).toEqual(new Set(expectedHeaders));
+    const describedHeaders = [...doc.info.description.matchAll(/`(X-RateLimit-[A-Za-z-]+)`/g)].map(m => m[1]);
+    expect(new Set(describedHeaders)).toEqual(new Set(expectedHeaders));
+  });
+
+  it('gives every tag used by an operation a top-level description', () => {
+    const declared = new Set(doc.tags.map((tag: { name: string }) => tag.name));
+    const used = Object.values(doc.paths).flatMap(pathItem =>
+      Object.values(pathItem as Record<string, { tags?: string[] }>).flatMap(op => op.tags ?? [])
+    );
+    expect(used.filter(tag => !declared.has(tag))).toEqual([]);
+    for (const tag of doc.tags as { name: string; description?: string }[]) {
+      expect(tag.description, tag.name).toBeTruthy();
+    }
   });
 
   it('declares X-Request-ID on every response', () => {
@@ -208,6 +280,13 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.synthesizeSpeechResponse413.properties.name).toBeUndefined();
   });
 
+  it('documents the oversized-audio 303 as a bodiless redirect with a Location header', () => {
+    const redirect = doc.paths['/api/ai/tts'].post.responses['303'];
+    expect(redirect).toBeDefined();
+    expect(redirect.content).toBeUndefined();
+    expect(redirect.headers.Location).toBeDefined();
+  });
+
   it('publishes the WINDOWED rate-limit header names the middleware actually sets', () => {
     // The unwindowed spelling is what the spec used to publish; nothing sets it,
     // so a client coding against it reads undefined.
@@ -234,6 +313,8 @@ describe('buildOpenApiDocument', () => {
       ['/api/ai/sound-effects', 'post'],
       ['/api/sessions/{id}', 'put'],
       ['/api/v1/me', 'get'],
+      ['/api/v1/credits', 'get'],
+      ['/api/v1/models', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;
@@ -330,6 +411,23 @@ describe('registerContracts wiring', () => {
 
   it('runs the uniqueness guard before registering', () => {
     expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
+  });
+
+  it('registers nothing from a rejected batch', () => {
+    expect(() => registerContracts([conformingContract, conformingContract])).toThrow(/Duplicate operationId/);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
+    const rebuilt = buildOpenApiDocument('9.9.9') as any;
+    expect(rebuilt.paths[conformingContract.path]).toBeUndefined();
+  });
+
+  it('rejects a contract that reuses an already-registered operation', () => {
+    const core = CONTRACTS[0];
+    expect(() => registerContracts([{ ...conformingContract, operationId: core.operationId }])).toThrow(
+      /Duplicate operationId/
+    );
+    expect(() => registerContracts([{ ...conformingContract, method: core.method, path: core.path }])).toThrow(
+      /Duplicate route/
+    );
   });
 
   it('rejects those two for the injected violation, not for the fixture itself', () => {

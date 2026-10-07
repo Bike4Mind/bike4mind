@@ -48,7 +48,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 import { settleStrandedQuests } from './settleStrandedQuests';
-import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
+import { ABANDONED_REPLY, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
 
 const logger = { warn: vi.fn(), error: vi.fn() };
 
@@ -81,7 +81,7 @@ describe('settleStrandedQuests', () => {
     addQuest({ status: 'pending' });
 
     expect(await settle(['exec1'])).toEqual({ settled: 1, failed: false, failedExecutionIds: [] });
-    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null }]);
   });
 
   it('preserves partial text instead of replacing it with an error', async () => {
@@ -89,7 +89,14 @@ describe('settleStrandedQuests', () => {
 
     await settle(['exec1']);
 
-    expect(updates).toEqual([{ id: 'q1', status: 'done' }]);
+    expect(updates).toEqual([
+      {
+        id: 'q1',
+        status: 'done',
+        finishReason: 'abandoned',
+        reply: `here is half an answer\n\n${UNFINISHED_REPLY_NOTICE}`,
+      },
+    ]);
   });
 
   it('treats images alone as content worth preserving', async () => {
@@ -97,7 +104,7 @@ describe('settleStrandedQuests', () => {
 
     await settle(['exec1']);
 
-    expect(updates).toEqual([{ id: 'q1', status: 'done' }]);
+    expect(updates).toEqual([{ id: 'q1', status: 'done', finishReason: 'abandoned', fallbackInfo: null }]);
   });
 
   it('treats tool output alone as content worth preserving', async () => {
@@ -108,7 +115,8 @@ describe('settleStrandedQuests', () => {
 
     await settle(['exec1']);
 
-    expect(updates).toEqual([{ id: 'q1', status: 'done' }]);
+    expect(updates).toEqual([expect.objectContaining({ id: 'q1', status: 'done', finishReason: 'abandoned' })]);
+    expect(updates[0].type).toBeUndefined();
   });
 
   it('treats structured replies alone as content worth preserving', async () => {
@@ -116,7 +124,8 @@ describe('settleStrandedQuests', () => {
 
     await settle(['exec1']);
 
-    expect(updates).toEqual([{ id: 'q1', status: 'done' }]);
+    expect(updates).toEqual([expect.objectContaining({ id: 'q1', status: 'done', finishReason: 'abandoned' })]);
+    expect(updates[0].type).toBeUndefined();
   });
 
   it('does not mistake an empty structure for content', async () => {
@@ -130,8 +139,8 @@ describe('settleStrandedQuests', () => {
     await settle(['exec1', 'exec2']);
 
     expect(updates).toEqual([
-      { id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY },
-      { id: 'q2', status: 'done', type: 'error', reply: ABANDONED_REPLY },
+      { id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null },
+      { id: 'q2', status: 'done', type: 'error', reply: ABANDONED_REPLY, fallbackInfo: null },
     ]);
   });
 

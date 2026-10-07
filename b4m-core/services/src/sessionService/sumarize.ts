@@ -2,6 +2,7 @@ import { IChatHistoryItem, IMessage, ISession } from '@bike4mind/common';
 import { z } from 'zod';
 import { secureParameters } from '@bike4mind/utils';
 import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 
 const sumarizeSessionSchema = z.object({
   id: z.string(),
@@ -13,7 +14,7 @@ interface SumarizeSessionAdapters {
   db: {
     sessions: {
       findByIdAndUserId: (id: string, userId: string) => Promise<ISession | null | undefined>;
-      update: (session: ISession) => Promise<ISession | null>;
+      update: (session: Partial<ISession>) => Promise<ISession | null>;
     };
     chatHistories: {
       findAllBySessionIdAndCreatedAtGreaterThanDate: (
@@ -68,7 +69,10 @@ export const summarizeSession = async (
 
   const content = chatHistories
     .map(quest =>
-      [`Question: ${quest.prompt}`, `Answer: ${quest.reply || quest.replies?.join('\n') || 'No reply'}`].join('\n')
+      [
+        `Question: ${quest.prompt}`,
+        `Answer: ${stripToolOutputMarker(quest.reply || quest.replies?.join('\n') || 'No reply')}`,
+      ].join('\n')
     )
     .join('\n');
 
@@ -82,7 +86,7 @@ export const summarizeSession = async (
   session.summary = summary;
   session.summaryAt = new Date();
 
-  await db.sessions.update(session);
+  await db.sessions.update({ id: session.id, summary: session.summary, summaryAt: session.summaryAt });
 
   return session;
 };

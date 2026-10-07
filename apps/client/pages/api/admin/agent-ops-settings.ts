@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { Request } from 'express';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { agentOpsSettingsRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
@@ -40,7 +41,7 @@ async function fetchSelectableModels() {
   return getAvailableModels(buildApiKeyTable(coreKeys), modelCatalogListingOptions());
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user!.isAdmin) {
       throw new ForbiddenError('Admin access required');

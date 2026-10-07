@@ -1,5 +1,87 @@
 # @bike4mind/cli
 
+## 2.0.0
+
+### Major Changes
+
+- [#3884](https://github.com/Bike4Mind/bike4mind/pull/3884) [`31d4623`](https://github.com/Bike4Mind/bike4mind/commit/31d46236619fd7e0c2be3f3bc4d34ee69314e682) Thanks [@onoya](https://github.com/onoya)! - deliver all generated audio through one shared module, by URL when oversized
+
+### Patch Changes
+
+- [#3858](https://github.com/Bike4Mind/bike4mind/pull/3858) [`ad14801`](https://github.com/Bike4Mind/bike4mind/commit/ad14801acd6de3230b2dc9819586f402ae047cb4) Thanks [@juicewaa](https://github.com/juicewaa)! - derive quest reply text from replies[] on poll and wait bodies
+
+## 1.4.0
+
+### Minor Changes
+
+- [#3836](https://github.com/Bike4Mind/bike4mind/pull/3836) [`2483e86`](https://github.com/Bike4Mind/bike4mind/commit/2483e86cb8ac92ed12fd719140337416b7947381) Thanks [@onoya](https://github.com/onoya)! - async post-edit diagnostics loop
+
+- [#3843](https://github.com/Bike4Mind/bike4mind/pull/3843) [`2c3ed54`](https://github.com/Bike4Mind/bike4mind/commit/2c3ed543d7d596805a352a0e93a1cbe124d09d9d) Thanks [@onoya](https://github.com/onoya)! - add MCP text to speech tool
+
+- [#3851](https://github.com/Bike4Mind/bike4mind/pull/3851) [`07d3d0d`](https://github.com/Bike4Mind/bike4mind/commit/07d3d0dabe5d7b79575aa5da18838d2c313c63bb) Thanks [@vinchi777](https://github.com/vinchi777)! - accept the b4m-desktop client in the device flow
+
+- [#3865](https://github.com/Bike4Mind/bike4mind/pull/3865) [`0beaa0e`](https://github.com/Bike4Mind/bike4mind/commit/0beaa0e53469277116632c1c46055bdbfe904ccb) Thanks [@julsanchez](https://github.com/julsanchez)! - add data lake tools to b4m mcp serve
+
+### Patch Changes
+
+- [#3698](https://github.com/Bike4Mind/bike4mind/pull/3698) [`3412bf6`](https://github.com/Bike4Mind/bike4mind/commit/3412bf663a5068ed68e712d276790e00754eb7db) Thanks [@jjmarfa](https://github.com/jjmarfa)! - distinguish a missing credential from an expired session
+
+- [#3747](https://github.com/Bike4Mind/bike4mind/pull/3747) [`fc67333`](https://github.com/Bike4Mind/bike4mind/commit/fc673338c4450638acb93708a423298141b98e28) Thanks [@julsanchez](https://github.com/julsanchez)! - escape untrusted text in CLI approval and question prompts
+
+- [#3749](https://github.com/Bike4Mind/bike4mind/pull/3749) [`52c290e`](https://github.com/Bike4Mind/bike4mind/commit/52c290eb2a6812aaaee1c47fd321ca2301dbd99f) Thanks [@julsanchez](https://github.com/julsanchez)! - name a missing verification URL and strip control chars from login strings
+
+- [#3837](https://github.com/Bike4Mind/bike4mind/pull/3837) [`9d7b298`](https://github.com/Bike4Mind/bike4mind/commit/9d7b298a2b71380b1f3202f50b230e5ef33ac4e9) Thanks [@jjmarfa](https://github.com/jjmarfa)! - isolate API-key chat sessions from the user's open notebook
+
+- [#3872](https://github.com/Bike4Mind/bike4mind/pull/3872) [`061bb61`](https://github.com/Bike4Mind/bike4mind/commit/061bb61868b98e855f72aaf29d61d469b93ea88c) Thanks [@onoya](https://github.com/onoya)! - restore the model after a custom-command model override
+
+## 1.3.0
+
+### Minor Changes
+
+- [#3703](https://github.com/Bike4Mind/bike4mind/pull/3703) [`31f1547`](https://github.com/Bike4Mind/bike4mind/commit/31f15478fe43bea7b7d76a4104d87cf9abf812d7) Thanks [@julsanchez](https://github.com/julsanchez)! - name the bound account on login and only auto-open same-origin verification URLs
+
+- [#3708](https://github.com/Bike4Mind/bike4mind/pull/3708) [`2628352`](https://github.com/Bike4Mind/bike4mind/commit/2628352ca0036977581c53846d3b2b6133fc1e78) Thanks [@julsanchez](https://github.com/julsanchez)! - require approval of each repo MCP server definition before spawning
+
+### Patch Changes
+
+- [#3394](https://github.com/Bike4Mind/bike4mind/pull/3394) [`fb13127`](https://github.com/Bike4Mind/bike4mind/commit/fb13127fa17159715f2465edc13aa79ba9fbb371) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - scan artifact tags, titles and tool-output results in linear time
+
+- [#3605](https://github.com/Bike4Mind/bike4mind/pull/3605) [`3b49048`](https://github.com/Bike4Mind/bike4mind/commit/3b49048715891aac4f5d427f717980c5626bd4d3) Thanks [@onoya](https://github.com/onoya)! - bump axios to 1.20.0 for seven high-severity advisories
+
+- [#3701](https://github.com/Bike4Mind/bike4mind/pull/3701) [`71cb783`](https://github.com/Bike4Mind/bike4mind/commit/71cb7835d59579ea20349dfa9988ac015c2eae5f) Thanks [@julsanchez](https://github.com/julsanchez)! - ignore a model-supplied confirmedFuzzyHash in edit_local_file
+
+- [#3706](https://github.com/Bike4Mind/bike4mind/pull/3706) [`edfe671`](https://github.com/Bike4Mind/bike4mind/commit/edfe6718c78309af24d2057d0d428e5dea7f208d) Thanks [@erikbethke](https://github.com/erikbethke)! - bump vulnerable dependencies (HIGH)
+
+## 1.2.0
+
+### Minor Changes
+
+- [#3036](https://github.com/Bike4Mind/bike4mind/pull/3036) [`31e0dd9`](https://github.com/Bike4Mind/bike4mind/commit/31e0dd9a905a7a125f7489efc951a7d21157bc17) Thanks [@julsanchez](https://github.com/julsanchez)! - harden the CLI trust boundary against a hostile cloned repo
+
+  Behavior changes (all user-visible effects of hardening the CLI against an untrusted clone):
+
+  - The shared utils barrel no longer runs `dotenv.config()` on import, so a project-local `.env` is no longer auto-loaded. Configuration now resolves from the real process environment. Set the variables in your shell (or your process manager) instead of relying on a cwd `.env`.
+  - Non-YAML frontmatter in a skill, command, or agent file (e.g. a `---js` fence) no longer evaluates; such frontmatter is treated as empty instead of running code at load time.
+  - A `--session-id`/`--resume` value outside the strict session-id charset is now rejected up front rather than used as a filesystem path component.
+  - A project skill/command/agent whose file is a symlink escaping the project root is refused when loading from an untrusted checkout.
+  - A `global` or `remote` skill whose name is reserved (a built-in or live feature/plugin command) is no longer advertised to the model or invokable, matching the dispatch gate.
+  - Agent lifecycle hooks (PreToolUse/PostToolUse/Stop and friends) that previously ran their shell command unprompted are now gated through the same permission prompt as any other shell command, and can be denied. Trusting the project folder loads the hook definitions; it no longer pre-authorizes the commands they carry.
+  - A `.b4m/checkpoints.json` whose root is not an object (e.g. a committed `[]`) no longer overwrites the metadata container, so checkpoints created after such a file is read are kept across restarts instead of being silently discarded.
+
+- [#3173](https://github.com/Bike4Mind/bike4mind/pull/3173) [`c5caa17`](https://github.com/Bike4Mind/bike4mind/commit/c5caa1792c8d7bb54da303842d74aa0e76ecee86) Thanks [@julsanchez](https://github.com/julsanchez)! - Harden the CLI sandbox network gate. Network egress is now fail-closed by default: with the sandbox enabled, all IP egress is denied unless it is explicitly turned on, and the runtime treats network as enabled only when a filtering proxy is actually running (no command sequence can leave the flag on with no proxy). Adds a `/sandbox:network <on|off>` command to toggle egress at runtime. When enabled, HTTP(S)_PROXY-aware clients are filtered against the allowed-domain list; raw sockets bypass the proxy, so leave egress off to deny all outbound connections.
+
+### Patch Changes
+
+- [#3172](https://github.com/Bike4Mind/bike4mind/pull/3172) [`319d72b`](https://github.com/Bike4Mind/bike4mind/commit/319d72b4431751e1531015bfa2e2111ee071865a) Thanks [@julsanchez](https://github.com/julsanchez)! - escape control chars in the permission-prompt Arguments block
+
+- [#3173](https://github.com/Bike4Mind/bike4mind/pull/3173) [`c5caa17`](https://github.com/Bike4Mind/bike4mind/commit/c5caa1792c8d7bb54da303842d74aa0e76ecee86) Thanks [@julsanchez](https://github.com/julsanchez)! - confine sandbox writable root and honor network.enabled
+
+- [#3177](https://github.com/Bike4Mind/bike4mind/pull/3177) [`052574d`](https://github.com/Bike4Mind/bike4mind/commit/052574d726ef6bdd2042f07b592e404135f34774) Thanks [@julsanchez](https://github.com/julsanchez)! - re-confirm silent fuzzy edit_local_file edits under trust/auto-accept
+
+- [#3178](https://github.com/Bike4Mind/bike4mind/pull/3178) [`cdab71d`](https://github.com/Bike4Mind/bike4mind/commit/cdab71dd2e14ad509746f7a037d11c2b9601cf66) Thanks [@julsanchez](https://github.com/julsanchez)! - authenticate the bridge peer before disclosing hookSecret
+
+- [#3218](https://github.com/Bike4Mind/bike4mind/pull/3218) [`9050e73`](https://github.com/Bike4Mind/bike4mind/commit/9050e73ced9ca0c6c9d6344abcc5f8346841fc04) Thanks [@julsanchez](https://github.com/julsanchez)! - escape Unicode bidi/isolate overrides in the permission prompt
+
 ## 1.1.0
 
 ### Minor Changes

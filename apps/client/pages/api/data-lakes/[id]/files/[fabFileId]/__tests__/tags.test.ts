@@ -1,20 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeWritable: vi.fn(),
   setDataLakeFileTags: vi.fn(),
+  resolveCanManageLake: vi.fn(),
+  decideStampPrefix: vi.fn(),
+  stampRefusalMessage: vi.fn(),
+  UNVERIFIED_PREFIX_OVERLAP_REFUSAL: 'Could not verify this data lake tag prefix right now - try again',
+  lakeMembershipSignals: vi.fn(),
+  fabFileFindById: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
 }));
 
-// baseApi mock: callable chain routed by req.method, defaulting to PUT (this route has only one
-// method) - the existing sibling chain (`[fabFileId].test.ts`) registers only `use`/`delete`/`post`.
+// baseApi mock: callable chain routed by req.method, defaulting to PUT. Registers both methods this
+// route now serves (PUT tags, GET current tags).
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'PUT']?.(req, res), {
       use: () => chain,
       put: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.PUT = fns[fns.length - 1]), chain),
+      get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.GET = fns[fns.length - 1]), chain),
     });
     return chain;
   },
@@ -25,10 +35,23 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     assertLakeWritable: h.assertLakeWritable,
     setDataLakeFileTags: h.setDataLakeFileTags,
+    resolveCanManageLake: h.resolveCanManageLake,
+    decideStampPrefix: h.decideStampPrefix,
+    stampRefusalMessage: h.stampRefusalMessage,
+    UNVERIFIED_PREFIX_OVERLAP_REFUSAL: h.UNVERIFIED_PREFIX_OVERLAP_REFUSAL,
+    lakeMembershipSignals: h.lakeMembershipSignals,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -38,7 +61,7 @@ vi.mock('@bike4mind/database', () => ({
     removeGrant: vi.fn().mockResolvedValue(true),
     removeAllForLake: vi.fn().mockResolvedValue(0),
   },
-  fabFileRepository: {},
+  fabFileRepository: { findById: h.fabFileFindById },
   userRepository: {},
   lakeConfigChangeEventRepository: { record: vi.fn() },
   adminSettingsRepository: { findBySettingNames: vi.fn(), findAll: vi.fn() },
@@ -59,6 +82,7 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('PUT /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.setDataLakeFileTags.mockResolvedValue({
@@ -169,5 +193,143 @@ describe('PUT /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
 
     await expect(call(req('PUT', { id: 'lake1', fabFileId: 'f1' }, {}), res)).rejects.toThrow();
     expect(h.setDataLakeFileTags).not.toHaveBeenCalled();
+  });
+
+  it('does not let a read-only API key through the PUT path', async () => {
+    // The route's baseApi gate is read-scoped so the GET can serve readers; the PUT must assert
+    // `datalake:write` itself or a read key would reach the write door.
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1' });
+    const { res } = makeRes();
+    const readOnly = {
+      method: 'PUT',
+      query: { id: 'lake1', fabFileId: 'f1' },
+      body: {},
+      apiKeyInfo: { scopes: ['datalake:read'] },
+    };
+
+    await expect(call(readOnly, res)).rejects.toThrow();
+    expect(h.setDataLakeFileTags).not.toHaveBeenCalled();
+  });
+
+  it('runs the gate and the write inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.tx.push('gate');
+      return { id: 'lake-oid-1', slug: 'my-lake' };
+    });
+    h.setDataLakeFileTags.mockImplementation(async () => {
+      h.tx.push('write');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+
+    await call(req('PUT', { id: 'my-lake', fabFileId: 'f1' }, { tags: ['lk:x'] }), res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('neither writes nor touches when the gate throws', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('PUT', { id: 'lake1', fabFileId: 'f1' }, { tags: ['lk:x'] }), res)).rejects.toThrow(
+      /not found/i
+    );
+    expect(h.setDataLakeFileTags).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.tx.length = 0;
+    h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
+    h.assertLakeWritable.mockReturnValue(undefined);
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });
+    h.resolveCanManageLake.mockResolvedValue(true);
+    h.decideStampPrefix.mockResolvedValue({ stamp: true, prefix: 'lk:' });
+    h.stampRefusalMessage.mockReturnValue('This lake tag prefix cannot be used right now');
+    h.lakeMembershipSignals.mockReturnValue({ inLake: true, tagsToPull: [], contentTags: [] });
+    h.fabFileFindById.mockResolvedValue({
+      id: 'f1',
+      userId: 'u1',
+      deletedAt: null,
+      tags: [
+        { name: 'lk:finance', strength: 1 },
+        { name: 'lk:uncategorized', strength: 1 },
+        { name: 'other:keep', strength: 1 },
+      ],
+    });
+  });
+
+  it('returns the lake prefix and only the names under it', async () => {
+    const { res, json } = makeRes();
+
+    await call(req('GET', { id: 'my-lake', fabFileId: 'f1' }), res);
+
+    expect(json).toHaveBeenCalledWith({ prefix: 'lk:', current: ['lk:finance', 'lk:uncategorized'] });
+  });
+
+  it('gates on the MANAGE rung, not mere read access', async () => {
+    h.resolveCanManageLake.mockResolvedValue(false);
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/permission/i);
+    expect(h.fabFileFindById).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-member file with a 404 rather than leaking it', async () => {
+    h.lakeMembershipSignals.mockReturnValue({ inLake: false, tagsToPull: [], contentTags: [] });
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+  });
+
+  it('refuses when the lake cannot stamp its prefix', async () => {
+    h.decideStampPrefix.mockResolvedValue({ stamp: false, reason: 'prefix-overlap' });
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow();
+    expect(h.fabFileFindById).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the prefix overlap check could not be verified', async () => {
+    // `stamp` can be true while the fail-closed overlap check failed - the write door refuses
+    // there too, so the read must not seed a set the PUT would reject.
+    h.decideStampPrefix.mockResolvedValue({ stamp: true, prefix: 'lk:', overlapCheckFailed: true });
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(
+      /Could not verify this data lake tag prefix/i
+    );
+    expect(h.fabFileFindById).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing when the access gate denies the lake', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+    expect(h.fabFileFindById).not.toHaveBeenCalled();
+  });
+
+  it('returns an empty current set when the file has no tags under the prefix', async () => {
+    h.fabFileFindById.mockResolvedValue({
+      id: 'f1',
+      userId: 'u1',
+      deletedAt: null,
+      tags: [{ name: 'other:x', strength: 1 }],
+    });
+    const { res, json } = makeRes();
+
+    await call(req('GET', { id: 'lake1', fabFileId: 'f1' }), res);
+
+    expect(json).toHaveBeenCalledWith({ prefix: 'lk:', current: [] });
   });
 });

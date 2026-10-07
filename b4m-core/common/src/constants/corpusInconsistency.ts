@@ -31,6 +31,14 @@ export const INCONSISTENCY_KINDS = [
   'relationship-conflict',
   /** Dated claims that have silently become false, grouped by the year they expired in. */
   'expired-claim',
+  /**
+   * Two documents state incompatible claims in ordinary prose, caught by READING them rather than
+   * by any pattern above (#3057). Never produced by `detectCorpusInconsistencies` - it is pure and
+   * LLM-free by design (see the module doc) - so this kind exists in the shared vocabulary but
+   * never appears in that function's own `countsByKind`. Only `detectLakeInconsistenciesModel`
+   * produces it.
+   */
+  'narrative-contradiction',
 ] as const;
 
 /**
@@ -58,10 +66,11 @@ export type InconsistencyKind = (typeof INCONSISTENCY_KINDS)[number];
  *
  * Only `metric-disagreement` qualifies, and only because it is the one rule comparing a parsed VALUE
  * across documents. The other two cross-document kinds cannot show disagreement:
- * `superlative-conflict` compares nothing at all, so two documents that AGREE - including two
- * carrying the identical sentence - group as a finding; `relationship-conflict` keys on `ORG`, a bare
- * capitalization proxy, while CUSTOMER/PROSPECT carry generic technical vocabulary, so two sentences
- * about the same capitalized product name satisfy it without describing a relationship at all.
+ * `superlative-conflict` keys on the category and compares whole sentences, so a rewording of one
+ * claim and a genuine rival claim look the same - it cannot assert disagreement;
+ * `relationship-conflict` keys on `ORG`, a bare capitalization proxy, while CUSTOMER/PROSPECT carry
+ * generic technical vocabulary, so two sentences about the same capitalized product name satisfy it
+ * without describing a relationship at all.
  *
  * Both remain fully reported by `detectCorpusInconsistencies` - a human triaging a lake's health
  * wants recall. This list is for the callers that ASSERT a finding rather than offer it.
@@ -102,8 +111,12 @@ export interface InconsistencyFinding {
   documentCount: number;
 }
 
-/** Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list. */
-const EXCERPT_MAX = 240;
+/**
+ * Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list.
+ * Exported so `LakeContradictionReadingService` (#3057) can hold the model to the same bound when it
+ * asks for a quote, rather than trusting `excerpt()` alone to trim an unbounded response after the fact.
+ */
+export const EXCERPT_MAX = 240;
 
 /**
  * Documents quoted per finding.
@@ -131,12 +144,20 @@ function sentences(text: string): string[] {
     .filter(Boolean);
 }
 
-function excerpt(sentence: string): string {
+/** Exported so `detectLakeInconsistenciesModel` (#3057) bounds a model-quoted excerpt the same way. */
+export function excerpt(sentence: string): string {
   return sentence.length <= EXCERPT_MAX ? sentence : `${sentence.slice(0, EXCERPT_MAX - 3)}...`;
 }
 
-/** Grouping key: case-folded, punctuation-stripped, whitespace-collapsed. */
-function normalizeSubject(raw: string): string {
+/**
+ * Grouping key: case-folded, punctuation-stripped, whitespace-collapsed.
+ *
+ * Exported for `detectLakeInconsistenciesModel` (#3057): a model's free-text subject phrasing can
+ * drift between runs, and this is the same normalization the lexical rules rely on to key a
+ * finding - reusing it is what gives a model-found contradiction a shot at landing on the same
+ * `recordLakeFindings` row across re-detections instead of minting a duplicate every run.
+ */
+export function normalizeSubject(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9\s%.-]/g, ' ')
@@ -184,15 +205,64 @@ const SUPERLATIVE_SUBJECT =
  * inside a unit WORD can shorten it into another valid unit, so `5 gbps` cut to `5 gb` reads as
  * gigabytes. Closing either means refusing a match rather than shortening one, which is a different
  * change to a rule two surfaces already depend on.
+ *
+ * Currency may sit before the value (`curpre`) or after it (`unit`). A K/M/B magnitude suffix must be
+ * ADJACENT to the digits and not followed by `[A-Za-z0-9/]`, so `120 m`, `5 m/s` and `2 B` stay
+ * unit abbreviations rather than becoming millions; spelled-out `thousand|million|billion|bn` may
+ * follow a space.
  */
 const METRIC =
-  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*([0-9](?:[0-9,.]*[0-9])?)(?:\s*(%|(?:percent|ms|s|gb|mb|tb|x)(?!\w))|(?!\w))/i;
+  /([A-Za-z][A-Za-z0-9 _/-]{2,40}?)\s*(?::|\bis\b|\bwas\b|\bof\b)\s*(?:(?<curpre>\p{Sc}|usd|eur|gbp|jpy|aud|cad|chf|cny|inr)\s*)?(?<val>[0-9](?:[0-9,.]*[0-9])?)(?:(?<mag>[kmb](?![A-Za-z0-9/])|\s+(?:thousand|million|billion|bn)(?!\w)))?(?:\s*(?<unit>%|(?:percent|ms|s|gb|mb|tb|x|usd|eur|gbp|jpy|aud|cad|chf|cny|inr|dollars?|euros?|yen|rupees?|yuan)(?!\w))|(?!\w))/iu;
+
+/**
+ * Common currency words/codes/symbols, mapped to ISO-like lowercase codes for grouping.
+ *
+ * A plain lookup is the whole implementation: `raw` is always one of `METRIC`'s own currency
+ * captures (a `\p{Sc}` symbol or one of its alternation's codes/words), so there is no free text
+ * here to pattern-match against.
+ */
+const CURRENCY_UNIT: Record<string, string> = {
+  $: 'usd',
+  usd: 'usd',
+  dollar: 'usd',
+  dollars: 'usd',
+  '\u20AC': 'eur', // euro sign
+  eur: 'eur',
+  euro: 'eur',
+  euros: 'eur',
+  '\u00A3': 'gbp', // pound sign
+  gbp: 'gbp',
+  '\u00A5': 'jpy', // yen sign
+  jpy: 'jpy',
+  yen: 'jpy',
+  '\u20B9': 'inr', // rupee sign
+  inr: 'inr',
+  rupee: 'inr',
+  rupees: 'inr',
+  cny: 'cny',
+  yuan: 'cny',
+  aud: 'aud',
+  cad: 'cad',
+  chf: 'chf',
+};
 
 /** `percent` and `%` are one unit written two ways, so they must group and compare as one. */
 function canonicalUnit(unit?: string): string {
-  const lower = unit?.toLowerCase() ?? '';
-  return lower === 'percent' ? '%' : lower;
+  const raw = unit ?? '';
+  const lower = raw.toLowerCase();
+  if (lower === 'percent' || raw === '%') return '%';
+  return CURRENCY_UNIT[lower] ?? lower;
 }
+
+const MAGNITUDE: Record<string, number> = {
+  k: 1e3,
+  thousand: 1e3,
+  m: 1e6,
+  million: 1e6,
+  b: 1e9,
+  billion: 1e9,
+  bn: 1e9,
+};
 
 /**
  * One FIGURE written two ways, compared as one: `99.90` and `99.9` are the same number, and reporting
@@ -202,16 +272,20 @@ function canonicalUnit(unit?: string): string {
  * group admits multiple separators, so `Version is 3.4.5` captures `3.4.5` and `Number` gives `NaN` -
  * every such version string would otherwise compare equal to every other.
  *
- * The trade, and it errs toward silence: past ~15 significant digits two genuinely different figures
+ * The trade, and it errs toward silence: past 15 significant digits two genuinely different figures
  * canonicalize to one double and stop being reported (`1e21` vs `1e21 + 1`, `2^53` vs `2^53 + 1`,
  * `0.1000000000000000055` vs `0.1`). This value never leaves the module - `InconsistencyFinding`
  * carries no `detail` - so the comparison changes but nothing rendered does, including the
  * exponential form `String(Number(...))` gives at those magnitudes.
  */
-function canonicalValue(value: string): string {
+function canonicalValue(value: string, mag?: string): string {
   const bare = value.replace(/,/g, '');
   const numeric = Number(bare);
-  return Number.isFinite(numeric) ? String(numeric) : bare;
+  if (!Number.isFinite(numeric)) return bare;
+  const scaled = numeric * (MAGNITUDE[(mag ?? '').trim().toLowerCase()] ?? 1);
+  // 15 digits absorbs the float artifact of scaling (2.01k) without narrowing ordinary figures.
+  const rounded = Number(scaled.toPrecision(15));
+  return String(rounded);
 }
 
 const CUSTOMER = /\b(customer|client|deployed|in production with|live with)\b/i;
@@ -292,8 +366,7 @@ function detailSignature(position: Hit[]): string {
  * contain the hits that disagree: a document stating both values agrees with its sibling on whichever
  * it happens to state first, so a real finding rendered two IDENTICAL sentences as its proof. Anchor
  * instead on a detail that some other document does not carry at all - such a pair exists whenever
- * the per-document sets differ, so the tail return is reached only by a rule that sets no `detail`
- * and therefore has no witness pair to promote.
+ * the per-document sets differ; the tail return is a fallback for hits without a `detail`.
  */
 function witnessOrder(positions: Hit[][]): Hit[] {
   for (const [i, hits] of positions.entries()) {
@@ -312,18 +385,14 @@ function witnessOrder(positions: Hit[][]): Hit[] {
  * The cross-document requirement is the whole point: one document restating its own superlative in
  * three sections is not an inconsistency, and flagging it would bury the real findings.
  *
- * `requireDisagreement` additionally requires the DOCUMENTS to hold different SETS of values, since
- * agreement is not a finding. Per-document sets rather than the flat hit list, which is the
+ * A group must also have the DOCUMENTS hold different SETS of details, since agreement is not a
+ * finding. Per-document sets rather than the flat hit list, which is the
  * distinction the rule turns on: a document stating both values contributes two differing details on
  * its own, so a flat comparison reported two byte-identical documents as contradicting each other -
  * naming a document that agrees. Sets still keep the case where one document holds both values and a
  * sibling holds only one of them: those documents really do disagree.
  */
-function crossDocumentGroups(
-  hits: Hit[],
-  kind: InconsistencyKind,
-  requireDisagreement = false
-): InconsistencyFinding[] {
+function crossDocumentGroups(hits: Hit[], kind: InconsistencyKind): InconsistencyFinding[] {
   const bySubject = new Map<string, Hit[]>();
   for (const hit of hits) {
     const existing = bySubject.get(hit.subject);
@@ -343,9 +412,8 @@ function crossDocumentGroups(
     if (byDocument.size < 2) continue;
 
     const positions = [...byDocument.values()];
-    if (requireDisagreement && new Set(positions.map(detailSignature)).size < 2) continue;
-    // Unconditional, so evidence order is one convention rather than one per kind. A rule that sets
-    // no `detail` cannot have a witness pair, and for those this degrades to first-hit-per-document.
+    if (new Set(positions.map(detailSignature)).size < 2) continue;
+    // Unconditional, so evidence order is one convention rather than one per kind.
     const perDocument = witnessOrder(positions);
     findings.push({
       kind,
@@ -362,7 +430,13 @@ function detectSuperlativeConflicts(documents: CorpusDocument[]): InconsistencyF
     collect(documents, sentence => {
       if (!SUPERLATIVE.test(sentence)) return null;
       const subject = SUPERLATIVE_SUBJECT.exec(sentence)?.[1];
-      return subject ? { subject: normalizeSubject(subject) } : null;
+      if (!subject) return null;
+      // Not normalizeSubject: it blanks symbols and non-ASCII, which can be the whole difference between two claims.
+      const detail = sentence
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/[\s.!?]+$/, '');
+      return { subject: normalizeSubject(subject), detail };
     }),
     'superlative-conflict'
   );
@@ -393,16 +467,52 @@ function detectMetricDisagreements(documents: CorpusDocument[], unitRequired = f
     collect(documents, sentence => {
       const match = METRIC.exec(sentence);
       if (!match) return null;
-      const [, label, value, unit] = match;
-      const canonical = canonicalUnit(unit);
+      const [, label] = match;
+      const groups = match.groups ?? {};
+      const value = groups.val;
+      if (!value) return null;
+      const unitRaw = groups.unit || groups.curpre;
+      const mag = groups.mag as string | undefined;
+      const canonical = canonicalUnit(unitRaw);
       if (unitRequired && !canonical) return null;
+      // Currency is decided from the matched group, not the canonical string: an unmapped `\p{Sc}`
+      // symbol canonicalizes to itself and would otherwise read as a non-currency unit.
+      const isCurrency = !!groups.curpre || (groups.unit ? groups.unit.toLowerCase() in CURRENCY_UNIT : false);
+
+      // Lowercase single-letter m/b should NOT scale unless a currency is present (e.g., `$5m`).
+      // Uppercase M/B or word magnitudes (thousand/million/billion/bn) continue to scale.
+      const effectiveMag = (() => {
+        if (!mag) return undefined;
+        const trimmed = mag.trim();
+        if (trimmed.length === 1) {
+          const lower = trimmed.toLowerCase();
+          if ((lower === 'm' || lower === 'b') && trimmed === lower && !isCurrency) return undefined;
+          // 'k' scales in either case; 'M'/'B' (captured under /i) scale too.
+          return lower;
+        }
+        // Word magnitudes (e.g., ' million') - keep.
+        return trimmed.toLowerCase();
+      })();
+
+      const scaled = canonicalValue(value, effectiveMag);
+      // A prefix unit survives a clip that lands inside the value (`$1,200,000` cut to `$1,2`), unlike a
+      // suffix unit, which the cut takes with it. A prefix-only value ending the passage is that fragment.
+      if (unitRequired && groups.curpre && !groups.unit) {
+        const end = match.index + match[0].length;
+        const tail = sentence.slice(end).trim();
+        const hasTerminator = /[.!?]/.test(tail);
+        const clippedTail =
+          !hasTerminator &&
+          (tail === '' || /^(?:[\s,]+)$/u.test(tail) || /^(?:b|m|bil|mil|billion|million)\b/i.test(tail));
+        if (clippedTail) return null;
+      }
+      const includeUnit = unitRequired || (!isCurrency && !!canonical);
       return {
         subject: unitRequired ? `${normalizeSubject(label)} ${canonical}` : normalizeSubject(label),
-        detail: `${canonicalValue(value)}${canonical}`,
+        detail: includeUnit ? `${scaled}${canonical}` : `${scaled}`,
       };
     }),
-    'metric-disagreement',
-    true
+    'metric-disagreement'
   );
 }
 
@@ -420,7 +530,7 @@ function detectRelationshipConflicts(documents: CorpusDocument[]): Inconsistency
       }
     }
   }
-  return crossDocumentGroups(hits, 'relationship-conflict', true);
+  return crossDocumentGroups(hits, 'relationship-conflict');
 }
 
 /**
@@ -602,6 +712,9 @@ export function detectCorpusInconsistencies(
     'metric-disagreement': 0,
     'relationship-conflict': 0,
     'expired-claim': 0,
+    // Never produced here - see the kind's own doc comment. Present so the Record type stays
+    // exhaustive over the full shared vocabulary rather than only this detector's slice of it.
+    'narrative-contradiction': 0,
   };
   for (const finding of findings) countsByKind[finding.kind] += 1;
 

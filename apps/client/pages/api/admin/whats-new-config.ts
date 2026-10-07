@@ -3,14 +3,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
 import { ForbiddenError } from '@server/utils/errors';
-import { WhatsNewConfigSchema } from '@bike4mind/common';
+import { ApiKeyScope, WhatsNewConfigSchema } from '@bike4mind/common';
 import { validateTemplate } from '@server/queueHandlers/whatsNewGeneration.templateUtils';
 
 // Rate limiting constants
 const ADMIN_CONFIG_RATE_LIMIT = 10; // requests per minute
 const ONE_MINUTE_MS = 60 * 1000;
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: ADMIN_CONFIG_RATE_LIMIT, windowMs: ONE_MINUTE_MS }))
   .get(async (req: Request, res: Response) => {
     // Check if user is admin

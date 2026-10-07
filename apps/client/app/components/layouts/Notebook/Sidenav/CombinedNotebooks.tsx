@@ -5,6 +5,7 @@ import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import FiltersPanel from './FiltersPanel';
+import { narrowsToNotebooks, toSessionListFilters } from './sidenavFilters';
 import BulkActionsPanel from './BulkActionsPanel';
 import NotebookRow from './NotebookRow';
 import NotebookGroupList from './NotebookGroupList';
@@ -14,7 +15,6 @@ import ProjectModal from './ProjectModal';
 import TagModal from './TagModal';
 import { useBulkActions } from './useBulkActions';
 import type { CombinedItem, CombinedSessionDocument } from './types';
-import { APP_NAME } from '@client/config/general';
 import { ISessionDocument, IProjectDocument } from '@bike4mind/common';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
 import TuneIcon from '@mui/icons-material/Tune';
@@ -26,8 +26,6 @@ import { useShallow } from 'zustand/react/shallow';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import { useTranslation } from 'react-i18next';
 import SearchBar from '@client/app/components/Session/SearchBar';
-import { BookOpen } from 'lucide-react';
-import dayjs from 'dayjs';
 import SidenavNav from './SidenavNav';
 import { useNavigate, useLocation } from '@tanstack/react-router';
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
@@ -62,6 +60,13 @@ const CombinedNotebooks = () => {
     return match ? match[1] : null;
   }, [location.pathname]);
 
+  const [contentFilter, setContentFilter, originFilter, setOriginFilter] = useNotebookLayout(
+    useShallow(s => [s.contentFilter, s.setContentFilter, s.originFilter, s.setOriginFilter])
+  );
+  // Applied by the server on both lists so infinite-scroll pages stay correct.
+  const listFilters = useMemo(() => toSessionListFilters(contentFilter, originFilter), [contentFilter, originFilter]);
+  const onlyNotebooks = narrowsToNotebooks(contentFilter, originFilter);
+
   // The shared sidebar serves the default surface (surface:null). Product surfaces like /opti
   // own a dedicated, fully scoped nav (e.g. OptiSidenav) and no longer render this component, so
   // it carries no surface-specific branching.
@@ -70,13 +75,13 @@ const CombinedNotebooks = () => {
     fetchNextPage: fetchNextOwn,
     hasNextPage: hasNextOwn,
     isFetching: isFetchingOwn,
-  } = useGetOwnSessions(search);
+  } = useGetOwnSessions(search, undefined, listFilters);
   const {
     data: sharedData,
     fetchNextPage: fetchNextShared,
     hasNextPage: hasNextShared,
     isFetching: isFetchingShared,
-  } = useGetSharedSessions(search);
+  } = useGetSharedSessions(search, listFilters);
   // Use the same hook as the projects page to ensure we get all projects
   const { data: projectsResponse, isLoading: isLoadingProjects } = useSearchProjects(
     '', // No search filter, we'll filter locally
@@ -109,16 +114,6 @@ const CombinedNotebooks = () => {
 
   // Advanced search state
   const { openDrawer, hasActiveFilters, getActiveFilterCount } = useAdvancedSearch();
-
-  // Check if user is new (created within the last 3 days)
-  const isNewUser = useMemo(() => {
-    return currentUser?.createdAt && dayjs(currentUser.createdAt).isAfter(dayjs().subtract(3, 'day'));
-  }, [currentUser]);
-
-  const handleTutorialClick = () => {
-    if (isMobile) setOpenSideNav(false);
-    navigate({ to: '/tutorials' });
-  };
 
   // Track the pinned nav's rendered height so the sticky search `top` stays in sync with it.
   useEffect(() => {
@@ -313,7 +308,10 @@ const CombinedNotebooks = () => {
    * renderGroupSessions (rendering). Avoids filtering 4000+ notebooks twice per render.
    */
   const filteredItems = useMemo(() => {
-    let allItems: CombinedItem[] = [...combinedSessions, ...processedProjects, ...processedAgents];
+    // Projects and agents carry no origin or images, so a filter that narrows to such notebooks hides them.
+    let allItems: CombinedItem[] = onlyNotebooks
+      ? [...combinedSessions]
+      : [...combinedSessions, ...processedProjects, ...processedAgents];
 
     // Apply type filter
     if (typeFilter !== 'all') {
@@ -334,7 +332,7 @@ const CombinedNotebooks = () => {
     }
 
     return allItems;
-  }, [combinedSessions, processedProjects, processedAgents, typeFilter]);
+  }, [combinedSessions, processedProjects, processedAgents, typeFilter, onlyNotebooks]);
 
   // Items for the date-grouped list: exclude project rows (rendered in the Projects section
   // above) and sessions that already appear nested under a project (avoids duplication).
@@ -342,11 +340,11 @@ const CombinedNotebooks = () => {
   // when typeFilter='notebooks' the Projects section is hidden, so those sessions must remain
   // in the loose list or they become unreachable in both panels.
   const looseFilteredItems = useMemo(() => {
-    const projectsVisible = typeFilter === 'all' || typeFilter === 'projects';
+    const projectsVisible = !onlyNotebooks && (typeFilter === 'all' || typeFilter === 'projects');
     return filteredItems.filter(
       item => !('isProject' in item && item.isProject) && (!projectsVisible || !projectSessionIds.has(item.id))
     );
-  }, [filteredItems, projectSessionIds, typeFilter]);
+  }, [filteredItems, projectSessionIds, typeFilter, onlyNotebooks]);
 
   // Bulk actions target only the sessions that are actually rendered with checkboxes -
   // i.e. the loose date-grouped list (looseFilteredItems), excluding agents. Project-member
@@ -565,7 +563,12 @@ const CombinedNotebooks = () => {
                     borderRadius: '8px',
                     // Active (dropdown open, bulk-actions/edit mode, or a filter applied): keep the default
                     // neutral border, add the faint brand fill (#D1E4F4 @ 5% dark / brand tint light) via the shared token.
-                    ...((filtersOpen || isEditMode || typeFilter !== 'all' || showMessageCounts) && {
+                    ...((filtersOpen ||
+                      isEditMode ||
+                      typeFilter !== 'all' ||
+                      contentFilter !== 'all' ||
+                      originFilter !== 'all' ||
+                      showMessageCounts) && {
                       backgroundColor: theme.palette.sidenav?.filterActiveBg,
                     }),
                   })}
@@ -578,6 +581,10 @@ const CombinedNotebooks = () => {
                   typeOptions={typeOptions}
                   typeFilter={typeFilter}
                   setTypeFilter={setTypeFilter}
+                  contentFilter={contentFilter}
+                  setContentFilter={setContentFilter}
+                  originFilter={originFilter}
+                  setOriginFilter={setOriginFilter}
                   showMessageCounts={showMessageCounts}
                   setShowMessageCounts={setShowMessageCounts}
                   onOpenBulkActions={openBulkActions}
@@ -621,82 +628,6 @@ const CombinedNotebooks = () => {
           </Box>
         </Box>
         <Stack className="combined-notebooks-list" gap="10px" sx={{ p: '10px 5px 16px 10px' }}>
-          {/* Tutorial section for new users */}
-          {isNewUser && (
-            <div>
-              <Typography
-                className="notebook-sidenav-section-title"
-                level="body-xs"
-                sx={{
-                  color: 'neutral.softDisabledColor',
-                  marginBottom: '0.1em',
-                }}
-              >
-                Tutorials
-              </Typography>
-              <Box
-                className="notebook-sidenav-tutorial-item"
-                role="button"
-                tabIndex={0}
-                onClick={handleTutorialClick}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleTutorialClick();
-                  }
-                }}
-                sx={theme => {
-                  const isSelected = location.pathname === '/tutorials';
-                  return {
-                    borderRadius: '8px',
-                    gap: '8px',
-                    padding: '8px 12px',
-                    marginBottom: '10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    cursor: 'pointer',
-                    backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
-                    '&:hover': {
-                      backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
-                    },
-                    transition: 'background 0.2s',
-                  };
-                }}
-              >
-                {/* 20x20 frame around an 18px SVG, matching the top SidenavNav icon slots.
-                    Pin the child svg to 18px so it can't stretch to fill the 20px frame. */}
-                <Box
-                  sx={{
-                    width: 20,
-                    height: 20,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    '& svg': { width: '18px', height: '18px' },
-                  }}
-                >
-                  <BookOpen style={{ color: 'inherit' }} />
-                </Box>
-                <Typography
-                  level="body-xs"
-                  sx={theme => ({
-                    color: theme.palette.neutral.softColor,
-                    fontWeight: 400,
-                    textAlign: 'left',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  })}
-                  noWrap
-                >
-                  {/* brand externalized */}
-                  {APP_NAME ? `How to work with ${APP_NAME}?` : 'How to get started?'}
-                </Typography>
-              </Box>
-            </div>
-          )}
-
           {/* Favorites section */}
           {filteredFavoriteSession.length > 0 && (
             <div>
@@ -767,7 +698,7 @@ const CombinedNotebooks = () => {
           )}
 
           {/* Projects section — collapsible nodes with lazy-loaded nested notebooks */}
-          {displayProjects.length > 0 && (typeFilter === 'all' || typeFilter === 'projects') && (
+          {displayProjects.length > 0 && !onlyNotebooks && (typeFilter === 'all' || typeFilter === 'projects') && (
             <div>
               <Typography
                 className="notebook-sidenav-section-title"
@@ -806,6 +737,8 @@ const CombinedNotebooks = () => {
             selectedItems={selectedItems}
             favoriteSessions={favoriteSessions}
             showMessageCount={showMessageCounts}
+            // Grouping API notebooks would only add a click when the list shows nothing else.
+            groupApiNotebooks={originFilter !== 'onlyApi'}
             suppressActive={suppressNotebookHighlight}
             activeAgentId={activeAgentId}
             onNavigate={handleItemNavigate}

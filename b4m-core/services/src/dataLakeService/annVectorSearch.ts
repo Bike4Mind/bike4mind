@@ -7,13 +7,26 @@ export interface AnnSearchAdapter {
     fileIds: string[],
     queryVector: number[],
     model: string,
-    options?: { limit?: number }
+    options?: { limit?: number; includeText?: boolean }
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
 }
 
-interface AnnRankableFile {
+/**
+ * The parent-file metadata an ANN row is shaped from. Exported so the two backend wrappers name
+ * this type rather than re-declaring a narrower structural copy: a hand-written duplicate that
+ * omits a field still compiles, and the field then arrives undefined at runtime with no error.
+ */
+export interface AnnRankableFile {
   fileName: string;
   fileTags: string[];
+  /** The file's owner; forwarded to `SemanticChunkResult.fileUserId`. */
+  userId?: string;
+  /**
+   * The source document's own vintage (#3048), carried through for the passage header. Required
+   * for the same reason as on `RankableFile`: a builder that omits it renders an undated passage,
+   * which is indistinguishable from the legitimate no-vintage case and so fails silently.
+   */
+  documentDate: Date | null;
 }
 
 export interface AnnVectorSearchResult {
@@ -86,15 +99,20 @@ export async function annVectorSearch(args: {
   model: string;
   limit: number;
   minScore: number;
+  includeText?: boolean;
   adapter: AnnSearchAdapter;
 }): Promise<AnnVectorSearchResult> {
-  const { fileIds, fileById, queryVector, model, limit, minScore, adapter } = args;
+  const { fileIds, fileById, queryVector, model, limit, minScore, includeText, adapter } = args;
   if (fileIds.length === 0) {
     return { results: [], hitsReturned: 0, hitsSkippedUnknownFile: 0, filesWithHits: new Set(), backendQueryMs: null };
   }
 
   const backendStartedAt = Date.now();
-  const hits = await adapter.knnSearch(fileIds, queryVector, model, { limit });
+  // The key stays absent when unset, so adapters and their tests see exactly `{ limit }`.
+  const hits = await adapter.knnSearch(fileIds, queryVector, model, {
+    limit,
+    ...(includeText === undefined ? {} : { includeText }),
+  });
   const backendQueryMs = Date.now() - backendStartedAt;
   const filesWithHits = new Set(hits.map(h => h.fabFileId));
 
@@ -122,6 +140,11 @@ export async function annVectorSearch(args: {
       fileId: hit.fabFileId,
       fileName: file.fileName,
       fileTags: file.fileTags,
+      fileUserId: file.userId,
+      // `?? null` despite the field now being required above: the type stops a TYPED builder from
+      // dropping it, this stops an undefined reaching the row from a structurally-typed caller.
+      // SemanticChunkResult's contract is null-for-undated, and the render channels key on it.
+      documentDate: file.documentDate ?? null,
       chunkText: hit.text,
       score,
     });

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/joy';
 import { type ReactArtifact, type HtmlArtifact, type SvgArtifact } from '@bike4mind/common';
 import DOMPurify from 'dompurify';
+import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { useReactArtifactSandbox } from '@client/app/hooks/useReactArtifactSandbox';
 
@@ -101,6 +102,14 @@ const generateSanitizedSVG = (svgContent: string) => {
   });
 };
 
+/** Ceiling for a self-sized React preview - generous, so it only catches runaways. */
+const REACT_PREVIEW_MAX_HEIGHT = 640;
+// The ceiling on an expanded HTML frame. The height arrives by postMessage from a window
+// where the artifact's own scripts run, so `event.source` proves which frame sent it, not
+// which code did - an artifact can ask for any height it likes. Generous enough that a real
+// page is never cut short by it.
+const HTML_PREVIEW_MAX_HEIGHT = 2400;
+
 const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact, type, maxHeight = 400, onError }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +187,51 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
     return () => window.removeEventListener('message', handler);
   }, [type]);
 
+  // React and HTML both size to what they render: the sandbox measures itself and posts its
+  // height back, because a cross-origin iframe cannot be measured from out here. Both paths
+  // clamp what comes back - see HTML_PREVIEW_MAX_HEIGHT.
+  const [reactContentHeight, setReactContentHeight] = useState<number | null>(null);
+  useEffect(() => {
+    if (type !== 'react') return;
+    const handler = (event: MessageEvent) => {
+      if (event.source !== reactIframeRef.current?.contentWindow) return;
+      if (event.data?.type !== 'react-sandbox-height') return;
+      const reported = Number(event.data.height);
+      if (!Number.isFinite(reported) || reported <= 0) return;
+      // A runaway component (an unbounded list, say) would otherwise take over the
+      // transcript, so the frame still has a ceiling - just a generous one.
+      setReactContentHeight(Math.min(reported, REACT_PREVIEW_MAX_HEIGHT));
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [type, reactIframeRef]);
+
+  // The HTML sandbox reports the written page's height the same way React's does, so the
+  // card can bound a long page and say how much more there is rather than guessing a size.
+  const [htmlContentHeight, setHtmlContentHeight] = useState<number | null>(null);
+  const [htmlExpanded, setHtmlExpanded] = useState(false);
+  useEffect(() => {
+    if (type !== 'html') return;
+    const handler = (event: MessageEvent) => {
+      if (event.source !== htmlIframeRef.current?.contentWindow) return;
+      if (event.data?.type !== 'artifact-sandbox-height') return;
+      const reported = Number(event.data.height);
+      if (!Number.isFinite(reported) || reported <= 0) return;
+      setHtmlContentHeight(Math.min(reported, HTML_PREVIEW_MAX_HEIGHT));
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, [type]);
+
+  // Only offer to show more when there demonstrably is more - a short page just renders.
+  const htmlOverflows = type === 'html' && htmlContentHeight !== null && htmlContentHeight > maxHeight + 8;
+  const htmlFrameHeight =
+    type === 'html'
+      ? htmlExpanded
+        ? (htmlContentHeight ?? maxHeight)
+        : Math.min(htmlContentHeight ?? maxHeight, maxHeight)
+      : maxHeight;
+
   const handleIframeError = () => {
     const errorMsg = 'Failed to load preview';
     setError(errorMsg);
@@ -225,81 +279,105 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
 
   // React and HTML render in iframe
   return (
-    <Box
-      sx={{
-        position: 'relative',
-        maxHeight,
-        overflow: 'hidden',
-        borderRadius: 'sm',
-        bgcolor: 'background.surface',
-      }}
-      data-testid="inline-artifact-preview"
-    >
-      {(type === 'react' ? reactPreviewLoading : isLoading) && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            bgcolor: 'background.level1',
-            zIndex: 1,
-          }}
-        >
-          <CircularProgress size="sm" />
-        </Box>
-      )}
+    <>
+      <Box
+        sx={{
+          position: 'relative',
+          // React grows to its rendered height (the sandbox reports it), bounded only by the
+          // runaway ceiling. HTML is bounded by the caller's cap until the reader asks for
+          // the rest, since a page can be arbitrarily long.
+          maxHeight: type === 'react' ? REACT_PREVIEW_MAX_HEIGHT : htmlFrameHeight,
+          overflow: 'hidden',
+          borderRadius: 'sm',
+          // The canvas an artifact is drawn on, not a chrome surface. Neither a fragment
+          // nor most complete documents set a body background, so the iframe is usually
+          // transparent and whatever sits behind it IS the page the artifact renders on.
+          // A theme-following surface therefore put a document's default black text on a
+          // near-black backdrop in dark mode. White in both modes, matching the React
+          // sandbox (which paints its own body white) and the SVG preview.
+          bgcolor: '#FFFFFF',
+        }}
+        data-testid="inline-artifact-preview"
+      >
+        {(type === 'react' ? reactPreviewLoading : isLoading) && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              bgcolor: 'background.level1',
+              zIndex: 1,
+            }}
+          >
+            <CircularProgress size="sm" />
+          </Box>
+        )}
 
-      {/* React artifacts: dedicated sandbox route whose per-route CSP carries 'unsafe-eval' */}
-      {type === 'react' && (
-        <iframe
-          key={reactIframeKey}
-          ref={reactIframeRef}
-          src={reactSandboxSrc}
-          title={artifact.title}
-          // Web Audio (AudioContext) is gated by the autoplay Permissions Policy,
-          // which defaults to self-only and denies this opaque-origin sandbox iframe.
-          // Without this grant, an artifact's "play" button resumes a context that
-          // never actually produces sound.
-          allow="autoplay"
-          onError={handleIframeError}
-          style={{
-            width: '100%',
-            height: maxHeight,
-            border: 'none',
-            borderRadius: '4px',
-          }}
-          sandbox="allow-scripts"
-          data-testid="inline-artifact-iframe"
+        {/* React artifacts: dedicated sandbox route whose per-route CSP carries 'unsafe-eval' */}
+        {type === 'react' && (
+          <iframe
+            key={reactIframeKey}
+            ref={reactIframeRef}
+            src={reactSandboxSrc}
+            title={artifact.title}
+            // Web Audio (AudioContext) is gated by the autoplay Permissions Policy,
+            // which defaults to self-only and denies this opaque-origin sandbox iframe.
+            // Without this grant, an artifact's "play" button resumes a context that
+            // never actually produces sound.
+            allow="autoplay"
+            onError={handleIframeError}
+            style={{
+              width: '100%',
+              // Its own height once the sandbox reports one; `maxHeight` only until then.
+              height: reactContentHeight ?? maxHeight,
+              border: 'none',
+              borderRadius: '4px',
+            }}
+            sandbox="allow-scripts"
+            data-testid="inline-artifact-iframe"
+          />
+        )}
+
+        {/* HTML artifacts: sandbox route so style-src https: is scoped to /api/artifact-sandbox */}
+        {type === 'html' && htmlLoadCount > 0 && (
+          <iframe
+            key={htmlLoadCount}
+            ref={htmlIframeRef}
+            src="/api/artifact-sandbox"
+            title={artifact.title}
+            // See note above: grant autoplay so interactive HTML artifacts using
+            // Web Audio can produce sound on a user click.
+            allow="autoplay"
+            onError={handleIframeError}
+            style={{
+              width: '100%',
+              height: htmlFrameHeight,
+              border: 'none',
+              borderRadius: '4px',
+            }}
+            sandbox="allow-scripts"
+            data-testid="inline-artifact-iframe"
+          />
+        )}
+      </Box>
+
+      {/* Same control the code card carries, for the same reason: the body is bounded, and
+        this says how much more there is rather than leaving the reader to guess. The card
+        around it opens the viewer on click, so the button stops propagation (see
+        ShowMoreButton) rather than expanding and opening the viewer at once. */}
+      {htmlOverflows && (
+        <ShowMoreButton
+          expanded={htmlExpanded}
+          onToggle={() => setHtmlExpanded(v => !v)}
+          testId="inline-artifact-show-more-btn"
         />
       )}
-
-      {/* HTML artifacts: sandbox route so style-src https: is scoped to /api/artifact-sandbox */}
-      {type === 'html' && htmlLoadCount > 0 && (
-        <iframe
-          key={htmlLoadCount}
-          ref={htmlIframeRef}
-          src="/api/artifact-sandbox"
-          title={artifact.title}
-          // See note above: grant autoplay so interactive HTML artifacts using
-          // Web Audio can produce sound on a user click.
-          allow="autoplay"
-          onError={handleIframeError}
-          style={{
-            width: '100%',
-            height: maxHeight,
-            border: 'none',
-            borderRadius: '4px',
-          }}
-          sandbox="allow-scripts"
-          data-testid="inline-artifact-iframe"
-        />
-      )}
-    </Box>
+    </>
   );
 };
 

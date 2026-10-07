@@ -46,9 +46,21 @@ const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: fa
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => useLakeDriveConnection(),
 }));
+// The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
+vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
+vi.mock('./manager/FinishGitHubConnectBanner', () => ({ default: () => null }));
+// The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
+// react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
+vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
+    // LakeInfoPanel's "Add existing files" picker submits through this door. Stubbed so mounting
+    // it (the affordance test below) needs no QueryClientProvider.
+    useAddFilesToLake: mutation,
+    // The picker also imports this key directly to gate on useIsMutating - keep it in the mock or
+    // the import resolves to undefined and every render throws (see the missing-export trap above).
+    addFilesToLakeMutationKey: ['addFilesToLake'],
     // The recipient's pending-offer banner renders at the top of the panel. Default: no offers, so
     // it renders nothing; a test that wants one overrides these.
     useOwnLakeOwnershipOffers: () => ({ data: [] }),
@@ -79,6 +91,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
     // no open-count badge.
     useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
+    useScanDataLakeFindings: mutation,
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
@@ -113,6 +126,26 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     downloadLakeAccessCsv: vi.fn(),
   };
 });
+
+// The existing-files picker's list query reaches react-query; stub it so clicking the entry point
+// mounts the real dialog without a QueryClientProvider.
+vi.mock('@client/app/hooks/data/fabFiles', () => ({
+  useGetFabFiles: () => ({
+    data: { pages: [{ data: [] }] },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    isFetching: false,
+  }),
+  useGetFabFile: () => ({ data: undefined }),
+}));
+
+// The picker also calls useIsMutating directly, which needs a QueryClientProvider this suite
+// does not set up (every other react-query-backed hook here is mocked too).
+vi.mock('@tanstack/react-query', async importOriginal => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useIsMutating: () => 0,
+}));
 
 // TaxonomyReviewPanel has its own suite; here we only assert the manager opens it with the
 // right batch (asserted via a data attribute mirroring the real component's props).
@@ -469,11 +502,18 @@ describe('DataLakeManagerPanel - pending-proposal chip', () => {
   it('advertises the waiting review count on the lake row', () => {
     useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 4 }, theirsLake], isLoading: false });
     renderPanel();
-    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 to review');
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 sources to review');
+  });
+
+  it('names the noun in the singular for one waiting source', () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 1 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('1 source to review');
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).not.toHaveTextContent('1 sources');
   });
 
   it('omits the chip at zero, so a row with nothing waiting is unchanged', () => {
-    // The guard is truthiness, not presence: a `!== undefined` check would render "0 to review"
+    // The guard is truthiness, not presence: a `!== undefined` check would render "0 sources to review"
     // and invent a queue for every lake that has ever been reviewed clean.
     useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 0 }, theirsLake], isLoading: false });
     renderPanel();
@@ -624,9 +664,22 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     await user.click(screen.getByTestId('datalake-manager-lake-mine'));
 
     expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-addexisting-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-delete-active-btn-mine')).toBeInTheDocument();
+  });
+
+  it('opens the existing-files picker from the Add existing files button', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.queryByTestId('generic-add-items-modal')).toBeNull();
+
+    await user.click(screen.getByTestId('datalake-addexisting-btn-mine'));
+
+    expect(screen.getByTestId('generic-add-items-modal')).toBeInTheDocument();
   });
 
   it("hides all four on a lake the caller cannot manage (someone else's public lake)", async () => {
@@ -638,6 +691,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
 
     expect(screen.getByTestId('datalake-manager-lakeinfo')).toHaveTextContent('Theirs');
     expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-addexisting-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
     expect(screen.queryByTestId('datalake-delete-active-btn-theirs')).toBeNull();
@@ -663,6 +717,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
 
     await user.click(screen.getByTestId('datalake-manager-lake-mine'));
     await user.click(screen.getByTestId('datalake-delete-active-btn-mine'));
+    await user.click(screen.getByTestId('datalake-delete-confirm-btn'));
 
     // Same lifecycle action the archived row's Delete button calls - deleteDataLake has no
     // archived-status precondition, so this reaches the same recoverable soft-delete.
@@ -721,6 +776,28 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     // lakes tab"), so the owner cue must live on the row, before anything is opened.
     expect(screen.getByTestId('datalake-manager-owner-icon-theirs')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
+  });
+
+  it('names the owner in the sidebar icon label with no native title', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: 'Dana' }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('falls back to a generic sidebar icon label when the owner name is missing', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: undefined }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
   });
 
   it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {

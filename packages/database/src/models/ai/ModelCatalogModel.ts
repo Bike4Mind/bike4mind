@@ -97,7 +97,8 @@ export class ModelCatalogRepository
    *
    * MUST STAY IN SYNC WITH mergeCatalog (b4m-core/llm-adapters/src/mergeCatalog.ts),
    * which resolves precedence per FIELD GROUP, not per row: within a group the
-   * newest operator row wins, else the newest discovery row, else seed. Handing
+   * newest operator row wins, else the newest discovery row, else seed (for
+   * {presentation}, seed ranks above discovery). Handing
    * it one row per model would let a sparse operator patch owning {presentation}
    * shadow the discovery row owning {limits} instead of overlaying it. Operator
    * rows are rare and each may own a different group, so none of them collapse;

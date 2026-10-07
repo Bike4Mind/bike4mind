@@ -117,10 +117,110 @@ describe('Lattice tools - owner-only object-level authz', () => {
   });
 });
 
+describe('Lattice tools - failed writes report success: false', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const setValue = (
+    context: Parameters<typeof latticeSetValueTool.implementation>[0],
+    entityName: string,
+    attributeKey: string
+  ) =>
+    latticeSetValueTool.implementation(context).toolFn({ modelId: MODEL_ID, entityName, attributeKey, value: '175' });
+
+  it('lattice_set_value against a missing entity writes nothing and lists the entities present', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    const result = JSON.parse(await setValue(context, 'Headcount', 'current'));
+    expect(update).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('"Headcount"');
+    expect(result.error).toContain('Available entities: "Revenue"');
+  });
+
+  it('lattice_set_value points split name/period arguments at the per-period entity', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    const model = await context.db.latticeModels.findById(MODEL_ID);
+    model.data.entities = [{ id: 'revenue_q2', name: 'Revenue Q2', attributes: [] }];
+    const result = JSON.parse(await setValue(context, 'Revenue', 'Q2'));
+    expect(update).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('entityName="Revenue Q2", attributeKey="value"');
+  });
+
+  it('lattice_set_value matches an entity name case-insensitively', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    const result = JSON.parse(await setValue(context, 'REVENUE', 'value'));
+    expect(update).toHaveBeenCalledOnce();
+    expect(result.success).toBe(true);
+  });
+
+  it('lattice_set_value matches a multi-word entity name ignoring case and extra whitespace', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    const model = await context.db.latticeModels.findById(MODEL_ID);
+    model.data.entities = [{ id: 'revenue_q2', name: 'Revenue Q2', attributes: [] }];
+    const result = JSON.parse(await setValue(context, 'revenue  q2', 'value'));
+    expect(update).toHaveBeenCalledOnce();
+    expect(result.success).toBe(true);
+    expect(model.data.entities[0].attributes).toEqual([expect.objectContaining({ key: 'value', value: 175 })]);
+  });
+
+  it('lattice_set_value resolves an entity by name when its id is not name-derived', async () => {
+    // UI-created entities get id: uuidv4() (see useLattice.ts addEntity), not toEntityId(name),
+    // so name lookup must fall back to comparing toEntityId(e.name) rather than e.id alone.
+    const { context, update } = makeContext('owner', 'owner');
+    const model = await context.db.latticeModels.findById(MODEL_ID);
+    model.data.entities = [{ id: 'a1b2', name: 'Revenue', attributes: [] }];
+    const result = JSON.parse(await setValue(context, 'revenue', 'value'));
+    expect(update).toHaveBeenCalledOnce();
+    expect(result.success).toBe(true);
+  });
+
+  it('lattice_set_value caps the listed entities and counts the rest', async () => {
+    const { context } = makeContext('owner', 'owner');
+    const model = await context.db.latticeModels.findById(MODEL_ID);
+    model.data.entities = Array.from({ length: 53 }, (_, i) => ({
+      id: `item_${i}`,
+      name: `Item ${i}`,
+      attributes: [],
+    }));
+    const { error } = JSON.parse(await setValue(context, 'Missing', 'value'));
+    expect(error).toContain('"Item 49"');
+    expect(error).not.toContain('"Item 50"');
+    expect(error).toContain('(and 3 more)');
+  });
+
+  it('lattice_set_value reports a failed save as success: false', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    update.mockRejectedValueOnce(new Error('write failed'));
+    const result = JSON.parse(await setValue(context, 'Revenue', 'value'));
+    expect(result.success).toBe(false);
+  });
+
+  it('lattice_add_entity reports a failed save as success: false', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    update.mockRejectedValueOnce(new Error('write failed'));
+    const result = await latticeAddEntityTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      name: 'Costs',
+      type: 'line_item',
+    });
+    expect(JSON.parse(result).success).toBe(false);
+  });
+
+  it('lattice_create_rule reports a failed save as success: false', async () => {
+    const { context, update } = makeContext('owner', 'owner');
+    update.mockRejectedValueOnce(new Error('write failed'));
+    const result = await latticeCreateRuleTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      name: 'Margin Rule',
+      formula: 'Revenue = Costs + Margin',
+    });
+    expect(JSON.parse(result).success).toBe(false);
+  });
+});
+
 /**
- * These tools share `isModelOwner` with `latticeModelService.getModelForWrite` rather than
- * comparing raw, so a same-org non-owner - who CAN now read the model over HTTP - still cannot
- * make the subagent write to it.
+ * These tools delegate to `getModelForWrite`, so a same-org non-owner - who CAN read the model
+ * over HTTP via `getModel` - is still rejected at the write gate (`isModelOwner`).
  */
 describe('Lattice tools - org sharing does not confer write authority', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -130,6 +230,10 @@ describe('Lattice tools - org sharing does not confer write authority', () => {
     const update = vi.fn().mockResolvedValue(null);
     const context = {
       userId: 'colleague',
+      // organizationId on user so canReadModel admits them at the READ gate --
+      // without this the colleague is rejected before isModelOwner is checked,
+      // and the write-gate predicate is never exercised.
+      user: { organizationId: orgId },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       db: {
         latticeModels: {
@@ -148,6 +252,18 @@ describe('Lattice tools - org sharing does not confer write authority', () => {
     return { context, update };
   };
 
+  it('lattice_add_entity refuses a same-org non-owner', async () => {
+    const { context, update } = makeOrgContext();
+    const result = await latticeAddEntityTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      name: 'Injected',
+      type: 'line_item',
+      initialValues: [],
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(JSON.parse(result).success).toBe(false);
+  });
+
   it('lattice_set_value refuses a same-org non-owner', async () => {
     const { context, update } = makeOrgContext();
     const result = await latticeSetValueTool.implementation(context).toolFn({
@@ -155,6 +271,17 @@ describe('Lattice tools - org sharing does not confer write authority', () => {
       entityName: 'Revenue',
       attributeKey: 'value',
       value: '999',
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(JSON.parse(result).success).toBe(false);
+  });
+
+  it('lattice_create_rule refuses a same-org non-owner', async () => {
+    const { context, update } = makeOrgContext();
+    const result = await latticeCreateRuleTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      name: 'Margin',
+      formula: 'Margin = Revenue - Costs',
     });
     expect(update).not.toHaveBeenCalled();
     expect(JSON.parse(result).success).toBe(false);

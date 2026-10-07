@@ -136,7 +136,7 @@ export const process = async (
 
   // Update status to PROCESSING before starting (no transaction needed for single operation)
   researchTask.status = ResearchTaskStatus.PROCESSING;
-  await db.researchTasks.update(researchTask);
+  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status });
 
   logger?.info(`✅ [PROCESS_START] Processing research task ${researchTask.id} with status: ${researchTask.status}`);
 
@@ -237,7 +237,11 @@ export const process = async (
     } else {
       researchTask.status = ResearchTaskStatus.COMPLETED;
       researchTask.statusCompletedAt = new Date();
-      await db.researchTasks.update(researchTask);
+      await db.researchTasks.update({
+        id: researchTask.id,
+        status: researchTask.status,
+        statusCompletedAt: researchTask.statusCompletedAt,
+      });
 
       try {
         await jobs.researchTasks.sendToClient(researchTask, {
@@ -441,7 +445,6 @@ const processScrape = async (
       logger?.info(`🔗 [LINKS_EXTRACTED] Found ${links.length} total links to analyze`);
 
       researchTask.discoveredLinks ||= [];
-      researchTask.discoveredLinks.forEach(l => (l.status = 'pending'));
       const stats = {
         added: 0,
         updated: 0,
@@ -483,6 +486,9 @@ const processScrape = async (
   await Promise.all(urls.map((url, index) => sequential(async () => scrapeUrl(url, index + 1))));
 
   await queueRunner.close();
+
+  // process() re-reads the task after this returns, so in-memory discoveredLinks would be lost.
+  await db.researchTasks.update({ id: researchTask.id, discoveredLinks: researchTask.discoveredLinks });
 };
 
 /**
@@ -635,7 +641,11 @@ const processDeepResearch = async (
 
     researchTask.status = ResearchTaskStatus.COMPLETED;
     researchTask.statusCompletedAt = new Date();
-    await db.researchTasks.update(researchTask);
+    await db.researchTasks.update({
+      id: researchTask.id,
+      status: researchTask.status,
+      statusCompletedAt: researchTask.statusCompletedAt,
+    });
 
     await sendToClient?.(researchTask, {
       status: 'completed',

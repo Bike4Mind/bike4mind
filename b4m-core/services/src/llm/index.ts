@@ -41,12 +41,18 @@ export type {
 } from './agents/ServerSubagentOrchestrator';
 export * from './MementoEvaluationService';
 export * from './LakeMemoryExtractionService';
+export * from './LakeContradictionReadingService';
 export * from './SmallLLMService';
 export * from './smallLLMHelpers';
 export * from './reranker';
 export { StatusManager } from './StatusManager';
 export { firecrawlFetch } from './tools/implementation/webfetch';
-export { serpApiSearch, resolveWebSearchProvider } from './tools/implementation/websearch';
+export {
+  serpApiSearch,
+  resolveWebSearchProvider,
+  resolveWebSearchProviders,
+  searchWithHedge,
+} from './tools/implementation/websearch';
 export type { WebSearchOptions, WebSearchProvider, WebSearchProviderResult } from './tools/implementation/websearch';
 export { scrapeWithRetry } from './tools/implementation/webfetch/scrapeWithRetry';
 
@@ -58,3 +64,4 @@ export type {
   DagHandoffSignal,
   DagNodeHandle,
 } from './tools/implementation/coordinateTask';
+export * from './toolEchoSources';

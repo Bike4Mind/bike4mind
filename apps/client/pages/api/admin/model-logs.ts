@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Quest } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
-import { IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
+import { ApiKeyScope, IChatHistoryItemDocument, redactPromptMetaForViewer } from '@bike4mind/common';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
 import { dateParam } from '@server/utils/dateParam';
@@ -15,7 +15,7 @@ const querySchema = z.object({
   search: z.string().optional(),
 });
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     // Check if user is admin
     if (!req.user?.isAdmin) {

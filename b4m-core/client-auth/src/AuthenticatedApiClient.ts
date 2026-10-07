@@ -18,6 +18,18 @@ export class SessionRevokedError extends Error {
   }
 }
 
+/**
+ * 401 with no credential at all (no API key, no stored tokens): a config gap, not an expiry.
+ * Not a SessionRevokedError, so checkSessionValid still reports "not revoked". The host's message
+ * should keep `Authentication failed` for string-matching callers.
+ */
+export class NotAuthenticatedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotAuthenticatedError';
+  }
+}
+
 /** The one thing the refresh-on-401 path needs from an OAuth client. */
 export interface RefreshingOAuthClient {
   refreshToken(refreshToken: string): Promise<RefreshTokenResponse>;
@@ -32,6 +44,8 @@ export interface ReauthMessages {
   refreshFailed: string;
   /** A request still 401d after a successful refresh. */
   stillUnauthorized: string;
+  /** A request 401d and there are no stored tokens to refresh. */
+  notLoggedIn?: string;
 }
 
 export interface AuthenticatedApiClientOptions {
@@ -49,6 +63,12 @@ export interface AuthenticatedApiClientOptions {
    * and the OAuth-JWT path (Bearer injection + refresh-on-401) is bypassed entirely.
    */
   apiKey?: string;
+  /**
+   * A 401 whose body this returns true for is passed through untouched, including on the
+   * post-refresh retry: the B4M credential was accepted, so refreshing cannot fix it (e.g. a
+   * missing AI-provider key).
+   */
+  isPassThrough401?: (data: unknown) => boolean;
 }
 
 /**
@@ -61,13 +81,19 @@ export class AuthenticatedApiClient {
   private oauthClient: RefreshingOAuthClient;
   private logger: AuthLogger;
   private apiKey?: string;
+  private isPassThrough401?: (data: unknown) => boolean;
 
   constructor(options: AuthenticatedApiClientOptions) {
     this.tokenStore = options.tokenStore;
     this.oauthClient = options.oauthClient;
     this.logger = options.logger;
     this.apiKey = options.apiKey;
-    const { refreshFailed, stillUnauthorized } = options.reauthMessages;
+    this.isPassThrough401 = options.isPassThrough401;
+    const {
+      refreshFailed,
+      stillUnauthorized,
+      notLoggedIn = 'Authentication failed: not logged in.',
+    } = options.reauthMessages;
 
     this.client = axios.create({
       baseURL: options.baseUrl,
@@ -117,17 +143,22 @@ export class AuthenticatedApiClient {
           return Promise.reject(error);
         }
 
+        if (error.response?.status === 401 && this.isPassThrough401?.(error.response.data)) {
+          return Promise.reject(error);
+        }
+
         // If 401 and we haven't retried yet, try to refresh token
         if (error.response?.status === 401 && !originalRequest._retry) {
           originalRequest._retry = true;
 
+          // Outside the try: the catch below would rewrite a no-token throw as refreshFailed.
+          const tokens = await this.tokenStore.getAuthTokens();
+
+          if (!tokens) {
+            throw new NotAuthenticatedError(notLoggedIn);
+          }
+
           try {
-            const tokens = await this.tokenStore.getAuthTokens();
-
-            if (!tokens) {
-              throw new Error('Not authenticated');
-            }
-
             // Skip refresh while the stored access token has not expired yet: a 401 against a
             // token that is still inside its own lifetime is far more likely a transient server
             // error than an auth failure, and refreshing would spend a rotation for nothing.

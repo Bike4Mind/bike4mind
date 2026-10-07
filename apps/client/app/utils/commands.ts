@@ -29,6 +29,11 @@ export type CommandArgExtra = {
   currentSession: ISessionDocument | null;
   model: string;
   workBenchFiles: IFabFileDocument[];
+  /**
+   * Agents the composer's Agents panel has selected. Sent only on the turn that creates a session
+   * (see LLMCommandArgs.agentIds).
+   */
+  agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];
@@ -48,6 +53,8 @@ export type CommandArgExtra = {
   researchMode?: LLMApiRequestBody['researchMode'];
   /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
   skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
+  /** Agent-mode routing provenance, forwarded to the `/llm` handler's payload. See LLMCommandArgs.agentMode. */
+  agentMode?: LLMApiRequestBody['agentMode'];
   deepResearchConfig?: {
     maxDepth?: number;
     duration?: number;

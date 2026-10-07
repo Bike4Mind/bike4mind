@@ -2,7 +2,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_SHARE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeAccessGrantRepository } from '@bike4mind/database';
+import {
+  withTransaction,
+  dataLakeRepository,
+  dataLakeAccessGrantRepository,
+  orgGoogleDriveConnectionRepository,
+} from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
@@ -37,33 +42,38 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES })
     const activeOrg = await resolveActiveOrg(req, organizationId);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
+    // Inside a transaction so a grant revoke committing mid-request collides on the lake doc and the
+    // retry re-runs the gates against live grants (see the SERIALIZATION note on grantLakeAccess).
+    const result = await withTransaction(async () => {
+      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
 
-    const result = await dataLakeService.setLakeVisibility(
-      // The promotion TARGET stays the per-request validated active org - a write input,
-      // not an authorization read (#1674). administeredOrgIds rides the shared context
-      // (toAccessContext resolves it once) for the org-manageable manage rung (#1668).
-      {
-        userId: ctx.userId,
-        isAdmin: ctx.isAdmin,
-        organizationId: activeOrg,
-        administeredOrgIds: ctx.administeredOrgIds,
-        auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
-      },
-      lake.id,
-      visibility,
-      {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          ...lakeConfigAuditDb,
+      return dataLakeService.setLakeVisibility(
+        // The promotion TARGET stays the per-request validated active org - a write input,
+        // not an authorization read (#1674). administeredOrgIds rides the shared context
+        // (toAccessContext resolves it once) for the org-manageable manage rung (#1668).
+        {
+          userId: ctx.userId,
+          isAdmin: ctx.isAdmin,
+          organizationId: activeOrg,
+          administeredOrgIds: ctx.administeredOrgIds,
+          auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo),
         },
-        logger: req.logger,
-      }
-    );
+        lake.id,
+        visibility,
+        {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            orgGoogleDriveConnections: orgGoogleDriveConnectionRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        }
+      );
+    });
 
     return res.json(result);
   });

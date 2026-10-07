@@ -43,6 +43,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'imageEditQueue',
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+  },
+  {
     label: 'data-lake-research',
     displayName: 'Data Lake Research Run',
     application: 'DataLakeManagement',
@@ -107,6 +113,12 @@ const DLQ_REGISTRY = [
     displayName: 'Video Generation',
     application: 'VideoGeneration',
     sourceQueue: 'videoGenerationQueue',
+  },
+  {
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
   },
   {
     label: 'liveops-triage',
@@ -193,6 +205,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'bobRunQueue',
   },
   {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+  },
+  {
     label: 'data-lake-cleanup',
     displayName: 'Data Lake Cleanup',
     application: 'DataLakeManagement',
@@ -211,10 +229,34 @@ const DLQ_REGISTRY = [
     sourceQueue: 'lakeMemoryQueue',
   },
   {
+    label: 'lake-inconsistency-model',
+    displayName: 'Lake Model Inconsistency Detection',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeInconsistencyModelQueue',
+  },
+  {
     label: 'drive-lake-ingest',
     displayName: 'Drive Lake Ingest',
     application: 'DataLakeManagement',
     sourceQueue: 'driveLakeIngestQueue',
+  },
+  {
+    label: 'drive-disconnect-purge',
+    displayName: 'Drive Disconnect Purge',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveDisconnectPurgeQueue',
+  },
+  {
+    label: 'github-lake-ingest',
+    displayName: 'GitHub Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeIngestQueue',
+  },
+  {
+    label: 'github-lake-revoke',
+    displayName: 'GitHub Lake Revoke',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeRevokeQueue',
   },
 ] as const satisfies readonly DlqDescriptor[];
 

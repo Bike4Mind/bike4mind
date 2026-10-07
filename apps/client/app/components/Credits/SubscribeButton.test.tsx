@@ -31,7 +31,10 @@ const subRow = (overrides: Partial<IUserSubscription> = {}) =>
     status: 'active',
     canceledAt: null,
     periodStartsAt: new Date('2026-01-01T00:00:00Z'),
-    periodEndsAt: new Date('2026-02-01T00:00:00Z'),
+    // Midday UTC so the formatted local date stays February 1 across every
+    // timezone this suite runs under (including America/Los_Angeles and
+    // Pacific/Auckland), not just UTC.
+    periodEndsAt: new Date('2026-02-01T10:00:00Z'),
     ...overrides,
   }) as unknown as IUserSubscription;
 

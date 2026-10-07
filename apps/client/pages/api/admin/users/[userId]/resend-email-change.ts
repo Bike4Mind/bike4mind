@@ -1,5 +1,6 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { userRepository } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
@@ -14,7 +15,7 @@ interface RequestQuery {
 }
 
 // Admin-only endpoint to resend email change verification for a specific user
-const handler = baseApi({ auth: true })
+const handler = baseApi({ auth: true, requiredScopes: [ApiKeyScope.ADMIN] })
   .use(csrfProtection())
   .post(
     asyncHandler(async (req, res) => {
@@ -147,8 +148,7 @@ const handler = baseApi({ auth: true })
       });
 
       // Update the resent timestamp
-      user.pendingEmailSentAt = new Date();
-      await userRepository.update(user);
+      await userRepository.update({ id: user.id, pendingEmailSentAt: new Date() });
 
       // Log admin action
       await logAuditEvent(

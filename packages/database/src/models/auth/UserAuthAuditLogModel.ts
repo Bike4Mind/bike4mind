@@ -32,7 +32,8 @@ export type UserAuthAuditEvent =
   | 'refresh_recovery_capped'
   | 'trusted_device_granted'
   | 'trusted_device_used'
-  | 'trusted_device_revoked';
+  | 'trusted_device_revoked'
+  | 'oauth_grant_revoked';
 
 export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'login_success',
@@ -50,6 +51,7 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'trusted_device_granted',
   'trusted_device_used',
   'trusted_device_revoked',
+  'oauth_grant_revoked',
 ];
 
 export interface IUserAuthAuditLogDocument extends Document {

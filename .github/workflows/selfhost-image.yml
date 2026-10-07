@@ -25,7 +25,14 @@ on:
       # The docs are baked into the image by the same prebuild, so a docs-only edit changes
       # what ships and has to revalidate it.
       - 'docs-site/docs/**'
+      # Root package.json drives pnpm install and the turbo build graph in this image, so a
+      # manifest-only edit that changes what gets built has to revalidate the image even when the
+      # lockfile is unchanged.
+      - 'package.json'
       - 'pnpm-lock.yaml'
+      # The builder loads this template as the built-API-route probe's placeholder env, so a key
+      # change can flip the image build's verdict.
+      - '.env.selfhost.example'
       - '.github/workflows/selfhost-image.yml'
   pull_request:
     paths:
@@ -39,7 +46,14 @@ on:
       # The docs are baked into the image by the same prebuild, so a docs-only edit changes
       # what ships and has to revalidate it.
       - 'docs-site/docs/**'
+      # Root package.json drives pnpm install and the turbo build graph in this image, so a
+      # manifest-only edit that changes what gets built has to revalidate the image even when the
+      # lockfile is unchanged.
+      - 'package.json'
       - 'pnpm-lock.yaml'
+      # The builder loads this template as the built-API-route probe's placeholder env, so a key
+      # change can flip the image build's verdict.
+      - '.env.selfhost.example'
       - '.github/workflows/selfhost-image.yml'
   workflow_dispatch:
 

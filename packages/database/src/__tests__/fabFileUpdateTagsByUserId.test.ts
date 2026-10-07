@@ -89,6 +89,26 @@ describe('FabFileRepository.updateTagsByUserId', () => {
     expect(await rawTagsOf(deleted)).toEqual(['receipts']);
   });
 
+  // The service follows every rename with dedupeTagByUserId; it must reach the same tombstones the
+  // rename did, or a soft-deleted file keeps both copies and an undelete double-counts the tag.
+  it('dedupes a soft-deleted file that already carried the new name', async () => {
+    const deleted = await seed(['receipts-old', 'receipts'], { deletedAt: new Date() });
+
+    await fabFileRepository.updateTagsByUserId(userId, 'receipts-old', 'receipts');
+    const modified = await fabFileRepository.dedupeTagByUserId(userId, 'receipts');
+
+    expect(modified).toBe(1);
+    expect(await rawTagsOf(deleted)).toEqual(['receipts']);
+  });
+
+  it("renames a soft-deleted file's primaryTag too", async () => {
+    const deleted = await seed(['invoices'], { deletedAt: new Date(), primaryTag: 'invoices' });
+
+    await fabFileRepository.updateTagsByUserId(userId, 'invoices', 'receipts');
+
+    expect((await rawOf(deleted))?.primaryTag).toBe('receipts');
+  });
+
   it('matches the whole name, so a neighbour containing it is not renamed', async () => {
     const file = await seed(['q1', 'q1-draft']);
 

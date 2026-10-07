@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box,
@@ -36,8 +37,6 @@ import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
 import { type ArtifactMutationResponse } from './types';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface ArtifactType {
   type: string;
@@ -621,19 +620,12 @@ export const ArtifactCreator: React.FC<ArtifactCreatorProps> = ({
 
               {formData.content ? (
                 <Box className="artifact-creator-preview-content" sx={{ flex: 1, overflow: 'auto' }}>
-                  <SyntaxHighlighter
+                  <HighlightedCode
                     className="artifact-creator-syntax-highlighter"
+                    code={formData.content}
                     language={getLanguage}
-                    style={oneDark}
-                    customStyle={{
-                      margin: 0,
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      minHeight: '100%',
-                    }}
-                  >
-                    {formData.content}
-                  </SyntaxHighlighter>
+                    customStyle={{ minHeight: '100%' }}
+                  />
                 </Box>
               ) : (
                 <Alert className="artifact-creator-preview-alert" color="neutral">

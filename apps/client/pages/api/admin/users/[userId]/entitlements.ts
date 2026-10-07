@@ -15,7 +15,7 @@ import {
   normalizeTag,
 } from '@client/lib/entitlements/registry';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
-import { hasDeveloperUserTag } from '@bike4mind/common';
+import { ApiKeyScope, hasDeveloperUserTag } from '@bike4mind/common';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 
 type EntitlementSourceType = 'tag' | 'domain' | 'subscription' | 'admin-bypass' | 'developer-bypass';
@@ -47,7 +47,7 @@ interface EntitlementRow {
  * feature gated on a different principal (e.g. an org-billed embed key resolves
  * the org billing owner) matches only when that principal is the viewed user.
  */
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

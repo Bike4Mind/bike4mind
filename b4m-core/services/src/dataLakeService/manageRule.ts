@@ -155,6 +155,43 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  *
  * `grants` is the lake's active grant set, pre-fetched by the caller; omitted -> `[]`, so a caller
  * that has not threaded grants yet still gets rungs 1, 2 (via creator) and 4.
+ *
+ * WRITE-TIME RESIDUAL. Every manage write decides from a grant read and then writes, so a revoke can
+ * commit in between. The rule, rather than a list that drifts: a manage write is serialized against
+ * a revoke ONLY when it writes the lake DOCUMENT inside `withTransaction` with its gate inside the
+ * callback (see the SERIALIZATION note on `grantLakeAccess`). Today that is the grants door, the lake
+ * PUT, visibility, promote, demote and the cleanup claim (its sweep runs later and re-gates); the
+ * ownership apply (`acceptLakeOwnershipOffer` -> `applyLakeOwnershipTransfer`) is a transactional
+ * lake-doc writer too, gated by transfer authority rather than this rule. A write whose own target is
+ * another collection joins by touching the lake last (`IDataLakeRepository.touchIfStable`): file add
+ * and remove (internal and v1 doors) and tags, research config create/update/delete, proposal
+ * decline/restore, finding resolve/assign, batch create and taxonomy dismiss. Inside that transaction a
+ * service's best-effort write (audit row, restore record, stats) is no longer best-effort: its failure
+ * aborts the transaction and fails the request. Any lake-doc write outside it (an ingestion worker's
+ * stats) also collides, so a manage write during a busy upload can exhaust its retries.
+ *
+ * Every other manage-gated write is gated once per request, and a revoke committing after that gate
+ * does not abort it:
+ *   - the archive/unarchive/delete/restore cascades, deliberately: each runs its claim and sweep in
+ *     one call, so a transaction would span the whole sweep, and re-checking after the claim would
+ *     strand the lake mid-status;
+ *   - the writes with an external or long step - proposal approve, taxonomy apply/reanalyze,
+ *     membership decisions, which can recompute stats once per removed duplicate, and corpus
+ *     actions, whose merge audits a partial result that a rollback would contradict;
+ *   - the toggle-tags join door (`fabFileService.toggleTags`), which reaches a lake from the file side;
+ *   - any of the above on a lake in a transitional status, which `touchIfStable` skips.
+ *
+ * Research run start, converge, rechunk, lake memory, inconsistency detection and finding belief are
+ * serialized up to their decision: the gate and that route's DB writes run in the transaction
+ * alongside a lake-doc write (`touchIfStable`, or the route's own lake update); any external step
+ * runs after commit, and a revoke landing after that commit does not stop it. The transitional-lake
+ * exception above applies to these routes too.
+ *
+ * A departure lapse collides too when the lapsed grant could manage (`lapseDepartedMemberLakeAccess`
+ * phase 1 touches the lake for an owner/curator grant, and like the writers skips a transitional
+ * lake). Loss of an org role collides with nothing,
+ * since `administeredOrgIds`/`isAdmin` are request snapshots - current-membership enforcement for the
+ * org rungs is a separate, known gap (the snapshot is built in `toAccessContext.ts`).
  */
 export function canManageLake(
   lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,

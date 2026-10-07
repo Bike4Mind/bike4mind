@@ -140,6 +140,87 @@ describe('findByDriveConnectionIdInDataLake', () => {
     const result = await fabFileRepository.findByDriveConnectionIdInDataLake(connId, datalakeTag);
     expect(result).toHaveLength(0);
   });
+
+  it('includeDeleted reaches deleted and archived rows, still excluding pending and other-lake ones', async () => {
+    // Own connection id: beforeEach's deleteMany is a soft delete, so earlier tests' rows linger.
+    const purgeConnId = 'conn-purge';
+    const purgeFile = (over: Record<string, unknown>) => makeFile({ driveConnectionId: purgeConnId, ...over });
+    await FabFile.create(purgeFile({ driveFileId: 'd-live' }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-del', deletedAt: new Date() }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-arch', archivedAt: new Date() }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-pending', status: 'pending' }));
+    await FabFile.create(purgeFile({ driveFileId: 'd-other', tags: [{ name: 'datalake:other', strength: 1.0 }] }));
+
+    const result = await fabFileRepository.findByDriveConnectionIdInDataLake(purgeConnId, datalakeTag, {
+      includeDeleted: true,
+    });
+    expect(result.map(f => f.driveFileId).sort()).toEqual(['d-arch', 'd-del', 'd-live']);
+    expect(await fabFileRepository.countByDriveConnectionIdInDataLake(purgeConnId, datalakeTag)).toBe(3);
+  });
+
+  it('limit caps the includeDeleted set to one bounded slice', async () => {
+    const sliceConnId = 'conn-slice';
+    for (const driveFileId of ['s-1', 's-2', 's-3']) {
+      await FabFile.create(makeFile({ driveConnectionId: sliceConnId, driveFileId }));
+    }
+    const slice = await fabFileRepository.findByDriveConnectionIdInDataLake(sliceConnId, datalakeTag, {
+      includeDeleted: true,
+      limit: 2,
+    });
+    expect(slice).toHaveLength(2);
+  });
+});
+
+// The disconnect backstop's finder: a file the connector UNPICKED lost the lake meta-tag but kept
+// its driveConnectionId, so the meta-tag-scoped purge finders cannot reach it. This must return
+// exactly those live orphans - and nothing else the connection owns.
+describe('findLiveNonMembersByDriveConnectionId', () => {
+  const datalakeTag = 'datalake:orphan-lake';
+  const connId = 'conn-orphans';
+
+  const makeFile = (over: Record<string, unknown>) => ({
+    userId: 'u-orphan',
+    fileName: 'f.txt',
+    mimeType: 'text/plain',
+    type: KnowledgeType.FILE,
+    filePath: `${Math.random()}.txt`,
+    status: 'complete',
+    driveConnectionId: connId,
+    ...over,
+  });
+
+  it('returns only the live, non-member orphan this connection owns', async () => {
+    // Member: still carries the lake tag -> the member purge's business, not this finder's.
+    await FabFile.create(makeFile({ driveFileId: 'member', tags: [{ name: datalakeTag, strength: 1 }] }));
+    const orphan = await FabFile.create(makeFile({ driveFileId: 'orphan', tags: [] }));
+    // Soft-deleted orphan: already reaped by deleteFabFile -> the plugin's default filter drops it.
+    await FabFile.create(makeFile({ driveFileId: 'deleted', tags: [], deletedAt: new Date() }));
+    // Archive stamps members only, so this is defensive: an archived non-member is still not live.
+    await FabFile.create(makeFile({ driveFileId: 'archived', tags: [], archivedAt: new Date() }));
+    // Never-durable in-flight upload.
+    await FabFile.create(makeFile({ driveFileId: 'pending', tags: [], status: 'pending' }));
+    // A different connection's row must not leak in. (A same-connection row tagged into ANOTHER lake
+    // is still a non-member of THIS lake, so the finder does return it - the gate, not this finder,
+    // is what keeps it alive. See connectorCopyGate.test.ts.)
+    await FabFile.create(makeFile({ driveFileId: 'other-conn', tags: [], driveConnectionId: 'conn-other' }));
+
+    const result = await fabFileRepository.findLiveNonMembersByDriveConnectionId(connId, datalakeTag);
+    expect(result.map(f => f.id)).toEqual([orphan.id]);
+  });
+
+  it('excludes a member even when its tag array also holds unrelated tags', async () => {
+    await FabFile.create(
+      makeFile({
+        driveFileId: 'member-mixed',
+        tags: [
+          { name: 'q3', strength: 1 },
+          { name: datalakeTag, strength: 1 },
+        ],
+      })
+    );
+    const result = await fabFileRepository.findLiveNonMembersByDriveConnectionId(connId, datalakeTag);
+    expect(result).toHaveLength(0);
+  });
 });
 
 // The resume key for a Drive ingest that spans several runs. It excludes `pending` - unlike every

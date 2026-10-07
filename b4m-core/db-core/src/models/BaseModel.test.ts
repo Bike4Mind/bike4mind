@@ -308,5 +308,15 @@ describe('BaseRepository', () => {
       expect(updateManyQuery.session).toHaveBeenCalledTimes(1);
       expect(updateManyQuery.session).toHaveBeenCalledWith(session);
     });
+
+    it('routes the reserved unset option to $unset instead of forwarding it to mongoose', async () => {
+      await repo.updateMany({ userId: 'user1' }, { name: 'renamed', userId: 'x' }, { unset: ['userId'], upsert: true });
+
+      expect(mockUpdateMany).toHaveBeenCalledWith(
+        { userId: 'user1' },
+        { $set: { name: 'renamed' }, $unset: { userId: '' } },
+        { upsert: true }
+      );
+    });
   });
 });

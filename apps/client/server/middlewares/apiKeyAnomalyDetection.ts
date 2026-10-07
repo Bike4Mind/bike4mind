@@ -17,9 +17,10 @@ export const apiKeyAnomalyDetection = (): RequestHandler => {
       return next();
     }
 
-    // Ingest keys emit from load-balanced product backends with ephemeral IPs by design.
-    // Running anomaly detection would constantly trip the commonIPs baseline. Skip it.
-    if (req.apiKeyInfo?.scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE)) {
+    // Ingest keys emit from load-balanced product backends or CI runners with
+    // ephemeral IPs by design; detection would trip the commonIPs baseline.
+    const scopes = req.apiKeyInfo?.scopes;
+    if (scopes?.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) || scopes?.includes(ApiKeyScope.QA_INGEST)) {
       return next();
     }
 

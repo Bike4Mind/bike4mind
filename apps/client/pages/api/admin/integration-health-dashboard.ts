@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import {
@@ -46,7 +47,7 @@ function buildHealthToAuditMap(): Record<IntegrationName, string[]> {
 
 const HEALTH_TO_AUDIT = buildHealthToAuditMap();
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

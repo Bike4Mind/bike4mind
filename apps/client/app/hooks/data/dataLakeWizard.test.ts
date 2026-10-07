@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /**
  * Regression coverage for the batch upload orchestration: the offline fail-fast +
@@ -28,7 +29,7 @@ vi.mock('@client/app/utils/uploadFileToUrl', () => ({ uploadFileToUrl: uploadFil
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction }),
 }));
-// Create mode reads the active org and reveals nav slots after the first upload -
+// Create mode reads the active org and refreshes the gears after the first upload -
 // both reached only once a test runs past the offline short-circuit.
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
@@ -39,8 +40,10 @@ import {
   useCreateLakeFromDrive,
   useDataLakeBatchCompletionSync,
 } from './dataLakeWizard';
-import { slugifyDataLakeName } from './dataLakeSlug';
+import { slugifyDataLakeName } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useUser } from '@client/app/contexts/UserContext';
+import type { DataLakeStatus, IUserDocument } from '@bike4mind/common';
 
 const mountHook = <T>(hook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -74,7 +77,7 @@ const seedWizardFile = () =>
     ],
   });
 
-type SeedOpts = { names?: string[]; targetLake?: { id: string; slug: string } | null };
+type SeedOpts = { names?: string[]; targetLake?: { id: string; slug: string; status?: DataLakeStatus } | null };
 
 const seedWizard = ({ names = ['a.txt'], targetLake = null }: SeedOpts = {}) =>
   useDataLakeWizardStore.setState({
@@ -101,7 +104,7 @@ const seedWizard = ({ names = ['a.txt'], targetLake = null }: SeedOpts = {}) =>
 // one descriptor per requested file (fileId = "id-<name>"), everything else -> ok.
 const installApiPostRouter = () =>
   apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
-    if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+    if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', slug: 'my-lake' } });
     if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
     if (url === '/api/files/generate-presigned-urls-batch') {
       const files = (body?.files ?? []).map(f => ({
@@ -392,6 +395,29 @@ describe('useBatchUpload onError', () => {
     expect((batchCall?.[1] as { wantsTaxonomy: boolean }).wantsTaxonomy).toBe(true);
   });
 
+  it('invalidates the active-batches list as soon as the batch record exists, not after the whole upload finishes', async () => {
+    // onUploadComplete only fires once every file has uploaded, well past the idle poll's 60s.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { id: 'id-1' } });
+    });
+    seedWizardFile();
+
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    const invalidatedKeys = () =>
+      invalidateSpy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
+    const activeBatchesKey = JSON.stringify(dataLakeKeys.activeBatches);
+
+    await waitFor(() => expect(invalidatedKeys().filter(k => k === activeBatchesKey)).toHaveLength(1));
+
+    invalidateSpy.mockRestore();
+  });
+
   it('retrying via the toast action re-invokes the upload', async () => {
     apiPost.mockRejectedValue({ isAxiosError: true, code: 'ERR_NETWORK', message: 'Network Error' });
     seedWizardFile();
@@ -463,6 +489,60 @@ describe('useBatchUpload lake targeting', () => {
     );
 
     expect(presignedLakeRef()).toBe('existing1');
+  });
+
+  /**
+   * #3222: the Complete screen discloses a non-serving lake by reading `uploadProgress.lakeStatus`.
+   * Asserted on the STORE, not on createWizardLake's return value - a status that is read from the
+   * response but never reaches the store leaves the screen exactly as silent as before, and a
+   * component test that seeds `lakeStatus` by hand would still pass.
+   */
+  it('records the created lake status, so the Complete screen can disclose a draft', async () => {
+    apiPut.mockResolvedValue({ data: { success: true } });
+    installApiPostRouter();
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', status: 'draft' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: `key-${f.fileName}`,
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    // Asserted at 'complete', the state the screen actually renders - not at the moment the status
+    // is written. The run sets `lakeStatus` early and flips to 'complete' later, so a setter that
+    // replaced rather than merged would still pass a mid-flight assertion and ship a silent screen.
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete'));
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+  });
+
+  // Append mode never calls create, so the status has to come off the target lake - otherwise adding
+  // files to a draft lake reports success and discloses nothing.
+  it('records the target lake status in append mode', async () => {
+    apiPut.mockResolvedValue({ data: { success: true } });
+    installApiPostRouter();
+    seedWizard({ targetLake: { id: 'existing1', slug: 'existing-slug', status: 'draft' } });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete'));
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+    expect(postCall('/api/data-lakes')).toBeUndefined();
   });
 });
 
@@ -677,6 +757,99 @@ describe('useBatchUpload rollback (#816)', () => {
   });
 });
 
+describe('useBatchUpload storage limit', () => {
+  const refreshUser = vi.fn(() => Promise.resolve());
+  const setStorage = (currentStorageSize: number, storageLimitMb = 1) =>
+    useUser.setState({
+      currentUser: { currentStorageSize, storageLimit: storageLimitMb } as IUserDocument,
+      refreshUser,
+    });
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    toastMock.error.mockClear();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  afterEach(() => {
+    useUser.setState({ currentUser: null });
+    uploadFileToUrlMock.mockClear();
+  });
+
+  it('refuses before the lake is created when the files do not fit', async () => {
+    installApiPostRouter();
+    setStorage(1_000_000);
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    expect(apiPost).not.toHaveBeenCalled();
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    // Not 'validation': a storage refusal is not about the Name/Tag Prefix fields.
+    expect(progress.errorKind).toBe('server');
+    expect(progress.errorMessage).toMatch(/Free up at least 8 B/);
+    expect(refreshUser).toHaveBeenCalled();
+  });
+
+  it('uploads when a fresh read shows files were freed since the cached usage', async () => {
+    installApiPostRouter();
+    setStorage(1_000_000);
+    refreshUser.mockImplementationOnce(async () => {
+      useUser.setState({ currentUser: { currentStorageSize: 0, storageLimit: 1 } as IUserDocument });
+    });
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postCall('/api/data-lakes')).toBeDefined();
+  });
+
+  it('uploads as before when the files fit', async () => {
+    installApiPostRouter();
+    setStorage(0);
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(postCall('/api/data-lakes')).toBeDefined();
+  });
+
+  it("shows the server's storage-limit refusal verbatim", async () => {
+    installApiPostRouter();
+    const router = apiPost.getMockImplementation()!;
+    apiPost.mockImplementation((url: string, body?: unknown) =>
+      url === '/api/files/generate-presigned-urls-batch'
+        ? Promise.reject({
+            isAxiosError: true,
+            message: 'Request failed with status code 400',
+            response: { status: 400, data: { error: 'File size exceeds storage limit' } },
+          })
+        : router(url, body)
+    );
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe('File size exceeds storage limit');
+  });
+});
+
 /**
  * A retry after a total upload failure (create mode) used to always archive the new lake
  * and forget its id, so the retry's second `createWizardLake` call collided with the archived
@@ -706,6 +879,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -762,6 +936,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -796,6 +971,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
   });
@@ -857,6 +1033,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
       restored: true,
     });
@@ -883,6 +1060,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -934,6 +1112,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
 
@@ -959,6 +1138,7 @@ describe('useBatchUpload retry reuse after a total upload failure', () => {
     expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
       id: 'lake1',
       tagPrefix: 'test:',
+      slug: 'my-lake',
       organizationId: undefined,
     });
   });
@@ -1018,6 +1198,22 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     // No files, so nothing that belongs to the upload pipeline should have run.
     expect(postCall('/api/data-lakes/batches')).toBeUndefined();
     expect(uploadFileToUrlMock).not.toHaveBeenCalled();
+  });
+
+  // #3222: the fileless path has its own commit and its own Complete screen, so it needs its own
+  // wire - the batch path's assignment never runs here.
+  it('records the created lake status on the fileless path too', async () => {
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', status: 'draft' } });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
   });
 
   it('lands the wizard on the upload step with a fileless progress record', async () => {

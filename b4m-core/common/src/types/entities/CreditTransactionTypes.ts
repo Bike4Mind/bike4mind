@@ -182,7 +182,8 @@ export const ToolUsageTransaction = BaseCreditTransaction.extend({
    * model of the quest that ran the tool. The row is one aggregate over every charging
    * tool call in the quest, so this is set only when exactly one model charged; a quest
    * that charged on two or more models leaves it unset rather than naming one of them.
-   * Per-call attribution always lives on the `feature: 'tool'` UsageEventModel rows.
+   * Per-call attribution always lives on the tool's UsageEventModel rows: `feature: 'tool'`,
+   * or the media feature for the music and audio tools (see buildToolUsageEvent).
    */
   model: z.string().optional(),
   questId: z.string(),

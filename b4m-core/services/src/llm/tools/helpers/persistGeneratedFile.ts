@@ -1,4 +1,4 @@
-import { KnowledgeType } from '@bike4mind/common';
+import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
 import { createFabFile } from '../../../fabFileService/create';
 import type { ToolContext } from '../base/types';
 
@@ -11,8 +11,13 @@ import type { ToolContext } from '../base/types';
  * a broken `<img>` for non-image files like .xlsx, and (b) was never recorded as a FabFile,
  * so nothing the user can browse referenced it - the file was effectively orphaned in the
  * generated-content bucket (observed in prod: agent-generated images lost entirely).
- * Creating a FabFile with `sessionId` set makes the file appear in the Knowledge Viewer
- * via `useGetFabFilesBySessionId` -> `useMessageFiles`.
+ *
+ * The session link lives in provenance (`sourceType: TOOL_GENERATED`, `sourceMetadata.sessionId`),
+ * NOT the top-level `sessionId`. That field means "notebook summary file": the File Browser search
+ * (fabFileSearchQuery.ts) hides every row carrying it, project context feeds every such row to the
+ * LLM as a sibling-notebook summary (ChatCompletionFeatures.getProjectNotebookSummaries), and the
+ * summarizer overwrites the first one it finds with the summary text (sessionSummarization.ts).
+ * listFabFilesBySession reads the provenance link for the notebook's file view.
  *
  * Best-effort: a failure here (missing adapters, storage quota, unsupported mime) must never
  * break the tool itself - the inline `quest.images` render still works. We log and swallow.
@@ -32,7 +37,7 @@ export async function persistGeneratedFileAsFabFile(
     tags?: { name: string; strength: number }[];
   }
 ): Promise<void> {
-  const { sessionId, userId, db, storage, logger } = context;
+  const { sessionId, questId, userId, db, storage, logger } = context;
 
   // No session means nothing to attach the file to (e.g. some non-chat tool harnesses).
   if (!sessionId) return;
@@ -51,7 +56,6 @@ export async function persistGeneratedFileAsFabFile(
         type: file.type ?? KnowledgeType.FILE,
         content: file.content,
         contentType: file.mimeType,
-        sessionId,
         prefix: 'generated',
         tags: file.tags ?? [{ name: 'generated', strength: 1 }],
       },
@@ -66,6 +70,10 @@ export async function persistGeneratedFileAsFabFile(
           upload: (path, content, options) => storage.upload(content, path, options),
           generateSignedUrl: (path, expireInSeconds, type) =>
             storage.getSignedUrl(path, type ?? 'get', { expiresIn: expireInSeconds }),
+        },
+        provenance: {
+          sourceType: FabFileSourceType.TOOL_GENERATED,
+          sourceMetadata: { sessionId, ...(questId && { questId }) },
         },
       }
     );

@@ -28,7 +28,7 @@ export interface RecordOperationalUsageParams {
   /** The user's organization, when they belong to one; attribution rolls up to it. */
   organization?: IOrganizationDocument | null;
   sessionId?: string;
-  /** Data lake this call is 1:1 attributable to (ingestion embeds only). */
+  /** Data lake this call is 1:1 attributable to - ingestion embeds and research-run judge calls. */
   dataLakeId?: string;
   feature: OperationalUsageFeature;
   /** Provider/backend, e.g. 'openai', 'voyageai'. */
@@ -93,7 +93,7 @@ export interface RecordOperationalUsageAdapters {
  * The bound is uneven, so do not read this as "every caller is gated upstream". The LLM-tool and
  * knowledge-base callers pass a narrowed db with no billing repos, so they can never reach the
  * deduct path at all - their safety comes from the adapter shape, not from a gated caller. The two
- * debit-capable callers are `server/events/recordSessionOperationalUsage` and
+ * debit-capable callers are `apps/workers/src/events/recordSessionOperationalUsage` and
  * `pages/api/data-lakes/semantic-search`; both are gated at their entry points, not here.
  * semantic-search runs its own per-member-cap and pool pre-flight before embedding, and the
  * session-event publishers run `server/utils/sessionOperationalCreditPreflight` (#1852) - the

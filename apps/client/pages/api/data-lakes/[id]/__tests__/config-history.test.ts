@@ -31,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
   userRepository: {},
+  userApiKeyRepository: { mock: 'userApiKeyRepository' },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
@@ -71,6 +72,25 @@ describe('GET /api/data-lakes/[id]/config-history', () => {
       expect.objectContaining({ id: 'lake-oid-1' }),
       expect.anything()
     );
+  });
+
+  it('wires the API-key repository and passes a resolved key name through to the response', async () => {
+    const withKey = {
+      ...view,
+      entries: [{ eventId: 'e1', principalKind: 'apiKey', principalId: 'k'.repeat(24), principalName: 'CI key' }],
+    };
+    h.assembleLakeConfigHistory.mockResolvedValue(withKey);
+    const { res, json } = makeRes();
+
+    await call(req({ id: 'lake1' }), res);
+
+    expect(h.assembleLakeConfigHistory).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        db: expect.objectContaining({ userApiKeys: { mock: 'userApiKeyRepository' } }),
+      })
+    );
+    expect(json.mock.calls[0][0].data.entries[0].principalName).toBe('CI key');
   });
 
   describe('gates', () => {

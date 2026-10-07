@@ -243,5 +243,5 @@ export const downloadRelevantLinks = async (
   await queueRunner.close();
 
   researchTask.status = ResearchTaskStatus.COMPLETED;
-  await db.researchTasks.update(researchTask);
+  await db.researchTasks.update({ id: researchTask.id, status: researchTask.status });
 };

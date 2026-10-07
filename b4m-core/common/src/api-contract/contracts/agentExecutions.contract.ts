@@ -90,8 +90,8 @@ export const getAgentExecutionContract = defineEndpoint({
     'Returns the status, reasoning trace, and (once terminal) the final answer of a run started by ' +
     '`POST /api/v1/agent-executions`. `steps` grows while the run is in flight, so polling this ' +
     'endpoint is also how a REST caller follows the loop. Safe (GET) requests on this route are ' +
-    'exempt from the per-day API-key quota so polling a single run costs one daily slot, not one per ' +
-    'poll; the per-minute burst limit still applies.',
+    'exempt from the per-day API-key quota: a poll consumes no daily slot, and only the per-minute ' +
+    'burst limit applies.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],

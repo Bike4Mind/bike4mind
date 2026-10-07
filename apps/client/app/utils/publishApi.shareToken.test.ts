@@ -7,19 +7,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * so the request shape is pinned.
  */
 
-const { mockGet, mockPost } = vi.hoisted(() => ({ mockGet: vi.fn(), mockPost: vi.fn() }));
+const { mockGet, mockPost, mockDelete } = vi.hoisted(() => ({
+  mockGet: vi.fn(),
+  mockPost: vi.fn(),
+  mockDelete: vi.fn(),
+}));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: mockGet, post: mockPost, patch: vi.fn(), delete: vi.fn() },
+  api: { get: mockGet, post: mockPost, patch: vi.fn(), delete: mockDelete },
 }));
 
 vi.mock('@client/app/utils/shareFooter', () => ({ buildShareFooterHtml: () => '<footer/>' }));
 
-import { getShareTokenState } from './publishApi';
+import { getShareTokenState, createAdditionalShareToken, revokeShareLink, revokeShareToken } from './publishApi';
 
 beforeEach(() => {
   mockGet.mockReset();
   mockPost.mockReset();
+  mockDelete.mockReset();
 });
 
 describe('getShareTokenState', () => {
@@ -54,5 +59,48 @@ describe('getShareTokenState', () => {
       shareUrl: null,
       shareTokenUpdatedAt: null,
     });
+  });
+});
+
+describe('createAdditionalShareToken', () => {
+  it('POSTs additional:true, so the call adds a link instead of returning the existing one', async () => {
+    // The difference from createOrGetShareToken is the whole point: that one is idempotent and
+    // would hand back the live link rather than minting a second audience's.
+    mockPost.mockResolvedValue({
+      data: { id: 'entry-2', shareToken: 'NEW', shareUrl: '/a/NEW', shareLinks: [] },
+    });
+
+    const minted = await createAdditionalShareToken('pub-1');
+
+    expect(mockPost).toHaveBeenCalledWith('/api/publish/pub-1/share-token', { additional: true });
+    expect(minted.id).toBe('entry-2');
+    expect(minted.shareToken).toBe('NEW');
+  });
+});
+
+describe('revokeShareLink', () => {
+  it('DELETEs one link by id and reports the survivors', async () => {
+    mockDelete.mockResolvedValue({ data: { revoked: true, remaining: 2 } });
+
+    const result = await revokeShareLink('pub-1', 'entry-1');
+
+    expect(mockDelete).toHaveBeenCalledWith('/api/publish/pub-1/share-token?id=entry-1');
+    expect(result).toEqual({ remaining: 2 });
+  });
+
+  it('encodes the id, so a stray character cannot forge query parameters', async () => {
+    mockDelete.mockResolvedValue({ data: { revoked: true, remaining: 0 } });
+
+    await revokeShareLink('pub-1', 'a&b=c');
+
+    expect(mockDelete).toHaveBeenCalledWith('/api/publish/pub-1/share-token?id=a%26b%3Dc');
+  });
+
+  it('revokeShareToken still sends the id-less DELETE that revokes every link', async () => {
+    mockDelete.mockResolvedValue({ data: { revoked: true, remaining: 0 } });
+
+    await revokeShareToken('pub-1');
+
+    expect(mockDelete).toHaveBeenCalledWith('/api/publish/pub-1/share-token');
   });
 });

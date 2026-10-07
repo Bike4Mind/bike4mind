@@ -26,6 +26,7 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   useCopySessionAsMarkdown: () => mutation(),
   useDeleteSession: () => mutation(),
   useDownloadSession: () => mutation(),
+  useMoveSession: () => mutation(),
   useExportSessionToExcel: () => mutation(),
   useExportSessionToWord: () => mutation(),
   useExportSessionToHtml: () => mutation(),
@@ -33,6 +34,9 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   useSummarizeSession: () => mutation(),
   useToggleFavoriteSession: () => mutation(),
   useUpdateSessionTags: () => mutation(),
+}));
+vi.mock('@client/app/hooks/useWorkspaceTargets', () => ({
+  useWorkspaceTargets: () => ({ current: undefined, copyTargets: [], moveTargets: [] }),
 }));
 vi.mock('@client/app/hooks/data/agentProactiveMessaging', () => ({
   useTriggerProactiveMessages: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),

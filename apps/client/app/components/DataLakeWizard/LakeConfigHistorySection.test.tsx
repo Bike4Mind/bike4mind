@@ -115,6 +115,69 @@ describe('describeLakeConfigChange', () => {
       describeLakeConfigChange({ field: 'description', kind: 'literal', before: 'a', after: 'b', truncated: true })
     ).toBe('a -> b (clipped)');
   });
+
+  it('renders a first-time value as "set to", not as a move from "not set"', () => {
+    expect(describeLakeConfigChange({ field: 'requiredUserTag', kind: 'literal', after: 'staff' })).toBe(
+      'set to staff'
+    );
+  });
+
+  it('renders a cleared value with what it was', () => {
+    expect(describeLakeConfigChange({ field: 'requiredUserTag', kind: 'literal', before: 'staff' })).toBe(
+      'cleared (was staff)'
+    );
+  });
+
+  it('renders an event field as its value alone - there is no prior state to show', () => {
+    expect(describeLakeConfigChange({ field: 'proposalReview', kind: 'literal', after: 'declined: Report' })).toBe(
+      'declined: Report'
+    );
+    expect(describeLakeConfigChange({ field: 'upload', kind: 'literal', after: '3 files added' })).toBe(
+      '3 files added'
+    );
+  });
+
+  it('renders status with the labels the rest of the UI uses', () => {
+    expect(describeLakeConfigChange({ field: 'status', kind: 'literal', before: 'draft', after: 'active' })).toBe(
+      'Draft -> Published'
+    );
+    expect(describeLakeConfigChange({ field: 'status', kind: 'literal', after: 'draft' })).toBe('set to Draft');
+  });
+
+  it('degrades an unknown stored status to its raw value', () => {
+    expect(describeLakeConfigChange({ field: 'status', kind: 'literal', before: 'active', after: 'frozen' })).toBe(
+      'Published -> frozen'
+    );
+  });
+
+  it('renders origin and grounding mode with the labels the settings modal uses', () => {
+    expect(describeLakeConfigChange({ field: 'origin', kind: 'literal', after: 'curated' })).toBe('set to Curated');
+    expect(
+      describeLakeConfigChange({ field: 'origin', kind: 'literal', before: 'curated', after: 'connector-fed' })
+    ).toBe('Curated -> Connector-fed');
+    expect(describeLakeConfigChange({ field: 'groundingMode', kind: 'literal', after: 'retrieve' })).toBe(
+      'set to Retrieve'
+    );
+    expect(
+      describeLakeConfigChange({ field: 'groundingMode', kind: 'literal', before: 'inline', after: 'auto-by-size' })
+    ).toBe('Inline into the prompt -> Auto (decide by size)');
+  });
+
+  it('never resolves a stored value to a prototype member of a label map', () => {
+    expect(describeLakeConfigChange({ field: 'status', kind: 'literal', after: 'constructor' })).toBe(
+      'set to constructor'
+    );
+    expect(describeLakeConfigChange({ field: 'origin', kind: 'literal', after: 'toString' })).toBe('set to toString');
+  });
+
+  it('renders an access grant as set and cleared, with the grant spelled out', () => {
+    expect(describeLakeConfigChange({ field: 'accessGrant', kind: 'literal', after: 'user:u1=reader' })).toBe(
+      'set to user:u1=reader'
+    );
+    expect(describeLakeConfigChange({ field: 'accessGrant', kind: 'literal', before: 'user:u1=curator' })).toBe(
+      'cleared (was user:u1=curator)'
+    );
+  });
 });
 
 describe('identity values in describeLakeConfigChange', () => {
@@ -160,6 +223,16 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getAllByTestId('datalake-config-history-row')).toHaveLength(2);
   });
 
+  it('prints the time zone with the timestamp, so it is not lined up against UTC-day surfaces wrongly', () => {
+    const changedAt = new Date('2026-08-17T10:30:00Z');
+    renderSection({ view: view({ entries: [entry({ changedAt })] }) });
+    const zone = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' })
+      .formatToParts(changedAt)
+      .find(part => part.type === 'timeZoneName')?.value;
+    expect(zone).toBeTruthy();
+    expect(screen.getByTestId('datalake-config-history-row')).toHaveTextContent(zone!);
+  });
+
   it('shows who changed it, by name, with the authorizing rung', () => {
     renderSection();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
@@ -192,6 +265,30 @@ describe('LakeConfigHistorySection', () => {
       }),
     });
     expect(screen.getByText(/for Grace Hopper/)).toBeInTheDocument();
+  });
+
+  it('truncates an unresolved API key id in the Who cell instead of letting it overflow the next column', () => {
+    const keyId = '6650f1c2a9b3e4d5f6071829';
+    const ownerId = '6650f1c2a9b3e4d5f607182c';
+    renderSection({
+      view: view({
+        entries: [
+          entry({ principalKind: 'apiKey', principalId: keyId, principalName: undefined, onBehalfOfUserId: ownerId }),
+        ],
+      }),
+    });
+    const kindLine = `apiKey (for ${ownerId})`;
+    for (const [line, text] of [
+      [screen.getByTestId('datalake-config-history-who'), keyId],
+      [screen.getByText(kindLine), kindLine],
+    ] as const) {
+      expect(line).toHaveTextContent(text);
+      expect(line).toHaveAttribute('title', text);
+      const style = getComputedStyle(line);
+      expect(style.whiteSpace).toBe('nowrap');
+      expect(style.overflow).toBe('hidden');
+      expect(style.textOverflow).toBe('ellipsis');
+    }
   });
 
   it('renders a long system prompt in the fingerprint form and NEVER the prompt text', () => {
@@ -235,6 +332,82 @@ describe('LakeConfigHistorySection', () => {
     expect(screen.getAllByTestId('datalake-config-history-change')).toHaveLength(2);
     expect(screen.getByText('Public')).toBeInTheDocument();
     expect(screen.getByText('off -> on')).toBeInTheDocument();
+  });
+
+  // A reviewer's approve/decline/restore decision left no trace in this tab at all.
+  it('renders a proposal-review decision with its action label and source', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'approve-proposal',
+            changes: [{ field: 'proposalReview', kind: 'literal', after: 'approved: https://example.com/report' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Proposal approved')).toBeInTheDocument();
+    expect(screen.getByText('Proposal review')).toBeInTheDocument();
+    expect(screen.getByText('approved: https://example.com/report')).toBeInTheDocument();
+  });
+
+  // A saved research config's create/update/delete left no trace in this tab at all.
+  it('renders a research-config change with its action label and encoded name', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'update-research-config',
+            changes: [{ field: 'researchConfig', kind: 'literal', after: 'updated: Coastal erosion' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Research configuration updated')).toBeInTheDocument();
+    expect(screen.getByText('Research configuration')).toBeInTheDocument();
+    expect(screen.getByText('updated: Coastal erosion')).toBeInTheDocument();
+  });
+
+  // A run reaching an outcome left no trace in this tab either - the executor's own half of the
+  // start/outcome pair `startResearchRun.ts`/`runLakeResearch.ts` record.
+  it('renders a research-run outcome with its action label and encoded query and run id', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            action: 'complete-research-run',
+            manageRung: 'system',
+            changes: [{ field: 'researchRun', kind: 'literal', after: 'completed: coastal erosion (run run-7)' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Research run finished')).toBeInTheDocument();
+    expect(screen.getByText('Research run')).toBeInTheDocument();
+    expect(screen.getByText('completed: coastal erosion (run run-7)')).toBeInTheDocument();
+  });
+
+  it('renders a lake-creation row and an upload row with their action labels', () => {
+    renderSection({
+      view: view({
+        entries: [
+          entry({
+            eventId: 'evt-create',
+            action: 'create',
+            changes: [{ field: 'name', kind: 'literal', after: 'Sales' }],
+          }),
+          entry({
+            eventId: 'evt-upload',
+            action: 'upload-files',
+            changes: [{ field: 'upload', kind: 'literal', after: '12 files added (2 failed)' }],
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText('Data lake created')).toBeInTheDocument();
+    expect(screen.getByText('set to Sales')).toBeInTheDocument();
+    expect(screen.getByText('Files uploaded')).toBeInTheDocument();
+    expect(screen.getByText('12 files added (2 failed)')).toBeInTheDocument();
   });
 
   // These rows are retained for 1095-3650 days, so one can outlive the enum that named it. An

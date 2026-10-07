@@ -5,6 +5,7 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 // note in tools.contract.ts).
 import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
+import { FallbackInfoSchema } from './llm';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -23,6 +24,11 @@ import { PROMPT_TEXT_MAX } from './briefcasePrompt';
  */
 export const SimplifiedChatRequestSchema = z.object({
   sessionId: z.string().nullish(), // Accepts string, null, or undefined - null treated as "not provided"
+  // Force a brand-new notebook for this turn, regardless of auth mode. Mutually exclusive with
+  // `sessionId` - sending both is a 422. It never reads or writes `lastNotebookId`, so it cannot
+  // reopen (or repoint) the notebook the human last had open. The new notebook's id is returned
+  // as `sessionId`, so a caller continues the conversation by passing that back.
+  newConversation: z.boolean().optional(),
   message: z.string(),
   // Billing target. When set, the turn is billed to this organization's credit pool - but only
   // after the handler validates the caller actually belongs to it (never trusted as-is; see
@@ -135,7 +141,7 @@ export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
 /**
  * Async ACK returned on the default (wait:false) path of POST /api/chat. The
  * `type`/`errorCode` pair below is the same classifier the `wait: true` body and
- * the polled quest (`GET /api/quests/{id}`) carry, so it is modelled once here -
+ * the polled quest (`GET /api/v1/quests/{id}`) carry, so it is modelled once here -
  * the rest of those two bodies is NOT described by this schema. The
  * handler assembles the ack body inline (apps/client/pages/api/chat.ts), so
  * this schema MUST stay in sync with that `res.json({...})` shape.
@@ -146,9 +152,15 @@ export const ChatAckSchema = z.object({
   message_received: z.boolean(),
   timestamp: z.string(),
   model: z.string(),
+  // The notebook/session this turn was recorded in. Present on both the async ACK and the
+  // `wait: true` body. When the request carried no `sessionId` (an API-key caller, or
+  // `newConversation: true`), this is a freshly created notebook's id - pass it back as the
+  // request's `sessionId` to continue that conversation. A JWT caller with no `sessionId`
+  // gets back the notebook they last had open, unchanged.
+  sessionId: z.string().optional(),
   message: z.string().optional(),
   // Present unconditionally on the `wait: true` body, carrying the quest's own value -
-  // same as the polled quest (`GET /api/quests/{id}`). Absent only on the immediate async
+  // same as the polled quest (`GET /api/v1/quests/{id}`). Absent only on the immediate async
   // ack, where nothing has run yet. `type` (not `errorCode`) is what separates a
   // failure from an answer: it is `'error'` for every failure class that sets it, coded
   // or not.
@@ -192,34 +204,36 @@ export const ChatAckSchema = z.object({
 export type ChatAck = z.infer<typeof ChatAckSchema>;
 
 /**
- * The quest a `wait: false` caller polls at `GET /api/quests/{id}` - the outcome
+ * The quest a `wait: false` caller polls at `GET /api/v1/quests/{id}` - the outcome
  * of the turn the ACK above only acknowledged.
  *
- * Deliberately the OUTCOME SUBSET, not the whole quest: that endpoint is a plain
- * handler rather than a contract, so this models only what decides whether the
- * turn succeeded, and a poll body carries further fields (`images`, `files`,
- * `toolPayloads`, `promptMeta`, ...). Must stay in sync with that handler's
- * `res.json` shape (apps/client/pages/api/quests/[id]/index.ts) - unlike a
- * contract-registered request/response schema, nothing validates this at
- * runtime. The "parses against the published ChatQuestPollResultSchema"
- * integration test (index.integration.test.ts) only proves the handler's
- * CURRENT response satisfies this schema - a non-strict `z.object` strips
- * unknown keys rather than rejecting them, and only `id` is required, so a
- * field the handler starts returning without a matching addition here keeps
- * that test green. The real per-field coverage lives in the sibling
- * assertions in that same test file; a shape addition still needs a schema
- * update by hand.
+ * Deliberately the OUTCOME SUBSET, not the whole quest: it models only what decides
+ * whether the turn succeeded. The full response of that endpoint is
+ * QuestPollResponseSchema (schemas/quest.ts), which extends this schema and is
+ * the 200 body of the `getQuest` contract.
  *
  * A failed turn is still `status: 'done'` with the failure text in `reply`, so
  * `reply` alone cannot tell an answer from a failure - `type` and `errorCode` are
- * what separate a CLASSIFIED failure. A run recovered from a timeout with partial
- * content is not one of those: `terminalRecoveryFor` (questTimeoutRecovery.ts)
- * flips only `status` to preserve the surviving content, so it polls back as
- * `type: 'message'` even though it never finished.
+ * what separate a CLASSIFIED failure. A run that died with partial content is not
+ * one of those: `terminalRecoveryFor` (questTimeoutRecovery.ts) keeps the surviving
+ * content, so it polls back as `type: 'message'`. What marks it unfinished is
+ * `promptMeta.finishReason` - RUN_TIMED_OUT_FINISH_REASON or
+ * RUN_ABANDONED_FINISH_REASON (utils/stopReasons.ts) - plus a notice appended to
+ * the reply.
  */
+// Exported so the /api/quests/[id] handler can build its response from this schema
+// instead of hand-listing the same fields, which would let the two drift apart silently.
+export const PolledFallbackInfoSchema = FallbackInfoSchema.pick({
+  primaryModel: true,
+  primaryModelName: true,
+  fallbackModel: true,
+  fallbackModelName: true,
+  reason: true,
+});
+
 export const ChatQuestPollResultSchema = z.object({
   id: z.string(),
-  status: z.enum(['stopped', 'running', 'done']).optional(),
+  status: z.enum(['pending', 'stopped', 'running', 'done']).optional(),
   // A finished turn that FAILED is `type: 'error'` carrying the failure text in
   // `reply`; anything else is a real reply.
   // Derived from CHAT_HISTORY_ITEM_TYPES, like ChatAckSchema's twin above:
@@ -231,8 +245,14 @@ export const ChatQuestPollResultSchema = z.object({
   // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
   // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).
   errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+  // The visible answer text, derived from `replies` when the poll body is built: thinking blocks
+  // and a choices block in the final answer slot stripped, slots joined. `replies` is the raw
+  // stored slots.
   reply: z.string().nullable().optional(),
   replies: z.array(z.string()).optional(),
+  // Present only when the requested model failed and another one answered. The answer in
+  // `reply` came from `fallbackModel`; `primaryModel` is what the caller asked for.
+  fallbackInfo: PolledFallbackInfoSchema.optional(),
 });
 
 export type ChatQuestPollResult = z.infer<typeof ChatQuestPollResultSchema>;
@@ -272,4 +292,27 @@ export const InsufficientCreditsErrorSchema = ApiErrorSchema.extend({
   // `satisfies` ties the literal to the shared vocabulary in apiErrorCodes.ts,
   // so a rename there breaks this rather than silently publishing a dead code.
   errorCode: z.literal('insufficient_credits' satisfies ApiErrorCode).optional(),
+});
+
+/** 503 when this deployment has no usable key for a provider the request needs (data-lake search, voice). */
+export const ProviderNotConfiguredErrorSchema = ApiErrorSchema.extend({
+  errorCode: z.literal('provider_not_configured' satisfies ApiErrorCode).optional(),
+});
+
+/**
+ * Error envelope for the 403 apiKeyAuth (apps/client/server/middlewares/apiKeyAuth.ts)
+ * throws when an API key lacks a route's scopes. It names what the ROUTE requires,
+ * never what the key holds, so a caller knows which scope to mint a key with.
+ * Values are `ApiKeyScope` strings; plain `z.string()` because the enum's module is
+ * not import-safe for the install-only openapi job (see the import note above).
+ */
+export const ScopeForbiddenErrorSchema = ApiErrorSchema.extend({
+  required_scopes: z
+    .array(z.string())
+    .optional()
+    .describe('API key scopes this route accepts. Holding any one of them satisfies it.'),
+  also_required_scopes: z
+    .array(z.string())
+    .optional()
+    .describe('API key scopes this route also requires. Every one must be held, on top of `required_scopes`.'),
 });

@@ -29,7 +29,7 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
   isGPTImageModel,
   MAX_REFERENCE_IMAGES,
   supportsImageEdit,
@@ -72,6 +72,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
+import { recordGeneratedImages } from './recordGeneratedImages';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -108,6 +109,8 @@ interface IImageEditServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -194,7 +197,7 @@ export class ImageEditService {
     // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
     // promptMeta is built, so the persisted model matches what actually renders and bills.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
@@ -219,12 +222,34 @@ export class ImageEditService {
     if (questId) {
       quest = await this.db.quests.findById(questId);
       if (!quest) throw new NotFoundError('Quest not found');
+      // Same retry-to-session binding as ChatCompletionInvoke: sessionId is access-checked at the
+      // route, so a quest from another session is refused with the generic missing-quest 404.
+      if (quest.sessionId !== sessionId) {
+        Logger.globalInstance.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+        throw new NotFoundError('Quest not found');
+      }
       // If the quest is a retry, we need to clear out the replies and images
       quest.images = [];
       quest.replies = [];
       quest.status = undefined;
+      // A failed run leaves `type: 'error'`, and the success path never resets it, so a successful
+      // retry would still tell pollers and the callback to discard the render.
+      quest.type = 'message';
+      quest.errorCode = undefined;
       quest.promptMeta = promptMeta;
-      await this.db.quests.update(quest);
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once, and a stale errorCode
+      // would outlive a successful retry. Unset both explicitly (mirrors ChatCompletionInvoke).
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          type: quest.type,
+          promptMeta: quest.promptMeta,
+        },
+        { unset: ['status', 'errorCode'] }
+      );
     } else {
       // Create the associated quest record.  We'll update this as we go.
       quest = await this.db.quests.create({
@@ -259,10 +284,13 @@ export class ImageEditService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     return quest;
@@ -400,7 +428,9 @@ export class ImageEditService {
     // silently turn a valid request into an opaque image. Resolved before billing so
     // credits key off the model actually used.
     const model =
-      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
+      background === 'transparent' && rejectsTransparentBackground(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -433,8 +463,8 @@ export class ImageEditService {
 
     const clientMessageSender = new ClientMessageSender(this.db, logger);
     const wsEndpoint = this.wsHttpsUrl;
-    // Assigned inside the try so a failed lookup lands on the quest as an error rather than
-    // escaping this method; the finally's mask cleanup reads it either way.
+    // Assigned inside the try, and only once every requested id resolves: the finally's mask
+    // cleanup reads it, so an access-guard failure leaves the painted mask in place for the retry.
     let fabFiles: IFabFileDocument[] = [];
 
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
@@ -470,7 +500,7 @@ export class ImageEditService {
       // Access-scoped: a caller-supplied mask id the caller cannot reach is never presigned and
       // never fed to a provider as an alpha channel.
       const requestedFabFileIds = [...new Set(fabFileIds ?? [])];
-      fabFiles = await this.db.fabFiles.findAccessibleInIds(
+      const accessibleFabFiles = await this.db.fabFiles.findAccessibleInIds(
         requestedFabFileIds,
         { userId, userGroups: user.groups ?? undefined },
         lakeAccess
@@ -487,9 +517,10 @@ export class ImageEditService {
       // behalf, and a draft-lake file the workbench itself admitted is exactly the case that
       // reaches this (#3279).
       //
-      // The `finally` cleanup reads the same list, so an unresolved id also stops reaching
-      // deleteFabFile - which already refused it.
-      const resolvedIds = new Set(fabFiles.map(file => file.id));
+      // The `finally` cleanup only sees this list once the guard passes, so neither an unresolved
+      // id (which deleteFabFile already refused) nor a resolved mask sent alongside it is deleted
+      // on this failure - the caller retries with the same mask id after removing the bad one.
+      const resolvedIds = new Set(accessibleFabFiles.map(file => file.id));
       const unresolvedIds = requestedFabFileIds.filter(id => !resolvedIds.has(id));
       if (unresolvedIds.length > 0) {
         // Separated because the remedies differ: a deny is the caller's to clear, an outage is
@@ -504,6 +535,7 @@ export class ImageEditService {
           `Attached file ${unresolvedIds.join(', ')} was not found or is not accessible. Remove it from the workbench and try again.`
         );
       }
+      fabFiles = accessibleFabFiles;
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
 
@@ -752,7 +784,16 @@ export class ImageEditService {
       quest.replies = [];
       quest.images = [path];
       quest.status = 'done';
-      await this.db.quests.update(quest);
+      await this.db.quests.update({
+        id: quest.id,
+        reply: quest.reply,
+        replies: quest.replies,
+        images: quest.images,
+        status: quest.status,
+        creditsUsed: quest.creditsUsed,
+      });
+
+      await recordGeneratedImages(this.db.sessions, sessionId, 1, logger);
 
       // Remove prompt loading message on the client
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
@@ -782,8 +823,10 @@ export class ImageEditService {
           }
         );
 
-        // Dual-write usage event: analytics only, never billing.
-        this.db.usageEvents
+        // Dual-write usage event: analytics only, never billing. Awaited because a write still in
+        // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
+        // from failing the request.
+        await this.db.usageEvents
           ?.record({
             requestId: questId,
             userId,
@@ -835,15 +878,20 @@ export class ImageEditService {
       // Always stop the running-status heartbeat, on success or error. The terminal write above
       // owns the final status.
       stopHeartbeat?.();
-      // Clean up the mask fab files in finally block to ensure they're always deleted
+      // Clean up the mask fab files in finally block to ensure they're always deleted.
+      // Awaited, not fire-and-forget: this runs in a queue Lambda, which freezes as soon as process()
+      // resolves, so a dropped delete never finishes and the mask stays in the user's files.
       Logger.globalInstance.debug('[DEBUG] Deleting mask fab files:');
-      await Promise.allSettled(
-        fabFiles
-          .filter(file => file.fileName.startsWith('image_mask'))
-          .map(async file => {
-            this.deleteFabFile(userId, file.id);
-          })
-      );
+      const maskFiles = fabFiles.filter(file => file.fileName.startsWith('image_mask'));
+      const deletions = await Promise.allSettled(maskFiles.map(file => this.deleteFabFile(userId, file.id)));
+      deletions.forEach((result, i) => {
+        if (result.status === 'rejected') {
+          logger.warn('[ImageEdit] Failed to delete temporary mask file', {
+            fileId: maskFiles[i].id,
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+          });
+        }
+      });
     }
   }
 }

@@ -145,12 +145,18 @@ export const MIME_TYPE_MAP: Record<string, string> = {
   '.7z': 'application/x-7z-compressed',
   // Code/Config
   '.js': 'text/javascript',
+  '.jsx': 'text/javascript',
   '.ts': 'text/typescript',
+  '.tsx': 'text/typescript',
   '.py': 'text/x-python',
   '.java': 'text/x-java-source',
   '.yaml': 'text/yaml',
   '.yml': 'text/yaml',
   '.log': 'text/plain',
+  '.mmd': 'text/plain',
+  '.css': 'text/css',
+  '.sh': 'text/x-sh',
+  '.sql': 'text/x-sql',
 };
 
 /**

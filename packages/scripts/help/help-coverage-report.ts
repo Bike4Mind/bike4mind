@@ -16,6 +16,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import { loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -118,7 +119,7 @@ async function main(): Promise<void> {
 }
 
 // Only run when invoked directly (not when imported by tests)
-if (process.argv[1] && process.argv[1].endsWith('help-coverage-report.ts')) {
+if (isDirectInvocation(import.meta.url)) {
   main().catch(error => {
     console.error('Failed to generate help coverage report:', error);
     process.exit(1);

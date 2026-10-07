@@ -10,6 +10,7 @@ import {
   FormLabel,
   Input,
   Modal,
+  ModalClose,
   ModalDialog,
   Option,
   Radio,
@@ -41,6 +42,8 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import { useActivatablePrompts } from '@client/app/hooks/data/useActivatablePrompts';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { useConfirmation } from '@client/app/hooks/useConfirmation';
+import { researchDefaultModelLabel, researchJudgeModelOptions } from '@client/app/utils/researchJudgeModels';
 import { useFeatureFlags } from '@client/app/hooks/useAdminSettingsCache';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import {
@@ -54,15 +57,15 @@ import {
 } from '@bike4mind/common';
 import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
+import { gateWriteWidensReadership } from '@bike4mind/services/lakeGateWideningRule';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
-import { DataLakeProposalsPanel } from './DataLakeProposalsPanel';
+import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
 import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
-/** The modal's tabs. Settings is always present; the other four are each permission-gated and only
- *  appear when they have content - see showSpendTab / showHistoryTab / showProposalsTab /
- *  showResearchTab. */
+/** The modal's tabs. Settings is always present; the other four are each permission-gated - see
+ *  showSpendTab / showHistoryTab / showProposalsTab / showResearchTab. */
 type DataLakeSettingsTab = 'settings' | 'spend' | 'history' | 'proposals' | 'research';
 
 /** Human-facing labels + helper copy for the grounding-mode picker, keyed by the shared enum. */
@@ -70,6 +73,16 @@ const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
   retrieve: 'Retrieve (recommended)',
   inline: 'Inline into the prompt',
   'auto-by-size': 'Auto (decide by size)',
+};
+
+/**
+ * Joy's Select portals its listbox but keeps it in the modal's React tree, so the Escape that closes an
+ * open listbox bubbles on to the Modal as well. Focus stays on the Select button while it is open, and
+ * its aria-expanded has not re-rendered yet when the Modal sees the key.
+ */
+const isEscapeFromOpenListbox = (event: unknown): boolean => {
+  const target = (event as { target?: unknown } | null)?.target;
+  return target instanceof Element && !!target.closest('[aria-expanded="true"], [role="listbox"]');
 };
 
 /** Human-facing labels for the origin picker, keyed by the shared enum. */
@@ -93,6 +106,11 @@ export interface EditableLake {
    * sends it only to a lake's editors), so the field renders off `canManage`, never off this.
    */
   systemPrompt: string;
+  /**
+   * Whether the system prompt also steers tag/entitlement readers on sessions scoped to this lake
+   * (see IDataLake.injectPromptForReaders). Editor-only control, always a concrete boolean.
+   */
+  injectPromptForReaders: boolean;
   /**
    * Preferred registry system prompt bound to this lake, by promptId ('' = none). Editor-only,
    * same as systemPrompt: the field renders off `canManage`, not off this value.
@@ -132,6 +150,8 @@ export interface EditableLake {
    * Origin, Required passage size).
    */
   canManage: boolean;
+  /** Owner per isEffectiveOwner, server-computed (see ManageableDataLakeConfig.isOwn). Gates who may widen sharing. */
+  isOwn: boolean;
   /**
    * Lifetime embedding-spend meter, ALWAYS present (defaulted to 0) when canManage - its
    * presence, not its value, is the signal that gates the Spend tab (see
@@ -140,12 +160,34 @@ export interface EditableLake {
   embeddingSpendMicroUsd?: number;
 }
 
+/** The form's starting values for a lake - what it is seeded with, and what "unsaved edits" is measured against. */
+const formSeed = (lake: EditableLake) => ({
+  name: lake.name,
+  description: lake.description,
+  requiredUserTag: lake.requiredUserTag,
+  requiredEntitlement: lake.requiredEntitlement,
+  // Defensive fallback: the type promises a string, but a caller that forgets to normalize a server
+  // response missing this field would otherwise set state to undefined and crash the character-count
+  // helper text below (`.trim()` on undefined).
+  systemPrompt: lake.systemPrompt ?? '',
+  injectPromptForReaders: lake.injectPromptForReaders,
+  preferredSystemPromptId: lake.preferredSystemPromptId ?? '',
+  groundingMode: lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+  origin: lake.origin ?? DEFAULT_DATA_LAKE_ORIGIN,
+  lakeMemoryEnabled: lake.lakeMemoryEnabled,
+  requiredPassageTokenTarget:
+    typeof lake.requiredPassageTokenTarget === 'number' ? String(lake.requiredPassageTokenTarget) : '',
+});
+
 /**
  * Edit a lake's metadata (rename, description, access gate). Gate fields are always sent,
  * including when blank: the backend reads '' as "remove this gate", so a lake gated by
  * mistake can be returned to ungated. Ungated is NOT world-readable - the lake falls back
  * to its Visibility (private/organization/public), per Private-by-default on the server.
  */
+
+const ownerOnlyMsg = "Only the lake's owner can change who it is shared with.";
+
 export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | null; onClose: () => void }) {
   const updateLake = useUpdateDataLake();
   const setVisibility = useSetLakeVisibility();
@@ -166,24 +208,27 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // lake list already carries): there is no precomputed "has proposals" signal, and a queue tab
   // that only appears after you click it would never be found. One small read per modal open.
   const proposals = useDataLakeProposals(lake?.id ?? null, 'pending', { enabled: !!lake?.canManage });
+  // Also fetched on open: a lake whose every proposal was declined still needs the tab, or its
+  // tombstones could never be seen or restored.
+  const declinedProposals = useDataLakeProposals(lake?.id ?? null, 'declined', { enabled: !!lake?.canManage });
+  // Keyed by lake, so switching lakes lands on the pending queue again rather than carrying over
+  // whichever view was open on the previous lake.
+  const [proposalsViewFor, setProposalsViewFor] = useState<{ lakeId: string; view: ProposalsView } | null>(null);
+  const proposalsView: ProposalsView =
+    proposalsViewFor && proposalsViewFor.lakeId === lake?.id ? proposalsViewFor.view : 'pending';
+  const shownProposals = proposalsView === 'declined' ? declinedProposals : proposals;
   const reviewProposal = useReviewDataLakeProposal(lake?.id ?? '');
-  // Hidden while the queue is empty rather than shown with an empty state: until a producer runs
-  // there is nothing to review, and a permanently-empty tab reads as a broken feature.
-  const queueHasItems = !!lake?.canManage && !proposals.isForbidden && (proposals.data?.length ?? 0) > 0;
-  // STICKY for as long as the modal is open. Deriving visibility purely from the current count meant
-  // ruling on the last proposal made the tab vanish under the reviewer mid-action, silently
-  // relocating them to the Settings form - which reads as the app losing their place, and hid the
-  // confirmation that they had finished. Sticky keeps them on a "nothing waiting" panel instead, and
-  // the tab is still absent on the next open, so an always-empty tab never appears.
-  // Stores WHICH lake earned the tab rather than a bare boolean, so switching lakes invalidates it by
-  // comparison. A separate reset effect would race this one on mount - whichever is declared last
-  // wins, which silently defeated the stickiness.
-  const [queueSeenFor, setQueueSeenFor] = useState<string | null>(null);
-  useEffect(() => {
-    if (queueHasItems && lake?.id) setQueueSeenFor(lake.id);
-  }, [queueHasItems, lake?.id]);
-  const showProposalsTab =
-    (queueHasItems || (!!lake?.id && queueSeenFor === lake.id)) && !!lake?.canManage && !proposals.isForbidden;
+  // Always derived from the pending fetch above (not gated on the declined tab being open), so a
+  // declined row superseded by a still-pending proposal for the same source reads as superseded the
+  // moment the declined tab is opened, rather than only after the pending tab has been visited once.
+  const pendingCanonicalSourceKeys = useMemo(
+    () => new Set((proposals.data ?? []).map(p => p.canonicalSourceKey)),
+    [proposals.data]
+  );
+  // Shown even while the queue is empty: the Research tab tells a curator its results land "in the
+  // Proposals queue", so the queue has to be findable before the first proposal arrives. The empty
+  // state explains how proposals get there.
+  const showProposalsTab = !!lake?.canManage && !proposals.isForbidden;
   // Research (#1682) is fetched only while its tab is open, like spend and history: unlike the
   // Proposals queue there is nothing about it the tab label needs to count.
   const researchConfigs = useDataLakeResearchConfigs(lake?.id ?? null, {
@@ -194,16 +239,22 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const updateResearchConfig = useUpdateDataLakeResearchConfig(lake?.id ?? '');
   const deleteResearchConfig = useDeleteDataLakeResearchConfig(lake?.id ?? '');
   const startResearchRun = useStartDataLakeResearchRun(lake?.id ?? '');
-  // Shown unconditionally to a manager, unlike Proposals: this tab is where a configuration is
-  // CREATED, so hiding it while there are none would hide the only way to make one.
+  // Shown to a manager even with no configuration: this tab is where one is CREATED.
   const showResearchTab = !!lake?.canManage && !researchConfigs.isForbidden;
   const { data: modelCatalog } = useModelInfo();
-  // Text models only - the judge reads a title and a snippet and answers with a number.
-  const researchModelOptions = useMemo(
-    () =>
-      (modelCatalog ?? []).filter(model => model.type === 'text').map(model => ({ id: model.id, name: model.name })),
-    [modelCatalog]
-  );
+  const researchModelOptions = useMemo(() => researchJudgeModelOptions(modelCatalog ?? []), [modelCatalog]);
+  const researchDefaultModel = useMemo(() => researchDefaultModelLabel(modelCatalog ?? []), [modelCatalog]);
+  const confirm = useConfirmation();
+  const confirmDeleteResearchConfig = (configId: string) => {
+    const name = researchConfigs.data?.find(config => config.id === configId)?.name;
+    confirm({
+      type: 'danger',
+      title: 'Delete research configuration',
+      description: `${name ? `"${name}"` : 'This configuration'} will be deleted. Its past runs stay in the history.`,
+      okLabel: 'Delete',
+      onOk: () => deleteResearchConfig.mutate(configId),
+    });
+  };
   // A tab that has just been retracted must not stay selected, or the panel renders blank.
   const activeTab: DataLakeSettingsTab =
     (tab === 'spend' && !showSpendTab) ||
@@ -213,11 +264,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       ? 'settings'
       : tab;
   const showTabs = showSpendTab || showHistoryTab || showProposalsTab || showResearchTab;
-  // Two DIFFERENT facts about a tab that merely coincide today, kept apart on purpose: collapsing
-  // them means a future narrow read-only tab silently gets a Save button it must not have.
-  // Every non-settings panel is tabular and needs the room; the settings form does not.
-  const isWideTab =
-    activeTab === 'spend' || activeTab === 'history' || activeTab === 'proposals' || activeTab === 'research';
+  const dialogWidth = showTabs ? '44rem' : '28rem';
   // Research saves through its own per-configuration buttons, so the modal's Save must stay away
   // from it - it would submit the lake settings form the user is not looking at.
   const isReadOnlyTab =
@@ -240,6 +287,12 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const hasGate = !!(lake?.requiredUserTag || lake?.requiredEntitlement);
   // Publishing exposes every file in the lake to all users, so it takes an explicit confirm.
   const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  const [researchDirty, setResearchDirty] = useState(false);
+  const [proposalsDirty, setProposalsDirty] = useState(false);
+  // Snapshotted with the form, not rebuilt from the live `lake`: a background refetch that brings in
+  // someone else's rename would otherwise count as an edit here.
+  const [seed, setSeed] = useState<ReturnType<typeof formSeed> | null>(null);
   const [testScopeOpen, setTestScopeOpen] = useState(false);
   const startChatWithLakes = useStartChatWithLakes();
   const [startingTestChat, setStartingTestChat] = useState(false);
@@ -253,6 +306,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [injectPromptForReaders, setInjectPromptForReaders] = useState(false);
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
   const [origin, setOrigin] = useState<DataLakeOrigin>(DEFAULT_DATA_LAKE_ORIGIN);
@@ -284,21 +338,19 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // background refresh (e.g. after a visibility change) from clobbering in-progress edits.
   useEffect(() => {
     if (lake) {
-      setName(lake.name);
-      setDescription(lake.description);
-      setRequiredUserTag(lake.requiredUserTag);
-      setRequiredEntitlement(lake.requiredEntitlement);
-      // Defensive fallback: the type promises a string, but a caller that forgets to
-      // normalize a server response missing this field would otherwise set state to
-      // undefined and crash the character-count helper text below (`.trim()` on undefined).
-      setSystemPrompt(lake.systemPrompt ?? '');
-      setPreferredSystemPromptId(lake.preferredSystemPromptId ?? '');
-      setGroundingMode(lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE);
-      setOrigin(lake.origin ?? DEFAULT_DATA_LAKE_ORIGIN);
-      setLakeMemoryEnabled(lake.lakeMemoryEnabled);
-      setRequiredPassageTokenTarget(
-        typeof lake.requiredPassageTokenTarget === 'number' ? String(lake.requiredPassageTokenTarget) : ''
-      );
+      const initial = formSeed(lake);
+      setSeed(initial);
+      setName(initial.name);
+      setDescription(initial.description);
+      setRequiredUserTag(initial.requiredUserTag);
+      setRequiredEntitlement(initial.requiredEntitlement);
+      setSystemPrompt(initial.systemPrompt);
+      setInjectPromptForReaders(initial.injectPromptForReaders);
+      setPreferredSystemPromptId(initial.preferredSystemPromptId);
+      setGroundingMode(initial.groundingMode);
+      setOrigin(initial.origin);
+      setLakeMemoryEnabled(initial.lakeMemoryEnabled);
+      setRequiredPassageTokenTarget(initial.requiredPassageTokenTarget);
     }
     setTab('settings');
     // Intentional id-keying: seed once per lake, not on every live-object refetch.
@@ -311,7 +363,33 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     // Reset-on-lake-change is the intent, so the setState here is deliberate.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setConfirmPublicOpen(false);
+    setConfirmDiscardOpen(false);
   }, [lake?.id]);
+
+  const settingsDirty =
+    !!lake &&
+    !!seed &&
+    (name !== seed.name ||
+      description !== seed.description ||
+      requiredUserTag !== seed.requiredUserTag ||
+      requiredEntitlement !== seed.requiredEntitlement ||
+      systemPrompt !== seed.systemPrompt ||
+      injectPromptForReaders !== seed.injectPromptForReaders ||
+      preferredSystemPromptId !== seed.preferredSystemPromptId ||
+      groundingMode !== seed.groundingMode ||
+      origin !== seed.origin ||
+      lakeMemoryEnabled !== seed.lakeMemoryEnabled ||
+      requiredPassageTokenTarget !== seed.requiredPassageTokenTarget);
+  // Escape, the backdrop and the close button all come through here; Cancel and a successful save
+  // close directly, since both are the user deciding what happens to the edits.
+  const requestClose = () => {
+    if (settingsDirty || researchDirty || proposalsDirty) setConfirmDiscardOpen(true);
+    else onClose();
+  };
+  const discardAndClose = () => {
+    setConfirmDiscardOpen(false);
+    onClose();
+  };
 
   // Blanking a previously-set gate un-gates the lake. Call it out on the way out: what the
   // lake becomes reachable by afterwards is its Visibility, which is not what "removed the
@@ -330,8 +408,18 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       parsedTarget < MIN_PASSAGE_TOKEN_TARGET ||
       parsedTarget > OVERSIZED_PASSAGE_TOKEN_THRESHOLD);
 
+  // Mirrors the server rule in updateDataLake: a non-owner may narrow a gate but not widen readership.
+  const widensAsNonOwner =
+    !!lake &&
+    !lake.isOwn &&
+    gateWriteWidensReadership(lake, {
+      requiredUserTag: requiredUserTag.trim(),
+      requiredEntitlement: requiredEntitlement.trim(),
+    });
+
   const handleSave = () => {
     if (!lake) return;
+    if (widensAsNonOwner) return;
     const trimmedName = name.trim();
     if (!trimmedName) return;
     if (targetInvalid) return;
@@ -349,6 +437,8 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // guards a path no user can currently take. Blank from an EDITOR is a deliberate clear,
         // and '' is what unsets it.
         ...(lake.canManage ? { systemPrompt: systemPrompt.trim() } : {}),
+        // Editor-only, sent only when changed - same shape and reason as lakeMemoryEnabled below.
+        ...(lake.canManage && injectPromptForReaders !== lake.injectPromptForReaders ? { injectPromptForReaders } : {}),
         // Send only when the editor actually changed the binding. Omitting an unchanged value is
         // "leave as-is" server-side, which (a) never re-sends a now-delisted id that the write
         // boundary would 400 on - that would block saving name/description/gate too - and (b) still
@@ -436,11 +526,29 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             data-testid="datalake-systemprompt-input"
           />
           <FormHelperText data-testid="datalake-systemprompt-help">
-            {`Extra instructions added to answers on turns that actually pull content from this lake. They apply to you, to anyone holding an owner or curator grant on this lake, to members of this lake's organization, and to a manager testing it in a scoped session - not to users given read-only access by tag, entitlement, or a reader grant - and never fire on turns that don't use the lake. Your organization's prompt stays authoritative on conflict, and only people who can manage this lake can read this text in the app.${
+            {`Extra instructions added to answers on turns that pull content from this lake, and never on turns that don't use it. They reach you, anyone holding an owner or curator grant on this lake, members of its organization, and a manager testing it in a scoped session. Users given read-only access by tag or entitlement don't get them unless you turn on "Apply to readers". Users with only a reader grant never get them. Your organization's prompt stays authoritative on conflict. Only people who can manage this lake can read this text.${
               // Count what SAVE will persist (trimmed), not the raw field contents.
               systemPrompt.trim() ? ` (${systemPrompt.trim().length} characters)` : ''
             }`}
           </FormHelperText>
+        </FormControl>
+      )}
+      {lake?.canManage && (
+        <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <Box>
+            <FormLabel>Apply to readers</FormLabel>
+            <FormHelperText data-testid="datalake-reader-prompt-toggle-help" sx={{ mt: 0 }}>
+              {requiredUserTag.trim() || requiredEntitlement.trim()
+                ? 'Also apply the system prompt for users who reach this lake by its access tag or entitlement, ' +
+                  "but only in chats they've scoped to this lake. They can't read the text."
+                : 'Has no effect until this lake has an access tag or required entitlement.'}
+            </FormHelperText>
+          </Box>
+          <Switch
+            checked={injectPromptForReaders}
+            onChange={e => setInjectPromptForReaders(e.target.checked)}
+            slotProps={{ input: { 'data-testid': 'datalake-reader-prompt-toggle' } }}
+          />
         </FormControl>
       )}
       {/* Per-lake config, editor-only (canManage). This section is the home for lake-scoped
@@ -591,17 +699,32 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           }}
           data-testid="datalake-settings-visibility"
         >
-          <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+          {/* Non-owner rules must stay in sync with setLakeVisibility's owner-only checks (b4m-core/services). */}
+          <Radio
+            value="private"
+            label="Private"
+            disabled={
+              setVisibility.isPending || (!lake?.isOwn && visibility !== 'private' && !!lake?.organizationId && hasGate)
+            }
+          />
           <Radio
             value="organization"
             label="Organization"
-            disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+            disabled={
+              setVisibility.isPending ||
+              (!canShareToOrg && visibility !== 'organization') ||
+              (!lake?.isOwn && visibility !== 'organization')
+            }
             data-testid="datalake-settings-visibility-org"
           />
           <Radio
             value="public"
             label="Public"
-            disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+            disabled={
+              setVisibility.isPending ||
+              (hasGate && visibility !== 'public') ||
+              (!lake?.isOwn && visibility !== 'public')
+            }
             data-testid="datalake-settings-visibility-public"
           />
         </RadioGroup>
@@ -618,13 +741,16 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     ? 'Private. Switch to your team account (the profile card at the bottom left) to share with your organization, or make it public.'
                     : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
         </FormHelperText>
+        {lake && !lake.isOwn && (
+          <FormHelperText data-testid="datalake-settings-visibility-owner-only">{ownerOnlyMsg}</FormHelperText>
+        )}
       </FormControl>
       <FormControl>
         <FormLabel>Access tag</FormLabel>
         <Input
           value={requiredUserTag}
           onChange={e => setRequiredUserTag(e.target.value)}
-          placeholder="e.g. Opti"
+          placeholder="e.g. LegalTeam"
           data-testid="datalake-settings-usertag"
         />
         <FormHelperText data-testid="datalake-settings-usertag-help">
@@ -647,19 +773,31 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
             : 'Namespaced key (e.g. \u201Cproduct:pro\u201D). Leave blank for no entitlement gate.'}
         </FormHelperText>
       </FormControl>
+      {widensAsNonOwner && (
+        <FormHelperText sx={{ color: 'danger.plainColor' }} data-testid="datalake-settings-gate-owner-only">
+          {ownerOnlyMsg}
+        </FormHelperText>
+      )}
     </Stack>
   );
 
   return (
     <>
-      <Modal open={!!lake} onClose={onClose}>
+      <Modal
+        open={!!lake}
+        onClose={(event, reason) => {
+          if (reason === 'escapeKeyDown' && isEscapeFromOpenListbox(event)) return;
+          requestClose();
+        }}
+      >
         <ModalDialog
           data-testid="datalake-settings-modal"
           sx={{
-            width: { xs: '95%', sm: isWideTab ? '44rem' : '28rem' },
-            maxWidth: isWideTab ? '44rem' : '28rem',
+            width: { xs: '95%', sm: dialogWidth },
+            maxWidth: dialogWidth,
           }}
         >
+          <ModalClose aria-label="Close data lake settings" data-testid="datalake-settings-close-btn" />
           <DialogTitle>Data lake settings</DialogTitle>
           <DialogContent>
             {showTabs ? (
@@ -684,7 +822,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                   )}
                   {showProposalsTab && (
                     <Tab value="proposals" data-testid="datalake-settings-tab-proposals">
-                      {`Proposals (${proposals.data?.length ?? 0})`}
+                      {proposals.data ? `Proposals (${proposals.data.length})` : 'Proposals'}
                     </Tab>
                   )}
                   {showResearchTab && (
@@ -716,45 +854,70 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     error={history.isForbidden ? null : history.error}
                   />
                 </TabPanel>
-                <TabPanel value="proposals" sx={{ p: 0 }}>
-                  <DataLakeProposalsPanel
-                    proposals={proposals.data}
-                    isLoading={proposals.isLoading}
-                    error={proposals.isForbidden ? null : proposals.error}
-                    pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
-                    // Survives the toast: which source failed, and why, stays on its own card until
-                    // the next attempt on it.
-                    failure={
-                      reviewProposal.isError && reviewProposal.variables?.proposalId
-                        ? {
-                            proposalId: reviewProposal.variables.proposalId,
-                            message: reviewProposalFailureMessage(reviewProposal.error),
-                          }
-                        : undefined
-                    }
-                    onApprove={proposalId => reviewProposal.mutate({ proposalId, decision: 'approve' })}
-                    onDecline={(proposalId, reason) =>
-                      reviewProposal.mutate({ proposalId, decision: 'decline', reason })
-                    }
-                  />
-                </TabPanel>
-                <TabPanel value="research" sx={{ p: 0 }}>
-                  <DataLakeResearchPanel
-                    configs={researchConfigs.data}
-                    runs={researchRuns.data}
-                    isLoading={researchConfigs.isLoading}
-                    error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
-                    modelOptions={researchModelOptions}
-                    isCreating={createResearchConfig.isPending}
-                    savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
-                    deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
-                    startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
-                    onCreate={input => createResearchConfig.mutate(input)}
-                    onUpdate={(configId, input) => updateResearchConfig.mutate({ configId, ...input })}
-                    onDelete={configId => deleteResearchConfig.mutate(configId)}
-                    onStartRun={configId => startResearchRun.mutate(configId)}
-                  />
-                </TabPanel>
+                {/* Kept mounted, guarded and keyed like the Research panel below, because a
+                    half-typed decline reason is this panel's own state too. It reports that
+                    reason as dirty state, and an unmount here would lose the text. */}
+                {showProposalsTab && (
+                  <TabPanel value="proposals" sx={{ p: 0 }} keepMounted>
+                    <DataLakeProposalsPanel
+                      key={lake?.id}
+                      onDirtyChange={setProposalsDirty}
+                      view={proposalsView}
+                      onViewChange={view => {
+                        if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
+                      }}
+                      proposals={shownProposals.data}
+                      isLoading={shownProposals.isLoading}
+                      error={shownProposals.isForbidden ? null : shownProposals.error}
+                      pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
+                      // Survives the toast: which source failed, and why, stays on its own card until
+                      // the next attempt on it.
+                      failure={
+                        reviewProposal.isError && reviewProposal.variables?.proposalId
+                          ? {
+                              proposalId: reviewProposal.variables.proposalId,
+                              message: reviewProposalFailureMessage(reviewProposal.error),
+                            }
+                          : undefined
+                      }
+                      onApprove={proposalId => reviewProposal.mutate({ proposalId, decision: 'approve' })}
+                      onDecline={(proposalId, reason) =>
+                        reviewProposal.mutate({ proposalId, decision: 'decline', reason })
+                      }
+                      onRestore={proposalId => reviewProposal.mutate({ proposalId, decision: 'restore' })}
+                      pendingCanonicalSourceKeys={pendingCanonicalSourceKeys}
+                    />
+                  </TabPanel>
+                )}
+                {/* keepMounted: a tab switch would otherwise unmount the panel, silently dropping the
+                    configuration draft AND resetting researchDirty, so the close confirm would not
+                    fire either. A kept-mounted panel then needs two guards the unmounting ones do
+                    not: rendered only when its tab is offered, so a reader cannot carry a hidden
+                    copy, and keyed on the lake, so a draft cannot outlive the lake it belongs to -
+                    the same seed-once-per-lake rule the settings form above uses. */}
+                {showResearchTab && (
+                  <TabPanel value="research" sx={{ p: 0 }} keepMounted>
+                    <DataLakeResearchPanel
+                      key={lake?.id}
+                      configs={researchConfigs.data}
+                      runs={researchRuns.data}
+                      isLoading={researchConfigs.isLoading}
+                      error={researchConfigs.isForbidden ? null : (researchConfigs.error ?? researchRuns.error)}
+                      pendingProposals={researchConfigs.pendingProposals}
+                      modelOptions={researchModelOptions}
+                      defaultModelLabel={researchDefaultModel}
+                      isCreating={createResearchConfig.isPending}
+                      savingConfigId={updateResearchConfig.isPending ? updateResearchConfig.variables?.configId : null}
+                      deletingConfigId={deleteResearchConfig.isPending ? deleteResearchConfig.variables : null}
+                      startingConfigId={startResearchRun.isPending ? startResearchRun.variables : null}
+                      onCreate={input => createResearchConfig.mutateAsync(input)}
+                      onUpdate={(configId, input) => updateResearchConfig.mutateAsync({ configId, ...input })}
+                      onDelete={confirmDeleteResearchConfig}
+                      onStartRun={configId => startResearchRun.mutate(configId)}
+                      onDirtyChange={setResearchDirty}
+                    />
+                  </TabPanel>
+                )}
               </Tabs>
             ) : (
               settingsFields
@@ -769,7 +932,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 variant="solid"
                 color="primary"
                 loading={updateLake.isPending}
-                disabled={!name.trim() || targetInvalid}
+                disabled={!name.trim() || targetInvalid || widensAsNonOwner}
                 onClick={handleSave}
                 data-testid="datalake-settings-save-btn"
               >
@@ -801,6 +964,25 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           confirming={startingTestChat}
         />
       )}
+      <Modal open={confirmDiscardOpen} onClose={() => setConfirmDiscardOpen(false)}>
+        <ModalDialog role="alertdialog" data-testid="datalake-discard-confirm" sx={{ maxWidth: '28rem' }}>
+          <DialogTitle>Discard unsaved changes?</DialogTitle>
+          <DialogContent>Your edits to this data lake have not been saved.</DialogContent>
+          <DialogActions>
+            <Button variant="solid" color="danger" onClick={discardAndClose} data-testid="datalake-discard-confirm-btn">
+              Discard
+            </Button>
+            <Button
+              variant="plain"
+              color="neutral"
+              onClick={() => setConfirmDiscardOpen(false)}
+              data-testid="datalake-discard-keep-btn"
+            >
+              Keep editing
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
       <Modal open={confirmPublicOpen} onClose={() => setConfirmPublicOpen(false)}>
         <ModalDialog role="alertdialog" data-testid="datalake-publish-confirm" sx={{ maxWidth: '28rem' }}>
           <DialogTitle>Make this data lake public?</DialogTitle>

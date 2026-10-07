@@ -1,13 +1,19 @@
+import { useEffect } from 'react';
 import { Box, Button, Modal, ModalClose, ModalDialog, Stack, Typography } from '@mui/joy';
 import { useTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore, type OptionalSteps } from '@client/app/stores/useDataLakeWizardStore';
 import type { WizardStep } from '@client/app/stores/useDataLakeWizardStore';
 import { useBatchUpload, useCreateLakeFromDrive, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
-import { isValidDataLakeSlug } from '@client/app/hooks/data/dataLakeSlug';
+import { plannedUploadBytes } from '@client/app/hooks/data/dataLakeUploadPipeline';
+import { useUser } from '@client/app/contexts/UserContext';
+import { checkStorageForUpload, getStorageQuota } from '@client/app/utils/storageQuota';
+import StorageLimitNotice from '@client/app/components/common/StorageLimitNotice';
+import { useFileBrowser } from '@client/app/components/Files/fileBrowserStore';
 import {
   hasBlankTagPrefixSegment,
   isReservedTagPrefix,
+  isValidDataLakeSlug,
   submittedTagPrefix,
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,
@@ -19,6 +25,7 @@ import ConfigStep from './steps/ConfigStep';
 import UploadStep from './steps/UploadStep';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
 
 /**
  * The wizard's step order. Preview is opt-in (default off), so the minimal create path is
@@ -47,6 +54,8 @@ export default function DataLakeWizardModal() {
   const deriveTagPrefixFromName = useDataLakeWizardStore(s => s.deriveTagPrefixFromName);
   const targetLake = useDataLakeWizardStore(s => s.targetLake);
   const pendingDriveFolder = useDataLakeWizardStore(s => s.pendingDriveFolder);
+  const uploadStatus = useDataLakeWizardStore(s => s.uploadProgress.status);
+  const hideFooter = step === 'upload' && uploadStatus === 'complete';
 
   const batchUpload = useBatchUpload();
   const createLakeFromDrive = useCreateLakeFromDrive();
@@ -58,6 +67,15 @@ export default function DataLakeWizardModal() {
   // Nothing to upload, so the commit is the create + Drive connect, not the upload pipeline.
   const isDriveOnlyCommit = !hasIncludedFiles && !!pendingDriveFolder;
   const commit = isDriveOnlyCommit ? createLakeFromDrive : batchUpload;
+  const currentUser = useUser(s => s.currentUser);
+  const setFileBrowserOpen = useFileBrowser(s => s.setOpen);
+  const uploadBytes = plannedUploadBytes(allFiles, config.conflictResolution);
+  const exceedsStorage = checkStorageForUpload(getStorageQuota(currentUser), uploadBytes).status === 'exceeds';
+  // The cached usage is not refreshed when files are deleted, so re-read it before holding the
+  // user to a block - e.g. on returning from "Manage files".
+  useEffect(() => {
+    if (isOpen && exceedsStorage) void useUser.getState().refreshUser();
+  }, [isOpen, exceedsStorage]);
 
   const STEP_ORDER = stepOrderFor({ optionalSteps });
   // What the create request will carry, which is what every rule below judges - see
@@ -65,6 +83,8 @@ export default function DataLakeWizardModal() {
   // matches no lake (normalizeTagPrefix drops it) and the collision goes unreported.
   const effectivePrefix = submittedTagPrefix(config.tagPrefix);
   const duplicatePrefixLake = useDuplicatePrefixLake(effectivePrefix, !!targetLake);
+  // Only on Configure: the name changes per keystroke on the source step.
+  const { heldTypedPrefix } = useWizardIdentityPreview(step === 'config');
   const currentIndex = STEP_ORDER.indexOf(step);
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
@@ -99,12 +119,18 @@ export default function DataLakeWizardModal() {
         // bare "a" is the legal "a:" (accepted). Sizing the field got both of those wrong.
         return (
           hasSource &&
+          // Nothing is uploaded on the Drive-only path (uploadBytes is 0 there), so a user
+          // already over quota must not be blocked from a commit that sends no bytes.
+          (isDriveOnlyCommit || !exceedsStorage) &&
           (!!targetLake || isValidDataLakeSlug(config.name)) &&
           effectivePrefix.length >= MIN_TAG_PREFIX_LENGTH &&
           !isReservedTagPrefix(effectivePrefix) &&
           (!!targetLake ||
             (effectivePrefix.length <= MAX_TAG_PREFIX_LENGTH && !hasBlankTagPrefixSegment(effectivePrefix))) &&
-          !duplicatePrefixLake
+          !duplicatePrefixLake &&
+          // A typed prefix the server reports held by a lake this form cannot see. Never gates
+          // while that check loads or fails: create stays the authority.
+          !heldTypedPrefix
         );
       case 'upload':
         return false; // No "next" on last step
@@ -141,6 +167,13 @@ export default function DataLakeWizardModal() {
       }
     }
     resetWizard();
+  };
+
+  // The file browser often sits open beneath the wizard, so the wizard has to close for the
+  // user to reach it; handleClose still confirms discarding the selection.
+  const handleManageFiles = () => {
+    handleClose();
+    if (!useDataLakeWizardStore.getState().isOpen) setFileBrowserOpen(true);
   };
 
   const handleCommit = () => {
@@ -206,56 +239,65 @@ export default function DataLakeWizardModal() {
         {/* Step indicator */}
         <WizardStepIndicator currentStep={step} stepKeys={STEP_ORDER} />
 
+        {hasIncludedFiles && step !== 'upload' && (
+          <Box sx={{ px: 3, pt: 1 }}>
+            <StorageLimitNotice uploadBytes={uploadBytes} onManageFiles={handleManageFiles} />
+          </Box>
+        )}
+
         {/* Step content */}
         <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>{renderStep()}</Box>
 
         {/* Footer */}
-        <Stack
-          direction="row"
-          justifyContent="space-between"
-          sx={{
-            px: 3,
-            py: 2,
-            borderTop: '1px solid',
-            borderColor: 'divider',
-          }}
-        >
-          <Button variant="plain" color="neutral" onClick={handleClose}>
-            Cancel
-          </Button>
-          <Stack direction="row" gap={1}>
-            {canGoBack && (
-              <Button variant="outlined" color="neutral" onClick={handleBack}>
-                Back
-              </Button>
-            )}
-            {step === 'config' ? (
-              <Button
-                // One commit button, two labels: the testid is deliberately unchanged so every
-                // existing selector still finds the wizard's primary action.
-                data-testid="wizard-start-upload-btn"
-                variant="solid"
-                color="success"
-                disabled={!canGoNext || commit.isPending}
-                loading={commit.isPending}
-                onClick={handleCommit}
-              >
-                {/* Nothing is uploaded on the Drive-only path, so don't call it an upload. */}
-                {isDriveOnlyCommit ? 'Create and sync' : 'Start Upload'}
-              </Button>
-            ) : step !== 'upload' ? (
-              <Button
-                data-testid="wizard-next-btn"
-                variant="solid"
-                color="primary"
-                disabled={!canGoNext}
-                onClick={handleNext}
-              >
-                Next
-              </Button>
-            ) : null}
+        {!hideFooter && (
+          <Stack
+            data-testid="wizard-footer"
+            direction="row"
+            justifyContent="space-between"
+            sx={{
+              px: 3,
+              py: 2,
+              borderTop: '1px solid',
+              borderColor: 'divider',
+            }}
+          >
+            <Button variant="plain" color="neutral" onClick={handleClose}>
+              Cancel
+            </Button>
+            <Stack direction="row" gap={1}>
+              {canGoBack && (
+                <Button variant="outlined" color="neutral" onClick={handleBack}>
+                  Back
+                </Button>
+              )}
+              {step === 'config' ? (
+                <Button
+                  // One commit button, two labels: the testid is deliberately unchanged so every
+                  // existing selector still finds the wizard's primary action.
+                  data-testid="wizard-start-upload-btn"
+                  variant="solid"
+                  color="success"
+                  disabled={!canGoNext || commit.isPending}
+                  loading={commit.isPending}
+                  onClick={handleCommit}
+                >
+                  {/* Nothing is uploaded on the Drive-only path, so don't call it an upload. */}
+                  {isDriveOnlyCommit ? 'Create and sync' : 'Start Upload'}
+                </Button>
+              ) : step !== 'upload' ? (
+                <Button
+                  data-testid="wizard-next-btn"
+                  variant="solid"
+                  color="primary"
+                  disabled={!canGoNext}
+                  onClick={handleNext}
+                >
+                  Next
+                </Button>
+              ) : null}
+            </Stack>
           </Stack>
-        </Stack>
+        )}
       </ModalDialog>
     </Modal>
   );

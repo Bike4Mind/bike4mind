@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
-import { ImageModels } from '@bike4mind/common';
+import { ImageModels, LEGACY_DALL_E_3_MODEL_ID } from '@bike4mind/common';
 
 // The service builds its OpenAI client inside each call, so there is no instance to
 // stub - the SDK module is mocked instead. The spies are only dereferenced when a
@@ -148,6 +148,19 @@ describe('resolveGptImageOutputOptions', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('gpt-image-2');
   });
+
+  it.each(['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare-2026-09-08'])(
+    'keeps a transparent background for %s, which supports it unlike gpt-image-2',
+    model => {
+      const warnings: string[] = [];
+
+      expect(resolveGptImageOutputOptions('transparent', 'png', warnings, model)).toEqual({
+        background: 'transparent',
+        output_format: 'png',
+      });
+      expect(warnings).toEqual([]);
+    }
+  );
 
   it('keeps a transparent background for gpt-image-1.5, which supports it', () => {
     const warnings: string[] = [];
@@ -435,6 +448,43 @@ describe('OpenAIImageService.generate legacy dall-e sizing', () => {
       expect(params.size).toBe('1024x1024');
     }
   );
+
+  // OpenAIImageGenerationInput remaps 'dall-e-3' to gpt-image-2, so this is a caller that skips that schema.
+  it.each(['256x256', '512x512'])(
+    'coerces the dall-e-2 size %s to the dall-e-3 default for the legacy dall-e-3 model ID',
+    async size => {
+      const params = await generateParams({ model: LEGACY_DALL_E_3_MODEL_ID, size });
+
+      expect(params.model).toBe('dall-e-3');
+      expect(params.size).toBe('1024x1024');
+    }
+  );
+
+  it.each(['1024x1024', '1792x1024', '1024x1792'])(
+    'keeps the dall-e-3 size %s for the legacy dall-e-3 model ID',
+    async size => {
+      const params = await generateParams({ model: LEGACY_DALL_E_3_MODEL_ID, size });
+
+      expect(params.size).toBe(size);
+    }
+  );
+
+  const legacyModels = [
+    ['dall-e-2', ImageModels.DALL_E_2],
+    ['the legacy dall-e-3 model ID', LEGACY_DALL_E_3_MODEL_ID],
+  ];
+
+  it.each(legacyModels)('sends no size for %s when none is supplied', async (_label, model) => {
+    const params = await generateParams({ model });
+
+    expect(params.size).toBeUndefined();
+  });
+
+  it.each(legacyModels)('coerces a size it cannot parse to 1024x1024 for %s', async (_label, model) => {
+    const params = await generateParams({ model, size: 'wide' });
+
+    expect(params.size).toBe('1024x1024');
+  });
 });
 
 describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () => {
@@ -475,6 +525,18 @@ describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () 
     // The cost calculator bills 'standard'/'hd' as medium/high, so mapping (not dropping)
     // is what keeps the charge and the render on the same tier.
     const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: requested });
+
+    expect(params.quality).toBe(expected);
+  });
+
+  it.each([
+    [ImageModels.GPT_IMAGE_2_5_SUNBURST, 'xhigh', 'xhigh'],
+    [ImageModels.GPT_IMAGE_2_5_FLARE, 'max', 'max'],
+    [ImageModels.GPT_IMAGE_2, 'xhigh', 'high'],
+    [ImageModels.GPT_IMAGE_1_5, 'max', 'high'],
+  ])("sends %s a requested '%s' as '%s'", async (model, requested, expected) => {
+    // Must match OpenAIImageCostCalculator, which bills the same clamped tier.
+    const params = await generateParams({ model, quality: requested });
 
     expect(params.quality).toBe(expected);
   });

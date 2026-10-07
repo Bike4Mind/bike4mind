@@ -1,4 +1,4 @@
-import { IOrganizationDocument, Permission, WithId } from '@bike4mind/common';
+import { IOrganizationDocument, Permission, WithId, isOrgOwnerOrCurrentAdmin } from '@bike4mind/common';
 import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationGroups from '@client/app/components/organizations/OrganizationGroups';
@@ -40,13 +40,17 @@ import VpnKeyOutlinedIcon from '@mui/icons-material/VpnKeyOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import GroupWorkOutlinedIcon from '@mui/icons-material/GroupWorkOutlined';
-import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
-import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '@client/app/routes/organizations/orgTabAccess';
+import {
+  canViewOrgBilling,
+  canViewOrgUsage,
+  OrganizationTabs,
+  resolveAccessibleTab,
+} from '@client/app/routes/organizations/orgTabAccess';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { FC, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -93,20 +97,17 @@ const OrganizationPage: FC = () => {
   // permission set.
   const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
 
-  // Who may manage group instances + membership. Mirrors assertCanManageOrgGroups
-  // (organizationService/groupMembership.ts) exactly: billing owner, an appointed org admin who is
-  // ALSO still a current member, or a platform admin. Personal orgs never have groups.
-  // The membership conjunct is not redundant - it is what stops a stale adminUserIds entry (a purge
-  // that missed) from being shown a management surface whose every write would 403.
+  // Who may manage group instances + membership: the same isOrgOwnerOrCurrentAdmin rule
+  // assertCanManageOrgGroups enforces, so a stale adminUserIds entry is never shown a surface whose
+  // every write would 403. Personal orgs never have groups.
   const canManageGroups = useMemo(() => {
     if (!currentUser || !organization || organization.personal) return false;
-    if (currentUser.isAdmin) return true;
-    if (currentUser.id === organization.userId) return true;
-    return (
-      (organization.adminUserIds ?? []).includes(currentUser.id) &&
-      (organization.users ?? []).some(member => member.userId === currentUser.id)
-    );
+    return isOrgOwnerOrCurrentAdmin(currentUser, organization);
   }, [currentUser, organization]);
+
+  // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
+  // why a platform admin is not admitted here either.
+  const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
 
   // Only the billing owner or a platform admin may appoint org admins (admins route authz).
   const canSetAdmins = useMemo(() => {
@@ -121,7 +122,12 @@ const OrganizationPage: FC = () => {
   // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
-  const selectedTab = resolveAccessibleTab(requestedTab, { canManageOrg, canViewUsage, canManageGroups });
+  const selectedTab = resolveAccessibleTab(requestedTab, {
+    canManageOrg,
+    canViewUsage,
+    canManageGroups,
+    canViewBilling,
+  });
 
   useDocumentTitle(organization?.name, ' | Organization');
 
@@ -215,12 +221,14 @@ const OrganizationPage: FC = () => {
                 </Tab>
               </>
             )}
+            {canViewBilling && (
+              <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
+                Billing
+              </Tab>
+            )}
             {canManageOrg && (
               <>
-                <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
-                  Billing
-                </Tab>
                 <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
                   Integrations
@@ -275,14 +283,16 @@ const OrganizationPage: FC = () => {
                 </TabPanel>
               </>
             )}
+            {canViewBilling && (
+              <TabPanel value={OrganizationTabs.Billing}>
+                <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
+                  Billing & Subscription
+                </Typography>
+                <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
             {canManageOrg && (
               <>
-                <TabPanel value={OrganizationTabs.Billing}>
-                  <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
-                    Billing & Subscription
-                  </Typography>
-                  <OrganizationBillingSection organization={organization} />
-                </TabPanel>
                 <TabPanel value={OrganizationTabs.Integrations}>
                   <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
                     Integrations
@@ -389,21 +399,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
   const subscription = pickDisplayedSubscription(subscriptions ?? []);
   const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
-  // Calculate storage usage percentage
-  const storageUsed = organization.currentStorageSize || 0;
-  const storageLimit = organization.storageLimit || 0;
-  const storagePercentage =
-    storageLimit > 0 ? Math.min(100, Math.max(0, (storageUsed / (storageLimit * 1024 * 1024)) * 100)) : 0;
-
-  // Format bytes to human-readable format
-  const formatBytes = (bytes: number) => {
-    if (bytes <= 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
-  };
-
   // Format next billing date
   const formatDate = (date: Date | string | undefined) => {
     if (!date) return 'N/A';
@@ -438,35 +433,6 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
 
       {/* Second row - Detailed cards */}
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-        {/* Storage Usage Card */}
-        <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="storage-usage-card">
-          <Stack spacing={2}>
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography level="title-md" startDecorator={<StorageOutlinedIcon sx={{ fontSize: 20 }} />}>
-                Storage Usage
-              </Typography>
-              <Typography level="body-sm" color="neutral">
-                {storagePercentage.toFixed(1)}%
-              </Typography>
-            </Stack>
-            <LinearProgress
-              determinate
-              value={Math.min(storagePercentage, 100)}
-              color={storagePercentage > 90 ? 'danger' : storagePercentage > 70 ? 'warning' : 'primary'}
-              sx={{ '--LinearProgress-thickness': '8px' }}
-              aria-label={`Storage usage: ${storagePercentage.toFixed(1)}%`}
-            />
-            <Stack direction="row" justifyContent="space-between">
-              <Typography level="body-sm" color="neutral">
-                {formatBytes(storageUsed)} used
-              </Typography>
-              <Typography level="body-sm" color="neutral">
-                {storageLimit > 0 ? `${storageLimit} MB limit` : 'No limit'}
-              </Typography>
-            </Stack>
-          </Stack>
-        </Card>
-
         {/* Subscription Status Card */}
         <Card variant="outlined" sx={{ flex: 1, minWidth: 280, p: 3 }} data-testid="subscription-status-card">
           <Stack spacing={2}>

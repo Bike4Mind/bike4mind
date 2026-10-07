@@ -6,13 +6,17 @@ const h = vi.hoisted(() => ({
   settleRun: vi.fn(),
   recordProgress: vi.fn(),
   findLakeById: vi.fn(),
-  resolveWebSearchProvider: vi.fn(),
+  findUserById: vi.fn(),
+  findOrgById: vi.fn(),
+  resolveWebSearchProviders: vi.fn(),
   executeResearchRun: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   getAvailableModels: vi.fn(),
   judge: vi.fn(),
   fetchAndParseURL: vi.fn(),
   proposeDataLakeContent: vi.fn(),
+  recordResearchRunOutcome: vi.fn(),
+  recordOperationalUsage: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -20,6 +24,11 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   dataLakeProposalRepository: {},
   fabFileRepository: {},
+  dataLakeAccessGrantRepository: {},
+  lakeConfigChangeEventRepository: {},
+  usageEventRepository: {},
+  userRepository: { findById: h.findUserById },
+  organizationRepository: { findById: h.findOrgById },
   dataLakeRepository: { findById: h.findLakeById },
   dataLakeResearchRunRepository: {
     claimForExecution: h.claimForExecution,
@@ -32,14 +41,18 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: { proposeDataLakeContent: h.proposeDataLakeContent },
   dataLakeResearchService: {
     executeResearchRun: h.executeResearchRun,
+    recordResearchRunOutcome: h.recordResearchRunOutcome,
     RelevanceJudgeService: class {
       judge = h.judge;
     },
     RELEVANCE_JUDGE_DEFAULT_MODEL: 'default-judge-model',
   },
+  recordOperationalUsage: h.recordOperationalUsage,
 }));
-vi.mock('@bike4mind/services/llm', () => ({
-  resolveWebSearchProvider: h.resolveWebSearchProvider,
+// The real searchWithHedge runs, so the failover test exercises the same hedge chat uses.
+vi.mock('@bike4mind/services/llm', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/services/llm')>()),
+  resolveWebSearchProviders: h.resolveWebSearchProviders,
 }));
 vi.mock('@bike4mind/llm-adapters', () => ({ getAvailableModels: h.getAvailableModels }));
 // fetchAndParseURL comes from fab-pipeline, not utils: the lint rule `no-restricted-imports` routes
@@ -85,14 +98,19 @@ beforeEach(() => {
   h.claimForExecution.mockResolvedValue(claimedRun());
   h.recordProgress.mockResolvedValue(undefined);
   h.findLakeById.mockResolvedValue({ id: 'lake-1', createdByUserId: 'owner-1' });
-  h.resolveWebSearchProvider.mockResolvedValue({ name: 'serpapi', search: vi.fn(async () => []) });
+  h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: null });
+  h.findOrgById.mockResolvedValue(null);
+  h.resolveWebSearchProviders.mockResolvedValue([{ name: 'serpapi', search: vi.fn(async () => []) }, null]);
   h.getEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
-  h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini' }]);
+  h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini', backend: 'openai' }]);
   h.executeResearchRun.mockResolvedValue({
     totals: { ...emptyResearchRunTotals(), searchHits: 3, proposed: 1 },
     spentMicroUsd: 800,
     stopReason: 'exhausted',
+    judgeStepFailed: false,
   });
+  h.recordResearchRunOutcome.mockResolvedValue(undefined);
+  h.recordOperationalUsage.mockResolvedValue(undefined);
 });
 
 describe('runLakeResearch', () => {
@@ -111,8 +129,286 @@ describe('runLakeResearch', () => {
 
     expect(h.settleRun).toHaveBeenCalledWith(
       'run-1',
-      expect.objectContaining({ status: 'completed', stopReason: 'exhausted', spentMicroUsd: 800 })
+      expect.objectContaining({ status: 'completed', stopReason: 'exhausted', spentMicroUsd: 800, error: undefined })
     );
+  });
+
+  // "Default" leaves `levers.model` unset, so without this a run cannot be traced to the model that
+  // judged it, and changing the default would silently rewrite its history.
+  it('records the resolved default judge model on the run', async () => {
+    await runLakeResearch('run-1', logger);
+
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ judgeModel: 'default-judge-model' }));
+  });
+
+  // The settle is too late for a run still in flight: its card names the judge from the progress
+  // write, so that write has to carry the resolved model.
+  describe('the mid-run progress write', () => {
+    const progressOnce = () =>
+      h.executeResearchRun.mockImplementation(
+        async (_l: unknown, _r: string, ports: { onProgress: (s: number, t: unknown) => Promise<void> }) => {
+          await ports.onProgress(10, { ...emptyResearchRunTotals(), searchHits: 2 });
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 10, stopReason: 'exhausted' };
+        }
+      );
+
+    it('stamps the resolved default judge model', async () => {
+      progressOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordProgress).toHaveBeenCalledWith(
+        'run-1',
+        10,
+        expect.objectContaining({ searchHits: 2 }),
+        'default-judge-model'
+      );
+    });
+
+    it('stamps the configured judge model when the deployment offers it', async () => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
+      progressOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordProgress).toHaveBeenCalledWith('run-1', 10, expect.anything(), 'gpt-4.1-mini');
+    });
+  });
+
+  it('records the judge model on a run that dies mid-flight too', async () => {
+    h.executeResearchRun.mockRejectedValue(new Error('boom'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/boom/);
+
+    expect(h.settleRun).toHaveBeenCalledWith(
+      'run-1',
+      expect.objectContaining({ status: 'failed', judgeModel: 'default-judge-model' })
+    );
+  });
+
+  describe('a failing judge', () => {
+    it('settles as failed, naming the model and its error, when every judgment failed', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 10 },
+        spentMicroUsd: 0,
+        stopReason: 'exhausted',
+        judgeStepFailed: true,
+        judgeError: 'model access denied',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'failed',
+          totals: expect.objectContaining({ judgeFailed: 10, belowRelevance: 0 }),
+          error:
+            'The relevance judge (default-judge-model) failed on every candidate it tried (10), so nothing was proposed: model access denied',
+        })
+      );
+    });
+
+    it('settles a run the judge breaker stopped as failed, persisting the not-judged count', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 10, judgeFailed: 3, notJudged: 7 },
+        spentMicroUsd: 0,
+        stopReason: 'judge_unavailable',
+        judgeStepFailed: true,
+        judgeError: 'model access denied',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'failed',
+          stopReason: 'judge_unavailable',
+          totals: expect.objectContaining({ judgeFailed: 3, notJudged: 7 }),
+          error:
+            'The relevance judge (default-judge-model) failed on every candidate it tried (3), so nothing was proposed: model access denied',
+        })
+      );
+    });
+
+    it('completes a partly-failed run but carries the judge error, so the card shows it as degraded', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: { ...emptyResearchRunTotals(), searchHits: 3, judgeFailed: 1, proposed: 2 },
+        spentMicroUsd: 500,
+        stopReason: 'exhausted',
+        judgeStepFailed: false,
+        judgeError: 'rate limited',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.settleRun).toHaveBeenCalledWith(
+        'run-1',
+        expect.objectContaining({
+          status: 'completed',
+          error: 'The relevance judge (default-judge-model) failed on 1 candidate: rate limited',
+        })
+      );
+    });
+  });
+
+  // A run reaching an outcome left no trace in the lake's History tab.
+  it('records the completed outcome against the resolved lake and the run query', async () => {
+    await runLakeResearch('run-1', logger);
+
+    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+      { id: 'lake-1', createdByUserId: 'owner-1' },
+      'coastal erosion',
+      'completed',
+      'run-1',
+      expect.anything()
+    );
+  });
+
+  // Follow-up: a fault in the audit write used to reject `recordRunEffects`'s `Promise.all`
+  // AFTER `settle('completed')` had already landed, which re-ran the pair as `'failed'` (a second
+  // ledger row plus an overwritten, incorrect run status) instead of just logging the failure.
+  it('is best-effort: a failed outcome write does not re-settle an already-completed run', async () => {
+    h.recordResearchRunOutcome.mockRejectedValue(new Error('replica set stepped down'));
+
+    await expect(runLakeResearch('run-1', logger)).resolves.toEqual({ claimed: true });
+
+    expect(h.settleRun).toHaveBeenCalledTimes(1);
+    expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/outcome record failed/));
+  });
+
+  // Round-2 finding: round-1's fix for this was never actually exercised either - same commit,
+  // same +3 -0 diff, no test that ever made `settleRun` itself reject. The run succeeded and spent
+  // money; what threw was the terminal settle write. Re-settling or re-recording `failed` here
+  // would either overwrite a real `completed` row or lie about an outcome that never happened.
+  it('leaves the run unresolved - no re-settle, no re-record - when the terminal settle write itself rejects', async () => {
+    h.settleRun.mockRejectedValueOnce(new Error('replica set stepped down'));
+
+    await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/replica set stepped down/);
+
+    expect(h.settleRun).toHaveBeenCalledTimes(1);
+    expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
+    expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringMatching(/run completed but recording its outcome failed/),
+      expect.anything()
+    );
+  });
+
+  describe('judge-cost usage recording (the runs API reported spend the Spend tab never showed)', () => {
+    it('records one UsageEvent for the run, attributed to the lake and the resolved judge model', async () => {
+      h.claimForExecution.mockResolvedValue(claimedRun({ levers: levers({ model: 'gpt-4.1-mini' }) }));
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.findUserById).toHaveBeenCalledWith('owner-1');
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requestId: 'run-1',
+          dataLakeId: 'lake-1',
+          feature: 'operations',
+          provider: 'openai',
+          model: 'gpt-4.1-mini',
+          costUsd: 800 / 1_000_000,
+          bypassCreditBilling: true,
+        }),
+        expect.anything()
+      );
+    });
+
+    // The fallback default model is not necessarily in the deployment's own catalog (it is a
+    // platform-wide constant, not per-deployment) - the provider degrades to 'unknown' rather
+    // than the ledger write failing or reporting a wrong backend.
+    it('falls back to an unknown provider when the resolved model is not in the catalog', async () => {
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'default-judge-model', provider: 'unknown' }),
+        expect.anything()
+      );
+    });
+
+    it("rolls the spend up to the owner's organization when they belong to one", async () => {
+      h.findUserById.mockResolvedValue({ id: 'owner-1', organizationId: 'org-1' });
+      h.findOrgById.mockResolvedValue({ id: 'org-1' });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.findOrgById).toHaveBeenCalledWith('org-1');
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ organization: { id: 'org-1' } }),
+        expect.anything()
+      );
+    });
+
+    // Round-2 finding: round-1's fix for this was never actually exercised - the commit claiming
+    // to cover it only added a `runId` argument to unrelated expectations. A lake whose creator
+    // account was deleted must not vanish research spend silently a second time.
+    it('logs and skips the ledger write when the lake creator cannot be resolved', async () => {
+      h.findUserById.mockResolvedValue(null);
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/research spend not recorded: the lake creator could not be resolved/),
+        expect.anything()
+      );
+    });
+
+    // `.catch(() => null)` on the creator lookup means a rejection and a null resolution must
+    // behave identically from the caller's side - pinned so that equivalence cannot silently drift.
+    it('logs and skips the ledger write when the creator lookup itself rejects', async () => {
+      h.findUserById.mockRejectedValue(new Error('connection reset'));
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/research spend not recorded: the lake creator could not be resolved/),
+        expect.anything()
+      );
+    });
+
+    // A run that judged nothing (e.g. the search provider returned zero hits) spent nothing -
+    // writing a $0 ledger row would be noise, not signal, on the Spend tab.
+    it('skips the ledger write entirely when the run spent nothing', async () => {
+      h.executeResearchRun.mockResolvedValue({
+        totals: emptyResearchRunTotals(),
+        spentMicroUsd: 0,
+        stopReason: 'exhausted',
+      });
+
+      await runLakeResearch('run-1', logger);
+
+      expect(h.recordOperationalUsage).not.toHaveBeenCalled();
+    });
+
+    it('records the spend already reported when the run dies mid-flight, not zero', async () => {
+      h.executeResearchRun.mockImplementation(
+        async (_levers: unknown, _runId: string, ports: { onProgress: (s: number, t: unknown) => Promise<void> }) => {
+          await ports.onProgress(650, emptyResearchRunTotals());
+          throw new Error('the provider exploded');
+        }
+      );
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/exploded/);
+
+      expect(h.recordOperationalUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ costUsd: 650 / 1_000_000 }),
+        expect.anything()
+      );
+    });
+
+    // Best-effort like every other audit write in this file - a ledger failure must never turn
+    // an otherwise-real run outcome into a reported failure.
+    it('is best-effort: a failed usage write does not fail the run', async () => {
+      h.recordOperationalUsage.mockRejectedValue(new Error('replica set stepped down'));
+
+      await expect(runLakeResearch('run-1', logger)).resolves.toEqual({ claimed: true });
+    });
   });
 
   it('executes the levers snapshotted on the run row', async () => {
@@ -127,10 +423,74 @@ describe('runLakeResearch', () => {
     );
   });
 
+  describe('web search failover', () => {
+    const searchOnce = () => {
+      let hits: unknown;
+      h.executeResearchRun.mockImplementation(
+        async (_l: unknown, _r: string, ports: { search: (q: string, n: number, d?: number) => Promise<unknown> }) => {
+          hits = await ports.search('q', 5, 30);
+          return { totals: emptyResearchRunTotals(), spentMicroUsd: 0, stopReason: 'exhausted' };
+        }
+      );
+      return () => hits;
+    };
+    const timedOutLead = () => ({
+      name: 'serpapi',
+      search: vi.fn(async () => {
+        throw new Error('Web search timed out: SerpAPI did not respond within 10s (tried 2 times)');
+      }),
+    });
+
+    it('takes candidates from the backup when the lead times out', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => [{ title: 'Backup', url: 'https://backup.example', snippet: 's' }]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(hits()).toEqual([{ title: 'Backup', url: 'https://backup.example', snippet: 's' }]);
+      expect(backup.search).toHaveBeenCalledWith('q', 5, expect.objectContaining({ recencyDays: 30 }));
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'completed' }));
+    });
+
+    it('maps lead hits to candidates when no backup is configured', async () => {
+      const lead = {
+        name: 'searxng',
+        search: vi.fn(async () => [
+          { title: 'Lead', url: 'https://lead.example', snippet: 's', thumbnail: 'https://lead.example/t.png' },
+        ]),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([lead, null]);
+      const hits = searchOnce();
+
+      await runLakeResearch('run-1', logger);
+
+      expect(lead.search).toHaveBeenCalledWith('q', 5, { recencyDays: 30 });
+      expect(hits()).toEqual([{ title: 'Lead', url: 'https://lead.example', snippet: 's' }]);
+    });
+
+    it('fails the run naming both providers when both fail', async () => {
+      const backup = {
+        name: 'searxng',
+        search: vi.fn(async () => {
+          throw new Error('SearXNG returned 502');
+        }),
+      };
+      h.resolveWebSearchProviders.mockResolvedValue([timedOutLead(), backup]);
+      searchOnce();
+
+      await expect(runLakeResearch('run-1', logger)).rejects.toThrow(/Web search failed on both providers/);
+      expect(h.settleRun).toHaveBeenCalledWith('run-1', expect.objectContaining({ status: 'failed' }));
+    });
+  });
+
   describe('terminal operator faults settle rather than throw', () => {
     // Throwing would burn the SQS deliveries and a DLQ entry on a message that can never succeed.
     it('names what an administrator must do when web search is unconfigured', async () => {
-      h.resolveWebSearchProvider.mockResolvedValue(null);
+      h.resolveWebSearchProviders.mockResolvedValue([null, null]);
 
       expect(await runLakeResearch('run-1', logger)).toEqual({ claimed: true });
       expect(h.settleRun).toHaveBeenCalledWith(
@@ -138,6 +498,13 @@ describe('runLakeResearch', () => {
         expect.objectContaining({ status: 'failed', error: expect.stringMatching(/Web search is not configured/) })
       );
       expect(h.executeResearchRun).not.toHaveBeenCalled();
+      expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+        { id: 'lake-1', createdByUserId: 'owner-1' },
+        'coastal erosion',
+        'failed',
+        'run-1',
+        expect.anything()
+      );
     });
 
     it('settles when the lake went away between enqueue and execution', async () => {
@@ -148,6 +515,8 @@ describe('runLakeResearch', () => {
         'run-1',
         expect.objectContaining({ status: 'failed', error: expect.stringMatching(/no longer exists/) })
       );
+      // No lake left to audit into.
+      expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
     });
 
     // A failed READ is not an answer of "deleted". Reporting a database outage as "the lake no
@@ -164,6 +533,8 @@ describe('runLakeResearch', () => {
         'run-1',
         expect.objectContaining({ error: expect.stringMatching(/no longer exists/) })
       );
+      // No lake was ever resolved on this path, so there is nothing to audit into.
+      expect(h.recordResearchRunOutcome).not.toHaveBeenCalled();
     });
   });
 
@@ -187,6 +558,13 @@ describe('runLakeResearch', () => {
         totals: expect.objectContaining({ proposed: 2 }),
         error: 'the provider exploded',
       })
+    );
+    expect(h.recordResearchRunOutcome).toHaveBeenCalledWith(
+      { id: 'lake-1', createdByUserId: 'owner-1' },
+      'coastal erosion',
+      'failed',
+      'run-1',
+      expect.anything()
     );
   });
 
@@ -228,6 +606,13 @@ describe('runLakeResearch', () => {
       expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/falling back/), expect.anything());
     });
 
+    // Discovery disables a model that cannot be dispatched (e.g. a profile-only Bedrock id); a
+    // config saved before that still names it, and would otherwise fail every judgment.
+    it('falls back when the configured model is disabled', async () => {
+      h.getAvailableModels.mockResolvedValue([{ id: 'gpt-4.1-mini' }, { id: 'a-disabled-model', disabled: true }]);
+      expect((await judgeWith('a-disabled-model'))?.model).toBe('default-judge-model');
+    });
+
     it('uses the default when the config names no model', async () => {
       expect((await judgeWith(undefined))?.model).toBe('default-judge-model');
     });
@@ -259,6 +644,17 @@ describe('runLakeResearch', () => {
         title: 'A page',
         text: 'body text',
       });
+    });
+
+    it('passes the post-redirect url through for the title check', async () => {
+      expect(
+        await fetchVia({
+          title: 'A page',
+          textContent: 'body',
+          mimeType: 'text/plain',
+          finalUrl: 'https://example.com/final',
+        })
+      ).toEqual({ title: 'A page', text: 'body', finalUrl: 'https://example.com/final' });
     });
 
     // For a PDF, textContent is the raw buffer and the chunker extracts with a PDF parser - hashing

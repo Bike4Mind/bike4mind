@@ -348,6 +348,8 @@ describe('updateDataLake', () => {
 });
 
 describe('setLakeVisibility', () => {
+  const noDriveConnection = { findByDataLakeIdAny: vi.fn().mockResolvedValue(null) };
+
   it('records the scope move under the visibility action', async () => {
     const existing = lake();
     const audit = auditSpy();
@@ -359,6 +361,7 @@ describe('setLakeVisibility', () => {
           find: vi.fn().mockResolvedValue([]),
         },
         dataLakeAccessGrants: noGrants,
+        orgGoogleDriveConnections: noDriveConnection,
         ...audit.db,
       },
     });
@@ -385,6 +388,7 @@ describe('setLakeVisibility', () => {
           find: vi.fn().mockResolvedValue([]),
         },
         dataLakeAccessGrants: noGrants,
+        orgGoogleDriveConnections: noDriveConnection,
         ...audit.db,
       },
     });
@@ -407,6 +411,7 @@ describe('setLakeVisibility', () => {
         find: vi.fn().mockResolvedValue([]),
       },
       dataLakeAccessGrants: noGrants,
+      orgGoogleDriveConnections: noDriveConnection,
       ...audit.db,
     });
 
@@ -430,6 +435,7 @@ describe('setLakeVisibility', () => {
           find: vi.fn().mockResolvedValue([]),
         },
         dataLakeAccessGrants: noGrants,
+        orgGoogleDriveConnections: noDriveConnection,
         ...audit.db,
       },
     });

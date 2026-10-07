@@ -19,7 +19,9 @@ import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
 import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
+import { releaseGitHubLakeConnectionForLake } from '@server/integrations/github/dataLake/githubLakeConnection';
 import { createKeyProvider } from '@server/memory/factCipher';
+import { getFilesStorage } from '@server/utils/storage';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -32,7 +34,11 @@ const CleanupPayload = z.object({
     isAdmin: z.boolean(),
     administeredOrgIds: z.array(z.string()).optional(),
   }),
+  // The claim the lifecycle route accepted this message under, so a guard refusal releases only
+  // that claim. Optional for messages enqueued before this field existed.
+  purgeClaimId: z.string().optional(),
 });
+export type DataLakeCleanupMessage = z.input<typeof CleanupPayload>;
 
 /**
  * Background consumer for the phase-2 data-lake hard-delete sweep, offloaded off the request path
@@ -43,14 +49,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // Hoisted so the catch can name the lake it is releasing. Stays undefined when parsing itself
   // failed, which is exactly the case that has no purge to release.
   let parsedLakeId: string | undefined;
+  let parsedClaimId: string | undefined;
   try {
     // Parse INSIDE the try: a malformed body (bad JSON / wrong shape) is permanently invalid, so
     // it must be swallowed like the other permanent errors below, not retried into the DLQ.
-    const { dataLakeId, actor } = CleanupPayload.parse(JSON.parse(event.Records[0].body));
+    const { dataLakeId, actor, purgeClaimId } = CleanupPayload.parse(JSON.parse(event.Records[0].body));
     parsedLakeId = dataLakeId;
+    parsedClaimId = purgeClaimId;
     logger.updateMetadata({ handler: 'dataLakeCleanup', dataLakeId, userId: actor.userId });
 
     await dataLakeService.cleanupDeletedDataLake(actor, dataLakeId, {
+      purgeClaimId,
+      beginPurge: () => dataLakeRepository.beginPurgeExecution(dataLakeId, purgeClaimId),
+      deleteFileAndChunks: id => fabFileRepository.hardDeleteWithChunks(id),
       db: {
         dataLakes: dataLakeRepository,
         dataLakeAccessGrants: dataLakeAccessGrantRepository,
@@ -64,6 +75,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
       },
+      // Deletes each purged file's stored object(s) before its row. Needs `fabFileBucket` linked on
+      // this subscriber (infra/queues.ts); unlinked, this throws and every purge lands in the DLQ.
+      storage: getFilesStorage(),
       // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
       // FabFileChunk collection itself, so the chunk-sweep two steps below already removes it.
       retrievalIndex: selfHostOpenSearchEnabled()
@@ -110,26 +124,38 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           logger.info('[driveLake] released the purged lake Drive connection and its folder claim', { dataLakeId });
         }
       },
+      releaseGitHubConnection: async ({ dataLakeId }) => {
+        const released = await releaseGitHubLakeConnectionForLake(dataLakeId);
+        if (released) {
+          logger.info('[githubLake] released the purged lake GitHub connection and its repository claim', {
+            dataLakeId,
+            installationRetained: released.installationRetained,
+          });
+        }
+      },
       logger,
     });
   } catch (err) {
-    // A failed GUARD (BadRequestError: not a manager, or the lake is not in a sweepable status) is
-    // the one permanent failure that abandons an ACCEPTED purge, so it does not get to be a quiet
-    // WARN. Log it at ERROR and release 'purging' -> 'deleted', which puts the lake back in the
-    // deleted-lakes list where its owner can see it and retry, rather than leaving it in a status
-    // no list shows (#1744).
-    //
-    // Releasing is safe ONLY because cleanupDeletedDataLake throws BadRequestError exclusively from
-    // its two entry guards, before anything is destroyed. Keep it that way: a BadRequestError raised
-    // deeper in the sweep would make this advertise a half-purged lake as restorable. Every other
-    // failure (DB/network) rethrows below and is recovered by DLQ replay, which must NOT release -
-    // that lake may be partly swept.
+    // Release only an unstarted matching generation. Started cleanup must remain replayable and hidden.
     if (err instanceof BadRequestError) {
-      logger.error('[dataLakes] cleanup sweep refused by its own guard; releasing the accepted purge', {
+      if (parsedLakeId) {
+        const released = await dataLakeRepository.releasePurgingToDeleted(parsedLakeId, parsedClaimId);
+        if (released) {
+          logger.error('[dataLakes] cleanup guard refused; releasing the accepted purge', {
+            dataLakeId: parsedLakeId,
+            purgeClaimId: parsedClaimId,
+            reason: err.message,
+          });
+          return;
+        }
+        const lake = await dataLakeRepository.findById(parsedLakeId);
+        if (lake?.purgeStartedAt && lake.purgeClaimId === parsedClaimId) throw err;
+      }
+      logger.warn('[dataLakes] skipping refused cleanup generation without releasing another claim', {
         dataLakeId: parsedLakeId,
+        purgeClaimId: parsedClaimId,
         reason: err.message,
       });
-      if (parsedLakeId) await dataLakeRepository.releasePurgingToDeleted(parsedLakeId);
       return;
     }
     // Malformed payload (SyntaxError/ZodError): permanently invalid and unattributable - there is no

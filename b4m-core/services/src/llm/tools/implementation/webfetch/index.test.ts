@@ -450,6 +450,27 @@ describe('firecrawlFetch onlyMainContent', () => {
   });
 });
 
+describe('firecrawlFetch fresh', () => {
+  // The params object scrapeUrl was called with on the nth call.
+  const paramsOfCall = (n: number) => (scrapeUrl.mock.calls[n] as unknown[])[1];
+
+  it('leaves the params unchanged when the caller does not set it', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc');
+    expect(paramsOfCall(0)).not.toHaveProperty('maxAge');
+    expect(paramsOfCall(0)).not.toHaveProperty('storeInCache');
+  });
+
+  it('adds maxAge: 0 and storeInCache: false when set', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc', { fresh: true });
+    expect(scrapeUrl).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ maxAge: 0, storeInCache: false })
+    );
+  });
+});
+
 describe('firecrawlFetch keyless plain-fetch fallback', () => {
   it('falls back to plainFetchScrape when Firecrawl is not configured', async () => {
     mockCreateApp.mockReturnValueOnce(null);

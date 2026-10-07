@@ -35,7 +35,12 @@ export function registeredContracts(): readonly EndpointContract[] {
  * registered nothing. Inline, deleting a guard line broke no test at all.
  */
 export function registerContracts(contracts: readonly EndpointContract[] = CONTRACTS): void {
-  assertUniqueOperations(contracts.map(c => ({ operationId: c.operationId, method: c.method, path: c.path })));
+  // Checked against what is already registered too: a deployment build registers overlay
+  // contracts on top of CONTRACTS, and an overlay reusing a core operationId or route
+  // would otherwise silently overwrite the core operation.
+  assertUniqueOperations(
+    [...registered, ...contracts].map(c => ({ operationId: c.operationId, method: c.method, path: c.path }))
+  );
   assertContractConventions(contracts);
 
   for (const contract of contracts) {

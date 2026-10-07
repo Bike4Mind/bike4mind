@@ -55,9 +55,9 @@ interface TelemetryMetrics {
 }
 
 const ONE_MINUTE_MS = 60 * 1000;
-// Nothing in the app calls this route: it only shows up in the in-app API reference and the
-// KNOWN_UNGATED test ledger, same "no real caller" situation as users/report.ts. 5/min matches
-// that route's floor rather than inventing a burst that has no measured caller behind it.
+// Nothing in the app calls this route: it only shows up in the in-app API reference, same
+// "no real caller" situation as users/report.ts. 5/min matches that route's floor rather than
+// inventing a burst that has no measured caller behind it.
 export const CONTEXT_TELEMETRY_METRICS_RATE_LIMIT = 5;
 
 // requiredScopes only constrains API-key callers (server/middlewares/baseApi.ts); browser/JWT

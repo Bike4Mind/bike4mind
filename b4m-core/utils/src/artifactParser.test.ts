@@ -4,11 +4,22 @@ import {
   parseArtifacts,
   isSvgGraphicallyEmpty,
   scanMermaidFences,
+  extractHTMLTitle,
+  maskToolOutputRegions,
+  TOOL_OUTPUT_MARKER,
+  stripToolOutputMarker,
+  markToolEchoes,
+  isMermaidSyntax,
+  validateMermaidSyntax,
 } from './artifactParser';
+import { createToolEchoMatcher } from './toolEchoMatcher';
 
-// The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
-// fails fast instead of letting a hang run out the clock. The ratio check is secondary
-// and, in practice, close to a fixed budget rather than a true ratio: every baseline
+// Scaling is judged by a ratio of two timings taken back to back in the same process, never by an
+// absolute wall-clock budget: a budget measures the host, so a loaded runner fails it with no
+// regression. Quadratic input stays small enough to finish well inside the test timeout, so a
+// regression fails the ratio instead of hanging.
+//
+// In practice the ratio is close to a fixed budget rather than a true ratio: every baseline
 // measured here lands under this floor, so flooring the denominator reduces
 // `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * MIN_BASELINE_MS`.
 // The floor exists because a near-instant call is noise-dominated - without it, timer
@@ -17,8 +28,7 @@ const MIN_BASELINE_MS = 25;
 // Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
 // (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
-// Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
-const SMALL_INPUT_MS_CEILING = 500;
+const MEASUREMENT_ATTEMPTS = 5;
 
 /**
  * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
@@ -33,25 +43,26 @@ function assertLinearGrowth(
   run: (input: string) => string = convertCodeBlocksToArtifacts,
   minBaselineMs: number = MIN_BASELINE_MS
 ) {
-  // Best of three, not a single timing: a GC pause landing in one measured window is
-  // worth more than the whole budget here (the current parser needs single-digit
-  // milliseconds), while a genuinely super-linear scan is slow on every attempt.
-  const measure = (n: number) => {
-    const input = build(n);
-    let bestMs = Infinity;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const startedAt = performance.now();
-      const out = run(input);
-      bestMs = Math.min(bestMs, performance.now() - startedAt);
-      if (attempt === 0) checkOutput(out, input);
-    }
-    return bestMs;
+  const smallInput = build(small);
+  const doubledInput = build(small * 2);
+  const timeOnce = (input: string, verifyOutput: boolean) => {
+    const startedAt = performance.now();
+    const out = run(input);
+    const elapsedMs = performance.now() - startedAt;
+    if (verifyOutput) checkOutput(out, input);
+    return elapsedMs;
   };
 
-  const baselineMs = measure(small);
-  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+  // Best of N with the two sizes interleaved: a GC pause or a CPU-starved slice then lands in
+  // both series instead of only one, while a genuinely super-linear scan is slow on every attempt.
+  let baselineMs = Infinity;
+  let doubledMs = Infinity;
+  for (let attempt = 0; attempt < MEASUREMENT_ATTEMPTS; attempt++) {
+    const verifyOutput = attempt === 0;
+    baselineMs = Math.min(baselineMs, timeOnce(smallInput, verifyOutput));
+    doubledMs = Math.min(doubledMs, timeOnce(doubledInput, verifyOutput));
+  }
 
-  const doubledMs = measure(small * 2);
   const ratio = doubledMs / Math.max(baselineMs, minBaselineMs);
   expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
 }
@@ -134,9 +145,7 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
   });
 
   it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
-    const { artifacts } = promote(
-      '```html\n<div><h1>Hello</h1></div>\n<title>Bad<>Title"</title>\n```'
-    );
+    const { artifacts } = promote('```html\n<div><h1>Hello</h1></div>\n<title>Bad<>Title"</title>\n```');
     expect(artifacts).toHaveLength(1);
     expect(artifacts[0].title).toBe('BadTitle');
   });
@@ -1046,5 +1055,643 @@ describe('mutation control: the body characters the original regex could not cro
     }
     expect(vsOriginal.extra).toBeGreaterThan(1000);
     expect(vsScanner.extra).toBeGreaterThan(1000);
+  });
+});
+
+describe('extractHTMLTitle', () => {
+  const oldExtract = (code: string) => code.match(/<title>(.*?)<\/title>/i)?.[1] ?? null;
+
+  it('matches case-insensitively and returns an empty title as an empty string', () => {
+    expect(extractHTMLTitle('<TITLE>Hi</Title>')).toBe('Hi');
+    expect(extractHTMLTitle('<title></title>')).toBe('');
+    expect(extractHTMLTitle('no title here')).toBeNull();
+  });
+
+  it('skips a title broken by a line terminator and takes a later valid one', () => {
+    expect(extractHTMLTitle('<title>a\r\nb</title><title>ok</title>')).toBe('ok');
+    expect(extractHTMLTitle('<title>a\u2028b</title> <title>ok</title>')).toBe('ok');
+    expect(extractHTMLTitle('<title>a\nb</title>')).toBeNull();
+  });
+
+  it('agrees with the old regex on seeded random input', () => {
+    let seed = 7;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const tokens = [
+      '<title>',
+      '<TITLE>',
+      '<Title>',
+      '</title>',
+      '</TITLE>',
+      '<title',
+      'title>',
+      '<',
+      '/',
+      'x',
+      ' ',
+      '\n',
+      '\r',
+      '\u2028',
+      '\u2029',
+    ];
+    for (let i = 0; i < 5000; i++) {
+      let text = '';
+      const len = 1 + Math.floor(rand() * 12);
+      for (let j = 0; j < len; j++) text += tokens[Math.floor(rand() * tokens.length)];
+      expect(extractHTMLTitle(text), JSON.stringify(text)).toBe(oldExtract(text));
+    }
+  });
+
+  it.each([
+    // Sized so the old regex's quadratic rescan clears MIN_BASELINE_MS and fails the ratio.
+    ['repeated openers', (n: number) => '<title>'.repeat(n), 8_000],
+    ['openers each broken by a newline', (n: number) => '<title>x\n'.repeat(n), 40_000],
+  ])('scans %s in linear time', (_label, build, small) => {
+    assertLinearGrowth(
+      build,
+      small,
+      out => expect(out).toBe(''),
+      input => extractHTMLTitle(input) ?? ''
+    );
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - tool output echoes', () => {
+  const DOC =
+    '<!DOCTYPE html>\n<html><head><title>Fetched Page</title></head><body><p>Quoted verbatim from a tool result.</p></body></html>';
+  const FRAGMENT = '<div class="card"><h2>Fetched</h2><p>A fragment quoted verbatim from a tool result.</p></div>';
+  const TOOL_JSON = JSON.stringify({ name: 'build_html', arguments: { html: DOC } });
+  const isToolEcho = createToolEchoMatcher([{ text: `Fetched:\n${DOC}\n${FRAGMENT}\n${TOOL_JSON}`, truncated: false }]);
+  const artifacts = (out: string) => out.match(/<artifact [^>]*>/g) ?? [];
+  const marker = (lang: string) => new RegExp(`^~{3,}${lang} ${TOOL_OUTPUT_MARKER}$`, 'm');
+
+  it('marks an echoed full-document html fence instead of promoting it', () => {
+    const out = convertCodeBlocksToArtifacts(`Source:\n\`\`\`html\n${DOC}\n\`\`\`\n`, { isToolEcho });
+    expect(artifacts(out)).toHaveLength(0);
+    expect(out).toMatch(marker('html'));
+    expect(out).toContain(`\n${DOC}\n`);
+  });
+
+  it('marks an echoed html fragment fence', () => {
+    const out = convertCodeBlocksToArtifacts(`\`\`\`html\n${FRAGMENT}\n\`\`\``, { isToolEcho });
+    expect(artifacts(out)).toHaveLength(0);
+    expect(out).toMatch(marker('html'));
+  });
+
+  it('marks an echoed tool-call json fence and a whole-reply tool-call json', () => {
+    const fenced = convertCodeBlocksToArtifacts(`\`\`\`json\n${TOOL_JSON}\n\`\`\``, { isToolEcho });
+    expect(artifacts(fenced)).toHaveLength(0);
+    expect(fenced).toMatch(marker('json'));
+    const whole = convertCodeBlocksToArtifacts(TOOL_JSON, { isToolEcho });
+    expect(artifacts(whole)).toHaveLength(0);
+    expect(whole).toMatch(marker('json'));
+  });
+
+  it('marks an echoed bare document, starting the fence on its own line', () => {
+    const out = convertCodeBlocksToArtifacts(`Here it is: ${DOC} done`, { isToolEcho });
+    expect(artifacts(out)).toHaveLength(0);
+    expect(out).toMatch(marker('html'));
+    expect(out.startsWith('Here it is: \n~~~html')).toBe(true);
+  });
+
+  it('still promotes authored html next to an echo in the same reply', () => {
+    const authored = '<!DOCTYPE html>\n<html><head><title>Mine</title></head><body><p>new</p></body></html>';
+    const out = convertCodeBlocksToArtifacts(`\`\`\`html\n${DOC}\n\`\`\`\n\n\`\`\`html\n${authored}\n\`\`\``, {
+      isToolEcho,
+    });
+    expect(artifacts(out)).toEqual(['<artifact identifier="mine" type="text/html" title="Mine">']);
+  });
+
+  it('leaves mermaid, svg and react promotion alone even when echoed', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>';
+    const echoAll = () => true;
+    const out = convertCodeBlocksToArtifacts(`\`\`\`svg\n${svg}\n\`\`\`\n\n\`\`\`mermaid\ngraph TD\n  A-->B\n\`\`\``, {
+      isToolEcho: echoAll,
+    });
+    expect(artifacts(out)).toHaveLength(2);
+  });
+
+  it('picks a tilde run longer than any in the body and keeps backticks inside', () => {
+    const body = `${FRAGMENT}\n~~~~\n\`\`\`\nstill quoted, long enough to pass the minimum length check\n`;
+    const out = convertCodeBlocksToArtifacts(`\`\`\`html\n${body}\`\`\``, { isToolEcho: () => true });
+    expect(out.split('\n')[0]).toBe(`~~~~~html ${TOOL_OUTPUT_MARKER}`);
+    expect(convertCodeBlocksToArtifacts(out)).toBe(out);
+  });
+
+  it('is stable when a marked reply is converted again without a matcher', () => {
+    const once = convertCodeBlocksToArtifacts(`\`\`\`html\n${DOC}\n\`\`\`\n\n${DOC}`, { isToolEcho });
+    expect(convertCodeBlocksToArtifacts(once)).toBe(once);
+  });
+
+  it('with no options and no marker, output matches a never-echo matcher', () => {
+    const corpus = [
+      `\`\`\`html\n${DOC}\n\`\`\``,
+      `\`\`\`html\n${FRAGMENT}\n\`\`\``,
+      TOOL_JSON,
+      `Text ${DOC} text`,
+      '```mermaid\ngraph TD\n  A-->B\n```',
+      'plain text with ~~~ tildes and b4m words',
+    ];
+    for (const sample of corpus) {
+      expect(convertCodeBlocksToArtifacts(sample)).toBe(
+        convertCodeBlocksToArtifacts(sample, { isToolEcho: () => false })
+      );
+      expect(maskToolOutputRegions(sample).masked).toBe(sample);
+    }
+  });
+});
+
+describe('maskToolOutputRegions', () => {
+  const region = (body: string, tildes = '~~~') => `${tildes}html ${TOOL_OUTPUT_MARKER}\n${body}\n${tildes}`;
+
+  it('hides a closed region from every detector and restores it byte for byte', () => {
+    const content = `before\n${region('<!DOCTYPE html><html><body>x</body></html>')}\nafter`;
+    const { masked, restore } = maskToolOutputRegions(content);
+    expect(masked).not.toContain('DOCTYPE');
+    expect(restore(masked)).toBe(content);
+    expect(convertCodeBlocksToArtifacts(content)).toBe(content);
+  });
+
+  it('does not treat an unclosed opener as a region', () => {
+    const content = `~~~html ${TOOL_OUTPUT_MARKER}\n<p>never closed</p>`;
+    expect(maskToolOutputRegions(content).masked).toBe(content);
+  });
+
+  it('handles CRLF line endings', () => {
+    const content = `a\r\n~~~html ${TOOL_OUTPUT_MARKER}\r\n<html><body>x</body></html>\r\n~~~\r\nb`;
+    const { masked, restore } = maskToolOutputRegions(content);
+    expect(masked).toMatch(/^a\r\n\S+\r\nb$/);
+    expect(restore(masked)).toBe(content);
+  });
+
+  it('masks adjacent regions and a region after a markdown block', () => {
+    const content = `\`\`\`markdown\n# notes\n\`\`\`\n${region('<html><body>1</body></html>')}\n${region('<html><body>2</body></html>', '~~~~')}`;
+    const { masked } = maskToolOutputRegions(content);
+    expect(masked).not.toContain('<html>');
+    expect(convertCodeBlocksToArtifacts(content)).toBe(content);
+  });
+
+  it('keeps a shorter tilde line inside the body', () => {
+    const content = region('~~~\n<html><body>x</body></html>', '~~~~');
+    expect(maskToolOutputRegions(content).masked).not.toContain('<html>');
+  });
+
+  it('does not pair backticks inside a region with an authored fence after it', () => {
+    const content = `${region('```html\n<div>quoted</div>')}\n\n\`\`\`html\n<div>authored</div>\n\`\`\``;
+    const out = convertCodeBlocksToArtifacts(content);
+    expect(out.match(/<artifact [^>]*>/g)).toHaveLength(1);
+    expect(out).toContain('<div>quoted</div>');
+    expect(out.startsWith(`~~~html ${TOOL_OUTPUT_MARKER}\n\`\`\`html\n<div>quoted</div>\n~~~`)).toBe(true);
+  });
+
+  it('scales linearly on many unclosed openers', () => {
+    const build = (n: number) => `~~~ ${TOOL_OUTPUT_MARKER}\n`.repeat(n);
+    assertLinearGrowth(build, 2000, undefined, input => maskToolOutputRegions(input).masked);
+    assertLinearGrowth(build, 2000);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - protected output inside a promotable span', () => {
+  const SCRIPT_DOC =
+    '<!DOCTYPE html>\n<html><head><title>Fetched</title></head><body><script>alert(document.cookie)</script><p>Quoted verbatim from a web tool result.</p></body></html>';
+  const artifactBodies = (out: string) =>
+    [...out.matchAll(/<artifact\b[^>]*>([\s\S]*?)<\/artifact>/g)].map(match => match[1]);
+  const expectScriptOutsideArtifacts = (out: string) => {
+    expect(out).toContain('<script>alert(document.cookie)</script>');
+    for (const body of artifactBodies(out)) expect(body).not.toContain('<script');
+  };
+
+  it('does not promote authored <html><body> wrapping an echoed html fence', () => {
+    const isToolEcho = createToolEchoMatcher([{ text: SCRIPT_DOC, truncated: false }]);
+    const reply = `<html><body>\n\`\`\`html\n${SCRIPT_DOC}\n\`\`\`\n</body></html>`;
+    const out = convertCodeBlocksToArtifacts(reply, { isToolEcho });
+    expect(out).toMatch(new RegExp(`^~{3,}html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expectScriptOutsideArtifacts(out);
+  });
+
+  it.each([
+    ['a bare document', (region: string) => `<html><body>\n${region}\n</body></html>`],
+    ['an html fragment fence', (region: string) => `\`\`\`html\n<div>\n${region}\n</div>\n\`\`\``],
+    ['a tsx fence', (region: string) => `\`\`\`tsx\nexport default function App() {\n${region}\nreturn null }\n\`\`\``],
+  ])('does not promote %s wrapping a server-marked region', (_label, wrap) => {
+    const region = `~~~html ${TOOL_OUTPUT_MARKER}\n${SCRIPT_DOC}\n~~~`;
+    const out = convertCodeBlocksToArtifacts(wrap(region));
+    expect(out).toContain(region);
+    expectScriptOutsideArtifacts(out);
+  });
+});
+
+describe('stripToolOutputMarker', () => {
+  it('drops the marker from openers only, keeping body text and CRLF', () => {
+    const reply = `Intro\r\n~~~html ${TOOL_OUTPUT_MARKER}\r\n<p>${TOOL_OUTPUT_MARKER}</p>\r\n~~~\r\n`;
+    expect(stripToolOutputMarker(reply)).toBe(`Intro\r\n~~~html\r\n<p>${TOOL_OUTPUT_MARKER}</p>\r\n~~~\r\n`);
+  });
+
+  it('returns unmarked text unchanged', () => {
+    expect(stripToolOutputMarker('```html\n<p>x</p>\n```')).toBe('```html\n<p>x</p>\n```');
+  });
+});
+
+describe('markToolEchoes', () => {
+  const DOC =
+    '<!DOCTYPE html>\n<html><head><title>Fetched Page</title></head><body><p>Quoted verbatim from a web tool result.</p></body></html>';
+  const isToolEcho = createToolEchoMatcher([{ text: `Fetched:\n${DOC}`, truncated: false }]);
+  const AUTHORED_HTML =
+    '```html\n<!DOCTYPE html>\n<html><body><h1>Authored by the model itself</h1></body></html>\n```';
+  const MERMAID = '```mermaid\ngraph TD\n  A-->B\n```';
+  const REACT = '```tsx\nexport default function App() {\n  const [n] = useState(0);\n  return <div>{n}</div>;\n}\n```';
+
+  it('marks an echoed html fence and an echoed bare document', () => {
+    const fenced = markToolEchoes(`Page:\n\`\`\`html\n${DOC}\n\`\`\`\n`, isToolEcho);
+    expect(fenced).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(fenced).toContain(DOC);
+    const bare = markToolEchoes(`Page:\n${DOC}\n`, isToolEcho);
+    expect(bare).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+    expect(bare).not.toContain('<artifact');
+  });
+
+  it('leaves everything that is not an echo byte-identical', () => {
+    const reply = `Intro\n\n${AUTHORED_HTML}\n\n${MERMAID}\n\n${REACT}\n\nDone.`;
+    expect(markToolEchoes(reply, isToolEcho)).toBe(reply);
+    expect(markToolEchoes(reply, () => false)).toBe(reply);
+  });
+
+  it('marks the echo and keeps authored blocks promotable in the same reply', () => {
+    const reply = `${AUTHORED_HTML}\n\n\`\`\`html\n${DOC}\n\`\`\`\n\n${MERMAID}`;
+    const marked = markToolEchoes(reply, isToolEcho);
+    expect(marked).toContain(AUTHORED_HTML);
+    expect(marked).toContain(MERMAID);
+    const promoted = convertCodeBlocksToArtifacts(marked);
+    expect(promoted.match(/<artifact [^>]*>/g)).toHaveLength(2);
+    expect(promoted).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+  });
+
+  it('leaves a tool artifact untouched while marking an echoed fence', () => {
+    const tool = '<artifact identifier="d" type="text/html" title="D">\n<p>x</p>\n</artifact>';
+    const marked = markToolEchoes(`${tool}\n\n\`\`\`html\n${DOC}\n\`\`\`\n`, isToolEcho);
+    expect(marked.startsWith(tool)).toBe(true);
+    expect(marked).toMatch(new RegExp(`^~~~html ${TOOL_OUTPUT_MARKER}$`, 'm'));
+  });
+
+  it('is idempotent on an already-marked reply', () => {
+    const once = markToolEchoes(`\`\`\`html\n${DOC}\n\`\`\``, isToolEcho);
+    expect(markToolEchoes(once, isToolEcho)).toBe(once);
+  });
+});
+
+describe('convertCodeBlocksToArtifacts - existing artifacts', () => {
+  const FLOW =
+    'flowchart TD\n    A[Submitted] --> B[Triaged]\n    B --> C{Escalate?}\n    C -->|Yes| D[Tier 2]\n    C -->|No| E[Resolved]';
+  const toolFlow = `<artifact identifier="mermaid-1790933427990" type="application/vnd.ant.mermaid" title="Customer Support Ticket Flowchart">\n${FLOW}\n</artifact>`;
+
+  it('does not nest an artifact inside a tool artifact whose body starts with a diagram keyword', () => {
+    const input = `<artifact identifier="mermaid-1790933536293" type="application/vnd.ant.mermaid" title="One-Time Email Code Login">\nsequenceDiagram\n    participant User\n    participant App\n    User->>App: Request code\n    App-->>User: Code sent\n</artifact>Here is the flow.`;
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  const SEQ = 'sequenceDiagram\n    participant User\n    participant App\n    User->>App: request code';
+  const toolSeq = `<artifact identifier="mermaid-1790933536293" type="application/vnd.ant.mermaid" title="Login">\n${SEQ}\n</artifact>`;
+  const spacedFlow = FLOW.replace(/\n {4}/g, '\n  ').replace('A[Submitted] -->', 'A[Submitted]   -->');
+
+  it.each([
+    ['an identical flowchart body', toolFlow, FLOW],
+    ['a body differing only in whitespace', toolFlow, `${spacedFlow}\n`],
+    ['an identical sequence diagram body', toolSeq, SEQ],
+  ])('does not promote a mermaid fence repeating %s of a tool artifact', (_name, artifact, fenceBody) => {
+    const fence = `\`\`\`mermaid\n${fenceBody}\n\`\`\``;
+    const out = convertCodeBlocksToArtifacts(`${artifact}\n\n${fence}\n`);
+    expect(parseArtifacts(out).artifacts).toHaveLength(1);
+    expect(out).toContain(fence);
+  });
+
+  it('still promotes a different mermaid fence next to a tool artifact', () => {
+    const input = `${toolFlow}\n\n\`\`\`mermaid\ngraph TD\n    X --> Y\n\`\`\`\n`;
+    expect(parseArtifacts(convertCodeBlocksToArtifacts(input)).artifacts).toHaveLength(2);
+  });
+
+  it('still promotes a plain mermaid fence with no artifact in the reply', () => {
+    const input = `Intro\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n`;
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(out).toContain('<artifact identifier="mermaid-flowchart" type="application/vnd.ant.mermaid"');
+    expect(parseArtifacts(out).artifacts).toHaveLength(1);
+  });
+
+  // Only fenced mermaid is promoted: a raw-line pass could capture just the header line.
+  it('leaves a raw sequenceDiagram block outside any fence as text', () => {
+    const input = 'Intro\nsequenceDiagram\n    participant User\n    User->>App: Request code\n';
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  describe('near-duplicate echoes ignore title and comment lines', () => {
+    const BODY = ['sequenceDiagram', '    participant User', '    participant App', '    User->>App: request code'];
+    const art = (lines: string[]) =>
+      `<artifact identifier="mermaid-1" type="application/vnd.ant.mermaid" title="Login">\n${lines.join('\n')}\n</artifact>`;
+    const fenceOf = (lines: string[]) => `\`\`\`mermaid\n${lines.join('\n')}\n\`\`\``;
+    const withLine = (line: string) => [BODY[0], line, ...BODY.slice(1)];
+
+    it.each([
+      ['a title only in the fence', BODY, withLine('    title Checkout')],
+      ['a title only in the artifact', withLine('    title Checkout'), BODY],
+      ['a comment line only in the fence', BODY, withLine('    %% note to self')],
+      ['an accTitle line only in the fence', BODY, withLine('    accTitle: Checkout')],
+      ['an accDescr line only in the fence', BODY, withLine('    accDescr: how checkout works')],
+    ])('does not promote a fence differing by %s', (_name, artifactLines, fenceLines) => {
+      const fence = fenceOf(fenceLines);
+      const out = convertCodeBlocksToArtifacts(`${art(artifactLines)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+      expect(out).toContain(fence);
+    });
+
+    it('still promotes a fence that differs by a real message line', () => {
+      const fence = fenceOf([...BODY, '    App-->>User: code sent']);
+      const out = convertCodeBlocksToArtifacts(`${art(BODY)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(2);
+    });
+
+    // Accepted tradeoff: diagrams differing only by ignored lines count as the same diagram.
+    it.each([
+      ['only their titles', withLine('    title One'), withLine('    title Two')],
+      [
+        'only an init directive',
+        ['%%{init: {"theme": "dark"}}%%', ...BODY],
+        ['%%{init: {"theme": "forest"}}%%', ...BODY],
+      ],
+    ])('does not promote a different diagram that differs by %s', (_name, artifactLines, fenceLines) => {
+      const fence = fenceOf(fenceLines);
+      const out = convertCodeBlocksToArtifacts(`${art(artifactLines)}\n\n${fence}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+      expect(out).toContain(fence);
+    });
+  });
+
+  describe('sequence diagrams and stray openers', () => {
+    it('does not promote raw lines that repeat a sequence diagram artifact', () => {
+      const out = convertCodeBlocksToArtifacts(`${toolSeq}\n\nHere it is.\n${SEQ}\n`);
+      expect(parseArtifacts(out).artifacts).toHaveLength(1);
+    });
+
+    it('still promotes html and leaves a mermaid artifact alone when prose mentions an <artifact> tag', () => {
+      const html = '```html\n<div class="card"><p>hello</p></div>\n```';
+      const input = `Wrap output in an <artifact> tag.\n\n${html}\n\n${toolFlow}`;
+      const out = convertCodeBlocksToArtifacts(input);
+      expect(out).toContain('type="text/html"');
+      expect(out).not.toContain('```html');
+      expect(out).toContain(toolFlow);
+      expect(parseArtifacts(out).artifacts).toHaveLength(2);
+    });
+
+    it('protects an inner artifact when the outer span holds tool output', () => {
+      const input = `<artifact identifier="a" type="text/markdown" title="t">\n~~~ ${TOOL_OUTPUT_MARKER}\nx\n~~~\n<artifact identifier="m" type="application/vnd.ant.mermaid" title="M">\n${SEQ}\n</artifact>\n</artifact>`;
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    it.each([
+      ['text/html', '```mermaid'],
+      ['text/html', '```html'],
+      ['application/vnd.ant.react', '```mermaid'],
+      ['application/vnd.ant.react', '```html'],
+    ])('leaves a %s artifact holding a %s fence untouched', (type, opener) => {
+      const fenceBody = opener === '```html' ? '<div class="card"><p>hi</p></div>' : FLOW;
+      const input = `<artifact identifier="a" type="${type}" title="t">\n<pre>\n${opener}\n${fenceBody}\n\`\`\`\n</pre>\n</artifact>`;
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    it('handles an unclosed stray opener before a real artifact and a duplicate fence', () => {
+      const input = `see <artifact docs\n${toolFlow}\n\n\`\`\`mermaid\n${FLOW}\n\`\`\`\n`;
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    describe('opener acceptance', () => {
+      const FENCE = '```mermaid\nflowchart TD\n    A[Start] --> B[End]\n```';
+      const wrap = (open: string) => `${open}\n${FENCE}\n</artifact>`;
+
+      it.each([
+        ['a tab', '<artifact\tidentifier="x" type="text/plain" title="t">'],
+        ['a newline', '<artifact\nidentifier="x" type="text/plain" title="t">'],
+      ])('treats %s after <artifact as an artifact span', (_name, open) => {
+        const input = wrap(open);
+        expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+      });
+
+      it('does not treat <artifactfoo as an artifact span', () => {
+        const out = convertCodeBlocksToArtifacts(wrap('<artifactfoo identifier="x" type="text/plain" title="t">'));
+        expect(out).not.toContain(FENCE);
+        expect(out).toContain('type="application/vnd.ant.mermaid"');
+      });
+
+      it('promotes a fence after an accepted opener that has no closer', () => {
+        const input = `<artifact identifier="a" type="text/plain" title="t">x\n\n${FENCE}\n`;
+        const out = convertCodeBlocksToArtifacts(input);
+        expect(out).not.toContain(FENCE);
+        expect(out).toContain('type="application/vnd.ant.mermaid"');
+      });
+    });
+  });
+
+  describe('linear time', () => {
+    it.each([
+      ['unclosed bare openers', (n: number) => '<artifact a="1">'.repeat(n)],
+      ['unclosed identified openers', (n: number) => '<artifact identifier="a" type="text/plain" title="t">'.repeat(n)],
+      [
+        'complete small artifacts',
+        (n: number) => '<artifact identifier="a" type="text/plain" title="t">x</artifact>'.repeat(n),
+      ],
+    ])('stays linear on %s', (_name, build) => {
+      assertLinearGrowth(build, 16000, (out, input) => expect(out).toBe(input), convertCodeBlocksToArtifacts, 150);
+    });
+
+    // Smaller size: a rescan per held artifact is quadratic, and 16000 of them would hang the runner.
+    it('stays linear on artifacts that each wrap tool output', () => {
+      const wrapped = `<artifact identifier="a" type="text/plain" title="t">\n~~~ ${TOOL_OUTPUT_MARKER}\nx\n~~~\n</artifact>\n`;
+      assertLinearGrowth(
+        n => wrapped.repeat(n),
+        2000,
+        (out, input) => expect(out).toBe(input),
+        convertCodeBlocksToArtifacts,
+        150
+      );
+    });
+  });
+});
+
+describe('sequence diagram syntax', () => {
+  const SEQ_LINES = [
+    'sequenceDiagram',
+    '    autonumber',
+    '    actor U as User',
+    '    participant A as App Server',
+    '    participant B',
+    '    box Purple Backend',
+    '    participant C',
+    '    end',
+    '    create participant D',
+    '    destroy D',
+    '    U->>+A: hi',
+    '    A-->>-U: ok',
+    '    U-xA: lost',
+    '    U--xA: lost async',
+    '    U-)A: async',
+    '    U--)A: async dotted',
+    '    A->B: plain',
+    '    A-->B: dotted',
+    '    A<<->>B: both',
+    '    A<<-->>B: both dotted',
+    '    activate A',
+    '    Note over A,B: shared',
+    '    Note right of A: right',
+    '    Note left of B: left',
+    '    loop every minute',
+    '    A->>B: ping',
+    '    end',
+    '    alt ok',
+    '    A->>B: yes',
+    '    else fail',
+    '    A->>B: no',
+    '    end',
+    '    opt maybe',
+    '    A->>B: x',
+    '    end',
+    '    par one',
+    '    A->>B: x',
+    '    and two',
+    '    A->>C: y',
+    '    end',
+    '    critical connect',
+    '    A->>B: x',
+    '    option timeout',
+    '    A->>B: y',
+    '    end',
+    '    break stop',
+    '    A->>B: z',
+    '    end',
+    '    rect rgb(0, 0, 0)',
+    '    A->>B: w',
+    '    end',
+    '    deactivate A',
+    '    link A: Docs @ https://example.com',
+  ];
+  const SEQ = SEQ_LINES.join('\n');
+
+  it('accepts every sequence diagram line', () => {
+    for (const line of SEQ_LINES.slice(1)) expect(isMermaidSyntax(line.trim(), true), line).toBe(true);
+  });
+
+  it.each([
+    'participant A as Alice',
+    'actor B',
+    'create participant C',
+    'destroy D',
+    'box Purple X',
+    'A-xB: x',
+    'A-)B: x',
+    'A<<->>B: x',
+    'Note over A,B: x',
+    'loop Every minute',
+    'alt ok',
+    'else fail',
+    'opt maybe',
+    'par x',
+    'and y',
+    'critical z',
+    'option w',
+    'break v',
+    'rect rgb(0,0,0)',
+    'activate A',
+    'deactivate A',
+    'link A: Docs @ https://x',
+    'links A: {"a":"b"}',
+    'title Login',
+    'accTitle: Login',
+    'accDescr: how login works',
+  ])('sequence-only line %j is syntax only in a sequence diagram', line => {
+    expect(isMermaidSyntax(line)).toBe(false);
+    expect(isMermaidSyntax(line, true)).toBe(true);
+  });
+
+  it('keeps lines after a title in a sequence diagram', () => {
+    const body = 'sequenceDiagram\n    title Login\n    A->>B: hi\n    B-->>A: ok';
+    expect(validateMermaidSyntax(body).cleanedContent).toBe(body);
+  });
+
+  it.each([
+    'App->>Email Service: x',
+    'Email Service-->>App: y',
+    'User Agent->>+Auth Server: z',
+    'User Agent-->>-Auth Server : done',
+    'Auth-Service->>DB: x',
+    'Auth-Service-->>Edge Proxy: y',
+    'Edge Proxy-1->>+Auth-Service v2: z',
+    'App->>Auth-xray: w',
+  ])('accepts spaced or hyphenated participant names in %j', line => {
+    expect(isMermaidSyntax(line)).toBe(false);
+    expect(isMermaidSyntax(line, true)).toBe(true);
+  });
+
+  it('keeps a spaced-participant message when cleaning a sequence diagram', () => {
+    const body = 'sequenceDiagram\n    App->>Email Service: Request one-time code email';
+    expect(validateMermaidSyntax(body).cleanedContent).toBe(body);
+  });
+
+  it('still rejects prose that merely contains a colon', () => {
+    expect(isMermaidSyntax('Here is how it works: simple', true)).toBe(false);
+  });
+
+  it('stays linear on very long spaced lines', () => {
+    const run = (input: string) => String(isMermaidSyntax(input, true));
+    assertLinearGrowth(
+      n => 'A '.repeat(n),
+      50000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => `${'A '.repeat(n)}->> ${'B '.repeat(n)}`,
+      25000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => `${'A-'.repeat(n)}->>`,
+      25000,
+      () => undefined,
+      run,
+      20
+    );
+    assertLinearGrowth(
+      n => 'A-x'.repeat(n),
+      25000,
+      () => undefined,
+      run,
+      20
+    );
+  });
+
+  it('does not let sequence keywords keep prose in a flowchart', () => {
+    const input = '```mermaid\nflowchart TD\n    A-->B\noption two is better here\n```\n';
+    const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(input));
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].content).not.toContain('option two');
+  });
+
+  it('still rejects prose', () => {
+    expect(isMermaidSyntax('Here is the diagram:')).toBe(false);
+    expect(isMermaidSyntax('Note that this is prose')).toBe(false);
+  });
+
+  it('validateMermaidSyntax keeps the whole diagram', () => {
+    const { cleanedContent } = validateMermaidSyntax(`${SEQ}\n\nThis shows the flow.`);
+    expect(cleanedContent).toBe(SEQ.trim());
+  });
+
+  it('promotes a standalone mermaid fence holding a full sequence diagram', () => {
+    const { artifacts } = parseArtifacts(convertCodeBlocksToArtifacts(`Intro\n\n\`\`\`mermaid\n${SEQ}\n\`\`\`\n`));
+    expect(artifacts).toHaveLength(1);
+    for (const line of SEQ_LINES) expect(artifacts[0].content).toContain(line.trim());
   });
 });

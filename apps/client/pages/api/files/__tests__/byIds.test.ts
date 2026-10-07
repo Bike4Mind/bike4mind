@@ -1,9 +1,18 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { NextApiResponse } from 'next';
+import { ApiKeyScope } from '@bike4mind/common';
 
-// baseApi wraps the handler; mock it as a pass-through so the test drives the handler directly.
+// Evaluated once at import - not reset in beforeEach - so it captures the options this module's
+// top-level baseApi(...) call was made with.
+const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
+
+// baseApi wraps the handler; mock it as a pass-through so the test drives the handler directly,
+// capturing the options it was called with for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: (h: unknown) => h }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { get: (handler: unknown) => handler };
+  },
 }));
 
 const listFabFiles = vi.fn();
@@ -66,10 +75,11 @@ function makeRes() {
   return { res, getJson: () => jsonBody };
 }
 
-const makeReq = (ids: string[]) => ({
+const makeReq = (ids: string[], apiKeyInfo?: { scopes: ApiKeyScope[] }) => ({
   query: { ids },
   user: { id: 'u1' },
   logger: { warn: vi.fn(), error: vi.fn() },
+  apiKeyInfo,
 });
 
 describe('GET /api/files/byIds', () => {
@@ -100,6 +110,37 @@ describe('GET /api/files/byIds', () => {
     const body = getJson() as Array<{ id: string; fileUrl?: string }>;
     expect(body.map(f => f.id)).toEqual([OWNED_ID, LAKE_ID]); // deleted candidate filtered out
     expect(body.find(f => f.id === LAKE_ID)?.fileUrl).toBe('signed-url');
+  });
+
+  describe('data-lake read scope', () => {
+    beforeEach(() => {
+      resolveAccessibleLakes.mockResolvedValue([{ id: 'lake-1' }]);
+      findAllInIds.mockResolvedValue([{ id: LAKE_ID, tags: [{ name: 'datalake:lake-1' }] }]);
+      grantingLakes.mockReturnValue([{ id: 'lake-1' }]);
+    });
+
+    it('keeps the ACL-dropped lake file out for a files:read-only key, and never resolves its lakes', async () => {
+      const { res, getJson } = makeRes();
+      await handler(makeReq([OWNED_ID, LAKE_ID], { scopes: [ApiKeyScope.READ_FILES] }), res);
+
+      expect(resolveAccessibleLakes).not.toHaveBeenCalled();
+      expect(findAllInIds).not.toHaveBeenCalled();
+      expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID]);
+    });
+
+    it('re-admits the lake file for a key holding datalake:read', async () => {
+      const { res, getJson } = makeRes();
+      await handler(makeReq([OWNED_ID, LAKE_ID], { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] }), res);
+
+      expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID, LAKE_ID]);
+    });
+
+    it('re-admits the lake file for a JWT/browser caller (no apiKeyInfo)', async () => {
+      const { res, getJson } = makeRes();
+      await handler(makeReq([OWNED_ID, LAKE_ID]), res);
+
+      expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID, LAKE_ID]);
+    });
   });
 
   // The byIds twin of the single-file fallback in files/[id]/index.ts - same surface, batched.
@@ -164,6 +205,34 @@ describe('GET /api/files/byIds', () => {
     expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID]);
   });
 
+  describe('ids query shapes', () => {
+    const idsPassedToAcl = () => (listFabFiles.mock.calls[0][1] as { ids: string[] }).ids;
+
+    it('treats a lone ?ids=<id> as a one-element list, not one id per character', async () => {
+      const { res, getJson } = makeRes();
+      await handler({ ...makeReq([]), query: { ids: OWNED_ID } }, res);
+
+      expect(idsPassedToAcl()).toEqual([OWNED_ID]);
+      expect((getJson() as Array<{ id: string }>).map(f => f.id)).toEqual([OWNED_ID]);
+    });
+
+    it.each([
+      ['ids[]', { 'ids[]': [OWNED_ID, LAKE_ID] }],
+      ['ids[0]', { 'ids[0]': OWNED_ID, 'ids[1]': LAKE_ID }],
+      ['repeated ids', { ids: [OWNED_ID, LAKE_ID] }],
+    ])('normalizes the %s form to the same list', async (_label, query) => {
+      await handler({ ...makeReq([]), query }, makeRes().res);
+
+      expect(idsPassedToAcl()).toEqual([OWNED_ID, LAKE_ID]);
+    });
+
+    it('treats a missing ids param as an empty list', async () => {
+      await handler({ ...makeReq([]), query: {} }, makeRes().res);
+
+      expect(idsPassedToAcl()).toEqual([]);
+    });
+  });
+
   it('rejects an id list over the cap before doing any work', async () => {
     const ids = Array.from({ length: 501 }, (_, i) => hexId(String(i % 10)));
     const { res } = makeRes();
@@ -172,5 +241,9 @@ describe('GET /api/files/byIds', () => {
     expect(res.statusCode).toBe(400);
     expect(listFabFiles).not.toHaveBeenCalled();
     expect(resolveAccessibleLakes).not.toHaveBeenCalled();
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
   });
 });

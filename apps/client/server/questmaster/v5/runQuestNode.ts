@@ -3,6 +3,7 @@ import type { AgentExecutionStatus, IQuestGraphDocument, IQuestNodeDocument } fr
 import { BadRequestError, InternalServerError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
+import { apiKeyExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import {
   dispatchAgentExecution,
@@ -43,9 +44,9 @@ export interface RunQuestNodeResult {
 /**
  * Dispatch one QuestNode into the existing agent executor.
  *
- * v5 deliberately runs nodes through the same Lambda that powers agent mode
+ * v5 deliberately runs nodes through the same executor that powers agent mode
  * rather than a parallel loop, so a node inherits checkpointing, per-iteration
- * billing, permission gating, abort, and Lambda self-dispatch for free. The
+ * billing, permission gating, abort, and executor self-dispatch for free. The
  * only v5-specific parts are the prompt (from the node) and the toolset (from
  * `node.enabledTools`).
  *
@@ -61,8 +62,10 @@ export async function runQuestNode(args: {
   userId: string;
   model: string;
   logger: Logger;
+  /** `req.apiKeyInfo`; the lake-tool denials and key id persisted on the execution are both derived from it. */
+  apiKeyInfo?: ApiKeyCredential;
 }): Promise<RunQuestNodeResult> {
-  const { node, graph, userId, model, logger } = args;
+  const { node, graph, userId, model, logger, apiKeyInfo } = args;
 
   if (!graph.sessionId) {
     // AgentExecution.sessionId is required, and the session is what gives the
@@ -74,7 +77,7 @@ export async function runQuestNode(args: {
   // run creates a top-level AgentExecution exactly like an agent-mode run does,
   // so without this a user with the flag on could hold far more agents in
   // flight through v5 than the cap allows. Sweep first, or executions orphaned
-  // by a dead Lambda would count against them (unconditional here rather than
+  // by a stopped executor would count against them (unconditional here rather than
   // memoized as in `agentExecute`: a dispatch is rare and about to cost real
   // credits, so one extra updateMany is noise).
   const swept = await agentExecutionRepository.cleanupStaleActive(userId, STALE_ACTIVE_MS);
@@ -145,6 +148,7 @@ export async function runQuestNode(args: {
       connectionId: HEADLESS_CONNECTION_ID,
       approvedTools: [],
       deniedTools: [],
+      ...apiKeyExecutionFields(apiKeyInfo),
       iterationBilling: [],
       totalCreditsUsed: 0,
       lambdaInvocationCount: 1,
@@ -238,7 +242,7 @@ export async function runQuestNode(args: {
       });
     }
     await questNodeRepository.updateStatus(node.id, 'failed', { completedAt: new Date() });
-    // A throttled Lambda or a failed write is our fault, not the caller's, so
+    // A throttled executor or a failed write is our fault, not the caller's, so
     // this must not come back as a 4xx the client would treat as "bad input".
     const failure = new InternalServerError('Could not start the node run');
     failure.cause = err;

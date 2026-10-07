@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_RESOURCE_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 import {
   SimplifiedChatRequestSchema,
@@ -20,7 +21,7 @@ export const chatContract = defineEndpoint({
   summary: 'Send a chat message',
   description:
     'Sends a message to the AI and creates a quest to process it. By default (async) the call ' +
-    'returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send ' +
+    'returns immediately with a quest id; poll `GET /api/v1/quests/{id}` for the reply. Send ' +
     '`wait: true` to block until the reply is ready and receive it inline. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
@@ -37,7 +38,13 @@ export const chatContract = defineEndpoint({
     'fires outside the process try/catch that would classify it onto a quest. A ' +
     'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
     '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
-    'Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'Authenticate with an API key (`b4m_live_`) or a JWT. ' +
+    'Session resolution: pass `sessionId` to continue an existing notebook. An API-key caller ' +
+    'that omits it gets a BRAND-NEW notebook rather than the notebook the human last had open, ' +
+    'and `newConversation: true` forces a new notebook for any auth mode; both return the new ' +
+    'id as `sessionId`, so the caller can continue the conversation by passing it back. A ' +
+    'first-party JWT caller that omits `sessionId` keeps the last-opened-notebook fallback. ' +
+    'Sending `sessionId` and `newConversation` together is a 422.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -50,12 +57,12 @@ export const chatContract = defineEndpoint({
     200: {
       description:
         'Message accepted - NOT a completed turn. The default (async) path returns this queued ' +
-        'ACK; the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` ' +
+        'ACK; the outcome arrives on `GET /api/v1/quests/{id}` (see the `sendChatMessage200PollResult` ' +
         'schema). With `wait: true` the ' +
         'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
         '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
         'response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on ' +
-        'both that `wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose ' +
+        'both that `wait: true` body and the polled quest (`GET /api/v1/quests/{id}`) - the prose ' +
         'explaining why lands in `reply`/`response` like any other answer, so the reply text alone ' +
         'cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it ' +
         'unconditionally, so match on `type: "error"` first - it covers credit exhaustion, a ' +
@@ -68,13 +75,16 @@ export const chatContract = defineEndpoint({
         '`errorCode` then names the failure reason, but only for the billing failures that have one - ' +
         '`"insufficient_credits"` today; it is absent on every other `type: "error"` turn, so never use ' +
         'its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` ' +
-        'body. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 ' +
+        'body. The body also carries `sessionId`, the notebook the turn was recorded in - for an ' +
+        'API-key caller that sent none (or any caller sending `newConversation: true`), that is the ' +
+        "freshly created notebook's id; pass it back as the request's `sessionId` to continue. " +
+        'Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 ' +
         'carrying the same `errorCode` vocabulary.',
       schema: ChatAckSchema,
       pollResult: {
         schema: ChatQuestPollResultSchema,
         description:
-          'Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished ' +
+          'Outcome fields of the quest polled at `GET /api/v1/quests/{id}` after this ACK. A finished ' +
           'turn that failed is `status: "done"` with `type: "error"` and the failure text in ' +
           '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check ' +
           '`type` first, and also treat a terminal `status: "stopped"` (a missing session, a ' +
@@ -89,12 +99,14 @@ export const chatContract = defineEndpoint({
           'overload - have NO `errorCode`; its absence does not mean success, only that the ' +
           'failure is unclassified. A recovered stuck quest that still has renderable content is ' +
           'not a failure at all: it keeps `type: "message"` even though it did not finish, so a ' +
-          'caller gets the content rather than an error. The poll body carries further fields not ' +
-          'modelled here, including `images`, ' +
+          'caller gets the content rather than an error. `fallbackInfo` is present only when the ' +
+          'requested model failed and another model produced the reply: `fallbackModel` answered, ' +
+          '`primaryModel` is what was asked for, and `reason` is the error from the first failed attempt on the requested model. ' +
+          'The poll body carries further fields not modelled here, including `images`, ' +
           '`files`, `toolPayloads`, `promptMeta`, and the attachment report ' +
           '(`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.',
         example: {
-          id: '664f1c2b9a1e4d0012ab34cd',
+          id: EXAMPLE_RESOURCE_ID,
           status: 'done',
           type: 'error',
           errorCode: 'insufficient_credits',
@@ -102,9 +114,19 @@ export const chatContract = defineEndpoint({
         },
       },
     },
-    400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
+    400: {
+      description:
+        'The request was rejected before a turn was created: a supplied `model` is unknown, disabled ' +
+        'or not a chat model; or no usable default chat model is configured and none was supplied.',
+      schema: ApiErrorSchema,
+    },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },
-    422: { description: 'Request body failed schema validation.', schema: ApiErrorSchema },
+    422: {
+      description:
+        'Request body failed schema validation, or `sessionId` and `newConversation: true` were sent ' +
+        'together (they are mutually exclusive).',
+      schema: ApiErrorSchema,
+    },
     429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {

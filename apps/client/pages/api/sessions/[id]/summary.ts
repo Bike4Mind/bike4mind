@@ -31,10 +31,13 @@ const handler = baseApi().post<Request<{}, unknown, unknown, { id: string }>>(as
     logger: req.logger,
   });
 
+  // Same admin carve-out as tag.ts: an admin's job re-checks as the owner (still not-deleted).
+  const requesterId = req.user?.isAdmin ? undefined : req.user?.id;
   const requestId = await SessionEvents.Summarize.publish({
     sessionId: sessionId,
     callTagging: true,
     trigger: 'manual',
+    requesterId,
   });
 
   return res.json({ message: 'Summarization job queued', requestId });

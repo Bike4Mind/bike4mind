@@ -23,7 +23,10 @@ type JoinTarget = modelDiscoveryService.JoinTarget;
 interface CatalogView {
   /** Every id the catalog holds - the universe an aggregator may patch (sec 5.5). */
   targets: JoinTarget[];
-  /** Ids already 'active', so Bedrock skips their per-model availability call. */
+  /**
+   * Ids already 'active' and not auto-disabled, so Bedrock skips their per-model availability call.
+   * An auto-disabled one is asked again: that answer is the only thing that can lift the disable.
+   */
   activeModelIds: Set<string>;
   /**
    * This view is not a picture of the catalog: the read threw, or it returned
@@ -71,7 +74,7 @@ function readCatalogView(logger: Logger): CatalogViewReader {
         const backend = record.backend;
         targets.push({ modelId, backend: typeof backend === 'string' ? backend : undefined });
         const lifecycle = record.lifecycle as { status?: string } | undefined;
-        if (lifecycle?.status === 'active') activeModelIds.add(modelId);
+        if (lifecycle?.status === 'active' && record.autoDisabled !== true) activeModelIds.add(modelId);
       }
       // A clean read of zero rows is indistinguishable from a failed one for
       // every consumer here, and it is reachable: boot continues after a seeding

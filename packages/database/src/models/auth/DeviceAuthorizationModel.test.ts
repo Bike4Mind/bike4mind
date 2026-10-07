@@ -43,4 +43,40 @@ describe('DeviceAuthorizationModel repository', () => {
     expect(await deviceAuthorizationRepository.findByDeviceCode('nope')).toBeFalsy();
     expect(await deviceAuthorizationRepository.findByDeviceCode('raw-dead')).toBeFalsy();
   });
+
+  // The RFC 8628 s3.4 binding in the token route reads clientId to decide who may redeem a
+  // code. A row without one, or with an id the allowlist never admitted, would make that check
+  // meaningless, so the schema has to refuse both at write time.
+  it('rejects a row with no clientId', async () => {
+    await expect(
+      deviceAuthorizationRepository.create(
+        base({ userCode: 'LLLL-2345', deviceCode: digestDeviceCode('c-4'), clientId: undefined })
+      )
+    ).rejects.toThrow(/clientId/);
+  });
+
+  it('rejects a clientId that is not on the allowlist', async () => {
+    await expect(
+      deviceAuthorizationRepository.create(
+        base({ userCode: 'MMMM-2345', deviceCode: digestDeviceCode('c-5'), clientId: 'b4m-rogue' })
+      )
+    ).rejects.toThrow(/clientId/);
+  });
+
+  it('countPendingAndUnexpired counts only live pending records', async () => {
+    const past = new Date(Date.now() - 1000);
+    await deviceAuthorizationRepository.create(base({ userCode: 'EEEE-2345', deviceCode: digestDeviceCode('c-1') }));
+    await deviceAuthorizationRepository.create(base({ userCode: 'FFFF-2345', deviceCode: digestDeviceCode('c-2') }));
+    await deviceAuthorizationRepository.create(
+      base({ userCode: 'GGGG-2345', deviceCode: digestDeviceCode('c-3'), expiresAt: past })
+    );
+    for (const [userCode, status] of [
+      ['HHHH-2345', 'approved'],
+      ['JJJJ-2345', 'denied'],
+      ['KKKK-2345', 'consumed'],
+    ]) {
+      await deviceAuthorizationRepository.create(base({ userCode, status, deviceCode: digestDeviceCode(userCode) }));
+    }
+    expect(await deviceAuthorizationRepository.countPendingAndUnexpired()).toBe(2);
+  });
 });

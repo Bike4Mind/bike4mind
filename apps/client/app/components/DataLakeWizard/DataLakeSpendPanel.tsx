@@ -12,7 +12,7 @@ import {
   Typography,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import type { IDataLakeSpendResponse } from '@bike4mind/common';
+import type { IDataLakeSpendResponse, UsageEventFeature } from '@bike4mind/common';
 import { formatUsd } from '@client/app/utils/formatUsd';
 import { BreakdownTable } from '@client/app/components/common/BreakdownTable';
 
@@ -20,6 +20,22 @@ const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
 
 const microToUsd = (microUsd: number) => microUsd / 1_000_000;
+
+/**
+ * Research-run judge cost was invisible on this tab even after it started reaching the
+ * ledger, because nothing distinguished it from ingestion spend in the totals above. Today,
+ * `dataLakeId` is attached to a UsageEvent only by `fabFileVectorize.ts` (`'embedding'`) and
+ * `runLakeResearch.ts` (`'operations'`, see `recordOperationalUsage`'s own doc comment) - so
+ * within one lake's ledger, every `'operations'` row is currently a research judge call. Nothing
+ * enforces that pairing, though: a raw feature name is shown for anything else (there is none
+ * today), and a future THIRD lake-attributed producer of `'operations'` spend would silently
+ * inherit the "Research" label below and must revisit this map.
+ */
+const FEATURE_LABEL: Partial<Record<UsageEventFeature, string>> = {
+  embedding: 'File ingestion',
+  operations: 'Research',
+};
+const featureLabel = (feature: UsageEventFeature): string => FEATURE_LABEL[feature] ?? feature;
 
 const budgetProgressColor = (pct: number): 'primary' | 'warning' | 'danger' => {
   if (pct >= 100) return 'danger';
@@ -68,21 +84,29 @@ export function DataLakeSpendPanel({
 
   if (!summary) return null;
 
-  const lifetimeUsd = summary.embeddingSpendMicroUsd !== null ? microToUsd(summary.embeddingSpendMicroUsd) : null;
+  const ingestionLifetimeUsd =
+    summary.embeddingSpendMicroUsd !== null ? microToUsd(summary.embeddingSpendMicroUsd) : null;
+  const researchLifetimeUsd = summary.researchLifetimeUsd ?? 0;
+  const lifetimeUsd = ingestionLifetimeUsd !== null ? ingestionLifetimeUsd + researchLifetimeUsd : null;
   const windowUsd = summary.ledger.totals.cogsUsd;
   const lakeBudgetUsd = microToUsd(summary.perLakeBudgetMicroUsd);
   const periodBudgetUsd = microToUsd(summary.perPeriodBudgetMicroUsd);
   const runBudgetUsd = microToUsd(summary.perRunBudgetMicroUsd);
+  // The per-lake budget caps INGESTION only, so the bar reads the embedding meter only - the same
+  // number `enforceEmbeddingSpendGate` compares against (must stay in sync). Research is not part of
+  // this percentage; it gets its own line below, labelled as uncapped by this budget.
   const lakePct =
-    summary.perLakeBudgetMicroUsd > 0 && summary.embeddingSpendMicroUsd !== null
-      ? (summary.embeddingSpendMicroUsd / summary.perLakeBudgetMicroUsd) * 100
+    summary.perLakeBudgetMicroUsd > 0 && ingestionLifetimeUsd !== null
+      ? (ingestionLifetimeUsd / lakeBudgetUsd) * 100
       : null;
 
-  // A lake with no ledger rows yet is either brand-new (lifetime meter also 0) or predates this
-  // feature's ship date (lifetime meter nonzero) - the two need distinct copy.
+  // A lake with no ledger rows yet is either brand-new (no lifetime spend of either kind) or predates
+  // this feature's ship date (lifetime spend nonzero) - the two need distinct copy. Research counts
+  // toward lifetime spend so the empty state never contradicts the Lifetime chip.
   const hasNoLedgerRows = summary.ledger.totals.requests === 0;
-  const isBrandNew = hasNoLedgerRows && (summary.embeddingSpendMicroUsd ?? 0) === 0;
-  const predatesLedger = hasNoLedgerRows && (summary.embeddingSpendMicroUsd ?? 0) > 0;
+  const hasLifetimeSpend = (summary.embeddingSpendMicroUsd ?? 0) > 0 || researchLifetimeUsd > 0;
+  const isBrandNew = hasNoLedgerRows && !hasLifetimeSpend;
+  const predatesLedger = hasNoLedgerRows && hasLifetimeSpend;
 
   return (
     <Stack gap={2} data-testid="datalake-spend-panel">
@@ -104,6 +128,7 @@ export function DataLakeSpendPanel({
           variant="plain"
           onClick={onRefetch}
           loading={isFetching}
+          aria-label="Refresh spend"
           data-testid="datalake-spend-refresh-btn"
         >
           <RefreshIcon fontSize="small" />
@@ -132,7 +157,8 @@ export function DataLakeSpendPanel({
           {summary.perLakeBudgetMicroUsd > 0 && lakePct !== null ? (
             <Box data-testid="datalake-spend-lake-progress">
               <Typography level="body-sm">
-                Per-lake budget: {formatUsd(lifetimeUsd ?? 0)} of {formatUsd(lakeBudgetUsd)} ({Math.round(lakePct)}%)
+                Per-lake ingestion budget: {formatUsd(ingestionLifetimeUsd ?? 0)} of {formatUsd(lakeBudgetUsd)} (
+                {Math.round(lakePct)}%)
               </Typography>
               <LinearProgress
                 determinate
@@ -143,11 +169,18 @@ export function DataLakeSpendPanel({
             </Box>
           ) : (
             <Typography level="body-sm" data-testid="datalake-spend-lake-uncapped">
-              Per-lake budget: uncapped
+              Per-lake ingestion budget: uncapped
+            </Typography>
+          )}
+          {researchLifetimeUsd > 0 && (
+            <Typography level="body-sm" data-testid="datalake-spend-research-lifetime">
+              Research: {formatUsd(researchLifetimeUsd)} lifetime (not capped by the per-lake budget; each research run
+              has its own cost ceiling)
             </Typography>
           )}
           <Typography level="body-sm" data-testid="datalake-spend-perrun-cap">
-            Per-run budget: {formatUsd(runBudgetUsd)} (applies per upload batch)
+            Ingestion per-run budget: {formatUsd(runBudgetUsd)} (applies per upload batch; a research run has its own
+            cost ceiling, set per saved configuration)
           </Typography>
           <Typography level="body-sm">
             Platform-wide budget: {formatUsd(periodBudgetUsd)} per {summary.periodHours}h (shared across every lake)
@@ -157,7 +190,7 @@ export function DataLakeSpendPanel({
 
       {isBrandNew ? (
         <Typography level="body-sm" color="neutral" data-testid="datalake-spend-empty">
-          No embedding spend recorded yet. Costs appear here after the first file is indexed.
+          No spend recorded yet. Costs appear here after the first file is indexed or research run completes.
         </Typography>
       ) : predatesLedger ? (
         <Typography level="body-sm" color="neutral" data-testid="datalake-spend-empty">
@@ -179,7 +212,19 @@ export function DataLakeSpendPanel({
             }))}
           />
           <BreakdownTable
-            title="By day"
+            title="By feature"
+            testid="datalake-spend-feature-table"
+            keyLabel="Feature"
+            rows={summary.ledger.byFeature.map(r => ({
+              key: r.feature,
+              label: featureLabel(r.feature),
+              requests: r.requests,
+              cogsUsd: r.cogsUsd,
+              creditsCharged: r.creditsCharged,
+            }))}
+          />
+          <BreakdownTable
+            title="By day (UTC)"
             testid="datalake-spend-overtime-table"
             keyLabel="Day"
             rows={summary.ledger.overTime.map(r => ({

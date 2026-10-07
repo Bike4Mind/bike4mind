@@ -22,6 +22,7 @@ import {
   fabFileModerationDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
+  generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -35,8 +36,13 @@ import {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueueDLQ,
   videoGenerationDLQ,
+  generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -47,6 +53,7 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -95,7 +102,7 @@ if (isMonitoredStage) {
 
   dlqAlarmTopic!.subscribe(
     {
-      handler: 'apps/client/server/events/dlqAlarmToSlack.handler',
+      handler: 'apps/workers/src/events/dlqAlarmToSlack.handler',
       link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
       environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
       logging: { retention: '3 days' },
@@ -224,6 +231,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: imageEditDLQ,
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+    queue: generationCallbackQueueDLQ,
+  },
+  {
     label: 'research-engine',
     displayName: 'Research Engine',
     application: 'ResearchEngine',
@@ -315,6 +329,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: lakeMemoryQueueDLQ,
   },
   {
+    label: 'lake-inconsistency-model',
+    displayName: 'Lake Model Inconsistency Detection',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeInconsistencyModelQueue',
+    queue: lakeInconsistencyModelQueueDLQ,
+  },
+  {
     label: 'drive-lake-ingest',
     displayName: 'Drive Lake Ingest',
     application: 'DataLakeManagement',
@@ -322,11 +343,39 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: driveLakeIngestQueueDLQ,
   },
   {
+    label: 'drive-disconnect-purge',
+    displayName: 'Drive Disconnect Purge',
+    application: 'DataLakeManagement',
+    sourceQueue: 'driveDisconnectPurgeQueue',
+    queue: driveDisconnectPurgeQueueDLQ,
+  },
+  {
+    label: 'github-lake-ingest',
+    displayName: 'GitHub Lake Ingest',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeIngestQueue',
+    queue: githubLakeIngestQueueDLQ,
+  },
+  {
+    label: 'github-lake-revoke',
+    displayName: 'GitHub Lake Revoke',
+    application: 'DataLakeManagement',
+    sourceQueue: 'githubLakeRevokeQueue',
+    queue: githubLakeRevokeQueueDLQ,
+  },
+  {
     label: 'video-generation',
     displayName: 'Video Generation',
     application: 'VideoGeneration',
     sourceQueue: 'videoGenerationQueue',
     queue: videoGenerationDLQ,
+  },
+  {
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+    queue: generationJobDLQ,
   },
   {
     label: 'liveops-triage',
@@ -435,6 +484,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
     queue: bobRunQueueDLQ,
+  },
+  // queues.ts - LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology)
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+    queue: libreoncologyAudioRenderQueueDLQ,
   },
 ];
 

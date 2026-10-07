@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FabFile, FabFileChunk, fabFileRepository, fabFileChunkRepository } from '../models/content/FabFileModel';
 import { REBUILD_PENDING_STALE_MS } from '@bike4mind/common';
 import { setupMongoTest, testFabFileId as fid } from '../__test__/utils';
@@ -260,6 +260,35 @@ describe('FabFileRepository.resetChunkStateByIds', () => {
     await FabFile.deleteMany({});
   });
 
+  it('resets every file one at a time when run with concurrency 1', async () => {
+    // More files than the default batch size (10), so a dropped option would show up as a peak > 1.
+    const files = await FabFile.create(
+      Array.from({ length: 12 }, () => makeFile({ chunked: true, chunkCount: 1, isChunking: false }))
+    );
+    const ids = files.map(f => f._id.toString());
+
+    const original = FabFile.findOneAndUpdate.bind(FabFile);
+    let inFlight = 0;
+    let peak = 0;
+    const spy = vi.spyOn(FabFile, 'findOneAndUpdate').mockImplementation(((...args: unknown[]) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      const query = (original as (...a: unknown[]) => PromiseLike<unknown>)(...args);
+      return Promise.resolve(query).finally(() => {
+        inFlight -= 1;
+      });
+    }) as never);
+
+    try {
+      expect(await fabFileRepository.resetChunkStateByIds(ids, { concurrency: 1 })).toEqual(ids);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(peak).toBe(1);
+    expect(await FabFile.countDocuments({ _id: { $in: ids }, chunked: false })).toBe(12);
+  });
+
   it('resets the chunk/vector flags INCLUDING error, so a re-enqueued job re-chunks', async () => {
     const [f] = await FabFile.create([
       makeFile({
@@ -365,7 +394,7 @@ describe('reset -> worker claim handoff (real DB)', () => {
   });
 
   const STALE_MS = 30 * 60_000;
-  // Byte-for-byte the claim in apps/client/server/queueHandlers/fabFileChunk.ts. If that query
+  // Byte-for-byte the claim in apps/workers/src/queueHandlers/fabFileChunk.ts. If that query
   // changes, this must change with it - which is the point.
   const workerClaim = async (id: string) => {
     const now = new Date();

@@ -4,7 +4,15 @@ import {
   ChatCompletionProcess,
   featureNames,
 } from '@bike4mind/services/llm';
-import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
+import {
+  BadRequestError,
+  getSettingsMap,
+  getSettingsValue,
+  NotFoundError,
+  SQSService,
+  UnprocessableEntityError,
+} from '@bike4mind/utils';
+import { sessionService } from '@bike4mind/services';
 import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
@@ -14,7 +22,15 @@ import {
   isChatModelUsable,
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
-import { adminSettingsRepository, User, Session } from '@bike4mind/database';
+import {
+  adminSettingsRepository,
+  agentRepository,
+  fabFileRepository,
+  projectRepository,
+  sessionRepository,
+  User,
+  Session,
+} from '@bike4mind/database';
 import {
   B4MLLMTools,
   chatContract,
@@ -23,10 +39,15 @@ import {
   type SimplifiedChatRequest,
 } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
+import type { Request } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
+import { questReplyText } from '@server/utils/questPollBody';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@server/utils/resolveActiveOrg';
+import { dataLakeToolsDeniedFor } from '@server/dataLakes/dataLakeScopes';
 
 // How many distinct unrecognized tool ids are named in the warn log and echoed on the response.
 // Both are bounded by the same number so the response is no less bounded than the log; the cap is
@@ -78,9 +99,6 @@ const handler = nextRouteForContract(chatContract, {
     }
   }
 
-  apiTimer.phase('session');
-  const sessionId = await getSessionId(simplifiedRequest.sessionId ?? undefined, req.user.id);
-
   // Pre-compute tool recommendations once (used by both transform and response metadata)
   const recommendations = simplifiedRequest.toolMode === 'smart' ? recommendTools(simplifiedRequest.message) : [];
 
@@ -117,6 +135,13 @@ const handler = nextRouteForContract(chatContract, {
   // is what lets an org member whose org pool is empty still spend their own credits.
   const organizationId = await resolveActiveOrg(req, simplifiedRequest.organizationId);
 
+  // Resolve the notebook only AFTER the org check: an API-key/newConversation caller gets a
+  // freshly created notebook, and a request that resolveActiveOrg rejects (403/404) must not have
+  // already minted one. `createdNotebook` marks a session this request opened, so a later reject
+  // from invoke (an unknown/disabled model) can remove it - see the invoke try/catch below.
+  apiTimer.phase('session');
+  const { sessionId, createdNotebook } = await resolveChatSessionId(req, simplifiedRequest);
+
   // Transform to internal format. The resolved organizationId (already a validated hex string,
   // or undefined for personal) also scopes team-wide system prompts downstream.
   const internalRequest = transformToInternalFormat(
@@ -124,7 +149,8 @@ const handler = nextRouteForContract(chatContract, {
     req.user.id,
     organizationId,
     recommendations,
-    requestedTools
+    requestedTools,
+    dataLakeToolsDeniedFor(req)
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
@@ -160,10 +186,31 @@ const handler = nextRouteForContract(chatContract, {
   // Create the quest (this is immediate)
   apiTimer.phase('invoke');
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
-  const quest = await invokeService.invoke({
-    body: internalRequest,
-    userId: req.user.id,
-  });
+  let quest: Awaited<ReturnType<ChatCompletionInvoke['invoke']>>;
+  try {
+    quest = await invokeService.invoke({
+      body: internalRequest,
+      userId: req.user.id,
+      // Attributes a lake write a tool drives this turn to the key rather than its owner.
+      apiKeyId: req.apiKeyInfo?.keyId,
+    });
+  } catch (error) {
+    // invoke validates a caller-supplied model (unknown, disabled, no longer accessible) before it
+    // creates the quest, so a rejected turn can land here with the fresh notebook already open.
+    // Nothing references that notebook yet - remove it rather than leave an empty orphan that
+    // disguises itself as a real chat in the list. Best-effort: cleanup must not mask the original
+    // error, and invoke throws before quest creation on every path that reaches the caller.
+    if (createdNotebook) {
+      try {
+        await sessionRepository.delete(sessionId);
+      } catch (cleanupError) {
+        req.logger.warn(
+          `Failed to remove notebook ${sessionId} after a rejected turn: ${(cleanupError as Error)?.message}`
+        );
+      }
+    }
+    throw error;
+  }
 
   if (!quest) throw new NotFoundError('Failed to create quest');
 
@@ -178,6 +225,9 @@ const handler = nextRouteForContract(chatContract, {
         ...internalRequest,
         questId: quest.id,
         userId: req.user.id,
+        // Mirrors the apiKeyId handed to invoke() above: process() reads the tool context's key
+        // from this body only, so without it a key turn reaches tools as a signed-in session.
+        apiKeyId: req.apiKeyInfo?.keyId,
         embeddingModel: currentEmbeddingModel,
         queryComplexity: 'simple',
         // Optional schema fields - declared for QuestStartBodySchema type conformance
@@ -218,13 +268,14 @@ const handler = nextRouteForContract(chatContract, {
     return res.json({
       id: completedQuest.id,
       status: completedQuest.status,
+      sessionId,
       message_received: true,
       timestamp: new Date().toISOString(),
       model: internalRequest.params.model,
-      response: completedQuest.reply,
+      response: questReplyText(completedQuest),
       responses: completedQuest.replies,
       // Terminal-failure classifier (see chatContract's 200 description). `type` is present
-      // unconditionally, matching the polled quest (GET /api/quests/{id}); `errorCode` stays
+      // unconditionally, matching the polled quest (GET /api/v1/quests/{id}); `errorCode` stays
       // conditional since only the billing failures set it.
       type: completedQuest.type,
       ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
@@ -255,6 +306,7 @@ const handler = nextRouteForContract(chatContract, {
   return res.json({
     id: quest.id,
     status: 'queued',
+    sessionId,
     message_received: true,
     timestamp: new Date().toISOString(),
     model: internalRequest.params.model,
@@ -311,26 +363,73 @@ function buildToolMeta({
 }
 
 /**
- * Get session ID - either from request or user's most recent notebook
+ * Resolve the notebook/session this turn is recorded in.
+ *
+ * An API-key caller with no `sessionId` gets a BRAND-NEW notebook, and so does any caller that
+ * sends `newConversation: true`. Neither reads nor writes `User.lastNotebookId`: that field is the
+ * human's UI cursor (the notebook the web app reopens), so a script must not be able to post into
+ * it or repoint it at its own notebook. A first-party JWT caller with no `sessionId` keeps the old
+ * last-notebook fallback. An explicit `sessionId` always wins - its access check lives downstream.
+ *
+ * `createdNotebook` is true only when this call opened the notebook, so the caller can discard it if
+ * a later validation rejects the turn (see the invoke try/catch).
  */
-async function getSessionId(requestedSessionId: string | undefined, userId: string): Promise<string> {
-  if (requestedSessionId) {
-    return requestedSessionId;
+async function resolveChatSessionId(
+  req: Request,
+  request: SimplifiedChatRequest
+): Promise<{ sessionId: string; createdNotebook: boolean }> {
+  if (request.sessionId && request.newConversation) {
+    throw new UnprocessableEntityError('Pass either sessionId or newConversation, not both');
   }
 
-  const user = await User.findById(userId, { lastNotebookId: 1 });
+  if (request.sessionId) {
+    return { sessionId: request.sessionId, createdNotebook: false };
+  }
+
+  if (request.newConversation || isApiKeyAuth(req)) {
+    const session = await sessionService.createSession(
+      req.user,
+      { name: newNotebookName(req) },
+      {
+        db: {
+          sessions: sessionRepository,
+          projects: projectRepository,
+          fabFiles: fabFileRepository,
+          agents: agentRepository,
+        },
+        logger: req.logger,
+      },
+      { origin: resolveSessionOrigin(req) }
+    );
+    req.logger.info(
+      `POST /api/chat created notebook ${session.id} for ${isApiKeyAuth(req) ? 'API key' : 'new conversation'}`
+    );
+    return { sessionId: session.id, createdNotebook: true };
+  }
+
+  const user = await User.findById(req.user.id, { lastNotebookId: 1 });
   if (user?.lastNotebookId) {
-    return user.lastNotebookId.toString();
+    return { sessionId: user.lastNotebookId.toString(), createdNotebook: false };
   }
 
-  const mostRecentSession = await Session.findOne({ userId }).sort({ lastUpdated: -1, createdAt: -1 });
+  const mostRecentSession = await Session.findOne({ userId: req.user.id }).sort({ lastUpdated: -1, createdAt: -1 });
   if (mostRecentSession) {
     // Update user's lastNotebookId for future requests
-    await User.findByIdAndUpdate(userId, { lastNotebookId: mostRecentSession.id });
-    return mostRecentSession.id;
+    await User.findByIdAndUpdate(req.user.id, { lastNotebookId: mostRecentSession.id });
+    return { sessionId: mostRecentSession.id, createdNotebook: false };
   }
 
-  throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/sessions/create');
+  throw new NotFoundError('No notebook found. Please create a notebook first using POST /api/v1/sessions');
+}
+
+/**
+ * Notebook name for a session this endpoint creates on the caller's behalf. The `API` prefix is
+ * what makes an API-created notebook identifiable to a human scanning the notebook list; a JWT
+ * caller's `newConversation` is labelled as an ordinary new chat instead. ASCII only, UTC-stamped.
+ */
+function newNotebookName(req: Request): string {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  return `${isApiKeyAuth(req) ? 'API chat' : 'New chat'} - ${stamp} UTC`;
 }
 
 function transformToInternalFormat(
@@ -341,7 +440,9 @@ function transformToInternalFormat(
   // Already filtered to known ids AND deduped by the caller: unknowns are dropped there so the
   // wire schema stays OpenAPI-representable and so they can be reported back on the response,
   // and repeats are collapsed there because nothing downstream of this layer collapses them.
-  requestedTools: B4MLLMTools[] = []
+  requestedTools: B4MLLMTools[] = [],
+  // Server-derived only: the public request schema has no deniedTools field for a client to set.
+  deniedTools: string[] = []
 ) {
   // Compute effective tools. `tools` is a top-level field with nothing marking it conditional on
   // toolMode, so a named tool is honored on its own rather than silently dropped; 'fast' ignores
@@ -399,6 +500,7 @@ function transformToInternalFormat(
     enableArtifacts: false,
     ...(request.promptMode ? { promptMode: request.promptMode } : {}),
     ...(request.skip_auto_offers ? { skipAutoOffers: true } : {}),
+    ...(deniedTools.length > 0 ? { deniedTools } : {}),
     includeSystemPrompt: request.includeSystemPrompt,
     ...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
     ...(isToolsEnabled

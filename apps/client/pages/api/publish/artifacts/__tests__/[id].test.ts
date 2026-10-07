@@ -29,6 +29,15 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: (...a: unknown[]) => findOne(...a) },
+  // Faithful copy of the model's helper - the real one's behavior (including the legacy-scalar
+  // fold-in) is pinned by PublishedArtifactModel.shareToken.test.ts. The gate-surface check
+  // reads it rather than the scalar as of #3255 step 3.
+  liveShareTokens: (artifact: { shareToken?: string; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
+    const live = (artifact.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+    const legacy = artifact.shareToken;
+    if (legacy && !live.some(e => e.token === legacy)) return [{ token: legacy, revokedAt: null }, ...live];
+    return live;
+  },
 }));
 
 vi.mock('@server/services/publish', () => ({
@@ -376,6 +385,35 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     (a as unknown as { shareToken?: string }).shareToken = 'TOKEN-abc123';
     return a;
   }
+
+  /** A PRIVATE artifact whose only link lives in the shareTokens array (no legacy scalar). */
+  function arrayOnlyShared(entryOver: Record<string, unknown> = {}) {
+    const a = makeArtifact();
+    a.visibility = 'private';
+    (a as unknown as { shareTokens?: unknown[] }).shareTokens = [
+      { _id: 'entry-arr-1', token: 'TOKEN-arr', createdAt: new Date(), revokedAt: null, ...entryOver },
+    ];
+    return a;
+  }
+
+  it('ACCEPTS a passphrase gate on a private artifact whose only live link is in the array', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      arrayOnlyShared()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.save).toHaveBeenCalled();
+  });
+
+  it('REJECTS a passphrase gate on a private artifact whose only array link is revoked', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      arrayOnlyShared({ revokedAt: new Date() })
+    );
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
 
   it('ACCEPTS a passphrase gate on a private artifact that has a share token', async () => {
     const { res, artifact } = await patchBody(

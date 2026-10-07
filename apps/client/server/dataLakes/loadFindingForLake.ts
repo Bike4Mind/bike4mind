@@ -4,7 +4,6 @@ import { dataLakeService } from '@bike4mind/services';
 import { NotFoundError } from '@bike4mind/utils';
 import type { Request } from 'express';
 import { assertDataLakeWriteScope } from './dataLakeScopes';
-import { toAccessContext } from './toAccessContext';
 
 /**
  * Authorize a caller to WRITE against one finding, and hand back the finding with the lake it
@@ -24,10 +23,10 @@ import { toAccessContext } from './toAccessContext';
  */
 export async function loadFindingForLake(
   req: Request,
-  params: { lakeId: string; findingId: string }
+  params: { lakeId: string; findingId: string; ctx: AccessContext }
 ): Promise<{ lake: IDataLakeDocument; finding: IDataLakeFindingDocument; ctx: AccessContext }> {
   assertDataLakeWriteScope(req);
-  const ctx = await toAccessContext(req);
+  const { ctx } = params;
 
   const lake = await dataLakeService.assertLakeWriteAccess(params.lakeId, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },

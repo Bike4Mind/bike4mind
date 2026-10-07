@@ -30,6 +30,7 @@ import { knowledgeBaseSearchTool } from './implementation/knowledgeBaseSearch';
 import { knowledgeBaseRetrieveTool } from './implementation/knowledgeBaseRetrieve';
 import { knowledgeBaseCountTool } from './implementation/knowledgeBaseCount';
 import { describeKnowledgeBaseTool } from './implementation/describeKnowledgeBase';
+import { createDataLakeTool, listMyDataLakesTool, saveContentToDataLakeTool } from './implementation/dataLakeContent';
 import { navigateViewTool } from './implementation/navigateView';
 import { jupyterNotebookTool } from './implementation/jupyterNotebook';
 import { excelGenerationTool } from './implementation/excelGeneration';
@@ -132,6 +133,9 @@ export const b4mTools = {
   retrieve_knowledge_content: knowledgeBaseRetrieveTool,
   count_knowledge_base: knowledgeBaseCountTool,
   describe_knowledge_base: describeKnowledgeBaseTool,
+  list_my_data_lakes: listMyDataLakesTool,
+  create_data_lake: createDataLakeTool,
+  save_content_to_data_lake: saveContentToDataLakeTool,
 
   // Navigation tool
   navigate_view: navigateViewTool,

@@ -6,7 +6,7 @@ import {
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,
 } from '@bike4mind/common';
-import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
+import type { CreateDataLakeRequestInputType, DataLakeStatus, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type {
   DataLakeFormValues,
@@ -16,11 +16,12 @@ import type {
   UploadProgress,
   WizardStep,
 } from '@client/app/stores/useDataLakeWizardStore';
-import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
-import { slugifyDataLakeName } from '@client/app/hooks/data/dataLakeSlug';
+import { MIN_DATA_LAKE_SLUG_LENGTH, slugifyDataLakeName } from '@bike4mind/common';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { api } from '@client/app/contexts/ApiContext';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
+import { StorageLimitExceededError, checkStorageForUploadFresh } from '@client/app/utils/storageQuota';
+import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -76,6 +77,12 @@ export function classifyUploadError(
     (error instanceof Error && error.message === OFFLINE_MESSAGE);
   if (isNetworkError) {
     return { kind: 'network', message: OFFLINE_MESSAGE };
+  }
+
+  // Not 'validation': that kind shows the Name/Tag Prefix hint (UploadStep.tsx), which is
+  // irrelevant to a storage refusal.
+  if (error instanceof StorageLimitExceededError) {
+    return { kind: 'server', message: error.message };
   }
 
   // All uploads failed (thrown by the batch flow after the lake/batch were rolled back):
@@ -157,6 +164,26 @@ export function classifyUploadError(
   return { kind: 'unknown', message: 'Batch upload failed. Please try again.' };
 }
 
+/** True unless `conflictResolution` is 'skip' and this file duplicates one already present -
+ * shared by plannedUploadBytes and runBatchUpload's own duplicate filter so the two can't drift. */
+function isNotSkippedDuplicate(f: WizardFile, conflictResolution: DataLakeFormValues['conflictResolution']): boolean {
+  return conflictResolution !== 'skip' || !f.isDuplicate;
+}
+
+/**
+ * Bytes the commit will actually send: the same exclusion, file-type and skip-duplicate filters
+ * runBatchUpload applies, so the storage warning judges what the server will be asked to hold.
+ */
+export function plannedUploadBytes(
+  allFiles: WizardFile[],
+  conflictResolution: DataLakeFormValues['conflictResolution']
+): number {
+  return allFiles
+    .filter(f => !f.excluded && isSupportedFabFileMimeType(f.type))
+    .filter(f => isNotSkippedDuplicate(f, conflictResolution))
+    .reduce((sum, f) => sum + f.size, 0);
+}
+
 /**
  * Zeroed progress counters for a fresh commit attempt. `totalFiles` is left at 0 for the caller
  * that knows the real count to override - the fileless Drive commit genuinely has none.
@@ -180,8 +207,14 @@ export function zeroProgressCounts(): Partial<UploadProgress> {
  *
  * `tagPrefix` is passed in rather than derived here: it is the value every client-side gate already
  * judged (see submittedTagPrefix), and re-deriving it would let the two drift.
+ *
+ * Returns the lake's lifecycle status alongside its id (#3222) - read from the response, never
+ * assumed, so `createDataLake` stays the one place that owns the born-draft rule.
  */
-export async function createWizardLake(config: DataLakeFormValues, tagPrefix: string): Promise<string> {
+export async function createWizardLake(
+  config: DataLakeFormValues,
+  tagPrefix: string
+): Promise<{ id: string; status?: DataLakeStatus; slug: string }> {
   // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads the store
   // at call time, like the wizard config itself, so it can't go stale.
   const organizationId = activeOrgId();
@@ -189,7 +222,7 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
   // useCreateLakeFromDrive) already have a pendingDriveFolder in scope, so read it here rather
   // than threading it through as a parameter both would just forward unchanged.
   const { pendingDriveFolder } = useDataLakeWizardStore.getState();
-  const res = await api.post<{ id: string }>('/api/data-lakes', {
+  const res = await api.post<{ id: string; status?: DataLakeStatus; slug: string }>('/api/data-lakes', {
     name: config.name,
     // The slug we ask for. The server disambiguates it against lakes in scope, so the created
     // lake's real slug can differ - everything downstream keys off the id.
@@ -205,7 +238,7 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
     // ('curated') applies.
     ...(pendingDriveFolder ? { origin: 'connector-fed' as const } : {}),
   } satisfies CreateDataLakeRequestInputType);
-  return res.data.id;
+  return { id: res.data.id, status: res.data.status, slug: res.data.slug };
 }
 
 /**
@@ -289,7 +322,7 @@ export async function resolveCreateModeLake(
   tagPrefix: string,
   recoverableLake: RecoverableLake | null,
   setRecoverableLake: (lake: RecoverableLake | null) => void
-): Promise<string> {
+): Promise<{ id: string; status?: DataLakeStatus; slug: string }> {
   // Read at call time, like createWizardLake does, so a switch made behind the wizard modal counts.
   const organizationId = activeOrgId();
   if (!canReuseRecoverableLake(recoverableLake, tagPrefix, organizationId)) {
@@ -321,7 +354,9 @@ export async function resolveCreateModeLake(
   }
 
   await syncRestoredLakeConfig(recoverableLake.id, config);
-  return recoverableLake.id;
+  // unarchiveDataLake unconditionally lands the lake at 'active' (never restored to its pre-archive
+  // status, e.g. 'draft') - so a reused lake always serves retrieval; no need to re-fetch it.
+  return { id: recoverableLake.id, status: 'active', slug: recoverableLake.slug };
 }
 
 /** Bind a Drive folder picked during create to the lake that now exists (POST drive-sync). */
@@ -408,8 +443,14 @@ export interface BatchUploadCallbacks {
   setStep: (step: WizardStep) => void;
   /** Store writer, injected so the pipeline never subscribes to react state. See RecoverableLake. */
   setRecoverableLake: (lake: RecoverableLake | null) => void;
+  /** Refresh the active-batches list as soon as the batch exists; onUploadComplete only fires
+   * after every file uploads. */
+  onBatchCreated: () => void;
   /** Invalidate the lake list + gears status after upload-complete (the hook passes a closure over queryClient). */
   onUploadComplete: () => void;
+  /** Refreshes the cached user (storage usage) for the fresh storage re-check below - injected so
+   * this module's store coupling stays getState-only and never imports a store write action. */
+  refreshUser: () => Promise<void>;
 }
 
 /**
@@ -458,12 +499,20 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     }
   }
 
-  // Apply conflict resolution for duplicates
-  if (config.conflictResolution === 'skip') {
-    included = included.filter(f => !f.isDuplicate);
-    if (included.length === 0) throw new Error('All files are duplicates (skipped)');
+  // Apply conflict resolution for duplicates ('update' and 'duplicate' both upload: 'update'
+  // will overwrite, 'duplicate' creates new).
+  included = included.filter(f => isNotSkippedDuplicate(f, config.conflictResolution));
+  if (config.conflictResolution === 'skip' && included.length === 0) {
+    throw new Error('All files are duplicates (skipped)');
   }
-  // 'update' and 'duplicate' both upload: 'update' will overwrite, 'duplicate' creates new
+
+  // Before the lake exists: the presign batch would refuse this anyway, but only after the lake
+  // had been created.
+  const storageCheck = await checkStorageForUploadFresh(
+    included.reduce((sum, f) => sum + f.size, 0),
+    cb.refreshUser
+  );
+  if (storageCheck.status === 'exceeds') throw new StorageLimitExceededError(storageCheck);
 
   // Exactly the value every client-side rule judged (see submittedTagPrefix), so what was
   // gated is what gets sent.
@@ -472,9 +521,13 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   // Step 1: Create the data lake; skipped in append mode (upload into the existing lake), and
   // skipped when a same-session prior attempt archived a lake holding this exact prefix claim -
   // restore and reuse it instead of creating a second one the claim would refuse.
-  const dataLakeId = targetLake
-    ? targetLake.id
+  // The lake's lifecycle status travels with its id from here so the Complete screen can disclose a
+  // non-serving lake (#3222) - in append mode that is the target lake's CURRENT status, because
+  // adding files to a draft lake still grounds nothing.
+  const committedLake = targetLake
+    ? { id: targetLake.id, status: targetLake.status, slug: targetLake.slug }
     : await resolveCreateModeLake(config, tagPrefix, recoverableLake, cb.setRecoverableLake);
+  const dataLakeId = committedLake.id;
   let uploadedCount = 0;
   // Hoisted above the try so the outcome branch + the catch can reconcile the batch
   // and clean up the records setup created. `failedFileIds` are the FabFiles presign
@@ -513,6 +566,7 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     });
 
     batchId = batchRes.data.id;
+    cb.onBatchCreated();
 
     // Switch to upload step and set initial progress
     cb.setStep('upload');
@@ -521,6 +575,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       totalFiles: included.length,
       status: 'uploading',
       currentBatchId: batchId,
+      lakeStatus: committedLake.status,
+      lakeId: dataLakeId,
       // Clear any error from a prior attempt so a retry starts clean.
       errorMessage: undefined,
       errorKind: undefined,
@@ -639,7 +695,9 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
           .catch(() => false);
         // Remember it for a same-session retry - but only once we know the archive
         // actually took, so a retry never tries to restore a lake still live in some other state.
-        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null);
+        cb.setRecoverableLake(
+          archived ? { id: dataLakeId, tagPrefix, slug: committedLake.slug, organizationId: activeOrgId() } : null
+        );
       }
       // A presign refusal already says WHY (e.g. the request did not name the batch's lake),
       // and classifyUploadError surfaces a 4xx's server message - so rethrow it rather than
@@ -721,7 +779,9 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
           .delete(`/api/data-lakes/${dataLakeId}`)
           .then(() => true)
           .catch(() => false);
-        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null);
+        cb.setRecoverableLake(
+          archived ? { id: dataLakeId, tagPrefix, slug: committedLake.slug, organizationId: activeOrgId() } : null
+        );
       }
     }
     throw err;

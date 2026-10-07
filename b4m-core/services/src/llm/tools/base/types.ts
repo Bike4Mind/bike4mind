@@ -3,6 +3,7 @@ import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclus
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
+import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import {
   IChatHistoryItemDocument,
   ILatticeModel,
@@ -20,6 +21,9 @@ import {
   IOrganizationRepository,
   ILakeAccessEventRepository,
   IScopedSettingsRepository,
+  ILakeMembershipRemovalRepository,
+  ILakeConfigChangeEventRepository,
+  ILakeMembershipChangeEventRepository,
   ModelInfo,
 } from '@bike4mind/common';
 
@@ -98,6 +102,8 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
+    /** The image tools bump the session's imageCount through this (see recordGeneratedImages). */
+    sessions?: GeneratedImageCounter;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
       | 'findByFabFileId'
@@ -130,7 +136,16 @@ export interface ToolContext {
       // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
       // rather than silently degrade to bare creator provenance.
       | 'findIdsCreatedBy'
-    >;
+    > &
+      // The data-lake write tools (list_my_data_lakes, create_data_lake, save_content_to_data_lake).
+      // Optional per method so a read-only host still type-checks; those tools refuse cleanly when
+      // one is missing (see dataLakeContent/adapters.ts).
+      Partial<
+        Pick<
+          IDataLakeRepository,
+          'findAccessible' | 'findBySlug' | 'findBySlugAmongIds' | 'create' | 'setStats' | 'activateIfDraft'
+        >
+      >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
      * IFallbackLakeSetting). Used only by getAccessibleDataLakePrompts' registry-candidate branch;
@@ -169,7 +184,17 @@ export interface ToolContext {
      *   rungs cannot resolve, so the re-check revokes a maintainer whose rights are in fact intact.
      * Optional here - absent means both features resolve lake access with no grant arm.
      */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'> &
+      // Manage-gate grant snapshot and the new lake's owner-grant seed, for the data-lake write tools.
+      Partial<Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'upsertGrant'>>;
+    /**
+     * The rest of what the data-lake write tools need (addFileToDataLake's restore lookup and its
+     * config/membership audit sinks). Optional - absent, those tools report themselves unavailable
+     * on this surface instead of writing without an audit trail.
+     */
+    lakeMembershipRemovals?: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
+    lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
+    lakeMembershipChangeEvents?: Pick<ILakeMembershipChangeEventRepository, 'record'>;
     /**
      * Lake access audit sink. Optional - a host that hasn't wired it in degrades to a
      * silent no-op (see recordLakeAccessEvent) rather than blocking retrieval.
@@ -188,6 +213,19 @@ export interface ToolContext {
    * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
    */
   entitlementKeys?: string[];
+  /**
+   * The turn's active organization, already authorization-validated upstream on the web and
+   * public API paths (resolveActiveOrg) but NOT on every host (Slack), so a tool that scopes a
+   * write by it must re-check membership itself - see create_data_lake. Absent = personal context.
+   */
+  organizationId?: string;
+  /**
+   * The `b4m_live_` key that authenticated the turn, when one did (`/api/chat`, `/api/ai/llm`).
+   * Server-derived from `req.apiKeyInfo`, never from a request body. Attribution only: a lake
+   * write the tool drives is audited under the key (see buildToolAccessContext), while
+   * authorization still runs as `userId`. Absent = a session turn.
+   */
+  apiKeyId?: string;
   /**
    * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
    * resolved from the session and threaded down via the tool-builder deps (mirrors
@@ -232,9 +270,21 @@ export interface ToolContext {
    * access to the lake(s) this session is FOR, so a session created for one lake stops searching
    * every lake its owner can reach. Purely subtractive - see narrowLakeAccessToSession, which also
    * documents why the prefix buckets are filtered rather than rebuilt. Absent = unscoped; EMPTY is
-   * decided by the sidecar below, not by this field.
+   * decided by the sidecar below, not by this field. File-access scoping only - NOT the reader
+   * opt-in arm's consent input; see sessionReaderConsentDatalakeTags for that.
    */
   sessionRetrievalTags?: string[];
+  /**
+   * Owner-vetted copy of `sessionRetrievalTags` - the reader's consent for the lake-prompt READER
+   * OPT-IN arm (see getAccessibleDataLakePrompts), which widens prompt-injection trust but never
+   * file access. Deliberately a SEPARATE field from `sessionRetrievalTags` rather than a reuse of
+   * it: that one must stay populated for a non-owner request (a share, a teammate reply) so
+   * retrieval scoping keeps working, while consent must NOT - a request acting on someone else's
+   * session must not inherit the owner's consent to inject that lake's prompt. Populated only when
+   * the acting principal IS the session owner (see vetReaderConsentDatalakeTags); absent otherwise,
+   * which is what keeps the opt-in arm from firing.
+   */
+  sessionReaderConsentDatalakeTags?: string[];
   /**
    * `session.lakeScopeExplicit` - the sidecar that makes an EMPTY `sessionRetrievalTags` above
    * mean "grounds on no lake" rather than "expressed no lake opinion". Without it the two are the
@@ -247,7 +297,7 @@ export interface ToolContext {
   /**
    * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
    * lake they can manage but are not a member of - see canManageLake, checked once at
-   * pages/api/sessions/create.ts, never re-derived here). Unioned into the resolved lake access
+   * pages/api/v1/sessions/index.ts, never re-derived here). Unioned into the resolved lake access
    * set BEFORE narrowLakeAccessToSession runs (see unionPreauthorizedLakeAccess) so the lake's
    * files and prompt become reachable for exactly this session. Absent/empty = no widening - the
    * ordinary case for every session that isn't a maintainer's admitted test session.
@@ -327,15 +377,9 @@ export interface ToolContext {
    * delegate_to_agent / coordinate_task path already uses.
    *
    * IT CAN RETURN UNDEFINED EVEN WHEN THE HOST PASSED A GETTER, so treat a missing signal as
-   * normal rather than as a bug. Three cases, and the third is the surprising one:
+   * normal rather than as a bug. Two cases:
    *   - the host wires no controller at all (see below);
    *   - the holder is not filled yet (a tool somehow invoked during tool setup);
-   *   - ChatCompletionProcess's Research Mode branch, which returns before it ever assigns
-   *     the holder, yet hands `allTools` - these same tool instances - to ResearchModeService.
-   *     That service takes no signal today and the cancellation watcher starts after the
-   *     branch returns, so Research Mode has no cancellation of any kind; tool sub-calls on
-   *     that path stay uninterruptible across every parallel configuration. Fixing it means
-   *     giving Research Mode a controller and a watcher of its own, not changing this contract.
    *
    * Absent entirely on hosts with no per-turn controller to hand over - the top-level
    * agent-executor loop, which cancels via a polled `AgentExecution` abort flag rather than an
@@ -347,5 +391,12 @@ export interface ToolContext {
 
 export interface ToolDefinition {
   name: string;
+  /**
+   * The artifact MIME type this tool's results carry, matching its `<artifact type="...">`
+   * exactly (e.g. `text/html`). Lets a tool supplied at runtime through `externalTools` emit
+   * an artifact; without it the markup is stripped. Built-ins are pinned in common
+   * TOOL_ARTIFACT_EMITTERS instead, which wins on a name clash (see resolveToolArtifactType).
+   */
+  artifactType?: string;
   implementation: (context: Omit<ToolContext, 'config'>, config: any) => ICompletionOptionTools;
 }

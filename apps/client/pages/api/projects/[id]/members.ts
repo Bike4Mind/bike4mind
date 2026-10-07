@@ -17,10 +17,7 @@ const handler = baseApi().delete(async (req, res) => {
   const isRemovingMember = !!memberIdToRemove;
   const projectId = req.query.id as string;
 
-  const result = await withTransaction(async session => {
-    projectRepository.txn = session;
-    fabFileRepository.txn = session;
-
+  const result = await withTransaction(async () => {
     const project = await projectService.leaveProject(
       req.user,
       {

@@ -70,10 +70,11 @@ const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
  * one fails on a timeout, asserts nothing, and goes green on re-run of the same commit.
  *
  * This is not a hang mask - it is the correct budget for work that starts a database. A genuinely
- * hung test still fails, just later. Keep it the single lever for the whole class: raising the
- * shard default instead would hand the same slack to ~1000 unit tests that must stay tight.
- * `apps/client/__tests__/mongoTestTimeoutBudget.test.ts` fails the build if a real-Mongo suite in
- * that shard declares anything else.
+ * hung test still fails, just later. In apps/client and packages/scripts keep it the single lever
+ * for the whole class: raising their defaults instead would hand the same slack to ~1000 unit tests
+ * that must stay tight, and `mongoTestTimeoutBudget.test.ts` in each fails the build if a real-Mongo
+ * suite declares anything else. This package is the exception: most of its suites boot mongod, so
+ * its vitest.config.ts sets this budget as the default and the per-file declaration is optional.
  */
 export const MONGO_TEST_TIMEOUT_MS = 60_000;
 
@@ -109,6 +110,35 @@ export const createMongoServer = async (): Promise<MongoMemoryServer> =>
  * helper is the fix.
  *
  * Slower to boot - reach for it only when transactionality is the thing under test.
+ *
+ * A suite that opens a transaction over the full model registry should also await
+ * `settleAutoIndexBuilds(mongoose)` after connecting, and after its last model-registering import.
  */
 export const createMongoReplSet = async (): Promise<MongoMemoryReplSet> =>
   withPortRetry(() => MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } }));
+
+/**
+ * Waits out the index builds Mongoose starts in the background for every registered model on
+ * connect. Required before a suite opens its first transaction.
+ *
+ * Without it the failure is a deadlock, not slowness. The `@bike4mind/database` barrel registers
+ * enough models that connect has more `createIndexes` in flight than the pool has connections (100
+ * by default). A transaction opened meanwhile holds locks the builds queue behind, and each
+ * blocked build pins a pooled connection. Once the pool drains, the transaction's next command waits for a connection
+ * that only a finished build can return. Nothing moves until mongod reaps the transaction at
+ * `transactionLifetimeLimitSeconds` (60s), so the test times out. It needs a contended runner for
+ * the builds to still be running when the test starts, which is why it passes on re-run.
+ *
+ * Waiting out the full build costs tens of seconds on a contended runner. A suite that asserts
+ * nothing about indexes should connect with `{ autoIndex: false }` first, which leaves only the
+ * cheap collection creates for this helper to settle.
+ *
+ * `init()` returns the build already in flight rather than starting another. `allSettled`, because
+ * a few schemas declare an index mongod rejects, and a rejected build has released its connection.
+ */
+export const settleAutoIndexBuilds = async (odm: {
+  modelNames: () => string[];
+  model: (name: string) => { init: () => Promise<unknown> };
+}): Promise<void> => {
+  await Promise.allSettled(odm.modelNames().map(name => odm.model(name).init()));
+};

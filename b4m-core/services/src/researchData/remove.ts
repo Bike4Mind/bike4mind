@@ -1,9 +1,4 @@
-import {
-  IOrganizationRepository,
-  IResearchAgentRepository,
-  IResearchDataRepository,
-  IUserRepository,
-} from '@bike4mind/common';
+import { IResearchAgentRepository, IResearchDataRepository, IUserRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { DeleteFabFileAdapter } from '../fabFileService';
@@ -20,7 +15,6 @@ type ResearchDataRemoveAdapters = DeleteFabFileAdapter & {
   db: {
     researchDatas: Pick<IResearchDataRepository, 'delete' | 'findByIdAndResearchAgentId'>;
     researchAgents: Pick<IResearchAgentRepository, 'findByIdAndUserId'>;
-    organizations: Pick<IOrganizationRepository, 'incrementCurrentStorage'>;
     users: Pick<IUserRepository, 'incrementCurrentStorage'>;
   };
 };
@@ -51,10 +45,6 @@ export const remove = async (
   // if the file was already soft-deleted by a concurrent request.
   const result = await deleteFabFile(userId, { id: researchData.fabFileId }, adapters);
   if (result.action === 'deleted' && result.fabFile) {
-    if (result.fabFile.organizationId) {
-      await adapters.db.organizations.incrementCurrentStorage(result.fabFile.organizationId, -result.fabFile.fileSize);
-    } else {
-      await adapters.db.users.incrementCurrentStorage(result.fabFile.userId, -result.fabFile.fileSize);
-    }
+    await adapters.db.users.incrementCurrentStorage(result.fabFile.userId, -result.fabFile.fileSize);
   }
 };

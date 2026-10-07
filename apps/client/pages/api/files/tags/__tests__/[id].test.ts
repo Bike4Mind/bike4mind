@@ -11,11 +11,14 @@ const h = vi.hoisted(() => ({
   update: vi.fn().mockResolvedValue({ id: 't1' }),
   remove: vi.fn().mockResolvedValue({ id: 't1', name: 'invoices', filesUpdated: 2 }),
   assertDataLakeWriteScope: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the sibling toggle test).
+// Captures the options for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'PUT']?.(req, res), {
       use: () => chain,
@@ -263,5 +266,11 @@ describe('DELETE /api/files/tags/[id]', () => {
     expect(h.assertDataLakeWriteScope).not.toHaveBeenCalled();
     adapters.assertWriteScope();
     expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('/api/files/tags/[id] - scope gate', () => {
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

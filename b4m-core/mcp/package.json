@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/mcp",
-  "version": "2.0.13",
+  "version": "2.0.18",
   "publishConfig": {
     "access": "restricted"
   },
@@ -67,12 +67,12 @@
     "@types/unzipper": "^0.10.11",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@bike4mind/common": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
     "unzipper": "^0.12.5",
     "zod": "^4.4.3"

@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
+import type { ISessionAgentConfigDocument, RepositoryPatch } from '@bike4mind/common';
 import { z } from 'zod';
 
 const proactiveMessagingSchema = z.object({
@@ -18,6 +19,21 @@ const proactiveMessagingSchema = z.object({
 const updateConfigSchema = z.object({
   proactiveMessaging: proactiveMessagingSchema,
 });
+
+/**
+ * Re-check session write access right before a config write. The grant lives on the session and
+ * the write is to the config, so it cannot share one filter; this narrows the window since
+ * assertSessionAccess to the gap before the write, which is left open (not worth a transaction).
+ * Matches assertSessionAccess 'write', global-write included.
+ */
+async function assertStillWritable(
+  user: Parameters<typeof sessionRepository.shareable.findUpdateAccessById>[0],
+  sessionId: string
+) {
+  if (!(await sessionRepository.shareable.findUpdateAccessById(user, sessionId, { includeGlobalWrite: true }))) {
+    throw new NotFoundError('Session not found');
+  }
+}
 
 /**
  * Agent-level authz + attachment check, shared by all three verbs below: does the caller have
@@ -73,6 +89,8 @@ const handler = baseApi()
 
     const existingConfig = await sessionAgentConfigRepository.findBySessionAndAgent(sessionId, agentId);
 
+    await assertStillWritable(req.user!, sessionId);
+
     let config;
     if (existingConfig) {
       // Re-stamp userId to the caller on every update: this config's userId is who the
@@ -80,14 +98,20 @@ const handler = baseApi()
       // it must always be whoever last authored proactiveMessaging.systemPrompt, never whoever
       // happened to create the row first - otherwise a session write-sharee could rewrite the
       // prompt while leaving it to run under the original owner's identity, keys, and tools.
-      config = await sessionAgentConfigRepository.update({
-        ...existingConfig,
+      // Leaf paths, so the worker's concurrent `proactiveMessaging.lastProactiveMessageAt` stamp is not
+      // rewound to the read-time value; omitted optionals are cleared, as a whole-object write would.
+      const proactive = validatedData.proactiveMessaging;
+      const patch: RepositoryPatch<ISessionAgentConfigDocument> = {
+        id: existingConfig.id,
         userId: req.user!.id,
-        proactiveMessaging: {
-          ...validatedData.proactiveMessaging,
-          // Preserve lastProactiveMessageAt if not being reset
-          lastProactiveMessageAt: existingConfig.proactiveMessaging.lastProactiveMessageAt,
-        },
+      };
+      for (const [key, value] of Object.entries(proactive)) {
+        patch[`proactiveMessaging.${key}`] = value;
+      }
+      config = await sessionAgentConfigRepository.update(patch, {
+        unset: (['systemPrompt', 'minIntervalHours'] as const)
+          .filter(key => proactive[key] === undefined)
+          .map(key => `proactiveMessaging.${key}` as const),
       });
     } else {
       // Create new config
@@ -118,6 +142,7 @@ const handler = baseApi()
     // A write-sharee can delete a config they can't trigger (trigger-proactive-messages.ts only
     // fires configs the caller owns) - intentional: deletion doesn't run anyone else's prompt or
     // spend anyone else's credits, so it doesn't need the same per-owner restriction.
+    await assertStillWritable(req.user!, sessionId);
     await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
 
     res.json({ success: true });

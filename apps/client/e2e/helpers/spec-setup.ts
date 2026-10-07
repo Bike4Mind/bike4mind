@@ -9,6 +9,8 @@ interface SpecUserConfig {
   /** Extra user tags to seed (merged with the default predefined tags), e.g. ['tavern'] to grant Tavern access. */
   tags?: string[];
   prefs?: Record<string, unknown>;
+  /** Starting credit balance; omit for the default effectively-unlimited grant. */
+  initialCredits?: number;
   afterCreate?: (ctx: {
     request: import('@playwright/test').APIRequestContext;
     accessToken: string;
@@ -29,6 +31,7 @@ export function setupSpecUser(config: SpecUserConfig) {
       password: `E2e${config.key}Pass123!`,
       isAdmin: false,
       ...(config.tags && { tags: config.tags }),
+      ...(config.initialCredits !== undefined && { initialCredits: config.initialCredits }),
     };
 
     const result = await apiCreateTestUser(request, userConfig);
