@@ -928,6 +928,9 @@ describe('planCatalogWrites', () => {
 
     expect(agreeing.diff[0].promoted).toBe(true);
     expect(alone.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(alone.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+    });
   });
 
   // A text row whose output reserve eats its whole context window makes safeInputWindow
@@ -1127,6 +1130,9 @@ describe('planCatalogWrites', () => {
     });
 
     expect(result.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(result.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+    });
   });
 
   describe('introducing a model no source describes fully', () => {
