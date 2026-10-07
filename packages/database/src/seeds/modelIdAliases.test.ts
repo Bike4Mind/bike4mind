@@ -30,8 +30,10 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
  * by defect: roughly a fifth of the seed is retired or legacy (Gemini 1.5, Grok
  * 2/3, Claude 3.x, o1-preview, first-gen Bedrock) and the aggregators drop what
  * providers retire. litellm main dropped 116 such keys that the older v1.93.0
- * capture still held, which is what moved its rate from 87.7% to 77.0%; that
- * capture was keeping the rate up with keys the live source no longer serves.
+ * capture still held, which is what moved its rate from 86.9% (87.7% after a
+ * three-key top-up from main) to 77.0%; that capture was keeping the rate up with
+ * keys the live source no longer serves. The grok-3-fast alias went the same way:
+ * main keeps only reseller keys for it, which the alias file forbids targeting.
  *
  * Of the Moonshot ids, kimi-k3 and kimi-k2.7-code now join litellm main, so only
  * kimi-k2.7-code-highspeed is unjoined there (it joins models.dev). A model only
