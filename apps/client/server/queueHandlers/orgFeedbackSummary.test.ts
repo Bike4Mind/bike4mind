@@ -276,3 +276,16 @@ describe('runOrgFeedbackSummary', () => {
     ]);
   });
 });
+
+it('releases the persisted hold when the cooperative budget expires before work', async () => {
+  await expect(
+    runOrgFeedbackSummary(message, makeLogger() as never, () => {
+      throw new Error('run budget exhausted');
+    })
+  ).rejects.toThrow('run budget exhausted');
+  expect(h.complete).not.toHaveBeenCalled();
+  expect(h.updateOne).toHaveBeenCalledWith(
+    { summaryJobId: SUMMARY_JOB_ID },
+    { status: 'failed', activeKey: SUMMARY_JOB_ID, errorMessage: 'run budget exhausted' }
+  );
+});

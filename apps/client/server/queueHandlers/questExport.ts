@@ -333,11 +333,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   // a malformed message into a 422 the wrapper swallows instead of a retry loop into the DLQ.
   const message = secureParameters(JSON.parse(body), QueuePayload);
 
+  const checkBudget = () => {
+    if (context.getRemainingTimeInMillis?.() < 1000) throw new Error('Quest export run budget exhausted');
+  };
   if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
-    await runOrgFeedbackSummary(message, logger);
+    await runOrgFeedbackSummary(message, logger, checkBudget);
     return;
   }
 
+  checkBudget();
   const { exportJobId, planId, userId } = message;
 
   logger.updateMetadata({ exportJobId, planId, userId });
@@ -368,12 +372,19 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // check below (its `groups` feed the share predicate); a missing owner doc fails closed.
     const exportUser = await userRepository.findById(plan.userId || userId);
 
-    // Idempotency check: skip if ZIP already exists (must be after plan load to get slug)
+    // Authorize the current plan before returning an existing artifact.
     const slug = slugify(plan.goal);
-    const finalZipKey = `exports/quest/${exportJobId}/questmaster-${slug}-${dateStr}.zip`;
+    const finalZipKey = `exports/quest/${encodeURIComponent(userId)}/${encodeURIComponent(planId)}/${encodeURIComponent(exportJobId)}/artifact.zip`;
 
+    let artifactExists = false;
     try {
       await appFiles.getMetadata(finalZipKey);
+      artifactExists = true;
+    } catch (error) {
+      const missing = error instanceof Error && (error.name === 'NotFound' || error.name === 'NoSuchKey');
+      if (!missing) throw error;
+    }
+    if (artifactExists) {
       logger.info(`ZIP already exists at ${finalZipKey}, emitting completed event for idempotent retry`);
 
       // Generate presigned URL and emit completed event so client receives download URL on retry
@@ -387,10 +398,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         filename,
       });
       return;
-    } catch {
-      // File doesn't exist, proceed
     }
 
+    checkBudget();
     // Collect all questIds from subQuests
     const questIds: string[] = [];
     for (const quest of plan.quests) {
@@ -524,6 +534,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
       let figNum = 0;
       for (const url of allImageUrls) {
+        checkBudget();
         figNum++;
         const ext = getExtensionFromUrl(url);
         const filename = `images/fig-${figNum}${ext}`;
@@ -602,6 +613,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       }
     }
 
+    checkBudget();
     // Phase 3: Generate Summary
     await sendProgress(
       userId,
@@ -620,12 +632,14 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       logger.info('Skipping executive summary (generation failed or unavailable)');
     }
 
+    checkBudget();
     // Phase 4: Create ZIP
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'zipping', 88, 'Creating ZIP archive...');
 
     const zipBuffer = await createZipBuffer(markdown, imageBuffers, `${slug}.md`, summary);
 
     await sendProgress(userId, websocketEndpoint, exportJobId, planId, 'zipping', 90, 'Uploading ZIP...');
+    checkBudget();
     await appFiles.upload(zipBuffer, finalZipKey, { ContentType: 'application/zip' });
 
     // Generate presigned download URL (1 hour expiry)
