@@ -1,5 +1,12 @@
 import { useSettingsFromServer } from '@client/app/hooks/data/settings';
-import { settingsMap, SETTING_TABS, API_SERVICE_GROUPS, Category, CATEGORY_ICONS } from '@bike4mind/common';
+import {
+  settingsMap,
+  SETTING_TABS,
+  API_SERVICE_GROUPS,
+  Category,
+  CATEGORY_ICONS,
+  VideoGenerationSettingsSchema,
+} from '@bike4mind/common';
 import { EmbeddingProviderLimits } from './EmbeddingProviderLimits';
 import {
   Checkbox,
@@ -26,6 +33,7 @@ import {
 import React, { useCallback, useMemo, useState } from 'react';
 import AdminSettingInputField from './AdminSettingInputField';
 import { AdminOperationsModelSetting } from './AdminOperationsModelSetting';
+import { AdminVideoModelsSetting } from './AdminVideoModelsSetting';
 import { ScopedOverridesByScope } from './ScopedOverridesByScope';
 
 import AdminLogoUpload from './AdminLogoUpload';
@@ -277,6 +285,11 @@ const AdminSettingsTab: React.FC = () => {
     return map;
   }, [settingsFromServer.data]);
 
+  const videoGenerationSettings = useMemo(() => {
+    const parsed = VideoGenerationSettingsSchema.safeParse(settingValueByName.get('videoGeneration'));
+    return parsed.success ? parsed.data : undefined;
+  }, [settingValueByName]);
+
   // Returns true when EVERY whitespace-separated token in `searchTerm` appears in
   // the setting's name, description, key, or (non-sensitive) live value. Checking
   // all four fields matches the standard path to custom-rendered settings, and
@@ -325,6 +338,8 @@ const AdminSettingsTab: React.FC = () => {
       if (
         [
           'logoSettings',
+          // Per-model video toggles are rendered by <AdminVideoModelsSetting />
+          'videoGeneration',
           'RapidReplySettings',
           'SystemFiles',
           // What's New settings are managed in the What's New Modals tab
@@ -560,6 +575,8 @@ const AdminSettingsTab: React.FC = () => {
 
         {/* Operations Model component for the AI category */}
         {category === 'AI' && <AdminOperationsModelSetting />}
+
+        {category === 'AI' && <AdminVideoModelsSetting settings={videoGenerationSettings} />}
 
         {/* The by-scope read of the override overlay. Category-scoped rather than group-scoped:
             seven of the nine scope-capable settings are AI, and the panel lists all nine wherever
