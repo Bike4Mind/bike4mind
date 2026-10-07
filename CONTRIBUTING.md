@@ -280,6 +280,17 @@ Two notes specific to fork PRs:
 - CI for first-time contributors requires a maintainer to approve the workflow run — this is standard GitHub security, not a judgment on your PR. It happens quickly after triage.
 - Some internal automation (e.g. the AI review bot) doesn't run on fork PRs because it requires repository secrets. Maintainers will run those stages after initial review where relevant. Preview environments are unaffected by fork status — see below — since a maintainer triggers them out-of-band from an internal pipeline.
 
+### Fixing a dependency advisory
+
+The **Dependency Audit Gate** check runs `pnpm audit` on your PR and on the commit it targets, and fails only on high/critical advisories that your PR's dependency changes introduce. Advisories already on `main` show as warnings and in the job summary; a scheduled audit of `main` tracks those in a single `Dependency audit: high/critical advisories on main` issue. The gate is not a required check, but please don't merge with it red.
+
+To fix a failing gate (or the tracking issue):
+
+1. Raise the floor in `pnpm.overrides` in the root `package.json` to the patched version, keyed by the vulnerable range (e.g. `"shell-quote@<1.11.0": "^1.11.0"`).
+2. Update the lockfile with `pnpm install --lockfile-only`, then confirm it is consistent with `pnpm install --frozen-lockfile --lockfile-only`. Run `node scripts/check-pnpm-overrides.mjs` after an install that changed overrides (the Lockfile Integrity check runs it too).
+3. Run the gate locally: `pnpm audit --json > r.json; PACKAGES_JSON_REPORT_PATH=r.json node scripts/audit-gate.mjs`.
+4. Only if no patched version exists, or the vulnerable code path is not reachable, add the GHSA id to `scripts/audit-allowlist.json` instead, and explain why in the PR.
+
 ### Preview deploys
 
 Preview environments (`pr<N>.preview.bike4mind.com`) are created **on demand by maintainers** through an internal deploy pipeline — there is no label or comment command on this repo that triggers one. Every PR still runs the full CI suite (typecheck, lint, tests). When a maintainer wants to exercise your change in a live environment, they trigger a preview and a bot comment with the URL appears on the PR; previews are torn down automatically when the PR closes or after 3 days without a redeploy. The required **Deploy** check stays green either way — the absence of a preview is expected, not a failure.

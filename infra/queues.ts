@@ -1,10 +1,4 @@
-import {
-  appFilesBucket,
-  fabFileBucket,
-  generatedImagesBucket,
-  slackExportBucket,
-  whatsNewDistributionBucket,
-} from './buckets';
+import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
@@ -17,7 +11,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
 import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
@@ -134,7 +128,7 @@ const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
 });
 const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/fabFileVectorize.dispatch',
+    handler: 'apps/workers/src/queueHandlers/fabFileVectorize.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
@@ -202,7 +196,7 @@ const fabFileChunkQueue = new sst.aws.Queue('fabFileChunkQueue', {
 });
 const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/fabFileChunk.dispatch',
+    handler: 'apps/workers/src/queueHandlers/fabFileChunk.dispatch',
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
@@ -317,7 +311,7 @@ const generationCallbackQueue = new sst.aws.Queue('generationCallbackQueue', {
 });
 const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/generationCallback.dispatch',
+    handler: 'apps/workers/src/queueHandlers/generationCallback.dispatch',
     runtime: 'nodejs24.x',
     timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
     vpc: lambdaVpc,
@@ -457,7 +451,7 @@ const researchEngineQueue = new sst.aws.Queue('researchEngineQueue', {
 
 const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/researchEngineQueue.dispatch',
+    handler: 'apps/workers/src/queueHandlers/researchEngineQueue.dispatch',
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
@@ -484,7 +478,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// What's New Modal Generation Queue
+// Release notes generation queue (keeps the retired What's New generator's resource names)
 const whatsNewGenerationQueueDLQ = new sst.aws.Queue('whatsNewGenerationQueueDLQ', {
   transform: {
     queue: {
@@ -507,15 +501,10 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/workers/src/queueHandlers/whatsNewGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/releaseNotes.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [
-      ...allSecrets,
-      websocketApi,
-      ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
-      ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
-    ],
+    link: [...allSecrets, websocketApi],
     logging: {
       retention: '3 days',
     },
@@ -536,13 +525,6 @@ const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
       {
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
-      },
-      {
-        // CloudFront cache invalidation for What's New modal distribution
-        actions: ['cloudfront:CreateInvalidation'],
-        resources: [
-          $interpolate`arn:aws:cloudfront::${aws.getCallerIdentityOutput().accountId}:distribution/${router.distributionID}`,
-        ],
       },
     ],
     copyFiles: [
@@ -857,7 +839,7 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
 // so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
 const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
@@ -879,7 +861,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
 // lake fails in isolation and DLQs on its own.
 const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
+    handler: 'apps/workers/src/queueHandlers/lakeMemoryExtraction.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -906,7 +888,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
 // SINGLE_RECORD_BATCH so one lake fails in isolation and DLQs on its own.
 const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/lakeInconsistencyModelDetection.dispatch',
+    handler: 'apps/workers/src/queueHandlers/lakeInconsistencyModelDetection.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -929,7 +911,7 @@ const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subs
 // writes a file - approving one of its proposals does, through the ordinary ingestion door.
 const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeResearchRun.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeResearchRun.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -1090,48 +1072,6 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
         to: 'tiktoken_bg.wasm',
       },
     ],
-  },
-  SINGLE_RECORD_BATCH
-);
-
-// Video Generation Queue
-// Handles async OpenAI Sora video generation (longer processing times)
-// Note: Lambda max timeout is 15 minutes. The Sora polling happens within the Lambda,
-// so we set to max Lambda timeout. If videos take longer, the polling will timeout
-// and the job may need to be retried or handled differently in the future.
-const videoGenerationDLQ = new sst.aws.Queue('videoGenerationDLQ', {});
-const videoGenerationQueue = new sst.aws.Queue('videoGenerationQueue', {
-  visibilityTimeout: '20 minutes', // Lambda timeout (15 min) + safety margin
-  dlq: {
-    queue: videoGenerationDLQ.arn,
-    retry: 2, // Fewer retries - video generation is expensive
-  },
-});
-const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
-  {
-    handler: 'apps/client/server/queueHandlers/videoGeneration.dispatch',
-    runtime: 'nodejs24.x',
-    timeout: '15 minutes', // Max Lambda timeout (900 seconds)
-    vpc: lambdaVpc,
-    link: [
-      ...allSecrets,
-      websocketApi,
-      generatedImagesBucket,
-      fabFileBucket,
-      appFilesBucket,
-      eventBus,
-      generationCallbackQueue,
-    ],
-    logging: {
-      retention: '3 days',
-    },
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    concurrency: {
-      // Limit concurrency - video generation is resource-intensive
-      reserved: 5,
-    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1743,7 +1683,6 @@ export {
   generationCallbackQueue,
   imageGenerationQueue,
   imageEditQueue,
-  videoGenerationQueue,
   generationJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
@@ -1780,7 +1719,6 @@ export {
   generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
-  videoGenerationDLQ,
   generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
@@ -1818,7 +1756,6 @@ export {
   generationCallbackQueueSubscription,
   imageGenerationQueueSubscription,
   imageEditQueueSubscription,
-  videoGenerationQueueSubscription,
   generationJobQueueSubscription,
   fabFileBucketNotification,
   researchEngineQueueSubscription,

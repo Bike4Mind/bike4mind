@@ -58,6 +58,11 @@ export type VideoJobPayload = {
   providerOutput?: ProviderOutput;
   reportedDurationSeconds?: number;
   output?: VideoJobOutput;
+  /**
+   * The provider generated the clip, billed it, then blocked it: terminal handling settles the hold instead of
+   * releasing it. Persisted with the blocked state so a sweep recovery after a crash makes the same choice.
+   */
+  billedBlock?: boolean;
 };
 
 export interface IGenerationJob {
@@ -127,6 +132,18 @@ export type GenerationJobCreateInput = Omit<IGenerationJob, 'createdAt' | 'updat
   id?: string;
 };
 
+export type StalledJobLimits = { inFlight: number; terminal: number };
+
+export type ListByRequesterQuery = {
+  requestedBy: string;
+  kind: GenerationJobKind;
+  state?: GenerationJobState;
+  source?: GenerationJobSource;
+  /** Exclusive: only jobs whose id sorts before this one (the previous page's last id). */
+  beforeId?: string;
+  limit: number;
+};
+
 export interface IGenerationJobRepository extends IBaseRepository<IGenerationJobDocument> {
   createJob(input: GenerationJobCreateInput): Promise<IGenerationJobDocument>;
   findByIdempotencyKey(
@@ -152,5 +169,8 @@ export interface IGenerationJobRepository extends IBaseRepository<IGenerationJob
   /** Written by a kind's onTerminal right after credits move; the job's lease is not involved. */
   recordSettlement(id: string, settledCredits: number): Promise<void>;
   markTerminalHandled(id: string, at: Date): Promise<void>;
-  findStalled(overdueBefore: Date, limit: number): Promise<IGenerationJobDocument[]>;
+  /** Separate limits so an in-flight backlog can never starve terminal handling (credit release). */
+  findStalled(overdueBefore: Date, limits: StalledJobLimits): Promise<IGenerationJobDocument[]>;
+  /** Newest first, by id. Visibility is the requester, not the credit owner: org members never see each other's jobs. */
+  listByRequester(query: ListByRequesterQuery): Promise<IGenerationJobDocument[]>;
 }

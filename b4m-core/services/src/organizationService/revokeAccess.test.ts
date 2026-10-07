@@ -75,6 +75,7 @@ describe('organizationService - revokeAccess', () => {
         // the org-update assertions in the existing cases stay exact.
         dataLakes: {
           findByOrganizationId: vi.fn().mockResolvedValue([]),
+          touchIfStable: vi.fn().mockResolvedValue(true),
           update: vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id })),
         },
         dataLakeAccessGrants: {

@@ -26,7 +26,7 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
  * (the region-prefix strip alone carries 17 Bedrock ids).
  *
  * models.dev is the lower of the two by nature, not by defect: roughly 40% of the
- * seed is retired or legacy (Gemini 1.5, Grok 2/3, Claude 3.x, whisper, sora,
+ * seed is retired or legacy (Gemini 1.5, Grok 2/3, Claude 3.x, whisper,
  * transcribe, first-gen Bedrock) and models.dev drops what providers retire,
  * while litellm keeps historical entries.
  *

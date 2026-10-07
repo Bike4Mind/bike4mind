@@ -5,6 +5,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { DATALAKE_TAG_PREFIX, SetLakeFileTagsRequestInput, prefixArmTagNames } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import {
+  withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
@@ -66,22 +67,29 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { tags } = SetLakeFileTagsRequestInput.parse(req.body);
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
-
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    const result = await dataLakeService.setDataLakeFileTags(actor, lake.id, fabFileId, tags, {
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        fabFiles: fabFileRepository,
-        scopedSettings: scopedSettingsRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: req.logger,
+    // The gate runs inside the transaction so a grant revoke committing mid-request collides on the
+    // lake doc and the retry re-reads live grants.
+    const result = await withTransaction(async () => {
+      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
+
+      const retagged = await dataLakeService.setDataLakeFileTags(actor, lake.id, fabFileId, tags, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          fabFiles: fabFileRepository,
+          scopedSettings: scopedSettingsRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: req.logger,
+      });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return retagged;
     });
 
     return res.json(result);

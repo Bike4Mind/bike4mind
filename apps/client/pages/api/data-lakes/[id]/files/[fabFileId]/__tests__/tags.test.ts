@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeWritable: vi.fn(),
   setDataLakeFileTags: vi.fn(),
@@ -40,7 +43,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -71,6 +82,7 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('PUT /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.setDataLakeFileTags.mockResolvedValue({
@@ -198,11 +210,44 @@ describe('PUT /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
     await expect(call(readOnly, res)).rejects.toThrow();
     expect(h.setDataLakeFileTags).not.toHaveBeenCalled();
   });
+
+  it('runs the gate and the write inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.tx.push('gate');
+      return { id: 'lake-oid-1', slug: 'my-lake' };
+    });
+    h.setDataLakeFileTags.mockImplementation(async () => {
+      h.tx.push('write');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+
+    await call(req('PUT', { id: 'my-lake', fabFileId: 'f1' }, { tags: ['lk:x'] }), res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('neither writes nor touches when the gate throws', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('PUT', { id: 'lake1', fabFileId: 'f1' }, { tags: ['lk:x'] }), res)).rejects.toThrow(
+      /not found/i
+    );
+    expect(h.setDataLakeFileTags).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/data-lakes/[id]/files/[fabFileId]/tags', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', slug: 'my-lake' });

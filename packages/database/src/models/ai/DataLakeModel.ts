@@ -18,6 +18,7 @@ import type {
   BatchCompletionReason,
   BatchCounterField,
   AccessContext,
+  DataLakePendingConnector,
   DataLakeStatus,
   FindAccessibleArm,
   LakeSettleFields,
@@ -31,6 +32,7 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  DATA_LAKE_STABLE_STATUSES,
   DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
@@ -819,8 +821,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * that helper's own `$or` (gateless OR held tag OR held entitlement): a lake matching NONE of
    * those arms has a gate the caller does not hold, which is exactly the population this counts.
    *
-   * Without `restrictToTags`, visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
-   * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
+   * Without `restrictToTags`, visibility is org membership OR administered org OR public -
+   * deliberately narrower than `findActiveByUserTagsAndEntitlements`'s own arms (no owner bypass,
+   * no grant arm): those two arms are exactly what make a lake NOT
    * excluded regardless of its gate, so they are subtracted here instead of counted as visible.
    * The user-grant arm is an unconditional `_id: $nin` (a user-principal grant crosses orgs by
    * design). The org-grant arm reuses `orgGrantArms` under `$nor`, one arm per granting org,
@@ -880,7 +883,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       });
     }
 
-    const visibilityArms = callerVisibilityArms({ organizationIds, publicArm: { isPublic: true } });
+    const visibilityArms = callerVisibilityArms({
+      organizationIds,
+      administeredOrgIds: opts?.administeredOrgIds,
+      publicArm: { isPublic: true },
+    });
 
     const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
     const orgGrantExemptionArms = orgGrantArms(opts?.orgGrantedLakes);
@@ -1235,6 +1242,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
+  async touchIfStable(id: string): Promise<boolean> {
+    // `null` matches a lake written before `status` existed, which is at rest (see activateIfDraft).
+    // The explicit `updatedAt` makes this a real write whatever the timestamps plugin does with it.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: [...DATA_LAKE_STABLE_STATUSES, null] } },
+      { $set: { updatedAt: new Date() } }
+    );
+    return res.matchedCount === 1;
+  }
+
   async activateIfDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
     // The status guard lives in the FILTER, not in a prior read: `promoteDataLake` hands over a
     // lake document it fetched a round trip earlier (the grant load runs in between), so testing
@@ -1250,6 +1267,40 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
   async clearPendingConnector(id: string): Promise<void> {
     await this.dataLakeModel.updateOne({ _id: id }, { $unset: { pendingConnector: 1 } });
+  }
+
+  async findPendingPlaceholderLake(
+    userId: string,
+    organizationId: string,
+    connector: DataLakePendingConnector,
+    placeholder: string
+  ): Promise<IDataLakeDocument | null> {
+    if (!userId || !organizationId) return null;
+    return this.dataLakeModel
+      .findOne({
+        createdByUserId: userId,
+        organizationId,
+        pendingConnector: connector,
+        name: placeholder,
+        status: 'draft',
+      })
+      .sort({ _id: 1 });
+  }
+
+  async renameIfPlaceholderAndClearPending(
+    id: string,
+    placeholder: string,
+    name: string,
+    extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}
+  ): Promise<IDataLakeDocument | null> {
+    // The name match is the guard: a rename the user made meanwhile is never overwritten.
+    const renamed = await this.dataLakeModel.findOneAndUpdate(
+      { _id: id, name: placeholder },
+      { $set: { name, ...extra }, $unset: { pendingConnector: 1 } },
+      { new: false }
+    );
+    if (!renamed) await this.clearPendingConnector(id);
+    return renamed;
   }
 
   async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {

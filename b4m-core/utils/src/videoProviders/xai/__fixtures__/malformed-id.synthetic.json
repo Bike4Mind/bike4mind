@@ -1,0 +1,16 @@
+{
+  "scenario": "malformed-id.synthetic",
+  "synthetic": true,
+  "basis": "The body is the live-probed answer to GET /v1/videos/{bad id} (free, no generation); only the exchange wrapper is hand-built. Replace with a recording (see record.ts).",
+  "exchanges": [
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/videos/not-a-real-id" },
+      "response": {
+        "status": 400,
+        "headers": { "content-type": "application/json" },
+        "body": { "code": "invalid-argument", "error": "Malformed request ID" }
+      }
+    }
+  ]
+}

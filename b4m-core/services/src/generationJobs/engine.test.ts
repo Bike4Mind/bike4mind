@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CreditHolderType, type IGenerationJob } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { createInMemoryGenerationJobRepository } from './__test__/inMemoryGenerationJobRepository';
@@ -217,6 +217,99 @@ describe('GenerationJobEngine', () => {
     expect(t.repository.jobs.get(job.id)!.error?.code).toBe('provider_error');
   });
 
+  describe('cancels at the provider when a running job fails', () => {
+    it('after MAX_STEP_ATTEMPTS transient retries', async () => {
+      const t = setup();
+      const job = await t.create({ state: 'running', attempts: MAX_STEP_ATTEMPTS - 1 });
+      t.results.poll.push({ next: 'retry', reason: 'HTTP 503' });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.repository.jobs.get(job.id)!.state).toBe('failed');
+      expect(t.handler.cancelAtProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not cancel a retry that still has attempts left', async () => {
+      const t = setup();
+      const job = await t.create({ state: 'running' });
+      t.results.poll.push({ next: 'retry', reason: 'HTTP 503' });
+      expect(await t.engine.step(job.id)).toBe('advanced');
+      expect(t.handler.cancelAtProvider).not.toHaveBeenCalled();
+    });
+
+    it('on a non-retryable failed poll', async () => {
+      const t = setup();
+      const job = await t.create({ state: 'running' });
+      t.results.poll.push({ next: 'failed', error: { code: 'provider_error', message: 'boom' } });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.repository.jobs.get(job.id)!.state).toBe('failed');
+      expect(t.handler.cancelAtProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it('still fails with the original error and releases the hold when the cancel throws', async () => {
+      const t = setup();
+      const warnSpy = vi.spyOn(t.logger, 'warn');
+      vi.mocked(t.handler.cancelAtProvider).mockRejectedValueOnce(new Error('cancel 500'));
+      const job = await t.create({ state: 'running' });
+      t.results.poll.push({ next: 'failed', error: { code: 'provider_error', message: 'boom' } });
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.repository.jobs.get(job.id)).toMatchObject({
+        state: 'failed',
+        error: { code: 'provider_error', message: 'boom' },
+      });
+      expect(t.handler.cancelAtProvider).toHaveBeenCalledTimes(1);
+      expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls.some(call => String(call[0]).startsWith('provider cancel failed'))).toBe(true);
+    });
+
+    it('passes the step signal so a hung cancel stays bounded by the step budget', async () => {
+      const t = setup();
+      const job = await t.create({ state: 'running' });
+      t.results.poll.push({ next: 'failed', error: { code: 'provider_error', message: 'boom' } });
+      await t.engine.step(job.id);
+      expect(vi.mocked(t.handler.cancelAtProvider).mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('gives the cancel a fresh signal when the step signal already aborted', async () => {
+      const t = setup();
+      vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(AbortSignal.abort());
+      const job = await t.create({ state: 'running', attempts: MAX_STEP_ATTEMPTS - 1 });
+      t.results.poll.push({ next: 'retry', reason: 'poll timed out' });
+      await t.engine.step(job.id);
+      expect(vi.mocked(t.handler.cancelAtProvider).mock.calls[0][1].signal.aborted).toBe(false);
+    });
+
+    it.each([
+      ['succeeded', { next: 'succeeded', payload }],
+      ['blocked', { next: 'blocked', error: { code: 'content_blocked', message: 'policy' } }],
+    ] as const)('does not cancel a poll that ends %s', async (_label, result) => {
+      const t = setup();
+      const job = await t.create({ state: 'running' });
+      t.results.poll.push(result);
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.handler.cancelAtProvider).not.toHaveBeenCalled();
+    });
+
+    it('does not cancel a failure from pending (nothing was submitted)', async () => {
+      const t = setup();
+      const job = await t.create();
+      t.results.submit.push(new Error('socket hang up'));
+      expect(await t.engine.step(job.id)).toBe('terminal');
+      expect(t.repository.jobs.get(job.id)!.state).toBe('failed');
+      expect(t.handler.cancelAtProvider).not.toHaveBeenCalled();
+    });
+
+    it('does not cancel a failure from storing (the output is already produced)', async () => {
+      const t = setup();
+      const failedStore = await t.create({ state: 'storing' });
+      t.results.store.push({ next: 'failed', error: { code: 'provider_error', message: 'store' } });
+      expect(await t.engine.step(failedStore.id)).toBe('terminal');
+      const exhausted = await t.create({ state: 'storing', attempts: MAX_STEP_ATTEMPTS - 1 });
+      t.results.store.push({ next: 'retry', reason: 'HTTP 503' });
+      expect(await t.engine.step(exhausted.id)).toBe('terminal');
+      expect(t.repository.jobs.get(exhausted.id)!.state).toBe('failed');
+      expect(t.handler.cancelAtProvider).not.toHaveBeenCalled();
+    });
+  });
+
   it('caps consecutive failures only: transient poll failures between healthy polls never fail the job', async () => {
     const t = setup();
     const job = await t.create({ state: 'running' });
@@ -280,6 +373,20 @@ describe('GenerationJobEngine', () => {
     expect(t.repository.jobs.get(job.id)!.state).toBe('blocked');
     expect(t.repository.jobs.get(job.id)!.rawProviderError).toEqual({ x: 1 });
     expect(t.handler.onTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits the payload a blocked result carries, so terminal handling can read it after a crash', async () => {
+    const t = setup();
+    const job = await t.create({ state: 'running' });
+    const billedPayload = { ...payload, billedBlock: true };
+    t.results.poll.push({
+      next: 'blocked',
+      error: { code: 'content_blocked', message: 'policy' },
+      payload: billedPayload,
+    });
+    expect(await t.engine.step(job.id)).toBe('terminal');
+    expect(t.repository.jobs.get(job.id)!.payload).toEqual(billedPayload);
+    expect(vi.mocked(t.handler.onTerminal).mock.calls[0][0].payload).toEqual(billedPayload);
   });
 
   it.each(['pending', 'running'] as const)('cancel requested while %s cancels', async state => {
@@ -426,4 +533,43 @@ describe('GenerationJobEngine', () => {
     t.results.submit.push({ next: 'running', payload });
     await expect(t.engine.step(job.id)).resolves.toBe('advanced');
   });
+});
+
+describe('step time budget', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const running = {
+    next: 'running' as const,
+    payload: { ...payload, providerHandle: { provider: 'test' as const, data: {} } },
+  };
+
+  it('caps the step signal by the remaining invocation time', async () => {
+    const t = setup();
+    const job = await t.create();
+    t.results.submit.push(running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(job.id, { remainingMs: 31_000 });
+    expect(timeout).toHaveBeenCalledWith(1_000);
+  });
+
+  it('uses the lease when the remaining time is unknown or longer', async () => {
+    const t = setup();
+    const first = await t.create();
+    const second = await t.create();
+    t.results.submit.push(running, running);
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await t.engine.step(first.id);
+    await t.engine.step(second.id, { remainingMs: 24 * 3_600_000 });
+    expect(timeout.mock.calls).toEqual([[LEASE_MS - 30_000], [LEASE_MS - 30_000]]);
+  });
+
+  it.each([20_000, 30_000, Number.NaN])(
+    'refuses a step with no budget (%s ms left) and leaves the job unleased',
+    async remainingMs => {
+      const t = setup();
+      const job = await t.create();
+      await expect(t.engine.step(job.id, { remainingMs })).rejects.toThrow(/no time budget/);
+      expect(t.repository.jobs.get(job.id)?.leaseUntil ?? null).toBeNull();
+      expect(t.handler.submit).not.toHaveBeenCalled();
+    }
+  );
 });

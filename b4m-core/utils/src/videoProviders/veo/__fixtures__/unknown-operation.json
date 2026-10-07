@@ -1,0 +1,26 @@
+{
+  "scenario": "unknown-operation",
+  "recordedAt": "2026-10-06T15:50:35.964Z",
+  "exchanges": [
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/doesnotexist0000"
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "code": 403,
+            "message": "You do not have permission to access the Operation with ID doesnotexist0000 or it may not exist.",
+            "status": "PERMISSION_DENIED"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -322,9 +322,11 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     it('rejects an organizationId the caller is not a member of (403) before enqueuing', async () => {
       // The real resolveBillingOrgId -> resolveActiveOrg chain runs here with only the membership
       // gate stubbed, so this pins the status the route actually returns, not a mocked rejection.
+      // Unlike llm.integration.test.ts, orgAccess stays mocked file-wide because the forwarding
+      // case below needs mockResolveBillingOrgId to return a fixed org.
       const { resolveBillingOrgId: realResolveBillingOrgId } =
         await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
-      mockResolveBillingOrgId.mockImplementationOnce(realResolveBillingOrgId);
+      mockResolveBillingOrgId.mockImplementation(realResolveBillingOrgId);
       mockOrgFindAccessibleById.mockResolvedValueOnce(null);
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
       await handler(req, res);

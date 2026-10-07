@@ -9,6 +9,7 @@ import {
   fabFileChunkRepository,
   adminSettingsRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { Request } from 'express';
 import { z } from 'zod';
@@ -59,6 +60,9 @@ const RechunkInput = z.object({
 });
 
 const detectDeps = { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } };
+const gateDeps = {
+  db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+};
 const spaceDeps = { db: { fabFiles: fabFileRepository } };
 
 /**
@@ -106,9 +110,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query;
     const { limit, select } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
+    const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, gateDeps);
 
     let detected: dataLakeService.LakeRebuildTarget[];
     if (select === 'stale-embedding-space') {
@@ -181,7 +183,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // rather than having its lease released - so `resetIds` is a subset of the wave and is what we
       // enqueue. Mutual exclusion itself remains the chunk worker's compare-and-set.
       const userById = new Map(wave.map(f => [f.fabFileId, f.userId] as const));
-      const resetIds = await fabFileRepository.resetChunkStateByIds([...userById.keys()]);
+      // Gated a second time inside the transaction: the early gate keeps strangers from triggering
+      // detection, and this one is what serializes the reset against a concurrent grant revoke (see
+      // WRITE-TIME RESIDUAL on `canManageLake`). The sends below are external and run after commit.
+      const resetIds = await withTransaction(async () => {
+        await dataLakeService.assertLakeRebuildAccess(lake.id, ctx, gateDeps);
+        // Sequential: the ambient transaction session rejects concurrent operations.
+        const reset = await fabFileRepository.resetChunkStateByIds([...userById.keys()], { concurrency: 1 });
+        // A fallback lake has no Mongo doc and no grants to revoke, and its slug id is not a valid _id.
+        if (!dataLakeService.isFallbackLake(lake)) await dataLakeRepository.touchIfStable(lake.id);
+        return reset;
+      });
       // allSettled, not all: one failed send must not fail the whole wave. A file whose send didn't
       // land is left in the reset state (chunked:false, chunkCount:0), which is exactly what the
       // rescue sweep selects on, so it self-heals on the next pass rather than needing an undo.

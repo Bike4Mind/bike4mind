@@ -17,12 +17,10 @@ export * from './imageGeneration';
 export * from './generatedAudio';
 export * from './voiceGeneration';
 export * from './voicePricing';
-export * from './videoGeneration';
 export * from './video';
 export * from './soundGeneration';
 export * from './soundPricing';
 export * from './musicGeneration';
-export * from './schemas/sora';
 export * from './schemas';
 // Transport-agnostic API endpoint contracts. Pure data (no `.openapi()`), so
 // safe to import in any runtime. The OpenAPI layer (./openapi) is deliberately
@@ -32,6 +30,7 @@ export type { GeneratedFile } from './schemas/quest';
 export * from './constants/user';
 export * from './constants/organization';
 export * from './constants/dataLakes';
+export * from './constants/githubLakeFileRules';
 export * from './constants/dataLakeApiKeyScopes';
 export * from './constants/jupyter';
 export * from './constants/systemUsers';
@@ -80,11 +79,12 @@ export * from './mcp/providers';
 // Artifact system exports (schemas and helpers only, types are already exported via './types')
 export * from './schemas/artifacts';
 export * from './schemas/publishedArtifact';
-export * from './schemas/embedBranding';
+export * from './schemas/embedKey';
 export * from './schemas/annotation';
 export * from './schemas/questmaster';
 export * from './schemas/curation';
 export * from './schemas/imageModerationIncident';
+export * from './schemas/releaseNotes';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/deepLinks';

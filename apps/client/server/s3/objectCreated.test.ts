@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   recomputeUploaded: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   completedBatchStatus: vi.fn(),
+  changeStorageSize: vi.fn(),
 }));
 
 // withContext just threads a logger; the handler body is the subject.
@@ -25,7 +26,7 @@ vi.mock('@server/s3/utils', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
-  changeStorageSize: vi.fn(),
+  changeStorageSize: h.changeStorageSize,
   dataLakeBatchRepository: { claimFileStatus: h.claimFileStatus, incrementCounter: h.incrementCounter },
   FabFile: {
     findOne: h.findOne,
@@ -59,9 +60,9 @@ vi.mock('sst', () => ({
 import { func } from './objectCreated';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() };
-const run = (key = 'uploads/report.pdf') =>
+const run = (key = 'uploads/report.pdf', eventTime?: string) =>
   (func as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(
-    { Records: [{ s3: { object: { key, size: 10 } } }] },
+    { Records: [{ eventTime, s3: { object: { key, size: 10 } } }] },
     {},
     logger
   );
@@ -294,5 +295,54 @@ describe('objectCreated - moderation claim identity', () => {
       expect.objectContaining({ action: 'image_moderation_status', moderationStatus: 'pending' })
     );
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
+  });
+});
+
+describe('objectCreated - storage charge', () => {
+  const isStorageClaim = (filter: Record<string, unknown>) => '$or' in filter;
+
+  it('charges the owner once it wins the storage-charge claim on the row', async () => {
+    h.findOne.mockResolvedValue(metadata());
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    const eventTime = new Date('2026-01-01T00:00:00.000Z');
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', $or: [{ storageChargedAt: null }, { storageChargedAt: { $lt: eventTime } }] },
+      { $set: { storageChargedAt: eventTime } },
+      expect.anything()
+    );
+    expect(h.changeStorageSize).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 10);
+  });
+
+  it('does not charge an upload that was already charged', async () => {
+    // A redelivered event, or a notebook import's object the import charged in its own transaction.
+    h.findOne.mockResolvedValue(metadata());
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) =>
+      isStorageClaim(filter) ? { matchedCount: 0, modifiedCount: 0 } : { matchedCount: 1, modifiedCount: 1 }
+    );
+
+    await run();
+
+    expect(h.changeStorageSize).not.toHaveBeenCalled();
+  });
+
+  it('charges a redelivered event once', async () => {
+    h.findOne.mockResolvedValue(metadata());
+    let stamp: Date | undefined;
+    h.updateOne.mockImplementation(
+      async (filter: Record<string, unknown>, update: { $set: { storageChargedAt?: Date } }) => {
+        if (!isStorageClaim(filter)) return { matchedCount: 1, modifiedCount: 1 };
+        const next = update.$set.storageChargedAt as Date;
+        if (stamp && stamp >= next) return { matchedCount: 0, modifiedCount: 0 };
+        stamp = next;
+        return { matchedCount: 1, modifiedCount: 1 };
+      }
+    );
+
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+    await run('uploads/report.pdf', '2026-01-01T00:00:00.000Z');
+
+    expect(h.changeStorageSize).toHaveBeenCalledTimes(1);
   });
 });

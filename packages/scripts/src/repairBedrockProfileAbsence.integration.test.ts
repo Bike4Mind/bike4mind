@@ -155,4 +155,45 @@ describe('repairBedrockProfileAbsence', () => {
     const rows = await modelCatalogRepository.rowsInForce(new Date());
     expect(lifecycleOf(rows, modelId)).toMatchObject({ status: 'deprecated', deprecationDate: '2026-02-19' });
   });
+
+  /** A later discovery write (e.g. an aggregator enrichment) restating every group it inherited. */
+  const restated = (modelId: string, lifecycle: ModelRecord['lifecycle']): IModelCatalogRowInput => ({
+    ...graduated(modelId),
+    patch: { ...bedrockRecord(modelId, lifecycle), contextWindow: 1_000_000 },
+    effectiveFrom: new Date('2026-09-02T00:00:00Z'),
+    note: 'discovery:models.dev@2026-09-02T00:00:00.000Z',
+  });
+
+  it('repairs a graduation a later discovery row carried forward unchanged', async () => {
+    const modelId = 'global.anthropic.claude-sonnet-5';
+    await modelCatalogRepository.append(seedRow(modelId, { status: 'active' }));
+    await modelCatalogRepository.append(graduated(modelId));
+    await modelCatalogRepository.append(restated(modelId, { status: 'deprecated', deprecationDate: '2026-08-01' }));
+
+    const result = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    expect(result.candidates).toEqual([
+      { modelId, foundationId: 'anthropic.claude-sonnet-5', graduatedAt: '2026-08-01T00:00:00.000Z' },
+    ]);
+
+    const rows = await modelCatalogRepository.rowsInForce(new Date());
+    expect(lifecycleOf(rows, modelId)).toMatchObject({ status: 'active' });
+    expect(lifecycleOf(rows, modelId)?.deprecationDate).toBeUndefined();
+    // The enrichment the carrying row brought is kept, not reverted to the graduation's.
+    expect(resolveCatalogRecords(rows).get(modelId)?.record.contextWindow).toBe(1_000_000);
+
+    expect((await repairBedrockProfileAbsence({ apply: true, log: silent })).repaired).toBe(0);
+  });
+
+  it('leaves a profile id a later discovery row deprecated for its own reason', async () => {
+    const modelId = 'global.anthropic.claude-sonnet-5';
+    await modelCatalogRepository.append(seedRow(modelId, { status: 'active' }));
+    await modelCatalogRepository.append(graduated(modelId));
+    await modelCatalogRepository.append(restated(modelId, { status: 'deprecated', deprecationDate: '2026-09-15' }));
+
+    const result = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    expect(result.candidates).toEqual([]);
+
+    const rows = await modelCatalogRepository.rowsInForce(new Date());
+    expect(lifecycleOf(rows, modelId)).toMatchObject({ status: 'deprecated', deprecationDate: '2026-09-15' });
+  });
 });

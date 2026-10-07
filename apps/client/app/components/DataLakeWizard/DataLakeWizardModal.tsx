@@ -25,6 +25,7 @@ import ConfigStep from './steps/ConfigStep';
 import UploadStep from './steps/UploadStep';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useDuplicatePrefixLake } from '@client/app/hooks/data/dataLakes';
+import { useWizardIdentityPreview } from '@client/app/hooks/data/useWizardIdentityPreview';
 
 /**
  * The wizard's step order. Preview is opt-in (default off), so the minimal create path is
@@ -82,6 +83,8 @@ export default function DataLakeWizardModal() {
   // matches no lake (normalizeTagPrefix drops it) and the collision goes unreported.
   const effectivePrefix = submittedTagPrefix(config.tagPrefix);
   const duplicatePrefixLake = useDuplicatePrefixLake(effectivePrefix, !!targetLake);
+  // Only on Configure: the name changes per keystroke on the source step.
+  const { heldTypedPrefix } = useWizardIdentityPreview(step === 'config');
   const currentIndex = STEP_ORDER.indexOf(step);
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
@@ -124,7 +127,10 @@ export default function DataLakeWizardModal() {
           !isReservedTagPrefix(effectivePrefix) &&
           (!!targetLake ||
             (effectivePrefix.length <= MAX_TAG_PREFIX_LENGTH && !hasBlankTagPrefixSegment(effectivePrefix))) &&
-          !duplicatePrefixLake
+          !duplicatePrefixLake &&
+          // A typed prefix the server reports held by a lake this form cannot see. Never gates
+          // while that check loads or fails: create stays the authority.
+          !heldTypedPrefix
         );
       case 'upload':
         return false; // No "next" on last step

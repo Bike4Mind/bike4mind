@@ -4,18 +4,18 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@server/utils/config';
-import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
-import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
-import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
-import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
-import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
+import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
+import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
+import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
+import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@workers/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as dataLakeResearchRunDispatch } from '@workers/queueHandlers/dataLakeResearchRun';
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
 import { dispatch as driveLakeIngestDispatch } from '@server/queueHandlers/driveLakeIngest';
 import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
 import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
-import { dispatch as generationCallbackDispatch } from '@server/queueHandlers/generationCallback';
+import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
 import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
@@ -23,6 +23,7 @@ import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
+import { registerQuestExportQueue } from './questExportQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
@@ -33,6 +34,7 @@ import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
+import { registerGitHubLakeReconcile } from './githubLakeReconcile';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -100,6 +102,7 @@ async function main() {
   registerQuestTimeoutSweep(worker);
   registerGenerationJobSweep(worker);
   registerLakeHealthSweep(worker);
+  registerGitHubLakeReconcile(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);
   registerLakeInconsistencySweep(worker);
@@ -192,6 +195,7 @@ async function main() {
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
+  await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

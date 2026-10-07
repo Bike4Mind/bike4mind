@@ -7,6 +7,7 @@ const mockValidateAndRotateNonce = vi.fn();
 const mockVerifyPendingOTC = vi.fn();
 const mockRegisterViaOTC = vi.fn();
 const mockUserHasMFA = vi.fn();
+const mockCountPasskeys = vi.fn();
 const mockJwtVerify = vi.fn();
 const mockJwtSign = vi.fn();
 
@@ -74,6 +75,7 @@ vi.mock('@bike4mind/database', () => ({
   subscriberRepository: {},
   creditTransactionRepository: {},
   authSessionRepository: {},
+  passkeyCredentialRepository: { countByUser: (...a: unknown[]) => mockCountPasskeys(...a) },
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -146,6 +148,7 @@ describe('/api/otc/verify — enumeration resistance', () => {
     mockJwtSign.mockReturnValue('reissued-token');
     mockValidateAndRotateNonce.mockResolvedValue(true);
     mockUserHasMFA.mockReturnValue(false);
+    mockCountPasskeys.mockResolvedValue(0);
     sentCookies = [];
     mockRes = {
       json: vi.fn().mockReturnThis(),
@@ -284,10 +287,32 @@ describe('/api/otc/verify — enumeration resistance', () => {
     expect(mockRes.status).toHaveBeenCalledWith(200);
     const body = mockRes.json.mock.calls[0][0];
     expect(body.mfaRequired).toBe(true);
+    expect(body.passkeyAvailable).toBe(false);
     expect(body.accessToken).toBe('mfa-access-token');
     // Critical: no refreshToken - a client can't exchange it for a full session
     // by POSTing to /api/auth/refreshToken before completing MFA.
     expect(body.refreshToken).toBeUndefined();
+  });
+
+  it('flags passkeyAvailable on the MFA challenge when the user has enrolled a passkey', async () => {
+    mockJwtVerify.mockReturnValue(validToken());
+    mockVerifyPendingOTC.mockResolvedValue(true);
+    mockUserHasMFA.mockReturnValue(true);
+    mockCountPasskeys.mockResolvedValue(2);
+    mockFindByEmail.mockResolvedValue({
+      id: 'u1',
+      isSystem: false,
+      isBanned: false,
+      emailVerified: true,
+      tokenVersion: 0,
+      mfa: { totpEnabled: true },
+      toJSON: () => ({ id: 'u1' }),
+    });
+
+    await handler(makeReq({ email: 'user@example.com', code: '123456', pendingToken: 'tok' }), mockRes);
+
+    expect(mockCountPasskeys).toHaveBeenCalledWith('u1');
+    expect(mockRes.json.mock.calls[0][0]).toMatchObject({ mfaRequired: true, passkeyAvailable: true });
   });
 
   it('mfaSetupRequired response has NO refreshToken', async () => {

@@ -40,16 +40,27 @@ const harness = (opts: {
   // Resolves a document by default: `update` is a findOneAndUpdate, and a `null` here means the
   // lake vanished - a case one test below asserts on deliberately.
   const update = vi.fn().mockImplementation(async (input: { id: string }) => ({ id: input.id }));
+  const touchIfStable = vi.fn().mockResolvedValue(true);
   const warn = vi.fn();
   const adapters = {
     db: {
-      dataLakes: { findByOrganizationId, update },
+      dataLakes: { findByOrganizationId, update, touchIfStable },
       dataLakeAccessGrants: { listByPrincipal, listActiveByLakes, upsertGrant },
       lakeConfigChangeEvents: { record },
     },
     logger: { warn },
   };
-  return { findByOrganizationId, listByPrincipal, listActiveByLakes, upsertGrant, record, update, warn, adapters };
+  return {
+    findByOrganizationId,
+    listByPrincipal,
+    listActiveByLakes,
+    upsertGrant,
+    record,
+    update,
+    touchIfStable,
+    warn,
+    adapters,
+  };
 };
 
 const run = (h: ReturnType<typeof harness>, departed = DEPARTED) =>
@@ -147,6 +158,24 @@ describe('lapseDepartedMemberLakeAccess - phase 1, grants held by the departing 
     expect(event.changes).toHaveLength(1);
     expect(event.changes[0].before).toBe(`user:${DEPARTED}=curator`);
     expect(event.changes[0].after).toBe(`user:${DEPARTED}=curator until ${NOW.toISOString()}`);
+  });
+});
+
+describe('lapseDepartedMemberLakeAccess - phase 1 lake touch, the revoke-collision write', () => {
+  it.each(['owner', 'curator'] as const)('touches the lake when a lapsed grant is %s', async role => {
+    const h = harness({ lakes: [lake('lakeA')], held: [grant('lakeA', role)] });
+
+    await run(h);
+
+    expect(h.touchIfStable).toHaveBeenCalledWith('lakeA');
+  });
+
+  it('does not touch the lake for a reader lapse, which cannot have a manage write in flight', async () => {
+    const h = harness({ lakes: [lake('lakeA')], held: [grant('lakeA', 'reader')] });
+
+    await run(h);
+
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });
 

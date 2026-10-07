@@ -15,6 +15,7 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
+import { claimStorageCharge } from '@server/s3/storageCharge';
 import { recomputeStatsForUploadedFile } from '@server/dataLakes/recomputeStatsForUploadedFile';
 import { completedBatchStatus, finalizeBatchIfComplete } from '@server/queueHandlers/dataLakeBatchProgress';
 import { sendToQueue } from '@server/utils/sqs';
@@ -27,6 +28,7 @@ export const func = withContext(async (event, context, logger) => {
   for (const record of event.Records) {
     const { object } = record.s3;
     const objectKey = decodeS3Key(object.key);
+    const uploadedAt = record.eventTime ? new Date(record.eventTime) : new Date();
 
     logger.updateMetadata({ objectKey });
 
@@ -101,7 +103,7 @@ export const func = withContext(async (event, context, logger) => {
      * slow invocation here can find its claim superseded and a successor scan already in flight or
      * finished; an unguarded write would then overwrite the successor's verdict - including
      * un-quarantining a file it had just confirmed 'blocked'. Same shape as the chunk claim's
-     * identity-guarded release in queueHandlers/fabFileChunk.ts. Returns whether the write landed.
+     * identity-guarded release in apps/workers/src/queueHandlers/fabFileChunk.ts. Returns whether the write landed.
      */
     const writeVerdict = async (
       patch: { moderationStatus: 'clean' | 'blocked'; blockReason?: string },
@@ -191,7 +193,7 @@ export const func = withContext(async (event, context, logger) => {
         moderationStatus = (await writeVerdict(verdictPatch, session)) ? result.moderationStatus : 'pending';
       }
 
-      changeStorageSize(user, object.size);
+      if (await claimStorageCharge(metadata._id, uploadedAt, session)) changeStorageSize(user, object.size);
       await Promise.all([metadata.save({ session }), user.save({ session })]);
 
       return user;

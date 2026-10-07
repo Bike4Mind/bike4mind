@@ -147,6 +147,13 @@ describe('GET /api/v1/data-lakes', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it('returns each lake tag, the value a session lakeScope takes', async () => {
+    const body = (await run())._getJSONData();
+    expect(body.data.map((lake: { datalake_tag: string }) => lake.datalake_tag)).toEqual(
+      [...DB_IDS].sort().map(id => `datalake:${id}`)
+    );
+  });
+
   it('pages by id with an opaque cursor until next_cursor is null', async () => {
     const first = (await run({ limit: '2' }))._getJSONData();
     expect(first.data).toHaveLength(2);
