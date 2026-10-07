@@ -11,7 +11,7 @@ import { XAIBackend } from './xaiBackend';
 /**
  * Every backend whose `getModelInfo()` is a static table - no network, no real key.
  *
- * The one list both in-code price paths draw from: `adapterPriceTiers` below, and
+ * The one list the in-code price paths draw from: the `adapter*` collectors below, and
  * collectStaticTextModels in packages/database/src/seeds/generateModelPriceSeed.ts,
  * which generates modelPrices.seed.json. They were two hand-synced copies, and a
  * backend reaching one but not the other is a silent billing defect on that
@@ -20,8 +20,9 @@ import { XAIBackend } from './xaiBackend';
  *
  * Ollama is absent because its listing is a live server call; BFL and the image
  * backends publish no text models. The key is a placeholder - a static table needs
- * none, but the constructors take the argument. Both consumers filter to text
- * models, so AWSBackend (speech-to-text only) contributes nothing today.
+ * none, but the constructors take the argument. The per-token collectors and the
+ * seed filter to text models, so AWSBackend (speech-to-text only) contributes only
+ * to `adapterModelIds` and `adapterBuildPricedModelIds`.
  */
 export const staticPriceBackends = () => [
   new OpenAIBackend('static-price-table'),
@@ -34,9 +35,19 @@ export const staticPriceBackends = () => [
   new AWSBackend(),
 ];
 
+let cachedTables: Promise<ModelInfo[]> | undefined;
 let cached: Promise<ReadonlyMap<string, IModelPriceTier>> | undefined;
 let cachedLadders: Promise<ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>> | undefined;
+let cachedBuildPriced: Promise<ReadonlySet<string>> | undefined;
 let cachedIds: Promise<ReadonlySet<string>> | undefined;
+
+/** Every static table read once; the four accessors below are views of it. */
+function staticModelInfo(): Promise<ModelInfo[]> {
+  cachedTables ??= Promise.all(staticPriceBackends().map(backend => backend.getModelInfo())).then(tables =>
+    tables.flat()
+  );
+  return cachedTables;
+}
 
 /**
  * Every model id the static adapter tables ship. The read path merges catalog rows
@@ -44,10 +55,25 @@ let cachedIds: Promise<ReadonlySet<string>> | undefined;
  * fields even when no seed row is in force.
  */
 export async function adapterModelIds(): Promise<ReadonlySet<string>> {
-  cachedIds ??= Promise.all(staticPriceBackends().map(backend => backend.getModelInfo())).then(
-    tables => new Set(tables.flat().map(model => String(model.id)))
-  );
+  cachedIds ??= staticModelInfo().then(models => new Set(models.map(model => String(model.id))));
   return cachedIds;
+}
+
+/**
+ * Every model, of any type, whose adapter literal carries a price. A superset of
+ * `adapterPriceTiers`, which is per-token text only: the image, video and
+ * speech-to-text literals are priced per image or per minute, so they are not a
+ * trusted per-token price, but the admin queue should still say the build holds
+ * one rather than call the model unpriced.
+ */
+export async function adapterBuildPricedModelIds(): Promise<ReadonlySet<string>> {
+  cachedBuildPriced ??= staticModelInfo().then(
+    models =>
+      new Set(
+        models.filter(model => !model.freeToRun && Object.keys(model.pricing).length > 0).map(model => String(model.id))
+      )
+  );
+  return cachedBuildPriced;
 }
 
 /**
@@ -84,38 +110,35 @@ export async function adapterPriceLadders(): Promise<ReadonlyMap<string, Readonl
   return cachedLadders;
 }
 
-async function pricedTextModels(): Promise<ModelInfo[]> {
-  const tables = await Promise.all(staticPriceBackends().map(backend => backend.getModelInfo()));
-  return tables.flat().filter(model => model.type === 'text' && !model.freeToRun);
-}
-
-async function collect(): Promise<ReadonlyMap<string, IModelPriceTier>> {
-  const tiers = new Map<string, IModelPriceTier>();
-  for (const model of await pricedTextModels()) {
-    const tier = lowestTier(model);
-    if (tier) tiers.set(String(model.id), tier);
-  }
-  return tiers;
-}
-
+/**
+ * Priced per-token text models, by threshold. A model whose base tier lacks a
+ * positive input and output rate is left out: it would otherwise promote on, and be
+ * billed at, a placeholder that settles every call free.
+ */
 async function collectLadders(): Promise<ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>> {
   const ladders = new Map<string, Readonly<Record<string, IModelPriceTier>>>();
-  for (const model of await pricedTextModels()) {
-    if (!lowestTier(model)) continue;
+  for (const model of await staticModelInfo()) {
+    if (model.type !== 'text' || model.freeToRun) continue;
     const ladder: Record<string, IModelPriceTier> = {};
     for (const [threshold, tier] of Object.entries(model.pricing)) {
       if (Number.isFinite(Number(threshold))) ladder[threshold] = tier as IModelPriceTier;
     }
-    ladders.set(String(model.id), ladder);
+    const base = lowestOf(ladder);
+    if (base && base.input > 0 && base.output > 0) ladders.set(String(model.id), ladder);
   }
   return ladders;
 }
 
-function lowestTier(model: ModelInfo): IModelPriceTier | undefined {
-  const thresholds = Object.keys(model.pricing)
-    .map(Number)
-    .filter(threshold => Number.isFinite(threshold))
-    .sort((a, b) => a - b);
-  const tier = thresholds.length > 0 ? model.pricing[thresholds[0]] : undefined;
-  return tier as IModelPriceTier | undefined;
+async function collect(): Promise<ReadonlyMap<string, IModelPriceTier>> {
+  const tiers = new Map<string, IModelPriceTier>();
+  for (const [id, ladder] of await adapterPriceLadders()) {
+    const base = lowestOf(ladder);
+    if (base) tiers.set(id, base);
+  }
+  return tiers;
+}
+
+function lowestOf(ladder: Readonly<Record<string, IModelPriceTier>>): IModelPriceTier | undefined {
+  const thresholds = Object.keys(ladder).sort((a, b) => Number(a) - Number(b));
+  return thresholds.length > 0 ? ladder[thresholds[0]] : undefined;
 }
