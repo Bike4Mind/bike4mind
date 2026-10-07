@@ -15,6 +15,9 @@ import type {
   ChatApprovalMode,
   ChatArtifactContent,
   ChatArtifactLibrary,
+  ChatArtifactPublish,
+  ChatArtifactPublishProgress,
+  ChatArtifactPublishRequest,
   ChatAttachmentInput,
   ChatModelCatalog,
   ChatMoveToBackgroundResult,
@@ -106,6 +109,10 @@ export const IPC_CHANNELS = {
   chatDiscardAttachment: 'chat:discard-attachment',
   chatListArtifacts: 'chat:list-artifacts',
   chatReadArtifact: 'chat:read-artifact',
+  chatPublishArtifact: 'chat:publish-artifact',
+  chatReadArtifactPublishState: 'chat:read-artifact-publish-state',
+  /** main -> renderer push, one per publish step. */
+  chatArtifactPublishProgress: 'chat:artifact-publish-progress',
   chatListBackground: 'chat:list-background',
   chatReadBackground: 'chat:read-background',
   chatStopBackground: 'chat:stop-background',
@@ -444,6 +451,25 @@ export interface DesktopApi {
     listArtifacts(): Promise<ChatArtifactLibrary>;
     /** One artifact's body, fetched when the user opens its row. Never rejects. */
     readArtifact(artifactId: string): Promise<ChatArtifactContent>;
+    /**
+     * Publish an artifact so other people can open it, at the visibility named in the request.
+     *
+     * Outward-facing, and therefore ONLY ever called from an explicit user action: the renderer
+     * invokes this from the publish button and from nowhere else. No tool, no model output and
+     * no automatic path reaches it - a reply that asks for a publish produces text and nothing
+     * more. Never rejects; a refusal comes back as a state the card renders.
+     */
+    publishArtifact(request: ChatArtifactPublishRequest): Promise<ChatArtifactPublish>;
+    /**
+     * Whether this artifact already has a publication, read when the user looks at it.
+     *
+     * One request per artifact, so it is deliberately not part of listArtifacts: a library of
+     * hundreds of rows would otherwise be hundreds of queries to draw a list. Null means the
+     * artifact has never been published.
+     */
+    readArtifactPublishState(artifactId: string): Promise<ChatArtifactPublish | null>;
+    /** Which publish step is in flight, so a large bundle is not a frozen card. */
+    onArtifactPublishProgress(listener: (progress: ChatArtifactPublishProgress) => void): () => void;
     /**
      * Background commands belonging to this conversation, running and recently finished.
      *

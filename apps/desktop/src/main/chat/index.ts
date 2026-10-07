@@ -6,6 +6,7 @@ import { ChatModels } from '@bike4mind/common';
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
+  ChatArtifactPublishRequest,
   ChatAttachmentInput,
   ChatQueueEvent,
   ChatSessionStatusEvent,
@@ -35,6 +36,7 @@ import { BrowserManager, NO_PAGE } from './browser/BrowserManager';
 import { IMAGE_BYTE_CAP, isImageMediaType } from './attachments';
 import { ArtifactLibrary } from './artifacts/ArtifactLibrary';
 import { ArtifactPublisher } from './artifacts/ArtifactPublisher';
+import { SharePublisher } from './artifacts/SharePublisher';
 import { registerArtifactProtocol } from './artifacts/sandboxProtocol';
 import { ChatService } from './ChatService';
 import { CHAT_STREAM_TAG } from './devLogTag';
@@ -270,6 +272,16 @@ export function registerChat(auth: AuthService): RegisteredChat {
 
   const broadcast = (event: ChatStreamEvent) => send(IPC_CHANNELS.chatStreamEvent, event);
 
+  // Constructed here rather than beside ArtifactPublisher because it needs `send`, which is
+  // declared above. Note what it is NOT given: no hook into the turn, no tool registration.
+  // Publishing happens only when the IPC handler below is invoked from the publish button.
+  const sharePublisher = new SharePublisher(
+    () => auth.getApiClient(),
+    () => auth.getState().user?.id,
+    logger,
+    progress => send(IPC_CHANNELS.chatArtifactPublishProgress, progress)
+  );
+
   // Declared before the two things that feed it, because both take it as a constructor
   // argument: the gate reports who is waiting on the user, the service reports who is
   // replying, and this turns the pair into the one status a sidebar row draws.
@@ -484,6 +496,12 @@ export function registerChat(auth: AuthService): RegisteredChat {
 
   ipcMain.handle(IPC_CHANNELS.chatListArtifacts, () => artifactLibrary.list());
   ipcMain.handle(IPC_CHANNELS.chatReadArtifact, (_event, artifactId: string) => artifactLibrary.read(artifactId));
+  ipcMain.handle(IPC_CHANNELS.chatPublishArtifact, (_event, request: ChatArtifactPublishRequest) =>
+    sharePublisher.publish(request)
+  );
+  ipcMain.handle(IPC_CHANNELS.chatReadArtifactPublishState, (_event, artifactId: string) =>
+    sharePublisher.readState(artifactId)
+  );
   ipcMain.handle(IPC_CHANNELS.chatListBackground, (_event, sessionId: string) => background.list(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatReadBackground, (_event, sessionId: string, processId: string) =>
     background.tail(processId, sessionId, PANEL_TAIL_CHARS)

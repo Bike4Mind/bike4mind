@@ -25,7 +25,7 @@ import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
-import { SettingsNavItem, SettingsScreen } from './SettingsPanel';
+import { SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
@@ -432,7 +432,6 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
-        settings={<SettingsNavItem auth={auth ?? null} onOpen={openSettings} />}
         footer={account?.(
           <TurnDot
             state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}

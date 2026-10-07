@@ -2,7 +2,7 @@ import { CssVarsProvider } from '@mui/joy/styles';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AuthState } from '@shared/auth';
-import { SettingsNavItem, SettingsScreen } from './SettingsPanel';
+import { SettingsScreen } from './SettingsPanel';
 
 /** Rendered to a string, like CustomizePanel's tests and for the same reason: vitest runs on `node`. */
 const markup = (node: React.ReactNode) => renderToStaticMarkup(<CssVarsProvider>{node}</CssVarsProvider>);
@@ -49,19 +49,5 @@ describe('the Settings screen', () => {
     const early = markup(<SettingsScreen auth={null} onClose={() => {}} />);
     expect(early).toContain('data-entry="updates"');
     expect(early).not.toContain('data-entry="server"');
-  });
-});
-
-describe('the Settings nav row', () => {
-  it('opens the screen and keeps its stable hook', () => {
-    expect(markup(<SettingsNavItem auth={signedIn} onOpen={() => {}} />)).toContain('data-testid="chat-settings-btn"');
-  });
-
-  /**
-   * The chip moved here with the update entry. Nothing is pending in a renderer that has not
-   * talked to main yet, so it is absent - but it is this row's to draw, not Customize's.
-   */
-  it('shows no attention badge when no update is waiting', () => {
-    expect(markup(<SettingsNavItem auth={signedIn} onOpen={() => {}} />)).not.toContain('settings-attention-chip');
   });
 });

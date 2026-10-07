@@ -9,6 +9,7 @@
  * Credential-free like @shared/auth, for the same reason - see src/shared/ipc.ts.
  */
 
+import type { ValidationViolation } from '@bike4mind/common';
 import type { ChatQuestionAnswer } from './questions';
 import type { SkillSource } from './skills';
 
@@ -342,6 +343,12 @@ export interface ChatArtifactView {
    * of the library is on the server by definition, so saying so there would be noise.
    */
   save?: ChatArtifactSave;
+  /**
+   * How SHARING this artifact went, which is a different act from saving it and carries
+   * different consequences. Only ever set by an explicit user publish or by reading the
+   * publication back; absent means nobody has asked.
+   */
+  publish?: ChatArtifactPublish;
 }
 
 /** What an <artifact> block in a reply became, with the fields only a reply's artifact has. */
@@ -402,6 +409,63 @@ export interface ChatArtifactSave {
   status: 'saved' | 'failed' | 'disabled';
   /** Why it did not save. Set on 'failed' and 'disabled'. */
   reason?: string;
+}
+
+/**
+ * The visibility rungs a desktop publish may pick.
+ *
+ * The user tier's `allowedOverrides` in the server's SCOPE_POLICY, narrowed to the three a
+ * desktop session can actually resolve: it publishes under `tier: 'user'` with the signed-in
+ * account as the scope, so the project rung has no scope to name here.
+ */
+export type ChatArtifactPublishVisibility = 'private' | 'organization' | 'public';
+
+/**
+ * Where a publish ended up.
+ *
+ * Shaped after ChatArtifactSave - a status plus a human reason - because the discrimination is
+ * what the user acts on. The statuses are split finer than saving's because the remedies
+ * genuinely differ: `rejected` carries the violations that say what to fix, `quota` is a limit
+ * the account reached rather than a fault, and `unknown` exists because publishing is
+ * outward-facing. If finalize's answer never arrived, the page may or may not be reachable by
+ * other people, and telling the user either "it is published" or "it is not" would be a guess
+ * about who can see their content. Saying so is the only honest option.
+ */
+export interface ChatArtifactPublish {
+  status: 'published' | 'rejected' | 'quota' | 'failed' | 'unknown';
+  /** Absolute, shareable. Set on 'published' only. */
+  url?: string;
+  /** What the server actually resolved, which may be stricter than what was asked for. */
+  visibility?: ChatArtifactPublishVisibility;
+  publishedAt?: string;
+  /** Plain-language account of a non-'published' outcome. */
+  reason?: string;
+  /**
+   * Set on 'rejected'. The server's own shape, not a copy of it: these cross IPC verbatim so
+   * the panel can show what `validateBundle` actually objected to.
+   */
+  violations?: ValidationViolation[];
+}
+
+/** What the renderer asks for when the user confirms a publish. */
+export interface ChatArtifactPublishRequest {
+  artifactId: string;
+  type: string;
+  title: string;
+  content: string;
+  visibility: ChatArtifactPublishVisibility;
+}
+
+/**
+ * Which of the three steps is in flight, pushed so a large bundle is not a frozen card.
+ *
+ * `done` is terminal and carries the outcome, so a renderer that only listens to this channel
+ * still ends up with the same state the invoke resolves to.
+ */
+export interface ChatArtifactPublishProgress {
+  artifactId: string;
+  step: 'requesting' | 'uploading' | 'finalizing' | 'done';
+  result?: ChatArtifactPublish;
 }
 
 /**

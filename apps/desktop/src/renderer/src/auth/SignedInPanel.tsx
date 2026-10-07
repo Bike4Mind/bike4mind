@@ -3,6 +3,7 @@ import Alert from '@mui/joy/Alert';
 import Avatar from '@mui/joy/Avatar';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
+import Chip from '@mui/joy/Chip';
 import Divider from '@mui/joy/Divider';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
@@ -11,6 +12,7 @@ import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
 import { ChevronIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
 import { NavItem } from '../chat/SessionList';
+import { useSettingsAttention } from '../chat/settingsAttention';
 import { RuntimeInfo } from '../components/RuntimeInfo';
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
@@ -47,6 +49,7 @@ export function SignedInPanel({
 }) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
+  const settingsAttention = useSettingsAttention();
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
@@ -102,6 +105,14 @@ export function SignedInPanel({
             {status}
           </Stack>
         </Stack>
+        {/* Primary, not danger: an update waiting is not a fault. Hidden while the menu is
+            open, because the Settings row it points at is then two rows below and the chip
+            would be saying the same thing twice. */}
+        {settingsAttention && !open && (
+          <Chip size="sm" variant="soft" color="primary" data-testid="account-attention-chip">
+            {settingsAttention}
+          </Chip>
+        )}
         <IconButton
           size="sm"
           variant="plain"
@@ -115,55 +126,94 @@ export function SignedInPanel({
       </Stack>
 
       {open && (
-        <Stack spacing={0.25} data-testid="account-menu">
-          {/* The strip above shows whatever the account calls itself, which for most users is a
-              nickname. The address is what they would recognise on an invoice. */}
-          {user?.email && user.email !== displayName && (
-            <Typography
-              level="body-xs"
-              textColor="text.tertiary"
-              noWrap
-              sx={{ px: 1, pb: 0.5 }}
-              data-testid="account-menu-email"
-            >
-              {user.email}
-            </Typography>
-          )}
-
-          {/* Rows rather than full-width buttons: these are places to go, and a stack of solid
-              blocks reads as a stack of commands. Same component the nav above the list uses,
-              so the sidebar has one row shape from top to bottom. */}
-          <NavItem
-            icon={<UserIcon />}
-            label="Profile"
-            onClick={() => void navigate({ to: '/profile' })}
-            testId="account-profile-btn"
-          />
-
-          {/* The server moved to Settings, and this is where anyone who remembers it being in
-              here will come back to. One row rather than a copy of the picker: two live
-              controls for one setting is how they drift apart. */}
-          {onOpenSettings && (
-            <NavItem icon={<GearIcon />} label="Settings" onClick={onOpenSettings} testId="account-settings-btn" />
-          )}
-
-          <Divider sx={{ my: 0.5 }} />
-
-          <NavItem
-            icon={<SignOutIcon />}
-            label="Sign out"
-            loading={state.busy === 'signing-out'}
-            onClick={() => void window.b4m.auth.signOut()}
-            testId="auth-signout-btn"
-          />
-
-          <Divider sx={{ my: 0.5 }} />
-
-          <Box sx={{ px: 1, pt: 0.5 }}>
-            <RuntimeInfo />
-          </Box>
-        </Stack>
+        <AccountMenu
+          state={state}
+          attention={settingsAttention}
+          onOpenSettings={onOpenSettings}
+          onProfile={() => void navigate({ to: '/profile' })}
+        />
       )}
+    </Stack>
+  );
+}
+
+/**
+ * The account menu's own rows, split out so they can be rendered on their own.
+ *
+ * Worth a component rather than a block inside the strip: this is now the only way into
+ * Settings, and a collapsed menu renders nothing - a test of the strip cannot reach the row
+ * that matters without opening it.
+ */
+export function AccountMenu({
+  state,
+  attention,
+  onOpenSettings,
+  onProfile,
+}: {
+  state: AuthState;
+  attention?: string;
+  onOpenSettings?: () => void;
+  onProfile: () => void;
+}) {
+  const user = state.user;
+  const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
+
+  return (
+    <Stack spacing={0.25} data-testid="account-menu">
+      {/* The strip above shows whatever the account calls itself, which for most users is a
+          nickname. The address is what they would recognise on an invoice. */}
+      {user?.email && user.email !== displayName && (
+        <Typography
+          level="body-xs"
+          textColor="text.tertiary"
+          noWrap
+          sx={{ px: 1, pb: 0.5 }}
+          data-testid="account-menu-email"
+        >
+          {user.email}
+        </Typography>
+      )}
+
+      {/* Rows rather than full-width buttons: these are places to go, and a stack of solid
+          blocks reads as a stack of commands. Same component the nav above the list uses,
+          so the sidebar has one row shape from top to bottom. */}
+      <NavItem icon={<UserIcon />} label="Profile" onClick={onProfile} testId="account-profile-btn" />
+
+      {/* The only way into Settings. It is not in the nav list above: a second config row
+          under Customize read as the same thing twice, and the server used to live in this
+          menu anyway. One row rather than a copy of the picker - two live controls for one
+          setting is how they drift apart. */}
+      {onOpenSettings && (
+        <NavItem
+          icon={<GearIcon />}
+          label="Settings"
+          onClick={onOpenSettings}
+          end={
+            attention ? (
+              <Chip size="sm" variant="soft" color="primary" data-testid="account-settings-attention-chip">
+                {attention}
+              </Chip>
+            ) : undefined
+          }
+          testId="account-settings-btn"
+        />
+      )}
+
+      <Divider sx={{ my: 0.5 }} />
+
+      <NavItem
+        icon={<SignOutIcon />}
+        label="Sign out"
+        loading={state.busy === 'signing-out'}
+        onClick={() => void window.b4m.auth.signOut()}
+        testId="auth-signout-btn"
+      />
+
+      <Divider sx={{ my: 0.5 }} />
+
+      <Box sx={{ px: 1, pt: 0.5 }}>
+        <RuntimeInfo />
+      </Box>
     </Stack>
   );
 }
