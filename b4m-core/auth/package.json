@@ -82,6 +82,7 @@
   "dependencies": {
     "@bike4mind/common": "workspace:*",
     "@bike4mind/observability": "workspace:*",
+    "@simplewebauthn/server": "^14.0.3",
     "jsonwebtoken": "^9.0.3",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",

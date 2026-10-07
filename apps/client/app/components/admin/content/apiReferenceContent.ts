@@ -647,6 +647,12 @@ Multi-tenant organization management with roles and integrations.
 | POST | /api/auth/mfa/regenerate-backup-codes | Generate new backup codes |
 | POST | /api/auth/mfa/cancel-setup | Cancel in-progress setup |
 | POST | /api/auth/mfa/force-reset | Admin force-reset user MFA |
+| POST | /api/auth/mfa/passkey/register-options | Begin passkey enrollment (WebAuthn creation options) |
+| POST | /api/auth/mfa/passkey/register | Verify and store a new passkey |
+| GET | /api/auth/mfa/passkey | List enrolled passkeys |
+| DELETE | /api/auth/mfa/passkey/:id | Remove a passkey |
+| POST | /api/auth/mfa/passkey/authenticate-options | Begin passkey MFA verification during login |
+| POST | /api/auth/mfa/passkey/authenticate | Verify a passkey during login |
 
 #### User Management
 
