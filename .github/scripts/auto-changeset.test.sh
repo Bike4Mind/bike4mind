@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Integration self-test for the "Generate changeset" step of
-# .github/workflows/auto-changeset.yml.
+# Integration self-test for .github/scripts/generate-changeset.sh (the "Generate
+# changeset" step of .github/workflows/auto-changeset.yml) and verify-changeset.sh.
 #
-# The step's script is extracted from the workflow YAML and run for real against a
-# throwaway git repo with a local bare remote, so `git commit`/`git push` and the
-# merge-base diff behave as they do on a runner. `gh` is stubbed. This works only
-# because the step body contains no ${{ }} expressions -- keep it that way.
+# The scripts run for real against a throwaway git repo with a local bare remote, so
+# `git commit`/`git push` and the merge-base diff behave as they do on a runner. `gh` is
+# stubbed.
 #
 # Usage: bash .github/scripts/auto-changeset.test.sh
 
 set -uo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-WORKFLOW="$REPO_ROOT/.github/workflows/auto-changeset.yml"
+STEP="$REPO_ROOT/.github/scripts/generate-changeset.sh"
+VERIFY="$REPO_ROOT/.github/scripts/verify-changeset.sh"
 BOT_NAME="b4m-release-bot[bot]"
 
 PASSED=0
@@ -20,19 +20,6 @@ FAILED=0
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-
-# --- Extract the step body ---
-START=$(grep -n '^        run: |$' "$WORKFLOW" | tail -1 | cut -d: -f1)
-if [ -z "$START" ]; then
-  echo "FATAL: could not locate the 'Generate changeset' run block in $WORKFLOW"
-  exit 1
-fi
-STEP="$WORK/generate-changeset.sh"
-tail -n +$((START + 1)) "$WORKFLOW" | sed 's/^          //' >"$STEP"
-if ! grep -q 'resolve-changeset-packages.sh' "$STEP"; then
-  echo "FATAL: extracted block does not look like the generate step"
-  exit 1
-fi
 
 # --- Stub gh: records invocations, reports no existing comments ---
 mkdir -p "$WORK/bin"
