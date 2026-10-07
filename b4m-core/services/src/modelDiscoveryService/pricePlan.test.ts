@@ -1168,7 +1168,7 @@ describe('planPriceWrites adapter literal rows', () => {
     expect(result.rows[0].pricing).toEqual({ '0': LITERAL, '200000': upper });
   });
 
-  it('writes a row that automation may supersede and an operator may not be overridden by', () => {
+  it('classifies the row as automation-owned and labels its source adapter-literal', () => {
     const [row] = plan({ adapterLadders: ladders }).rows;
 
     expect(classifyPriceRow(row)).toBe('automation');
@@ -1220,6 +1220,41 @@ describe('planPriceWrites adapter literal rows', () => {
     };
 
     expect(plan({ adapterLadders: ladders, rowsInForce: [written] }).rows).toEqual([]);
+  });
+
+  it('rewrites its own row when the build ladder has moved on, so billing tracks the build', () => {
+    const stale = inForce(
+      { '0': { input: 2e-6, output: 10e-6 } },
+      'discovery:adapter-literal@2026-01-01T00:00:00.000Z'
+    );
+
+    const result = plan({ adapterLadders: ladders, rowsInForce: [stale] });
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].pricing).toEqual({ '0': LITERAL });
+  });
+
+  it('rewrites its own row when a tier was added to the ladder', () => {
+    const upper: IModelPriceTier = { input: 6e-6, output: 22.5e-6 };
+    const held = inForce({ '0': LITERAL }, 'discovery:adapter-literal@2026-01-01T00:00:00.000Z');
+
+    const result = plan({
+      adapterLadders: new Map([['gpt-6', { '0': LITERAL, '200000': upper }]]),
+      rowsInForce: [held],
+    });
+
+    expect(Object.keys(result.rows[0].pricing)).toEqual(['0', '200000']);
+  });
+
+  it('never rewrites a row someone else wrote, however far it is from the literal', () => {
+    for (const note of ['adapter-seed', 'discovery:openai@2026-01-01T00:00:00.000Z', 'invoice 4411']) {
+      const result = plan({
+        adapterLadders: ladders,
+        rowsInForce: [inForce({ '0': { input: 1e-6, output: 2e-6 } }, note)],
+      });
+
+      expect(result.rows, note).toEqual([]);
+    }
   });
 
   it('writes nothing when no ladders are supplied, which is every caller that predates it', () => {
