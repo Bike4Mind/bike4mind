@@ -81,6 +81,14 @@ Located in the AI category, the Operations Model setting allows administrators t
 - **Image Model** -- The model for image-related operations
 - **Speech Model** -- The model for speech-to-text operations
 
+### Video Generation Models
+
+Located in the AI category, this card shows one switch per video model in the catalog. Each switch shows whether the server will accept video jobs for that model:
+
+- A model that is on by default and has no admin override reads "Enabled by default"
+- Turning a model off makes new video jobs for it be refused
+- Models whose provider is not configured on the deployment (for example, the non-production test model on production) cannot generate regardless of the switch
+
 ### Logo Upload
 
 Located in the Branding category, the Logo Upload component provides:

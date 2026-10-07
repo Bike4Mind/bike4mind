@@ -23,9 +23,9 @@ import AdminSettingsTab from './AdminSettingsTab';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 
-const aiTabId = Object.entries(SETTING_TABS).find(([, tab]) =>
+const aiTab = Object.values(SETTING_TABS).find(tab =>
   (tab.categories as readonly string[]).includes(settingsMap.videoGeneration.category)
-)?.[0];
+);
 
 describe('AdminSettingsTab video generation setting', () => {
   it('renders the bespoke video models card and no generic videoGeneration card', () => {
@@ -34,7 +34,8 @@ describe('AdminSettingsTab video generation setting', () => {
         <AdminSettingsTab />
       </CssVarsProvider>
     );
-    if (aiTabId) fireEvent.click(screen.getAllByRole('tab', { name: new RegExp(SETTING_TABS[aiTabId].label, 'i') })[0]);
+    expect(aiTab).toBeDefined();
+    fireEvent.click(screen.getAllByRole('tab', { name: new RegExp(aiTab!.name, 'i') })[0]);
 
     expect(screen.getByTestId('admin-video-models-card')).toBeTruthy();
     expect(screen.queryByTestId('generic-setting-videoGeneration')).toBeNull();
