@@ -37,6 +37,9 @@ const TOKENS_PER_MTOK = 1_000_000;
  */
 export const SEED_PRICE_NOTE = 'adapter-seed';
 
+/** The source name on a row written from an adapter literal rather than a feed. */
+export const ADAPTER_LITERAL_SOURCE = 'adapter-literal';
+
 /** Stamped on every row discovery appends, for the admin provenance badge. */
 export const DISCOVERY_REPRICED_BY = 'model-discovery';
 
@@ -112,6 +115,13 @@ export interface PricePlanInput {
    * cached rate is below 10% of input.
    */
   adapterTiers?: ReadonlyMap<string, IModelPriceTier>;
+  /**
+   * The same literals as whole tier ladders (adapterPriceLadders). A model with
+   * no row in force that no source priced this run gets its literal written as
+   * its first row, so the price lives in the prices collection where an operator
+   * can see it and the next pass finds it already held. Unset writes none.
+   */
+  adapterLadders?: ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>;
   /** modelDiscoveryPriceBandPct: the largest move, in percent, applied unattended. */
   bandPct: number;
   runStartedAt: Date;
@@ -352,6 +362,26 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
       pricing: Object.fromEntries(tiers),
       effectiveFrom: input.runStartedAt,
       note: `${DISCOVERY_PRICE_NOTE_PREFIX}${valueSources.join('+')}@${input.runStartedAt.toISOString()}`,
+      repricedBy: DISCOVERY_REPRICED_BY,
+    });
+  }
+
+  // A model this build prices in code that no source quoted and no row holds. The
+  // literal is first-party and promotion already trusts it, so recording it
+  // removes the dependency on the price seed having been applied. The whole
+  // ladder goes in: the read path replaces the pricing map wholesale, and a row
+  // holding only the base tier would bill long prompts at the short rate. Noted
+  // as an automation row, so an operator reprice or a newer seed still wins.
+  const plannedIds = new Set(rows.map(row => row.modelId));
+  for (const modelId of [...(input.adapterLadders?.keys() ?? [])].sort()) {
+    const ladder = input.adapterLadders?.get(modelId);
+    if (!ladder || !input.knownModelIds.has(modelId) || inForce.has(modelId) || plannedIds.has(modelId)) continue;
+    rows.push({
+      modelId,
+      unit: 'per_token',
+      pricing: Object.fromEntries(Object.entries(ladder).map(([threshold, tier]) => [threshold, { ...tier }])),
+      effectiveFrom: input.runStartedAt,
+      note: `${DISCOVERY_PRICE_NOTE_PREFIX}${ADAPTER_LITERAL_SOURCE}@${input.runStartedAt.toISOString()}`,
       repricedBy: DISCOVERY_REPRICED_BY,
     });
   }
