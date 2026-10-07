@@ -7,7 +7,7 @@ import {
   parseBrandingColor,
   parseBrandingDisplayName,
   parseBrandingLogoUrl,
-} from './embedBranding';
+} from './embedKey';
 
 describe('EmbedBrandingSchema', () => {
   it('accepts a well-formed branding object', () => {

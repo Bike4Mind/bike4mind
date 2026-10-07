@@ -79,7 +79,7 @@ export * from './mcp/providers';
 // Artifact system exports (schemas and helpers only, types are already exported via './types')
 export * from './schemas/artifacts';
 export * from './schemas/publishedArtifact';
-export * from './schemas/embedBranding';
+export * from './schemas/embedKey';
 export * from './schemas/annotation';
 export * from './schemas/questmaster';
 export * from './schemas/curation';

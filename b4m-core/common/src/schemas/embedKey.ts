@@ -109,7 +109,7 @@ export const EmbedBrandingSchema = z.object({
  * Lives here rather than in an agent module because this is the only file both the
  * services package and the client's embed routes already import - putting it beside
  * the agent schemas would make `@bike4mind/services` depend on them for one
- * predicate. Nothing to do with branding; it is here for the import graph.
+ * predicate.
  */
 export function isAgentOwnedByEmbedKey(
   agent: { organizationId?: string | null; userId?: string | null },
