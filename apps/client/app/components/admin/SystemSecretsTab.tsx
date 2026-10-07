@@ -40,7 +40,7 @@ import {
   Error as ErrorIcon,
 } from '@mui/icons-material';
 import Tooltip from '@mui/joy/Tooltip';
-import toast from 'react-hot-toast';
+import { toast } from 'sonner';
 import { isAxiosError } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -200,8 +200,8 @@ const Tier1StatusSection: React.FC = () => {
           <Box>
             <Typography level="title-md">Infrastructure Secrets (SST)</Typography>
             <Typography level="body-sm" color="neutral">
-              These secrets must be configured via SST CLI. A deploy of this stage is refused while any of
-              them is unset.
+              These secrets must be configured via SST CLI. A deploy of this stage is refused while any of them is
+              unset.
             </Typography>
           </Box>
           <IconButton
