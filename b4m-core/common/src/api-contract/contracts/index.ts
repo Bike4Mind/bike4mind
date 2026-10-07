@@ -2,12 +2,16 @@ import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
 import { startAgentExecutionContract, getAgentExecutionContract } from './agentExecutions.contract';
 import { sessionUpdateContract } from './sessionUpdate.contract';
+import { sessionGetContract } from './sessionGet.contract';
+import { sessionDeleteContract } from './sessionDelete.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
 import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
+import { getCreditBalanceContract } from './credits.contract';
+import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
 import { createFileUploadContract, getFileContract } from './files.contract';
@@ -22,6 +26,8 @@ import {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './dataLakes.contract';
+import { generateVideoContract } from './videoGeneration.contract';
+import { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './voice.contract';
 
 /**
  * Every public endpoint, as a contract. The OpenAPI generator registers each of
@@ -33,13 +39,17 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chatContract,
   startAgentExecutionContract,
   getAgentExecutionContract,
+  sessionGetContract,
   sessionUpdateContract,
+  sessionDeleteContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
   generateMusicContract,
   generateSoundEffectContract,
   getMeContract,
+  getCreditBalanceContract,
+  listModelsContract,
   generateImageContract,
   editImageContract,
   createFileUploadContract,
@@ -53,4 +63,8 @@ export const CONTRACTS: readonly EndpointContract[] = [
   addDataLakeFileContract,
   removeDataLakeFileContract,
   searchDataLakeContract,
+  generateVideoContract,
+  listVoicesContract,
+  createVoiceSessionContract,
+  endVoiceSessionContract,
 ];

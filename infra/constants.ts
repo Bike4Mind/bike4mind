@@ -1,7 +1,9 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
-/** Stages that run at full production scale (reserved concurrency, full memory, etc.) */
-export const PRODUCTION_STAGES: readonly string[] = ['production', 'dev'];
+/** Stages that run at full production scale (reserved concurrency, full memory, etc.).
+ * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
+import { PRODUCTION_STAGES } from '@bike4mind/infra';
+export { PRODUCTION_STAGES };
 
 /**
  * Subscriber options for a single-record queue handler (one that reads only
@@ -17,6 +19,14 @@ export const PRODUCTION_STAGES: readonly string[] = ['production', 'dev'];
  * report partial-batch failures (ReportBatchItemFailures) -- do NOT reach for this const.
  */
 export const SINGLE_RECORD_BATCH = { batch: { size: 1 } } as const;
+
+/**
+ * Registers the fake video provider so the generation-job path can be exercised end to end without a paid
+ * provider key. Never set on production-scale stages, which must only ever reach real providers.
+ */
+export const TEST_VIDEO_PROVIDER_ENVIRONMENT: Record<string, string> = PRODUCTION_STAGES.includes($app.stage)
+  ? {}
+  : { ENABLE_TEST_VIDEO_PROVIDER: 'true' };
 
 export const DEFAULT_LAMBDA_ENVIRONMENT = {
   SEED_APP_NAME: $app.name,

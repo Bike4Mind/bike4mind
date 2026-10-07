@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main, prod]
+    branches: [main]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, closed]
@@ -43,17 +43,6 @@ jobs:
               echo "ecr_cache_repo=${{ vars.STAGING_ECR_CACHE_REPO || vars.ECR_CACHE_REPO }}" |tee -a "$GITHUB_OUTPUT"
               echo "cache_policy_id=${{ vars.STAGING_CACHE_POLICY_ID || vars.CACHE_POLICY_ID }}" |tee -a "$GITHUB_OUTPUT"
               echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" |tee -a "$GITHUB_OUTPUT"
-              echo "is_preview=false" |tee -a "$GITHUB_OUTPUT"
-            elif [ "${{ github.ref }}" = "refs/heads/prod" ]; then
-              echo "deploy_env=production" |tee -a "$GITHUB_OUTPUT"
-              echo "stage=production" |tee -a "$GITHUB_OUTPUT"
-              echo "aws_account=prod" |tee -a "$GITHUB_OUTPUT"
-              echo "server_domain=${{ vars.PROD_SERVER_DOMAIN || vars.SERVER_DOMAIN }}" |tee -a "$GITHUB_OUTPUT"
-              echo "vpc_id=${{ vars.PROD_VPC_ID || vars.VPC_ID }}" |tee -a "$GITHUB_OUTPUT"
-              echo "hosted_zone=${{ vars.PROD_HOSTED_ZONE || vars.HOSTED_ZONE }}" |tee -a "$GITHUB_OUTPUT"
-              echo "ecr_cache_repo=${{ vars.PROD_ECR_CACHE_REPO || vars.ECR_CACHE_REPO }}" |tee -a "$GITHUB_OUTPUT"
-              echo "cache_policy_id=${{ vars.PROD_CACHE_POLICY_ID || vars.CACHE_POLICY_ID }}" |tee -a "$GITHUB_OUTPUT"
-              echo "aws_role_arn=${{ secrets.AWS_PROD_ROLE_ARN }}" |tee -a "$GITHUB_OUTPUT"
               echo "is_preview=false" |tee -a "$GITHUB_OUTPUT"
             else
               echo "Unsupported branch for push: ${{ github.ref }}"

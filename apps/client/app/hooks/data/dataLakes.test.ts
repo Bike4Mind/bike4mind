@@ -45,11 +45,17 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 // The stub is callable (zustand-style) with a getState property: useDuplicatePrefixLake calls
 // it as a selector hook, activeOrgId reads getState.
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
+// `account.selected` defaults to none (personal scope); a test that needs an active org sets it
+// and the top-level afterEach clears it.
+const account = vi.hoisted(() => ({ selected: undefined as { id: string; personal: boolean } | undefined }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => {
-  const useSelectedAccount = (selector: (s: { selectedAccount: undefined }) => unknown) =>
-    selector({ selectedAccount: undefined });
-  useSelectedAccount.getState = () => ({ selectedAccount: undefined });
+  type State = { selectedAccount: typeof account.selected };
+  const useSelectedAccount = (selector: (s: State) => unknown) => selector({ selectedAccount: account.selected });
+  useSelectedAccount.getState = (): State => ({ selectedAccount: account.selected });
   return { useSelectedAccount };
+});
+afterEach(() => {
+  account.selected = undefined;
 });
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
@@ -72,6 +78,7 @@ import {
   useAddFileToDataLake,
   useRecordMembershipDecision,
   useRemoveFileFromDataLake,
+  useReviewDataLakeProposal,
   useApplyTaxonomySuggestions,
   useRechunkDataLake,
   useSetLakeVisibility,
@@ -94,8 +101,13 @@ import {
   useReprocessFabFile,
   useScanDataLakeFindings,
   useRuleOnDataLakeFinding,
+  useApplyCorpusAction,
+  useLakeFileTags,
   useUnderChunkedCount,
+  useGetDataLakesWithRetrievability,
+  useDataLakeSlugPreview,
 } from './dataLakes';
+import { dataLakeKeys } from './dataLakeKeys';
 
 const PAGE_SIZE = 24;
 
@@ -131,6 +143,65 @@ const mountBrowse = (initialSearch = '') => {
 
 const requestedUrls = (): string[] => apiGet.mock.calls.map(call => call[0] as string);
 const paramsOf = (url: string) => new URL(url, 'http://test.local').searchParams;
+
+// The only client path that opts into the retrievability label: drop the param and every row
+// renders unlabeled (treated as searchable) while the consumer tests, which mock this hook, stay green.
+describe('useGetDataLakesWithRetrievability', () => {
+  beforeEach(() => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValue({ data: { data: [] } });
+  });
+
+  const mount = (sessionId: string | null) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const view = renderHook(() => useGetDataLakesWithRetrievability(sessionId), { wrapper });
+    return { ...view, queryClient };
+  };
+
+  it('requests the labelled list scoped to the session, under the session-keyed query key', async () => {
+    const { result, queryClient } = mount('sess-1');
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', {
+      params: { includeRetrievability: 'true', sessionId: 'sess-1' },
+    });
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability('sess-1'))?.status).toBe('success');
+  });
+
+  it('omits sessionId but keeps includeRetrievability with no session', async () => {
+    const { result, queryClient } = mount(null);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes', { params: { includeRetrievability: 'true' } });
+    expect(queryClient.getQueryState(dataLakeKeys.listWithRetrievability(null))?.status).toBe('success');
+  });
+
+  it('keeps the previous session rows while a new session id refetches, so the selection never empties', async () => {
+    const rows = [{ id: 'a', name: 'A', retrievable: true }];
+    apiGet.mockResolvedValueOnce({ data: { data: rows } });
+    let release: (v: unknown) => void = () => {};
+    apiGet.mockReturnValueOnce(new Promise(resolve => (release = resolve)));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result, rerender } = renderHook(({ sid }) => useGetDataLakesWithRetrievability(sid), {
+      wrapper,
+      initialProps: { sid: 'sess-1' as string | null },
+    });
+    await waitFor(() => expect(result.current.data).toEqual(rows));
+
+    rerender({ sid: 'sess-2' });
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2));
+    expect(result.current.data).toEqual(rows);
+    expect(result.current.isPlaceholderData).toBe(true);
+
+    await act(async () => release({ data: { data: [{ ...rows[0], retrievable: false }] } }));
+    await waitFor(() => expect(result.current.data?.[0]?.retrievable).toBe(false));
+  });
+});
 
 describe('useBrowsePublicDataLakes', () => {
   beforeEach(() => {
@@ -355,6 +426,41 @@ describe('useRemoveFileFromDataLake cache invalidation', () => {
     });
 
     expect(toast.success).toHaveBeenCalledWith('File removed from data lake.');
+  });
+});
+
+describe('useReviewDataLakeProposal cache invalidation', () => {
+  const run = async (decision: 'approve' | 'decline' | 'restore') => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'p1', title: 'Source' } } });
+
+    const { result } = renderHook(() => useReviewDataLakeProposal('lake1'), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ proposalId: 'p1', decision });
+    });
+    return invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+  };
+
+  it('approve refreshes the membership-derived caches the header count reads', async () => {
+    const keys = await run('approve');
+    expect(keys).toContain(JSON.stringify(['dataLakeTagCounts']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+  });
+
+  it('decline refreshes the lake list but not the membership-derived caches', async () => {
+    const keys = await run('decline');
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeTagCounts']));
+  });
+
+  it('restore refreshes the lake list but not membership caches', async () => {
+    const keys = await run('restore');
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).not.toContain(JSON.stringify(['dataLakeTagCounts']));
   });
 });
 
@@ -819,6 +925,52 @@ describe('useDataLakeSpend isForbidden', () => {
     const { result } = mountSpend();
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.isForbidden).toBe(false);
+  });
+});
+
+describe('useDataLakeSlugPreview', () => {
+  const mount = (name: string, enabled?: boolean) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return { queryClient, ...renderHook(() => useDataLakeSlugPreview(name, undefined, enabled), { wrapper }) };
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset().mockResolvedValue({ data: { slug: 'slug-1', tagPrefix: 'vendor-1:' } });
+  });
+
+  it('sends the active org and caches under the org-keyed slug-preview key', async () => {
+    account.selected = { id: 'org-1', personal: false };
+    const { queryClient, result } = mount('Vendor Contracts');
+
+    await waitFor(() => expect(result.current.data).toEqual({ slug: 'slug-1', tagPrefix: 'vendor-1:' }));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/slug-preview', {
+      params: { name: 'Vendor Contracts', organizationId: 'org-1' },
+    });
+    expect(
+      queryClient.getQueryCache().find({ queryKey: dataLakeKeys.slugPreview('Vendor Contracts', 'org-1') })
+    ).toBeDefined();
+  });
+
+  it('omits organizationId entirely in personal scope', async () => {
+    const { queryClient, result } = mount('Vendor Contracts');
+
+    await waitFor(() => expect(result.current.data).toEqual({ slug: 'slug-1', tagPrefix: 'vendor-1:' }));
+    const params = apiGet.mock.calls[0][1].params as Record<string, unknown>;
+    expect(params).toEqual({ name: 'Vendor Contracts' });
+    expect('organizationId' in params).toBe(false);
+    expect(
+      queryClient.getQueryCache().find({ queryKey: dataLakeKeys.slugPreview('Vendor Contracts', undefined) })
+    ).toBeDefined();
+  });
+
+  it('makes no request while disabled', async () => {
+    const { result } = mount('Vendor Contracts', false);
+
+    await act(async () => {});
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(apiGet).not.toHaveBeenCalled();
   });
 });
 
@@ -2180,7 +2332,7 @@ describe('useScanDataLakeFindings', () => {
     // The bare prefix, so the dialog's filtered list and the chip's open-only count both refresh.
     expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
     expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
-    expect(toast.success).toHaveBeenCalledWith('Scan complete: 3 finding(s) across 4 document(s).');
+    expect(toast.success).toHaveBeenCalledWith('Scanned 4 document(s), found 3 finding(s).');
   });
 
   it('says nothing was read rather than calling an empty lake clean', async () => {
@@ -2190,7 +2342,9 @@ describe('useScanDataLakeFindings', () => {
       await result.current.mutateAsync();
     });
 
-    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/no document in this lake has text/i));
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringMatching(/^Scanned 0 documents\..*no document in this lake has text/i)
+    );
   });
 
   it("surfaces the rate limit's own retry hint, not axios' status line", async () => {
@@ -2351,5 +2505,298 @@ describe('useRuleOnDataLakeFinding', () => {
       await refetch;
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
+  });
+});
+
+describe('useLakeFileTags', () => {
+  it('reads one file current prefixed tags from the lake-scoped route', async () => {
+    apiGet.mockReset();
+    apiGet.mockResolvedValueOnce({ data: { prefix: 'lk:', current: ['lk:finance'] } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+    const { result } = renderHook(() => useLakeFileTags('lake1', 'f1'), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toEqual({ prefix: 'lk:', current: ['lk:finance'] }));
+    expect(apiGet).toHaveBeenCalledWith('/api/data-lakes/lake1/files/f1/tags');
+  });
+});
+
+describe('useApplyCorpusAction', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useApplyCorpusAction(), { wrapper });
+    return { result, invalidate };
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it('posts the action to the finding door and re-reads findings, membership and the tag seed', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'merge',
+          findingId: 'finding-1',
+          targets: [
+            { fabFileId: 'a', fileName: 'a.md', role: 'kept' },
+            { fabFileId: 'b', fileName: 'b.md', role: 'retired' },
+          ],
+          detail: { removedFabFileIds: ['b'] },
+        },
+      },
+    });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'merge', keepFabFileId: 'a', retireFabFileIds: ['b'] },
+      });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/finding-1/corpus-action', {
+      action: 'merge',
+      keepFabFileId: 'a',
+      retireFabFileIds: ['b'],
+    });
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFiles', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+    expect(toast.success).toHaveBeenCalledWith(
+      'Removed 1 document from this lake.',
+      expect.objectContaining({ duration: expect.any(Number) })
+    );
+  });
+
+  it('offers Undo on a merge that restores every removed document through the membership door', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'merge',
+          findingId: 'finding-1',
+          targets: [
+            { fabFileId: 'a', fileName: 'a.md', role: 'kept' },
+            { fabFileId: 'b', fileName: 'b.md', role: 'retired' },
+            { fabFileId: 'c', fileName: 'c.md', role: 'retired' },
+          ],
+          detail: { removedFabFileIds: ['b', 'c'] },
+        },
+      },
+    });
+    // The restores land on the same mocked POST.
+    apiPost.mockResolvedValue({ data: { success: true, fileCount: 1, totalSizeBytes: 1 } });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'merge', keepFabFileId: 'a', retireFabFileIds: ['b', 'c'] },
+      });
+    });
+
+    const [, options] = (toast.success as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    // Scope the assertion to the Undo itself: the forward action already refreshed these keys.
+    invalidate.mockClear();
+    act(() => options.action.onClick());
+
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/b');
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/files/c');
+    });
+
+    // A merge Undo is a membership change like any other, so it must stale the findings queue and
+    // the retag seed too - not just the lake's file list.
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+  });
+
+  it('undoes a supersede by posting unsupersede back to the same door', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'supersede',
+          findingId: 'finding-1',
+          targets: [
+            { fabFileId: 'a', fileName: 'a.md', role: 'kept' },
+            { fabFileId: 'b', fileName: 'b.md', role: 'retired' },
+          ],
+          detail: { suppressedFromRanking: 'b', removedFromCorpus: false },
+        },
+      },
+    });
+    apiPost.mockResolvedValue({
+      data: { data: { action: 'unsupersede', findingId: 'finding-1', targets: [], detail: {} } },
+    });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'supersede', keepFabFileId: 'a', retireFabFileId: 'b' },
+      });
+    });
+
+    const [, options] = (toast.success as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { action: { onClick: () => void } },
+    ];
+    // Scope the assertion to the Undo itself: the forward action already refreshed these keys.
+    invalidate.mockClear();
+    act(() => options.action.onClick());
+
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/findings/finding-1/corpus-action', {
+        action: 'unsupersede',
+        fabFileId: 'b',
+      });
+      const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+      expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+      expect(keys).toContain(JSON.stringify(['dataLakeFileTags', 'lake1']));
+    });
+  });
+
+  it('toasts the returned-to-ranking name when a mutation un-supersedes a file', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'unsupersede',
+          findingId: 'finding-1',
+          targets: [{ fabFileId: 'b', fileName: 'b.md', role: 'restored' }],
+          detail: { returnedToRanking: 'b' },
+        },
+      },
+    });
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'unsupersede', fabFileId: 'b' },
+      });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('"b.md" returned to ranking.');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+  });
+
+  it('stays pending until the findings refetch lands, so a second click cannot act on stale rows', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: {
+        data: {
+          action: 'unsupersede',
+          findingId: 'finding-1',
+          targets: [{ fabFileId: 'b', fileName: 'b.md', role: 'restored' }],
+          detail: {},
+        },
+      },
+    });
+    let release!: () => void;
+    const refetch = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const { result, invalidate } = mount();
+    invalidate.mockImplementation(filters =>
+      JSON.stringify(filters?.queryKey) === JSON.stringify(['dataLakeFindings', 'lake1']) ? refetch : Promise.resolve()
+    );
+
+    act(() => {
+      result.current.mutate({
+        dataLakeId: 'lake1',
+        findingId: 'finding-1',
+        body: { action: 'unsupersede', fabFileId: 'b' },
+      });
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(result.current.isPending).toBe(true);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(result.current.isPending).toBe(false));
+  });
+
+  it('re-reads the findings list when the server refuses, since the refusal can mean the rows are stale', async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This document is not superseded in this data lake'));
+    const { result, invalidate } = mount();
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          dataLakeId: 'lake1',
+          findingId: 'finding-1',
+          body: { action: 'unsupersede', fabFileId: 'b' },
+        })
+        .catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('This document is not superseded in this data lake');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+  });
+
+  it('surfaces the server refusal text on a closed finding rather than axios status line', async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(400, 'This finding has already been ruled on'));
+    const { result } = mount();
+
+    await act(async () => {
+      await result.current
+        .mutateAsync({
+          dataLakeId: 'lake1',
+          findingId: 'finding-1',
+          body: { action: 'retag', fabFileId: 'a', tags: [] },
+        })
+        .catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('This finding has already been ruled on');
+  });
+});
+
+describe('useUpdateDataLake success toast', () => {
+  const mount = (opts?: { notifySuccess?: boolean }) => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useUpdateDataLake(opts), { wrapper });
+  };
+
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+  });
+
+  it('toasts success by default', async () => {
+    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', name: 'Renamed' });
+    });
+    expect(toast.success).toHaveBeenCalledWith('Data lake updated');
+  });
+
+  it('stays silent when notifySuccess is false', async () => {
+    apiPut.mockResolvedValueOnce({ data: { id: 'lake1' } });
+    const { result } = mount({ notifySuccess: false });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1', name: 'Renamed' });
+    });
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

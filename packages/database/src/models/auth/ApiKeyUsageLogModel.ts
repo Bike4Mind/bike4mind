@@ -1,4 +1,8 @@
 import {
+  API_KEY_COMPLETION_SOURCES,
+  type ApiKeyBillingOwnerType,
+  type ApiKeyCompletionSource,
+  CreditHolderType,
   IApiKeyEndpointTraffic,
   IEndpointUsageBucket,
   IEndpointUsageDay,
@@ -17,6 +21,13 @@ export interface IApiKeyUsageLogDocument extends IMongoDocument {
   method: string;
   responseTime: number;
   statusCode: number;
+  /**
+   * Stamped at log time; rows written before these fields existed carry neither,
+   * so they drop out of a source/ownerType-filtered rollup.
+   */
+  source?: ApiKeyCompletionSource;
+  /** The key's billing owner when the request was made (same rule as reserveRequestCredits). */
+  ownerType?: ApiKeyBillingOwnerType;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +42,8 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
     method: { type: String, required: true },
     responseTime: { type: Number, required: true },
     statusCode: { type: Number, required: true },
+    source: { type: String, enum: API_KEY_COMPLETION_SOURCES },
+    ownerType: { type: String, enum: [CreditHolderType.User, CreditHolderType.Organization] },
   },
   { timestamps: true }
 );
@@ -39,6 +52,9 @@ const ApiKeyUsageLogSchema = new mongoose.Schema<IApiKeyUsageLogDocument>(
 ApiKeyUsageLogSchema.index({ userId: 1, keyId: 1, timestamp: -1 });
 ApiKeyUsageLogSchema.index({ userId: 1, timestamp: -1 });
 ApiKeyUsageLogSchema.index({ keyId: 1, timestamp: -1 });
+// Platform endpoint rollup filtered by source and/or ownerType (platformEndpointUsage).
+// An ownerType-only filter has no source prefix, so it range-scans the timestamp TTL index instead.
+ApiKeyUsageLogSchema.index({ source: 1, ownerType: 1, timestamp: -1 });
 
 // TTL index to auto-delete logs older than 90 days
 ApiKeyUsageLogSchema.index({ timestamp: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
@@ -169,17 +185,25 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
   /**
    * Platform-wide endpoint/latency rollup over a trailing window (default 30
    * days; pass `hours` for finer windows). Every row here is API-key-authed
-   * traffic - this collection logs nothing else - so there is no source
-   * dimension to filter on (the handler decides whether the endpoint section
-   * applies given the user's source filter). Beyond the collection's 90-day TTL
-   * there is simply no data; callers should clamp the window accordingly.
+   * traffic, so `source` only ever narrows to api vs cli (the handler decides
+   * whether the section applies to other sources). `source` / `ownerType` match
+   * the stamped fields, so either filter excludes rows logged before they
+   * existed. Beyond the collection's 90-day TTL there is simply no data; callers
+   * should clamp the window accordingly.
    *
    * `byEndpoint` groups by endpoint+method with request count, avg + p95 latency
    * (nearest-rank), and error rate (statusCode >= 400). `overTime` is daily
    * request counts. Request counts only - no credits/COGS live here.
    */
-  async platformEndpointUsage(params: { hours?: number; days?: number } = {}): Promise<IPlatformEndpointUsage> {
-    const { hours, days = 30 } = params;
+  async platformEndpointUsage(
+    params: {
+      hours?: number;
+      days?: number;
+      source?: ApiKeyCompletionSource;
+      ownerType?: ApiKeyBillingOwnerType;
+    } = {}
+  ): Promise<IPlatformEndpointUsage> {
+    const { hours, days = 30, source, ownerType } = params;
     const windowMs = hours != null ? hours * 60 * 60 * 1000 : days * 24 * 60 * 60 * 1000;
     const from = new Date(Date.now() - windowMs);
 
@@ -187,7 +211,7 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       byEndpoint: IEndpointUsageBucket[];
       overTime: IEndpointUsageDay[];
     }>([
-      { $match: { timestamp: { $gte: from } } },
+      { $match: { timestamp: { $gte: from }, ...(source && { source }), ...(ownerType && { ownerType }) } },
       {
         $facet: {
           byEndpoint: [

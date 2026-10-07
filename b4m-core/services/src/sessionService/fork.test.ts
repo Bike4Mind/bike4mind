@@ -56,6 +56,34 @@ describe('forkSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
 
+  // `citationStyle` is create-only, so a fork that drops it is stuck on the 'named' default for good.
+  it('carries the source session citationStyle onto the fork', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
+      forceKnowledgeRetrieval: true,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        corpusGroundingMode: 'retrieve',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+      })
+    );
+  });
+
   /**
    * Pins `knowledgeIdsFromSourceSession`: the fork must copy the source's knowledgeIds without
    * re-running the access filter, which would drop a teammate-authored organization-lake file the
@@ -173,6 +201,133 @@ describe('forkSession', () => {
     await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
 
     expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+  });
+
+  // A fork made inside a product surface must stay in that surface's list, not drop into the main one.
+  it('carries the source session surface onto the fork', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: ['optihashi:pro'] }) }
+    );
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+  });
+
+  // E.g. the entitlement lapsed since the source was made: the fork must land where it can be opened.
+  it('forks into the main list when the caller cannot use the registered source workspace', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      surface: 'opti',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession(
+      'caller-1',
+      { sessionId: 'session-1', messageId: 'm1' },
+      { db, resolveSurfaceAccess: async () => ({ entitlements: [] }) }
+    );
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
+  it('leaves the fork of a main-list session without a surface', async () => {
+    const { db } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+  });
+
+  describe('targetSurface', () => {
+    const OPTI_ACCESS = async () => ({ entitlements: ['optihashi:pro'] });
+    const NO_ACCESS = async () => ({ entitlements: [] });
+    const forkFrom = async (
+      surface: string | undefined,
+      targetSurface: string | null,
+      resolveSurfaceAccess?: () => Promise<{ entitlements: string[] }>
+    ) => {
+      const { db } = makeAdapters();
+      db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+        id: 'session-1',
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        surface,
+      });
+      db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+      const run = forkSession(
+        'caller-1',
+        { sessionId: 'session-1', messageId: 'm1', targetSurface },
+        { db, resolveSurfaceAccess }
+      );
+      return { db, run };
+    };
+
+    it('forks a main-list session into opti for an entitled caller', async () => {
+      const { db, run } = await forkFrom(undefined, 'opti', OPTI_ACCESS);
+      await run;
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
+    });
+
+    it('forks an opti session into the main list', async () => {
+      const { db, run } = await forkFrom('opti', null, NO_ACCESS);
+      await run;
+      expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
+    });
+
+    it('403s a destination the caller is not entitled to, creating nothing', async () => {
+      const { db, run } = await forkFrom(undefined, 'opti', NO_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s an unregistered destination', async () => {
+      const { db, run } = await forkFrom(undefined, 'some-private-surface', OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s a targeted fork out of an unregistered surface', async () => {
+      const { db, run } = await forkFrom('some-private-surface', null, OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    // A copy without a target inherits even a surface this repo does not register.
+    it('inherits an unregistered surface when no target is named', async () => {
+      const { db } = makeAdapters();
+      db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+        id: 'session-1',
+        name: 'Original',
+        knowledgeIds: [],
+        tags: [],
+        surface: 'some-private-surface',
+      });
+      db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+      await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'some-private-surface' }));
+    });
+
+    it('refuses a targeted fork when the route supplied no access resolver', async () => {
+      const { run } = await forkFrom(undefined, 'opti');
+      await expect(run).rejects.toMatchObject({ statusCode: 403 });
+    });
   });
 
   it('forks messages up to the fork point when the message belongs to the session', async () => {

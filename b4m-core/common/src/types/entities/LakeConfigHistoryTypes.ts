@@ -72,8 +72,9 @@ export interface LakeConfigHistoryEntry {
   changedAt: Date;
   principalKind: LakeConfigChangePrincipalKind;
   principalId: string;
-  /** Resolved display name when the principal is a user AND still resolvable; otherwise absent and
-   * the consumer falls back to the opaque `principalId`. Never an email - see `userDisplayName`. */
+  /** A user's display name or an API key's name, when still resolvable (a deleted key is not);
+   * otherwise absent and the consumer falls back to the opaque `principalId`. Never an email - see
+   * `userDisplayName`. */
   principalName?: string;
   onBehalfOfUserId?: string;
   onBehalfOfName?: string;

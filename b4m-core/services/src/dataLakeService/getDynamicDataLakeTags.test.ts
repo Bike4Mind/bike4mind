@@ -484,6 +484,80 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
     );
   });
 
+  it('passes the caller administered org ids to the account-wide count', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
+    const findIdsWithAdminRights = vi.fn().mockResolvedValue(['orgX']);
+    const res = await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+        } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']), findIdsWithAdminRights },
+      },
+      user: { id: 'u1', tags: [] },
+      entitlementKeysResolved: true,
+      measureExcludedByAccessCount: true,
+    });
+    expect(findIdsWithAdminRights).toHaveBeenCalledWith('u1');
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      [],
+      [],
+      ['org1'],
+      'u1',
+      expect.objectContaining({ administeredOrgIds: ['orgX'] })
+    );
+    expect(res.excludedByAccessCount).toBe(1);
+  });
+
+  it('keeps the membership-only bound when the host does not wire findIdsWithAdminRights', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(2);
+    const res = await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+        } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+      },
+      user: { id: 'u1', tags: [] },
+      entitlementKeysResolved: true,
+      measureExcludedByAccessCount: true,
+    });
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      [],
+      [],
+      ['org1'],
+      'u1',
+      expect.objectContaining({ administeredOrgIds: undefined })
+    );
+    expect(res.excludedByAccessCount).toBe(2);
+  });
+
+  it('leaves excludedByAccessCount undefined, never a false 0, when the administered-org lookup fails', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(0);
+    const logger = { warn: vi.fn() } as never;
+    const res = await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+        } as never,
+        organizations: {
+          findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+          findIdsWithAdminRights: vi.fn().mockRejectedValue(new Error('boom')),
+        },
+      },
+      user: { id: 'u1', tags: [] },
+      entitlementKeysResolved: true,
+      measureExcludedByAccessCount: true,
+      logger,
+    });
+    expect(res.excludedByAccessCount).toBeUndefined();
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
   // #3055: supersededOwnLakeIds must reach the count query the same way it already
   // reaches findActiveByUserTagsAndEntitlements's creator arm - otherwise a transferred-away creator
   // reports a false zero here even though the resolver's own read-side no longer exempts them.
@@ -821,7 +895,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       {
         db: {
           dataLakes: { countGateExcludedLakes } as never,
-          organizations: { findMembershipOrgIds: vi.fn() },
+          organizations: { findMembershipOrgIds: vi.fn(), findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
         },
         user: { tags: [] },
         entitlementKeysResolved: true,
@@ -838,7 +912,10 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       {
         db: {
           dataLakes: { countGateExcludedLakes } as never,
-          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
         },
         user: { id: 'u1', tags: ['x'] },
         entitlementKeys: ['k:pro'],
@@ -858,12 +935,123 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
     );
   });
 
-  it('returns the measured count, including a genuine zero', async () => {
+  it("passes the caller's administered org ids through to the count", async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
+    const findIdsWithAdminRights = vi.fn().mockResolvedValue(['orgX']);
+    await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]), findIdsWithAdminRights },
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeysResolved: true,
+      },
+      ['datalake:b']
+    );
+    expect(findIdsWithAdminRights).toHaveBeenCalledWith('u1');
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      [],
+      [],
+      [],
+      'u1',
+      expect.objectContaining({ administeredOrgIds: ['orgX'] })
+    );
+  });
+
+  it('skips the administered-org lookup for a caller who may already see every lake', async () => {
+    const findIdsWithAdminRights = vi.fn().mockResolvedValue(['orgX']);
+    await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes: vi.fn().mockResolvedValue(1) } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]), findIdsWithAdminRights },
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeysResolved: true,
+      },
+      ['datalake:b'],
+      { callerMaySeeAllLakes: true }
+    );
+    expect(findIdsWithAdminRights).not.toHaveBeenCalled();
+  });
+
+  it('degrades to undefined, never a false 0, when the administered-org lookup fails', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(0);
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockRejectedValue(new Error('orgs down')),
+          },
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeysResolved: true,
+        logger: { warn: vi.fn() } as never,
+      },
+      ['datalake:b']
+    );
+    expect(res).toBeUndefined();
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+  });
+
+  it('degrades to undefined when the organizations reader cannot resolve administered orgs', async () => {
     const res = await measureIdentityNamedExclusion(
       {
         db: {
           dataLakes: { countGateExcludedLakes: vi.fn().mockResolvedValue(0) } as never,
           organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeysResolved: true,
+      } as never,
+      ['datalake:b']
+    );
+    expect(res).toBeUndefined();
+  });
+
+  it.each([
+    [{ callerMaySeeAllLakes: true }, true],
+    [{ callerMaySeeAllLakes: false }, false],
+    [{}, false],
+    [undefined, false],
+  ])('forwards callerMaySeeAllLakes from the per-call option (%j -> %s)', async (callOpts, expected) => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
+    await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
+        },
+        user: { id: 'u1', tags: [] },
+        entitlementKeysResolved: true,
+      },
+      ['datalake:b'],
+      callOpts
+    );
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      [],
+      [],
+      ['org1'],
+      'u1',
+      expect.objectContaining({ callerMaySeeAllLakes: expected })
+    );
+  });
+
+  it('returns the measured count, including a genuine zero', async () => {
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes: vi.fn().mockResolvedValue(0) } as never,
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
         },
         user: { tags: [] },
         entitlementKeysResolved: true,
@@ -879,7 +1067,10 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       {
         db: {
           dataLakes: { countGateExcludedLakes: vi.fn().mockRejectedValue(new Error('boom')) } as never,
-          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
         },
         user: { tags: [] },
         entitlementKeysResolved: true,
@@ -893,7 +1084,11 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
 
   it('degrades to undefined when the dataLakes repo is unwired', async () => {
     const res = await measureIdentityNamedExclusion(
-      { db: { organizations: { findMembershipOrgIds: vi.fn() } }, user: { tags: [] }, entitlementKeysResolved: true },
+      {
+        db: { organizations: { findMembershipOrgIds: vi.fn(), findIdsWithAdminRights: vi.fn().mockResolvedValue([]) } },
+        user: { tags: [] },
+        entitlementKeysResolved: true,
+      },
       ['datalake:a']
     );
     expect(res).toBeUndefined();
@@ -908,7 +1103,10 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       {
         db: {
           dataLakes: { countGateExcludedLakes } as never,
-          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
         },
         user: { id: 'alice', tags: [] },
         entitlementKeys: [],
@@ -929,7 +1127,10 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       {
         db: {
           dataLakes: { countGateExcludedLakes } as never,
-          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
           dataLakeAccessGrants: { listByPrincipal: vi.fn().mockResolvedValue([]) } as never,
           adminSettings: { getSettingsValue: vi.fn().mockRejectedValue(new Error('settings down')) } as never,
         },
@@ -957,7 +1158,10 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
     const unvouchedContext = {
       db: {
         dataLakes: { countGateExcludedLakes } as never,
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        organizations: {
+          findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+          findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+        },
       },
       user: { id: 'alice', tags: [] },
       entitlementKeys: [],
@@ -984,7 +1188,10 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       {
         db: {
           dataLakes: { countGateExcludedLakes } as never,
-          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          organizations: {
+            findMembershipOrgIds: vi.fn().mockResolvedValue([]),
+            findIdsWithAdminRights: vi.fn().mockResolvedValue([]),
+          },
         },
         user: { id: 'alice', tags: [] },
         entitlementKeys: [],

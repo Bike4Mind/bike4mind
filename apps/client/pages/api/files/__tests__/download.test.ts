@@ -9,10 +9,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 const tempFiles: string[] = [];
 const ZIP_BYTES = Buffer.from('PK\x03\x04ZIPDATA');
 
+// Evaluated once at import - not reset in beforeEach - so it captures the options this module's
+// top-level baseApi(...) call was made with.
+const h = vi.hoisted(() => ({ baseApiOptions: undefined as unknown }));
+
 // baseApi wraps the handler; mock it as a thin pass-through so the test
-// focuses on the response body + cleanup behaviour.
+// focuses on the response body + cleanup behaviour, capturing the options for the scope-gate test.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({ get: (h: unknown) => h }),
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
+    return { get: (handler: unknown) => handler };
+  },
 }));
 
 vi.mock('@casl/mongoose', () => ({
@@ -132,5 +139,9 @@ describe('GET /api/files/download', () => {
 
     expect(tempFiles.length).toBe(1);
     for (const f of tempFiles) expect(fs.existsSync(f)).toBe(false);
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
   });
 });

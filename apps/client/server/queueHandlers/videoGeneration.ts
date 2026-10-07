@@ -15,6 +15,7 @@ import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { logEvent } from '@server/utils/analyticsLog';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { getGeneratedImageStorage } from '@server/utils/storage';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { SessionEvents } from '@server/utils/eventBus';
@@ -75,8 +76,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     requestId: context.awsRequestId,
   });
 
-  await getVideoGeneration().process({
-    body: JSON.parse(event.Records[0].body),
-    logger,
-  });
+  const body = JSON.parse(event.Records[0].body);
+  try {
+    await getVideoGeneration().process({ body, logger });
+  } finally {
+    // Also on a throw: process() may have written the terminal status before failing.
+    await dispatchQuestCallback(body.questId, logger);
+  }
 });

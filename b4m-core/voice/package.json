@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/voice",
-  "version": "0.9.27",
+  "version": "0.9.31",
   "publishConfig": {
     "access": "restricted"
   },
@@ -47,6 +47,6 @@
   "devDependencies": {
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   }
 }

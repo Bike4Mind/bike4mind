@@ -2,14 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
-import { VOICE_VENDOR_LABELS, type VoiceGenerationVendor } from '@bike4mind/common';
+import {
+  VOICE_VENDOR_LABELS,
+  type AudioSaveSkippedReason,
+  type GeneratedAudioResponse,
+  type TtsBase64Response,
+} from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { getErrorMessage } from '@client/app/utils/error';
+import { toPlayableAudio } from '@client/app/utils/generatedAudio';
 import { useAudioGenSettings } from '@client/app/stores/useAudioGenSettings';
 
 export interface AudioGenerationResult {
-  /** Playable URL: a blob: URL for generated audio, or a presigned file URL for large saved audio. */
+  /** Playable URL: a blob: URL for inline audio, or a signed storage URL for audio too large to inline. */
   url: string;
   /** True when `url` is an object URL that must be revoked on cleanup. */
   isObjectUrl: boolean;
@@ -18,23 +24,12 @@ export interface AudioGenerationResult {
   contentType: string;
 }
 
-interface TtsBase64Response {
-  audio: string;
-  format: string;
-  contentType: string;
-  saved?: boolean;
-  fabFileId?: string;
-  fileUrl?: string;
-  saveSkippedReason?: 'storage_limit' | 'file_too_large' | 'error';
-  /** Present only when the selected provider was unusable and another stood in. */
-  provider?: VoiceGenerationVendor;
-  fallbackFrom?: VoiceGenerationVendor;
-}
+type AudioKind = 'Audio' | 'Sound effect';
 
-const SAVE_SKIPPED_MESSAGES: Record<NonNullable<TtsBase64Response['saveSkippedReason']>, string> = {
-  storage_limit: 'Audio generated, but your storage is full so it was not saved to Files.',
-  file_too_large: 'Audio generated, but it was too large to save to Files.',
-  error: 'Audio generated, but saving to Files failed.',
+const SAVE_SKIPPED_MESSAGES: Record<AudioSaveSkippedReason, (kind: AudioKind) => string> = {
+  storage_limit: kind => `${kind} generated, but your storage is full so it was not saved to Files.`,
+  file_too_large: kind => `${kind} generated, but it was too large to save to Files.`,
+  error: kind => `${kind} generated, but saving to Files failed.`,
 };
 
 interface ParsedError {
@@ -48,35 +43,18 @@ interface ParsedError {
    */
   bodyMessage?: string;
   errorCode?: string;
-  saved?: boolean;
-  fabFileId?: string;
-  fileUrl?: string;
 }
 
-// Normalizes an axios failure into a status + message, transparently parsing a
-// JSON error body delivered as a Blob (the sound-effects route responds with
-// responseType 'blob', so its error bodies arrive as blobs too).
-async function parseError(error: unknown): Promise<ParsedError> {
+// Normalizes an axios failure into a status + message.
+function parseError(error: unknown): ParsedError {
   if (!isAxiosError(error)) return { message: getErrorMessage(error) };
 
   const status = error.response?.status;
-  let payload: unknown = error.response?.data;
-  if (payload instanceof Blob) {
-    try {
-      payload = JSON.parse(await payload.text());
-    } catch {
-      payload = undefined;
-    }
-  }
-
-  const body = (payload ?? {}) as {
+  const body = (error.response?.data ?? {}) as {
     error?: string;
     message?: string;
     errorCode?: string;
     additionalInfo?: { errorCode?: string };
-    saved?: boolean;
-    fabFileId?: string;
-    fileUrl?: string;
   };
 
   const bodyMessage = body.error || body.message || undefined;
@@ -86,9 +64,6 @@ async function parseError(error: unknown): Promise<ParsedError> {
     message: bodyMessage ?? getErrorMessage(error),
     bodyMessage,
     errorCode: body.additionalInfo?.errorCode ?? body.errorCode,
-    saved: body.saved,
-    fabFileId: body.fabFileId,
-    fileUrl: body.fileUrl,
   };
 }
 
@@ -122,6 +97,20 @@ export function useGenerateAudio() {
     queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
   }, [queryClient]);
 
+  const notifySaveOutcome = useCallback(
+    (data: GeneratedAudioResponse, kind: AudioKind) => {
+      if (data.saved === true) {
+        refreshFiles();
+        toast.success(`${kind} generated and saved to your Files.`);
+      } else if (data.saved === false && data.saveSkippedReason) {
+        toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason](kind));
+      } else {
+        toast.success(`${kind} generated.`);
+      }
+    },
+    [refreshFiles]
+  );
+
   const generate = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -138,105 +127,62 @@ export function useGenerateAudio() {
       setResult(null);
 
       try {
-        if (mode === 'tts') {
-          const response = await api.post<TtsBase64Response>(
-            '/api/ai/tts',
-            {
-              text: trimmed,
-              provider: ttsProvider,
-              voice: voice || undefined,
-              format,
-              languageCode: ttsProvider === 'elevenlabs' && languageCode ? languageCode : undefined,
-              encoding: 'base64',
-            },
-            { validateStatus: status => status === 200, skipAuthRefresh: true, timeout: 60000 }
+        const request =
+          mode === 'tts'
+            ? {
+                path: '/api/ai/tts',
+                body: {
+                  text: trimmed,
+                  provider: ttsProvider,
+                  voice: voice || undefined,
+                  format,
+                  languageCode: ttsProvider === 'elevenlabs' && languageCode ? languageCode : undefined,
+                  encoding: 'base64',
+                },
+              }
+            : {
+                path: '/api/ai/sound-effects',
+                body: {
+                  text: trimmed,
+                  durationSeconds: durationSeconds ?? undefined,
+                  promptInfluence,
+                  encoding: 'base64',
+                },
+              };
+
+        const response = await api.post<TtsBase64Response | GeneratedAudioResponse>(request.path, request.body, {
+          validateStatus: status => status === 200,
+          skipAuthRefresh: true,
+          timeout: 60000,
+        });
+
+        const data = response.data;
+        const playable = toPlayableAudio(data);
+        if (playable.isObjectUrl) objectUrlRef.current = playable.url;
+        setResult({
+          ...playable,
+          saved: data.saved === true,
+          fabFileId: data.fabFileId,
+          contentType: data.contentType,
+        });
+
+        // The server substituted a provider, so the voice will not be the one
+        // selected. Say so before the outcome toast rather than letting an
+        // unexplained voice change look like a bug.
+        if ('fallbackFrom' in data && data.fallbackFrom && data.provider) {
+          toast.info(
+            `${VOICE_VENDOR_LABELS[data.fallbackFrom]} was unavailable, so this audio was generated with ` +
+              `${VOICE_VENDOR_LABELS[data.provider]}.`
           );
-
-          const data = response.data;
-          // Play from a blob: URL, not a data: URL: the app CSP allows
-          // `media-src blob:` but not `data:`, so a data: source renders in the
-          // <audio> element but is blocked from actually playing. Mirrors the
-          // sound-effects path, and objectUrlRef handles revocation.
-          const bytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
-          const url = URL.createObjectURL(new Blob([bytes], { type: data.contentType }));
-          objectUrlRef.current = url;
-          setResult({
-            url,
-            isObjectUrl: true,
-            saved: data.saved === true,
-            fabFileId: data.fabFileId,
-            contentType: data.contentType,
-          });
-
-          // The server substituted a provider, so the voice will not be the one
-          // selected. Say so before the outcome toast rather than letting an
-          // unexplained voice change look like a bug.
-          if (data.fallbackFrom && data.provider) {
-            toast.info(
-              `${VOICE_VENDOR_LABELS[data.fallbackFrom]} was unavailable, so this audio was generated with ` +
-                `${VOICE_VENDOR_LABELS[data.provider]}.`
-            );
-          }
-
-          if (data.saved === true) {
-            refreshFiles();
-            toast.success('Audio generated and saved to your Files.');
-          } else if (data.saved === false && data.saveSkippedReason) {
-            toast.info(SAVE_SKIPPED_MESSAGES[data.saveSkippedReason]);
-          } else {
-            toast.success('Audio generated.');
-          }
-        } else {
-          const response = await api.post(
-            '/api/ai/sound-effects',
-            {
-              text: trimmed,
-              durationSeconds: durationSeconds ?? undefined,
-              promptInfluence,
-            },
-            { responseType: 'blob', validateStatus: status => status === 200, skipAuthRefresh: true, timeout: 60000 }
-          );
-
-          const blob = response.data as Blob;
-          const url = URL.createObjectURL(blob);
-          objectUrlRef.current = url;
-
-          const saved = response.headers['x-b4m-audio-saved'] === 'true';
-          setResult({
-            url,
-            isObjectUrl: true,
-            saved,
-            fabFileId: response.headers['x-b4m-audio-fab-file-id'],
-            contentType: blob.type || 'audio/mpeg',
-          });
-
-          if (saved) {
-            refreshFiles();
-            toast.success('Sound effect generated and saved to your Files.');
-          } else {
-            toast.success('Sound effect generated.');
-          }
         }
+
+        notifySaveOutcome(data, mode === 'tts' ? 'Audio' : 'Sound effect');
       } catch (error) {
-        const parsed = await parseError(error);
-
-        // A too-large TTS body still persisted a browsable copy: surface the
-        // saved file rather than a dead end (see #745 / ttsResponseLimit).
-        if (parsed.status === 413 && parsed.saved && parsed.fileUrl) {
-          setResult({
-            url: parsed.fileUrl,
-            isObjectUrl: false,
-            saved: true,
-            fabFileId: parsed.fabFileId,
-            contentType: 'audio/mpeg',
-          });
-          refreshFiles();
-          toast.info('Audio was too large to preview here, but it was saved to your Files.');
-          return;
-        }
+        const parsed = parseError(error);
 
         if (parsed.status === 413) {
-          toast.error('The generated audio is too large to return. Try shorter text.');
+          // Oversized audio normally comes back as a URL; a 413 means storing it failed too.
+          toast.error('The generated audio was too large to return. Try again, or use shorter text.');
         } else if (parsed.errorCode === 'provider_rejected') {
           // A key is configured but the provider refused it, and no other
           // provider could cover for it: switching providers is the one thing
@@ -246,7 +192,7 @@ export function useGenerateAudio() {
           toast.error('No provider API key is configured. Ask your administrator to set one up.');
         } else if (parsed.errorCode === 'insufficient_credits') {
           // Prefer the server's specific "you have X, need Y" message when it
-          // carries the figures (sound-effects route). `bodyMessage`, not
+          // carries the figures (sound-effects and music routes). `bodyMessage`, not
           // `message`: the latter would substitute a bare "Error: 422".
           toast.error(parsed.bodyMessage ?? 'You do not have enough credits to generate this audio.');
         } else {
@@ -256,7 +202,7 @@ export function useGenerateAudio() {
         setIsGenerating(false);
       }
     },
-    [refreshFiles, releaseObjectUrl]
+    [notifySaveOutcome, releaseObjectUrl]
   );
 
   return { generate, isGenerating, result, clearResult };

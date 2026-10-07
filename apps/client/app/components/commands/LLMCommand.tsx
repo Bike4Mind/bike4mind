@@ -30,6 +30,11 @@ export type LLMCommandArgs = {
   currentSession: ISessionDocument | null;
   model: ModelName;
   workBenchFiles: IFabFileDocument[];
+  /**
+   * Agents selected in the composer's Agents panel. Stamped on the session this turn creates;
+   * omitted when `currentSession` already exists (see the requestPayload guard).
+   */
+  agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   promptFileIds: string[];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
@@ -110,6 +115,7 @@ export async function handleLLMCommand(
       params,
       workBenchFiles,
       currentSession,
+      agentIds,
       model,
       dashboardParams,
       promptFileIds,
@@ -173,6 +179,7 @@ export async function handleLLMCommand(
     // Don't send objects not intended for the API request
     const {
       currentSession: _currentSession,
+      agentIds: _omitAgentIds,
       mcpServers: _omitMcpServers,
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
@@ -227,6 +234,9 @@ export async function handleLLMCommand(
         questId,
         ...(correctsQuestId ? { correctsQuestId } : {}),
         sessionId: currentSession?.id,
+        // Workbench agents are a session-creation input: only the id-less (new-session) turn may
+        // carry them, so an existing session's agents are never re-stamped from stale local state.
+        ...(agentIds?.length && !currentSession?.id ? { agentIds } : {}),
         historyCount,
         clientSubmittedAt: clientPromptSentTime,
         fabFileIds,
@@ -269,7 +279,8 @@ export async function handleLLMCommand(
         workBenchFiles.map(file => file.id),
         tools,
         researchMode,
-        currentSession?.agentIds ? currentSession.agentIds : []
+        // On a new session the agents only live in the args until the session exists.
+        currentSession?.agentIds ?? agentIds ?? []
       );
 
       // Sessions on the opti surface always get the instant ack (their KB-search

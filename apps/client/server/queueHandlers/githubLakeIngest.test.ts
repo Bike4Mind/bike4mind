@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   renewSyncClaim: vi.fn(),
   releaseSyncClaim: vi.fn(),
   recordSynced: vi.fn(),
+  recordTreeCounts: vi.fn(),
   lakeFindById: vi.fn(),
   batchFindById: vi.fn(),
   userFindById: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
     renewSyncClaim: h.renewSyncClaim,
     releaseSyncClaim: h.releaseSyncClaim,
     recordSynced: h.recordSynced,
+    recordTreeCounts: h.recordTreeCounts,
   },
 }));
 vi.mock('@bike4mind/utils', async importOriginal => ({
@@ -277,6 +279,15 @@ describe('githubLakeIngest - errors', () => {
 });
 
 describe('githubLakeIngest - finish', () => {
+  it('hands the slice a tree-count recorder bound to the claim this run holds', async () => {
+    h.runGitHubLakeSlice.mockImplementation(async ({ recordTreeCounts }) => {
+      await recordTreeCounts({ candidateCount: 3, skippedCount: 4 });
+      return { kind: 'done', batchId: 'batch1', transientSkips: 0 };
+    });
+    await run();
+    expect(h.recordTreeCounts).toHaveBeenCalledWith('conn1', 'tok-claim', { candidateCount: 3, skippedCount: 4 });
+  });
+
   it('records the commit on a clean finish', async () => {
     await run();
     expect(h.settle).toHaveBeenCalledWith('batch1', logger);

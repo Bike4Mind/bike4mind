@@ -1,3 +1,6 @@
+import { evaluateTier1Secrets, formatTier1DeployFailure, type Tier1SecretStatus } from '@bike4mind/infra';
+import { PRODUCTION_STAGES } from './constants';
+
 export const secrets = {
   MONGODB_URI: new sst.Secret('MONGODB_URI', 'my-secret-placeholder-value'),
   SESSION_SECRET: new sst.Secret('SESSION_SECRET', 'my-secret-placeholder-value'),
@@ -12,6 +15,9 @@ export const secrets = {
   // repositories only). Separate from the MCP OAuth app and OrgGitHubConnection automation on purpose.
   // The client id/secret are the App's own OAuth credentials, used to prove the installer can see the
   // installation. The private key is the PEM, newlines kept or escaped as \n.
+  // App settings: Callback URL <app origin>/data-lakes/github/callback (the SPA page that finishes a
+  // connect), "Request user authorization (OAuth) during installation" on, "Redirect on update" on.
+  // GitHub greys out the Setup URL once OAuth-during-install is on, so it needs no value.
   GITHUB_LAKE_APP_CLIENT_ID: new sst.Secret('GITHUB_LAKE_APP_CLIENT_ID', 'not-configured'),
   GITHUB_LAKE_APP_CLIENT_SECRET: new sst.Secret('GITHUB_LAKE_APP_CLIENT_SECRET', 'not-configured'),
   GITHUB_LAKE_APP_ID: new sst.Secret('GITHUB_LAKE_APP_ID', 'not-configured'),
@@ -190,3 +196,55 @@ export const secrets = {
 };
 
 export const allSecrets = Object.values(secrets);
+
+/**
+ * Value the stage will actually run with, read the same way sst.Secret reads it
+ * (see .sst/platform/src/components/secret.ts): the CLI exports SST_SECRET_<NAME>
+ * for every secret set on the stage or inherited from the account fallback, and
+ * anything absent resolves to the placeholder declared above. `undefined` here
+ * therefore means "never set", which evaluateTier1Secrets reports as a placeholder.
+ *
+ * Reading process.env rather than `secret.value` is deliberate: `.value` is a Pulumi
+ * Output, so the check would land mid-update after resources had already been
+ * created. This runs at config-evaluation time, before the first resource exists.
+ */
+function readResolvedSecret(name: string): string | undefined {
+  return process.env[`SST_SECRET_${name}`];
+}
+
+/**
+ * Refuse to deploy a stage whose security-critical secrets are still on the
+ * placeholder defaults declared above. Those defaults are public - they ship in this
+ * file - so a stage that never ran `sst secret set` is serving a credential anyone
+ * can read, not an unconfigured feature.
+ *
+ * Enforced at deploy time rather than at boot or per request: a boot check takes a
+ * stage down once it is already live, and a per-route check leaves every other
+ * surface open, whereas this fails while the operator is still at the terminal that
+ * can fix it. There is no override flag on purpose - the escape hatch is to set the
+ * secret. Per-consumer rejection at the point of use is complementary, not a
+ * substitute, and is tracked separately.
+ *
+ * Skipped on `sst remove`: refusing to tear a stage down because its secrets were
+ * never set is pure downside, and preview cleanup depends on it.
+ */
+function assertTier1SecretsConfigured(): void {
+  if ($cli.command === 'remove') return;
+
+  const statuses: Tier1SecretStatus[] = evaluateTier1Secrets({
+    stage: $app.stage,
+    isProductionStage: PRODUCTION_STAGES.includes($app.stage),
+    read: readResolvedSecret,
+  });
+
+  for (const status of statuses) {
+    if (status.blocksDeploy || status.status === 'configured') continue;
+    console.warn(`[secrets] ${status.name} is ${status.status} on stage "${$app.stage}": ${status.exposure}.`);
+  }
+
+  if (statuses.some(s => s.blocksDeploy)) {
+    throw new Error(formatTier1DeployFailure($app.stage, statuses));
+  }
+}
+
+assertTier1SecretsConfigured();

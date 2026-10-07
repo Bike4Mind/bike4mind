@@ -22,7 +22,13 @@ import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
-import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
+import {
+  verifyJwtToken,
+  checkRateLimit,
+  verifyApiKey,
+  checkApiKeyRateLimitOrThrow,
+  type ApiKeyInfo,
+} from '@server/cli/auth';
 import {
   dispatchAgentExecution,
   resolveAgentExecutorTarget,
@@ -199,8 +205,9 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   // Authenticate
   let userId: string;
+  let apiKeyInfo: ApiKeyInfo | undefined;
   try {
-    const apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
+    apiKeyInfo = await verifyApiKey({ authorization: `Bearer ${body.accessToken}` });
     userId = apiKeyInfo.userId;
     await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
       userId: apiKeyInfo.userId,
@@ -208,6 +215,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       method: 'WS',
     });
   } catch {
+    apiKeyInfo = undefined;
     try {
       const user = await verifyJwtToken(body.accessToken);
       userId = user.id;
@@ -229,7 +237,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   switch (body.command) {
     case 'start': {
       const startCmd = StartCommandSchema.parse(rawBody);
-      await handleStart(startCmd, userId, connectionId, endpoint, logger);
+      await handleStart(startCmd, userId, apiKeyInfo, connectionId, endpoint, logger);
       break;
     }
     case 'abort': {
@@ -264,6 +272,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 async function handleStart(
   cmd: z.infer<typeof StartCommandSchema>,
   userId: string,
+  apiKeyInfo: ApiKeyInfo | undefined,
   connectionId: string,
   endpoint: string,
   logger: Logger
@@ -283,6 +292,8 @@ async function handleStart(
       agentId: cmd.agentId,
       enabledTools: cmd.enabledTools,
       enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
+      // A b4m_live_ key authenticates this transport too, so it gets the REST door's scope gate and audit principal.
+      apiKeyInfo,
       maxIterations: cmd.maxIterations,
       messageFileIds: cmd.messageFileIds,
       sessionFabFileIds: cmd.sessionFabFileIds,

@@ -16,7 +16,7 @@ import { BadRequestError, ForbiddenError, HTTPError, NotFoundError } from '@bike
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { proposalReviewChange } from './diffLakeConfig';
-import { canManageLake, type LakeGrant, type ManageActor } from './manageRule';
+import { canManageLake, type LakeGrant, type ManageActor, type SerializeLakeClaim } from './manageRule';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
 /**
@@ -64,9 +64,15 @@ export interface ReviewAdapters extends LakeConfigAuditAdapters {
    * and was then refused the admission with nothing retryable.
    */
   admitSource(actor: ManageActor, params: AdmitSourceParams): Promise<AdmittedFile>;
+  /**
+   * Wraps the gate and the claim; the admission runs after it returns, since a network fetch cannot
+   * sit inside a transaction a retry would repeat. REQUIRED so the claim is never silently
+   * unserialized.
+   */
+  serializeClaim: SerializeLakeClaim;
 }
 
-type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource'>;
+type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource' | 'serializeClaim'>;
 
 interface ResolveReviewableAdapters {
   db: {
@@ -199,21 +205,24 @@ export async function approveDataLakeProposal(
   adapters: ReviewAdapters,
   { approverName }: ApproveOptions = {}
 ): Promise<ApprovedProposal> {
-  const { db, admitSource, logger } = adapters;
-  const { proposal, lake, grants } = await resolveReviewable(proposalId, actor, { db });
-  assertLakeTakesNewFiles(lake);
-
+  const { db, admitSource, serializeClaim, logger } = adapters;
   const approvedAt = new Date();
-  // Claim BEFORE admitting. The reverse order would let two reviewers (or one double-click) each
-  // create a file before either wrote a status, admitting the same content twice - and a duplicate
-  // member is exactly what this queue exists to prevent. The claim is a compare-and-set on
-  // `status: 'pending'`, so the loser gets null here rather than a second admission.
-  const claimed = await db.dataLakeProposals.claimForReview(proposalId, {
-    status: 'approved',
-    reviewedByUserId: actor.userId,
-    reviewedAt: approvedAt,
+  const { proposal, lake, grants, claimed } = await serializeClaim(async () => {
+    const reviewable = await resolveReviewable(proposalId, actor, { db });
+    assertLakeTakesNewFiles(reviewable.lake);
+
+    // Claim BEFORE admitting. The reverse order would let two reviewers (or one double-click) each
+    // create a file before either wrote a status, admitting the same content twice - and a duplicate
+    // member is exactly what this queue exists to prevent. The claim is a compare-and-set on
+    // `status: 'pending'`, so the loser gets null here rather than a second admission.
+    const claim = await db.dataLakeProposals.claimForReview(proposalId, {
+      status: 'approved',
+      reviewedByUserId: actor.userId,
+      reviewedAt: approvedAt,
+    });
+    if (!claim) throw new BadRequestError('This proposal has already been reviewed');
+    return { ...reviewable, claimed: claim };
   });
-  if (!claimed) throw new BadRequestError('This proposal has already been reviewed');
 
   const admitParams: AdmitSourceParams = {
     url: proposal.sourceUrl,
@@ -277,7 +286,7 @@ export async function approveDataLakeProposal(
       lake,
       grants,
       action: 'approve-proposal',
-      changes: [proposalReviewChange(proposal.sourceUrl, 'approved')],
+      changes: [proposalReviewChange(proposal, 'approved')],
     },
     { db, logger }
   );
@@ -312,7 +321,7 @@ export async function declineDataLakeProposal(
       lake,
       grants,
       action: 'decline-proposal',
-      changes: [proposalReviewChange(declined.sourceUrl, 'declined')],
+      changes: [proposalReviewChange(declined, 'declined')],
     },
     { db, logger }
   );
@@ -364,7 +373,7 @@ export async function restoreDataLakeProposal(
       lake,
       grants,
       action: 'restore-proposal',
-      changes: [proposalReviewChange(result.proposal.sourceUrl, 'restored')],
+      changes: [proposalReviewChange(result.proposal, 'restored')],
     },
     { db, logger }
   );

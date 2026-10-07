@@ -7,11 +7,12 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { HTTPError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const RefreshRequestSchema = z.object({
   grant_type: z.literal('refresh_token'),
   refresh_token: z.string(),
-  client_id: z.literal('b4m-cli'),
+  client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
 const handler = baseApi({ auth: false })
@@ -33,7 +34,12 @@ const handler = baseApi({ auth: false })
         const rotated = await authSessionService.rotateSession(refresh_token, {
           db: { authSessions: authSessionRepository, users: userRepository },
           signAccessToken,
-          audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
+          audit: event =>
+            logAuthAudit(req, {
+              userId: event.userId,
+              event: event.type,
+              metadata: { ...event.metadata, sid: event.sid },
+            }),
           logger: req.logger,
         });
         return res.json({

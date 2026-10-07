@@ -22,7 +22,13 @@ import {
   lakeMatchesAccess,
   normalizeEntitlementKey,
 } from '@bike4mind/common';
-import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } from './manageRule';
+import {
+  canManageLake,
+  canShredLakeMemory,
+  isEffectiveOwner,
+  resolveEffectiveOwnerIds,
+  type LakeGrant,
+} from './manageRule';
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 import {
   grantedLakeReachFor,
@@ -109,7 +115,7 @@ interface ListDataLakesAdapters {
     organizations?: OrgAdminLookup;
     /**
      * Optional owner-name lookup. When present (the manager list route), the projection labels
-     * lakes the caller does NOT own with the creator's display name, so a global admin (who sees
+     * lakes the caller does NOT own with the effective owner's display name, so a global admin (who sees
      * every tenant's lakes) or an org member can't mistake someone else's lake for their own.
      * Omitted by the content-scope resolver and Slack, which never render the owner and must not
      * pay for the extra query - `isOwn` is still computed for them (it is free), just unlabeled.
@@ -200,29 +206,55 @@ interface ListAllDataLakesOptions extends ListDataLakesAdapters {
 
 const toConfig = (dl: IDataLakeDocument): DataLakeConfig => toDataLakeConfig(dl);
 
+type ResolvedOwner = { name: string; username?: string };
+
 /**
- * Batch-resolve creator display names (name || username, never email - the same PII rule as the
- * discover catalog) for the lakes the caller does not own, in one round-trip. Returns an empty
- * map when no user lookup was supplied, so a caller that never renders owners pays nothing. Own
- * lakes are excluded from the id set: they render as "you", never by name.
+ * The one owner a lake is labelled with: the lexically smallest effective owner id. Sorted because
+ * `grantsByLakeIdFor` keeps the grant read's row order, which is not guaranteed - unsorted, a lake
+ * with two owner grants could flip groups between refetches (lakeOwnershipOffer.ts sorts for the
+ * same reason).
  */
-const resolveOwnerNames = async (
+const effectiveOwnerId = (dl: IDataLakeDocument, grants?: LakeGrant[]): string | undefined =>
+  resolveEffectiveOwnerIds(dl, grants).sort()[0];
+
+/**
+ * Batch-resolve effective-owner names (name || username, never email - the same PII rule as the
+ * discover catalog) for the lakes the caller does not own, in one round-trip. Returns an empty
+ * map when no user lookup was supplied, so a caller that never renders owners pays nothing. The
+ * caller's own id is excluded: own lakes render as "you", never by name. Keyed by owner id, and an
+ * owner is kept only when a non-empty name resolved.
+ */
+const resolveOwners = async (
   lakes: IDataLakeDocument[],
+  grantsByLake: Map<string, LakeGrant[]>,
   callerUserId: string,
   users?: { findByIds: (ids: string[]) => Promise<OwnerLookup> }
-): Promise<Map<string, string>> => {
+): Promise<Map<string, ResolvedOwner>> => {
   if (!users) return new Map();
-  const ownerIds = Array.from(
-    new Set(lakes.filter(l => l.createdByUserId && l.createdByUserId !== callerUserId).map(l => l.createdByUserId))
-  );
-  if (ownerIds.length === 0) return new Map();
-  const owners = await users.findByIds(ownerIds);
-  const nameById = new Map<string, string>();
+  const ownerIds = new Set<string>();
+  for (const dl of lakes) {
+    const id = effectiveOwnerId(dl, grantsByLake.get(dl.id));
+    if (id && id !== callerUserId) ownerIds.add(id);
+  }
+  if (ownerIds.size === 0) return new Map();
+  const owners = await users.findByIds([...ownerIds]);
+  const ownerById = new Map<string, ResolvedOwner>();
   for (const u of owners) {
     const name = u.name || u.username;
-    if (name) nameById.set(String(u.id), name);
+    if (name) ownerById.set(String(u.id), { name, ...(u.username ? { username: u.username } : {}) });
   }
-  return nameById;
+  return ownerById;
+};
+
+/** The resolved owner to label `dl` with, or undefined (own lake, no lookup, unresolved name). */
+const ownerFor = (
+  dl: IDataLakeDocument,
+  grantsByLake: Map<string, LakeGrant[]>,
+  ownerById: Map<string, ResolvedOwner>
+): ({ id: string } & ResolvedOwner) | undefined => {
+  const id = effectiveOwnerId(dl, grantsByLake.get(dl.id));
+  const owner = id ? ownerById.get(id) : undefined;
+  return id && owner ? { id, ...owner } : undefined;
 };
 
 type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSystemPromptId' | 'systemPrompt'>;
@@ -230,7 +262,7 @@ type FallbackOverlay = Pick<IFallbackLakeSetting, 'groundingMode' | 'preferredSy
 /**
  * Batch-resolve the overlay (`groundingMode`, `preferredSystemPromptId`, `systemPrompt`) for a set
  * of fallback lake ids, in one round-trip. Empty map when no overlay repo was supplied (the
- * content-scope resolver / Slack never render these fields) - mirrors `resolveOwnerNames`'s "pay
+ * content-scope resolver / Slack never render these fields) - mirrors `resolveOwners`'s "pay
  * nothing when nobody reads it" shape.
  */
 const resolveFallbackSettings = async (
@@ -296,8 +328,9 @@ const toManageableConfig = (
   manageable: boolean,
   canManageMemory: boolean,
   isOwn: boolean,
+  isCreator: boolean,
   canPreauthorize: boolean,
-  ownerDisplayName?: string,
+  owner?: { id: string } & ResolvedOwner,
   pendingProposalCount?: number
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
@@ -317,9 +350,16 @@ const toManageableConfig = (
   // the one manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
   canManageMemory,
   isOwn,
-  // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
-  // projection actually resolved one (name-or-username, never email - see resolveOwnerNames).
-  ...(!isOwn && ownerDisplayName ? { ownerDisplayName } : {}),
+  isCreator,
+  // Owner fields are a not-own label only: an own lake reads as "you", and they are set only when the
+  // projection actually resolved a name (name-or-username, never email - see resolveOwners).
+  ...(!isOwn && owner
+    ? {
+        ownerDisplayName: owner.name,
+        ownerUserId: owner.id,
+        ...(owner.username ? { ownerUsername: owner.username } : {}),
+      }
+    : {}),
   ...(manageable && dl.systemPrompt?.trim() ? { systemPrompt: dl.systemPrompt.trim() } : {}),
   // Editor-only, same gate as systemPrompt. An empty stored value means "no preferred prompt",
   // so it is reported as absent (never '') - the picker then shows "None".
@@ -331,6 +371,8 @@ const toManageableConfig = (
   // current selection; absent for a non-editor OR a lake predating the field (the picker then
   // falls back to the default mode, matching how the resolver treats an absent value).
   ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
+  // Editor-only, same gate: it drives the finish-connect banner, which only a manager can act on.
+  ...(manageable && dl.pendingConnector ? { pendingConnector: dl.pendingConnector } : {}),
   // Editor-only, same gate. Absent when the lake declares no target, which is exactly the state the
   // settings field renders as blank - and the state in which the lake never converges (#1681).
   ...(manageable && typeof dl.requiredPassageTokenTarget === 'number'
@@ -393,6 +435,7 @@ const toFallbackConfig = (
   canManageMemory: false,
   // Built-in registry lakes have no creator, so they are never "yours" and carry no owner label.
   isOwn: false,
+  isCreator: false,
   // A registry lake has no document, and session-create resolves every pre-authorized id through
   // findById - so naming one could only ever 404. Never offer the affordance.
   canPreauthorize: false,
@@ -469,10 +512,10 @@ export const listDataLakes = async (
     // DB may not have the collection yet - fall through to hardcoded
   }
 
-  // Label lakes the caller does not own with the creator's name (manager route only; the
-  // content-scope resolver passes no `users` adapter and this resolves to an empty map).
-  const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  // Label lakes the caller does not own with the effective owner's name (manager route only; the
+  // content-scope resolver passes no `users` adapter and this resolves to an empty map).
+  const ownerById = await resolveOwners(dynamicLakes, grantsByLake, ctx.userId, db.users);
   // Manage flags resolved BEFORE the queue-count aggregate so it spans only the lakes this caller may
   // manage. `toManageableConfig` drops the count for the rest anyway, so narrowing the aggregate both
   // saves the discarded work and keeps a count the caller must not see out of this function entirely.
@@ -498,8 +541,9 @@ export const listDataLakes = async (
       manageableById.get(dl.id) ?? false,
       canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      String(dl.createdByUserId) === String(ctx.userId),
       canPreauthorizeById.get(dl.id) ?? false,
-      ownerNames.get(dl.createdByUserId),
+      ownerFor(dl, grantsByLake, ownerById),
       pendingCounts[dl.id]
     )
   );
@@ -525,7 +569,7 @@ export const listDataLakes = async (
  *
  * Takes `ctx` (not just `db`) so it can mark which of those cross-tenant lakes the admin
  * actually owns (`isOwn`) and, when a `users` lookup is supplied, label the rest with the
- * creator's name - an admin sees every org's private lakes here, so the owner label is what
+ * effective owner's name - an admin sees every org's private lakes here, so the owner label is what
  * keeps them from mistaking someone else's for their own.
  */
 export const listAllDataLakes = async (
@@ -539,8 +583,8 @@ export const listAllDataLakes = async (
     // Fall through to hardcoded
   }
 
-  const ownerNames = await resolveOwnerNames(dynamicLakes, ctx.userId, db.users);
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
+  const ownerById = await resolveOwners(dynamicLakes, grantsByLake, ctx.userId, db.users);
   const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
   // This is the branch where canManage and canPreauthorize genuinely diverge: the admin manages every
   // DB lake, but may only ADMIT the ones they hold a real rung on (owner/curator/org-admin/org-grant).
@@ -563,8 +607,9 @@ export const listAllDataLakes = async (
       // predicate rather than hardcoded, so a change to the rule reaches this surface too.
       canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
+      String(dl.createdByUserId) === String(ctx.userId),
       canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
-      ownerNames.get(dl.createdByUserId),
+      ownerFor(dl, grantsByLake, ownerById),
       pendingCounts[dl.id]
     )
   );

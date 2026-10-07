@@ -28,6 +28,7 @@ export type {
   AgentStepType,
   ConfidenceGateDecision,
   ConversationMessage,
+  FeedbackDrainPhase,
   GatedToolCall,
   IterationResult,
   RunIterationOptions,

@@ -46,6 +46,37 @@ const makeFile = (overrides: {
 describe('FabFileRepository.countDataLakeUniqueFilesByPrefix', () => {
   setupMongoTest();
 
+  describe('creator-anchored lakeMemberships', () => {
+    const scope = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:orga:acme',
+      fileTagPrefix: 'acme:',
+      creatorUserId: 'creator-1',
+    };
+
+    it('counts a creator-owned prefix-only member for a non-creator viewer only when the scope is passed', async () => {
+      await makeFile({ userId: 'creator-1', tags: ['acme:uncategorized'] });
+
+      expect(await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:'], {})).toEqual({
+        total: 0,
+        byPrefix: { 'acme:': 0 },
+      });
+      expect(
+        await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:'], { lakeMemberships: [scope] })
+      ).toEqual({ total: 1, byPrefix: { 'acme:': 1 } });
+    });
+
+    it("does not count a different creator's file carrying the same prefix", async () => {
+      await makeFile({ userId: 'someone-else', tags: ['acme:uncategorized'] });
+
+      const result = await fabFileRepository.countDataLakeUniqueFilesByPrefix(USER, ['acme:'], {
+        lakeMemberships: [scope],
+      });
+
+      expect(result.total).toBe(0);
+    });
+  });
+
   it('counts a multi-lake file once in total but once per matching prefix', async () => {
     // One file tagged into BOTH lakes, one tagged into only acme.
     await makeFile({ tags: ['acme:industry', 'opti:family'], fileName: 'both' });

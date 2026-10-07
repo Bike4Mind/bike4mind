@@ -63,6 +63,7 @@ const adapters = (
   const releaseClaim = vi.fn(async () => undefined);
   const admitSource = over.admitSource ?? vi.fn(async () => ({ id: 'file-9', fileName: 'Quarterly report' }));
   const record = vi.fn(async () => undefined);
+  const serializeClaim = vi.fn(<T>(claim: () => Promise<T>) => claim());
   return {
     deps: {
       db: {
@@ -72,7 +73,9 @@ const adapters = (
         lakeConfigChangeEvents: { record },
       },
       admitSource,
+      serializeClaim,
     },
+    serializeClaim,
     findById,
     claimForReview,
     recordAdmission,
@@ -141,6 +144,29 @@ describe('approveDataLakeProposal', () => {
     await approveDataLakeProposal('prop-1', ctx(), deps);
 
     expect(order).toEqual(['claim', 'admit']);
+  });
+
+  // The route binds `serializeClaim` to a transaction that touches the lake doc; the admission is a
+  // network fetch a transaction retry would repeat, so it must run only after that phase returns.
+  it('runs the gate and claim inside serializeClaim and admits only after it returns', async () => {
+    const order: string[] = [];
+    const { deps, findById, claimForReview, admitSource, serializeClaim } = adapters();
+    serializeClaim.mockImplementation(async <T>(claim: () => Promise<T>) => {
+      order.push('enter');
+      const result = await claim();
+      order.push('exit');
+      return result;
+    });
+    findById.mockImplementation(async () => (order.push('gate'), proposal()));
+    claimForReview.mockImplementation(async (_id: string, input: { status: string }) => {
+      order.push('claim');
+      return { ...proposal(), status: input.status } as IDataLakeProposalDocument;
+    });
+    admitSource.mockImplementation(async () => (order.push('admit'), { id: 'file-9', fileName: 'Report' }));
+
+    await approveDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(order).toEqual(['enter', 'gate', 'claim', 'exit', 'admit']);
   });
 
   it('refuses a proposal another reviewer already ruled on, without admitting anything', async () => {
@@ -360,7 +386,13 @@ describe('approveDataLakeProposal', () => {
         principalId: OWNER,
         dataLakeId: 'lake-1',
         action: 'approve-proposal',
-        changes: [{ field: 'proposalReview', kind: 'literal', after: 'approved: https://example.com/report' }],
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'approved: Quarterly report (https://example.com/report)',
+          },
+        ],
       })
     );
   });
@@ -425,7 +457,13 @@ describe('declineDataLakeProposal', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'decline-proposal',
-        changes: [{ field: 'proposalReview', kind: 'literal', after: 'declined: https://example.com/report' }],
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'declined: Quarterly report (https://example.com/report)',
+          },
+        ],
       })
     );
   });
@@ -508,7 +546,13 @@ describe('restoreDataLakeProposal', () => {
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'restore-proposal',
-        changes: [{ field: 'proposalReview', kind: 'literal', after: 'restored: https://example.com/report' }],
+        changes: [
+          {
+            field: 'proposalReview',
+            kind: 'literal',
+            after: 'restored: Quarterly report (https://example.com/report)',
+          },
+        ],
       })
     );
   });

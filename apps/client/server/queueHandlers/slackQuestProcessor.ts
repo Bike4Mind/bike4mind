@@ -37,10 +37,8 @@ import {
   imageModerationIncidentRepository,
   lakeAccessEventRepository,
   scopedSettingsRepository,
-  lakeMembershipRemovalRepository,
 } from '@bike4mind/database';
-import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
-import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { NotFoundError, registerLambdaErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 
@@ -155,11 +153,7 @@ export const getStaticOptions = () => {
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
-      // Read by save_content_to_data_lake (-> addFileToDataLake). Without them that tool answers
-      // "not available on this surface" rather than failing mid-write.
-      lakeMembershipRemovals: lakeMembershipRemovalRepository,
-      lakeConfigChangeEvents: lakeConfigAuditDb.lakeConfigChangeEvents,
-      lakeMembershipChangeEvents: lakeMembershipAuditDb.lakeMembershipChangeEvents,
+      ...lakeWriteToolDb,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),
