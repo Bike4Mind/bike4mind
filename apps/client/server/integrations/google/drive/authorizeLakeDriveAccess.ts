@@ -5,6 +5,13 @@ import { NotFoundError } from '@server/utils/errors';
 type LakeDriveAccessUser = { id: string; isAdmin: boolean };
 type LakeDriveAccessLake = { organizationId?: string | null; createdByUserId: string };
 
+/** A personal lake's connection syncs on its creator's own Google grant, so nobody else passes - a 404, like an org refusal. */
+function assertPersonalLakeCreator(owner: { userId: string }, user: LakeDriveAccessUser) {
+  if (owner.userId !== user.id) {
+    throw new NotFoundError('Data lake not found');
+  }
+}
+
 /**
  * Gate a caller on managing a lake's Drive connection; returns the owner that connection must have.
  *
@@ -22,8 +29,8 @@ export async function authorizeLakeDriveAccess(
   const owner = driveConnectionOwnerForLake(lake);
   if (owner.kind === 'organization') {
     await verifyOrgAccess(user, owner.organizationId);
-  } else if (owner.userId !== user.id) {
-    throw new NotFoundError('Data lake not found');
+  } else {
+    assertPersonalLakeCreator(owner, user);
   }
   return owner;
 }
@@ -43,8 +50,6 @@ export async function authorizeLakeDriveRead(
     const { canManage } = await verifyOrgAdminRead(user, owner.organizationId);
     return { owner, canManage };
   }
-  if (owner.userId !== user.id) {
-    throw new NotFoundError('Data lake not found');
-  }
+  assertPersonalLakeCreator(owner, user);
   return { owner, canManage: true };
 }

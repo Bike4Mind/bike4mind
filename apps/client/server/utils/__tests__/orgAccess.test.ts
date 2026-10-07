@@ -145,9 +145,8 @@ describe('verifyOrgAccess', () => {
 });
 
 /**
- * The membership-level sibling of verifyOrgAccess, for org-scoped reads a plain member legitimately
- * makes (their org's subscription plan). Its whole job is to be WIDER than verifyOrgAccess on the
- * member arm while staying non-oracular for everyone else.
+ * The read-tier sibling of verifyOrgAccess: admits an appointed org admin too, and reports whether the
+ * caller would pass the write gate as `canManage`.
  */
 describe('verifyOrgAdminRead', () => {
   const orgWithAdmins = { ...org, adminUserIds: [APPOINTED_ADMIN] };
@@ -190,6 +189,22 @@ describe('verifyOrgAdminRead', () => {
     });
   });
 
+  // The read tier restates the write gate's owner/manager/platform-admin condition, so this pins
+  // `canManage` to exactly "verifyOrgAccess would admit this caller" and fails if the two drift.
+  it.each([
+    { who: 'owner', user: { id: OWNER, isAdmin: false } },
+    { who: 'manager', user: { id: MANAGER, isAdmin: false } },
+    { who: 'platform admin', user: { id: STRANGER, isAdmin: true } },
+    { who: 'appointed admin', user: { id: APPOINTED_ADMIN, isAdmin: false } },
+  ])('reports canManage exactly when verifyOrgAccess admits the $who', async ({ user }) => {
+    const { canManage } = await verifyOrgAdminRead(user, ORG);
+    const admittedByWriteGate = await verifyOrgAccess(user, ORG).then(
+      () => true,
+      () => false
+    );
+    expect(canManage).toBe(admittedByWriteGate);
+  });
+
   it('404s a user with no standing, including when the org predates adminUserIds', async () => {
     await expect(verifyOrgAdminRead({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
     mockFindById.mockResolvedValue(org);
@@ -202,6 +217,11 @@ describe('verifyOrgAdminRead', () => {
   });
 });
 
+/**
+ * The membership-level sibling of verifyOrgAccess, for org-scoped reads a plain member legitimately
+ * makes (their org's subscription plan). Its whole job is to be WIDER than verifyOrgAccess on the
+ * member arm while staying non-oracular for everyone else.
+ */
 describe('verifyOrgMembership', () => {
   const member = asUser({ id: STRANGER, groups: [], isAdmin: false });
 
