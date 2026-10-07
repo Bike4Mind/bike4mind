@@ -302,6 +302,7 @@ export const SettingKeySchema = z.enum([
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnableDataLakeGitHub',
+  'EnableDataLakeGitHubReconcile',
   'EnforceLakeAdmission',
   'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
@@ -2269,6 +2270,17 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 96,
     dependsOn: 'EnableDataLakes',
+  }),
+  EnableDataLakeGitHubReconcile: makeBooleanSetting({
+    key: 'EnableDataLakeGitHubReconcile',
+    name: 'Data Lakes: GitHub scheduled reconcile',
+    defaultValue: false,
+    description:
+      "Server-side gate for the scheduled check that compares each connected GitHub repository's default-branch HEAD with the last synced commit and queues a sync when they differ, so a missed or dropped push webhook still reaches the lake. Off by default - pushes still sync through the webhook and the Re-sync button; turn this on to also reconcile on a schedule.",
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 96,
+    dependsOn: 'EnableDataLakeGitHub',
   }),
   EnforceLakeAdmission: makeBooleanSetting({
     key: 'EnforceLakeAdmission',
