@@ -1091,6 +1091,8 @@ describe('runModelDiscovery', () => {
 
       await runModelDiscovery(kimi.adapters, kimi.options);
 
+      // A first row from the build's own literal is recorded, but is not a reprice.
+      expect(kimi.runs.docs[0].changes?.repriced).toEqual([]);
       expect(kimi.prices.rows).toHaveLength(1);
       expect(kimi.prices.rows[0]).toMatchObject({ modelId: 'kimi-k3', unit: 'per_token' });
       expect(kimi.prices.rows[0].note).toMatch(/^discovery:adapter-literal@/);
@@ -1101,6 +1103,73 @@ describe('runModelDiscovery', () => {
       await runModelDiscovery(kimi.adapters, kimi.options);
 
       expect(kimi.prices.rows).toHaveLength(1);
+    });
+
+    it('plans the literal row without writing it in report mode, and still promotes on the literal alone', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const reporting = harness(
+        [stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] })],
+        { modelDiscoveryMode: 'report' }
+      );
+
+      const result = await runModelDiscovery(reporting.adapters, reporting.options);
+
+      // Report mode plans a single pass, so the literal row cannot be what satisfies promotion here:
+      // only the knownPricedModelIds union can.
+      expect(result.diff[0]).toMatchObject({ modelId: 'kimi-k3', promoted: true, blockedBy: [] });
+      expect(reporting.prices.rows).toEqual([]);
+      expect(reporting.runs.docs[0].changes?.plannedPriceRows).toBe(1);
+      expect(reporting.runs.docs[0].changes?.appendedPriceRows).toBe(0);
+    });
+
+    it('does not spend a convergence pass on literal rows alone', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const kimi = harness([
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+      await runModelDiscovery(kimi.adapters, kimi.options);
+      kimi.prices.rows.splice(0);
+      kimi.advance(2 * 60 * 60 * 1000);
+
+      const second = await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(kimi.prices.rows).toHaveLength(1);
+      expect(second.passes).toBe(1);
+    });
+
+    it('words a per-image literal as priced in this build, which no trusted source quotes', async () => {
+      const image: DiscoveredModel = {
+        modelId: 'gpt-image-1',
+        patch: { ...gpt6.patch, id: 'gpt-image-1', name: 'GPT Image 1' },
+      };
+      const imaging = harness([openaiSource([image])]);
+
+      const result = await runModelDiscovery(imaging.adapters, imaging.options);
+
+      expect(result.diff[0].blockedBy).toContain('no-trusted-price');
+      expect(imaging.catalog.rows[0].patch).toMatchObject({
+        autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
+      });
     });
 
     it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {
