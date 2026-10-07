@@ -3815,6 +3815,129 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    // Shared arrange for the usage-event gating tests below. `primaryComplete` drives the first hop;
+    // when it throws, a fallback model answers 'Hello from the fallback'.
+    const arrangeUsageEventScenario = (opts: {
+      enforceCredits: boolean;
+      primaryComplete: (...args: any[]) => Promise<void>;
+    }) => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+      vi.spyOn(service as any, 'getDefaultSettingValue').mockImplementation(
+        (key: string) => key === 'enforceCredits' && opts.enforceCredits
+      );
+      mockDb.users = {
+        update: vi.fn(),
+        findById: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+        incrementCredits: vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 100_000 }),
+      };
+      mockDb.creditTransactions = { createTransaction: vi.fn().mockResolvedValue(undefined) };
+      const usageEventsRecord = vi.fn().mockResolvedValue(null);
+      mockDb.usageEvents = { record: usageEventsRecord };
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(opts.primaryComplete),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({
+        model: fallbackModel,
+        backend: {
+          complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            await cb(['Hello from the fallback'], { inputTokens: 100, outputTokens: 50 });
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: fallbackModel.id,
+        },
+        attempt: 1,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      return { usageEventsRecord, fallbackModel };
+    };
+
+    const runUsageEventScenario = () =>
+      service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+    it('records no refusal row when the hop failed for a non-refusal reason', async () => {
+      const { usageEventsRecord, fallbackModel } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async () => {
+          throw new Error('Model overloaded');
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: fallbackModel.id, status: 'ok' })
+      );
+      expect(usageEventsRecord).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'refusal' }));
+    });
+
+    it('records no refusal row when enforceCredits is off', async () => {
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: false,
+        primaryComplete: async () => {
+          throw new Error(`Anthropic safety classifier refusal for ${ChatModels.GPT4}`);
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).not.toHaveBeenCalled();
+    });
+
+    it('records a settled stop_reason refusal as a refusal row, not ok', async () => {
+      const { usageEventsRecord } = arrangeUsageEventScenario({
+        enforceCredits: true,
+        primaryComplete: async (_m, _ms, _o, cb) => {
+          await cb(['I cannot help with that'], { inputTokens: 100, outputTokens: 5, stopReason: 'refusal' });
+        },
+      });
+
+      await runUsageEventScenario();
+
+      expect(usageEventsRecord).toHaveBeenCalledTimes(1);
+      expect(usageEventsRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ model: ChatModels.GPT4, status: 'refusal' })
+      );
+    });
+
     // Exhaustion path + final-hop cross-provider wiring: every hop fails, so the loop runs the
     // full MAX_FALLBACK_HOPS budget and throws. Asserts the loop asks getLlmWithFallback for a
     // cross-provider (preferUntriedBackend) ONLY on the final hop, and settles as errored.

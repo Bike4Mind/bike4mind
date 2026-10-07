@@ -492,10 +492,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     // as an errored event so org metering stays complete. creditsCharged is 0: the
     // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
     // in USAGE_EVENT_STATUSES; a disconnect is an errored completion). A safety-classifier
-    // refusal is always recorded, as 'refusal', so the Spend tab's Refusal Rate sees it:
+    // refusal is recorded as 'refusal' under the same gate as the settled success row
+    // (enforceCredits or alwaysRecordUsage), so Refusal Rate = refusals / calls stays unskewed;
     // this path has no fallback loop, so the refused call is the whole request.
     const isRefusal = error instanceof Error && isSafetyRefusalError(error);
-    if (modelInfo && (isRefusal || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))) {
+    const recordsUsage = enforceCredits || params.alwaysRecordUsage;
+    if (
+      modelInfo &&
+      ((isRefusal && recordsUsage) || (params.alwaysRecordUsage && (finalInputTokens > 0 || finalOutputTokens > 0)))
+    ) {
       db.usageEvents
         ?.record({
           requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
@@ -503,6 +508,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           ownerId: holderId,
           ownerType: holderType,
           feature: 'completion_api',
+          source,
+          apiKeyId: apiKeyInfo?.keyId,
           provider: modelInfo.backend,
           model,
           inputTokens: finalInputTokens,

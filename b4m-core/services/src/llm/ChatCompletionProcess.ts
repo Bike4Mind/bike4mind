@@ -4524,7 +4524,6 @@ export class ChatCompletionProcess {
         // Loop covers the primary attempt plus up to MAX_FALLBACK_HOPS cross-model hops
         // (same-model overload/timeout retries below re-enter without advancing fallbackAttempt).
         while (!completionSuccess && fallbackAttempt <= MAX_FALLBACK_HOPS) {
-          const attemptStartTime = Date.now();
           try {
             const isInitialAttempt = fallbackAttempt === 0;
 
@@ -4864,7 +4863,6 @@ export class ChatCompletionProcess {
                   costUsd: 0,
                   creditsCharged: 0,
                   status: 'refusal',
-                  latencyMs: Date.now() - attemptStartTime,
                 })
                 .catch((usageEventError: unknown) => {
                   logger.warn('Failed to record refusal usage event', usageEventError);
