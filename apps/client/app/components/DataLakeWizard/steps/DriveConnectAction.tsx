@@ -24,7 +24,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   const { data: connection, isLoading, isError } = useLakeDriveConnection(lake.id);
-  const canManage = useLakeDriveCanManage(lake.id).data ?? true;
+  const canManage = useLakeDriveCanManage(lake.id).data === true;
   const connect = useConnectDriveFolderToLake();
   const disconnect = useDisconnectLakeDrive();
 
