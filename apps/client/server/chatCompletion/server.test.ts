@@ -316,9 +316,14 @@ describe('ChatCompletion drain window vs ECS stopTimeout', () => {
   );
 
   it('keeps DRAIN_TIMEOUT_MS at least 5s under the ECS stopTimeout', () => {
-    // Anchored to the assignment (`def.stopTimeout = N`), not a bare `stopTimeout = N`, so a
-    // matching literal left behind in a comment cannot satisfy the guard.
-    const matches = [...infraSource.matchAll(/def\.stopTimeout\s*=\s*(\d+)/g)];
+    // Strip comment lines before matching so a stale `// def.stopTimeout = 120` cannot
+    // satisfy (or duplicate) the assignment and make the guard pass vacuously. The regex is
+    // also anchored to the assignment (`def.stopTimeout = N`), not a bare `stopTimeout = N`.
+    const infraCode = infraSource
+      .split('\n')
+      .filter(line => !line.trimStart().startsWith('//'))
+      .join('\n');
+    const matches = [...infraCode.matchAll(/def\.stopTimeout\s*=\s*(\d+)/g)];
     expect(matches).toHaveLength(1);
     const stopTimeoutMs = Number(matches[0][1]) * 1000;
     expect(DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(stopTimeoutMs - 5_000);
@@ -326,19 +331,26 @@ describe('ChatCompletion drain window vs ECS stopTimeout', () => {
 });
 
 describe('ChatCompletion Dockerfile PID 1', () => {
-  // `pnpm exec` exits on SIGTERM without waiting for its child, and PID 1 exiting SIGKILLs the
-  // namespace, so server.ts's drain would never run. The image must exec the runtime directly.
+  // The drain in server.ts only runs if PID 1 waits on SIGTERM and lets server.ts's own
+  // handler run. A package-manager wrapper (`pnpm exec`) exits immediately; the tsx CLI
+  // relays SIGTERM but SIGKILLs the script if it does not ack within ~30ms (a blocked
+  // event loop cannot). `node --import tsx` keeps tsx in-process, so node runs the handler.
   const dockerfileSource = readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), '../../Dockerfile.chatcompletion'),
     'utf8'
   );
 
-  it('execs the runtime directly, not a package-manager wrapper', () => {
-    const cmdLine = dockerfileSource.match(/^CMD\s+(.+)$/m)?.[1];
-    expect(cmdLine).toBeDefined();
-    // JSON.parse also enforces exec (array) form: a shell-form `CMD pnpm ...` is not a JSON array.
-    const cmd = JSON.parse(cmdLine!) as string[];
-    expect(cmd[0]).not.toMatch(/\b(pnpm|npm|npx|yarn|corepack)\b/);
+  it('makes node PID 1 with tsx as an in-process loader', () => {
+    // Docker uses the LAST CMD, so read that one - an earlier CMD is dead config.
+    const cmdLines = [...dockerfileSource.matchAll(/^CMD\s+(.+)$/gm)].map(m => m[1]);
+    expect(cmdLines.length).toBeGreaterThan(0);
+    // JSON.parse also enforces exec (array) form: a shell-form `CMD node ...` is not a JSON array.
+    const cmd = JSON.parse(cmdLines[cmdLines.length - 1]) as string[];
+    expect(cmd[0]).toBe('node');
+    expect(cmd).toContain('--import');
+    expect(cmd).toContain('tsx');
+    // An ENTRYPOINT would become PID 1 instead of the CMD, hiding a wrapper.
+    expect(dockerfileSource).not.toMatch(/^ENTRYPOINT\b/m);
   });
 });
 

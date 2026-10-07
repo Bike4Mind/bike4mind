@@ -40,7 +40,8 @@ const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 // `stopTimeout` (infra/chatCompletion.ts) so the drain-expiry error below can log before SIGKILL -
 // a window equal to stopTimeout starts after SIGTERM and can never fire. The margin is pinned by
 // server.test.ts; work still running when the window closes (e.g. a multi-minute deep-research
-// generation) is still cut off. Requires tsx to be PID 1 (see Dockerfile.chatcompletion).
+// generation) is still cut off. Requires node as PID 1 with tsx loaded in-process (see
+// Dockerfile.chatcompletion) - a wrapper that exits first SIGKILLs the drain.
 export const DRAIN_TIMEOUT_MS = 110_000;
 
 // In-flight processing promises, tracked so SIGTERM can drain before exit. Both route
