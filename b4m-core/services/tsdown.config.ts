@@ -25,7 +25,6 @@ export default defineConfig({
     'src/llm/ChatCompletionInvoke.ts',
     'src/llm/ImageGeneration.ts',
     'src/llm/ImageEdit.ts',
-    'src/llm/VideoGeneration.ts',
     'src/llm/toolAvailability.ts',
     'src/llm/imageModerationGate.ts',
     'src/llm/SmallLLMService.ts',

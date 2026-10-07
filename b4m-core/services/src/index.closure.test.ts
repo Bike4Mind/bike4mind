@@ -125,7 +125,6 @@ describe('@bike4mind/services barrel closure', () => {
     ['llm/ChatCompletionInvoke.ts', 'apps/client pages/api/ai/llm.ts and slack'],
     ['llm/ImageGeneration.ts', 'apps/client server/queueHandlers/imageGeneration.ts'],
     ['llm/ImageEdit.ts', 'apps/client server/queueHandlers/imageEdit.ts'],
-    ['llm/VideoGeneration.ts', 'apps/client server/queueHandlers/videoGeneration.ts'],
     ['llm/toolAvailability.ts', 'apps/client pages/api/settings/serverConfig.ts'],
     ['llm/imageModerationGate.ts', 'apps/client generate-avatar + knowledgeModerationDeps'],
     ['llm/SmallLLMService.ts', 'apps/client server/deepAgent'],

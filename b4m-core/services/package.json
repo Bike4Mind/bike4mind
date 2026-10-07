@@ -180,16 +180,6 @@
         "default": "./dist/llm/ImageEdit.cjs"
       }
     },
-    "./llm/VideoGeneration": {
-      "import": {
-        "types": "./dist/llm/VideoGeneration.d.mts",
-        "default": "./dist/llm/VideoGeneration.mjs"
-      },
-      "require": {
-        "types": "./dist/llm/VideoGeneration.d.cts",
-        "default": "./dist/llm/VideoGeneration.cjs"
-      }
-    },
     "./llm/toolAvailability": {
       "import": {
         "types": "./dist/llm/toolAvailability.d.mts",
