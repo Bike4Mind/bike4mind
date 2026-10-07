@@ -442,6 +442,15 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
+   * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
+   * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
+   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
+   * predate it.
+   */
+  storageChargedAt?: Date;
+
+  /**
    * How many moderation scan attempts have been made on this row and failed without reaching a
    * terminal verdict - incremented by the rescue sweep's stale-claim reclaim and by a transient
    * release. The rescue sweep orders its selection by this ascending, so a never-attempted

@@ -22,6 +22,9 @@ const h = vi.hoisted(() => ({
   deleteFile: vi.fn(),
   importNotebooks: vi.fn(),
   getImportedKnowledgeFilePaths: vi.fn(),
+  stampImportedKnowledgeRows: vi.fn(),
+  chargeStampedKnowledgeStorage: vi.fn(),
+  session: { id: 'txn-session' },
 }));
 
 vi.mock('@server/s3/utils', () => ({ withContext: (fn: unknown) => fn }));
@@ -52,7 +55,7 @@ vi.mock('@bike4mind/database', () => ({
   Agent: {},
   Tool: {},
   User: {},
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(h.session),
 }));
 vi.mock('@bike4mind/services', () => ({
   notebookImportService: {
@@ -75,6 +78,10 @@ vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(), getSettingsValue: 
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
 vi.mock('@server/s3/moderateUploadedFile', () => ({ moderateUploadedFile: vi.fn() }));
 vi.mock('@server/s3/moderateImportedKnowledgeFiles', () => ({ moderateImportedKnowledgeFiles: vi.fn() }));
+vi.mock('@server/s3/storageCharge', () => ({
+  stampImportedKnowledgeRows: h.stampImportedKnowledgeRows,
+  chargeStampedKnowledgeStorage: h.chargeStampedKnowledgeStorage,
+}));
 vi.mock('@server/utils/storage', () => ({
   getFilesStorage: () => ({ delete: h.deleteFile, upload: vi.fn(), getContentAsBuffer: vi.fn() }),
 }));
@@ -87,6 +94,7 @@ vi.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 
 import { dispatch, discardUploadedKnowledgeFiles } from './notebookImportComplete';
 import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
+import { markImportComplete } from '@server/utils/importHistoryProgress';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -167,6 +175,8 @@ describe('notebook import duplicate-event guard', () => {
  * them, and `result.importedKnowledgeFilePaths` is what the post-commit moderation pass scans, so
  * the cleanup has to leave that list alone rather than sharing state with it.
  */
+const STAMP = new Date('2026-01-01T00:00:00Z');
+
 describe('notebook import: uploaded knowledge objects track the transaction outcome', () => {
   beforeEach(() => {
     h.getMetadata.mockResolvedValue({ size: 10 });
@@ -174,6 +184,8 @@ describe('notebook import: uploaded knowledge objects track the transaction outc
     // to the rollback under test, only that the callback gets far enough to run the service.
     h.getContentAsBuffer.mockResolvedValue(Buffer.from(JSON.stringify({ notebooks: [] })));
     h.jobCreate.mockResolvedValue({ id: 'job-1' });
+    h.stampImportedKnowledgeRows.mockResolvedValue(STAMP);
+    h.chargeStampedKnowledgeStorage.mockResolvedValue(0);
   });
 
   it('deletes every uploaded knowledge path when the import is rolled back', async () => {
@@ -217,9 +229,51 @@ describe('notebook import: uploaded knowledge objects track the transaction outc
     // These rows committed, so their objects are referenced and must survive - the compensation
     // exists only for the rejection path, and must not reach into the committed one.
     expect(h.deleteFile).not.toHaveBeenCalled();
+    expect(h.stampImportedKnowledgeRows).toHaveBeenCalledWith('user-1', ['knowledge/user-1/a'], h.session);
+    expect(h.chargeStampedKnowledgeStorage).toHaveBeenCalledWith('user-1', ['knowledge/user-1/a'], STAMP);
+    // The stamp rides the transaction; the user debit waits until after the job is marked complete.
+    expect(vi.mocked(markImportComplete).mock.invocationCallOrder[0]).toBeGreaterThan(
+      h.stampImportedKnowledgeRows.mock.invocationCallOrder[0]
+    );
+    expect(h.chargeStampedKnowledgeStorage.mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(markImportComplete).mock.invocationCallOrder[0]
+    );
     expect(moderateImportedKnowledgeFiles).toHaveBeenCalledWith(
       expect.objectContaining({ filePaths: ['knowledge/user-1/a'] })
     );
+  });
+
+  it('rolls back, cleans up and does not complete the job when the stamp write rejects', async () => {
+    h.importNotebooks.mockResolvedValue({
+      importedNotebooks: 1,
+      importedMessages: 0,
+      skippedNotebooks: 0,
+      importedKnowledgeFilePaths: ['knowledge/user-1/a'],
+    });
+    h.getImportedKnowledgeFilePaths.mockReturnValue(['knowledge/user-1/a']);
+    h.stampImportedKnowledgeRows.mockRejectedValue(new Error('stamp failed'));
+
+    await run();
+
+    expect(markImportComplete).not.toHaveBeenCalled();
+    expect(h.deleteFile).toHaveBeenCalledWith('knowledge/user-1/a');
+    expect(h.chargeStampedKnowledgeStorage).not.toHaveBeenCalled();
+    expect(moderateImportedKnowledgeFiles).not.toHaveBeenCalled();
+  });
+
+  it('keeps the committed import successful when the post-commit debit fails', async () => {
+    h.importNotebooks.mockResolvedValue({
+      importedNotebooks: 1,
+      importedMessages: 0,
+      skippedNotebooks: 0,
+      importedKnowledgeFilePaths: ['knowledge/user-1/a'],
+    });
+    h.chargeStampedKnowledgeStorage.mockRejectedValue(new Error('debit failed'));
+
+    await run();
+
+    expect(h.deleteFile).not.toHaveBeenCalled();
+    expect(moderateImportedKnowledgeFiles).toHaveBeenCalled();
   });
 });
 
