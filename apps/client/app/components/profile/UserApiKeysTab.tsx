@@ -1932,7 +1932,7 @@ export default function UserApiKeysTab() {
             <Typography level="title-md" sx={{ color: 'text.primary' }}>
               Manage Your API Keys
             </Typography>
-            <Box display="flex" gap={1} flexShrink={0} alignItems="center">
+            <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
               {revokedCount > 0 && (
                 <Checkbox
                   size="sm"
