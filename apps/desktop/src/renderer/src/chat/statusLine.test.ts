@@ -4,9 +4,11 @@ import {
   contextPercent,
   contextTokens,
   describeActivity,
+  describeReplyCost,
   describeSplit,
   describeUsage,
   formatCost,
+  formatCreditsSpent,
   formatElapsed,
   formatTokens,
   inputSide,
@@ -77,6 +79,37 @@ describe('formatCost', () => {
   it('is null when the server sent no cost', () => {
     expect(formatCost(undefined)).toBeNull();
     expect(formatCost({ inputTokens: 5 })).toBeNull();
+  });
+});
+
+describe('formatCreditsSpent', () => {
+  it('reports credits even when the server also sent a dollar figure', () => {
+    expect(formatCreditsSpent({ creditsUsed: 1234, usdCost: 0.6 })).toBe('1,234 credits');
+    expect(formatCreditsSpent({ creditsUsed: 1 })).toBe('1 credit');
+  });
+
+  it('keeps a sub-credit charge visible rather than rounding it to zero', () => {
+    expect(formatCreditsSpent({ creditsUsed: 0.4 })).toBe('<1 credit');
+  });
+
+  it('is null when the server reported no credits, and zero only when it said zero', () => {
+    expect(formatCreditsSpent(undefined)).toBeNull();
+    expect(formatCreditsSpent({ usdCost: 0.5, inputTokens: 90 })).toBeNull();
+    expect(formatCreditsSpent({ creditsUsed: 0 })).toBe('0 credits');
+  });
+});
+
+describe('describeReplyCost', () => {
+  it('adds the split and the dollar figure, and never repeats the credits headline', () => {
+    expect(describeReplyCost({ inputTokens: 1200, outputTokens: 300, creditsUsed: 9, usdCost: 0.004 })).toBe(
+      '1.2k new input, 300 output\n$0.0040'
+    );
+    expect(describeReplyCost({ inputTokens: 1200, creditsUsed: 9 })).toBe('1.2k new input');
+  });
+
+  it('is null when there is nothing to add', () => {
+    expect(describeReplyCost({ creditsUsed: 9 })).toBeNull();
+    expect(describeReplyCost(undefined)).toBeNull();
   });
 });
 

@@ -6,7 +6,7 @@ import Chip from '@mui/joy/Chip';
 import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
-import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage } from '@shared/chat';
+import { isTurnBudgetStop, lastBoundaryIndex, type ChatMessage, type ChatUsage } from '@shared/chat';
 import { ArtifactList } from './ArtifactCard';
 import { presentReply } from './codeStream';
 import { AttachmentRow } from './Attachments';
@@ -15,6 +15,7 @@ import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { ReplyMarkdown } from './markdown/ReplyMarkdown';
 import { displayText, relaySummary } from './relayRows';
 import { callsIn, roundsOf } from './replyRounds';
+import { describeReplyCost, formatCreditsSpent } from './statusLine';
 import { ToolCallList, type MoveCallToBackground, type RespondToApproval } from './ToolCallList';
 
 /** What each budget the agent loop enforces is called in the thread. See isTurnBudgetStop. */
@@ -145,6 +146,46 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
 }
 
 /**
+ * Marks the cost row for the `:hover` rule on the turn around it. A class rather than a child
+ * selector so the rule survives any wrapper that gets put between the two.
+ */
+const REPLY_COST_CLASS = 'b4m-reply-cost';
+
+/**
+ * What this reply cost, read off the usage the message already carries.
+ *
+ * Quiet until the turn is hovered, and out of the flow while it is: a thread runs to hundreds of
+ * replies, and a row that reserved its line would grow every one of them by a line to show a
+ * figure nobody is looking at. Sitting in the gap under the turn, it shifts nothing either way.
+ *
+ * There is no React state here on purpose. Hover tracked in state - here or, far worse, in the
+ * thread above - is a render per mouse move across a transcript that can be hundreds of turns
+ * long. The parent's `:hover` does the same job for nothing; see AssistantTurn.
+ *
+ * Nothing at all when the server reported no credits. Absent is not zero - a turn that failed,
+ * and every reply stored before this was captured, would otherwise claim to have been free.
+ */
+function ReplyCost({ usage }: { usage?: ChatUsage }) {
+  const credits = formatCreditsSpent(usage);
+  if (!credits) return null;
+
+  return (
+    <Typography
+      level="body-xs"
+      textColor="text.tertiary"
+      className={REPLY_COST_CLASS}
+      // Native, like the turn status line's own split: a Joy tooltip per reply would mount a
+      // popper for every turn in the thread to serve the one the pointer is over.
+      title={describeReplyCost(usage) ?? undefined}
+      sx={{ position: 'absolute', top: '100%', right: 0, mt: 0.5, whiteSpace: 'nowrap' }}
+      data-testid="chat-message-cost"
+    >
+      {credits}
+    </Typography>
+  );
+}
+
+/**
  * The assistant's turn: set flush in the column with no bubble around it.
  *
  * A reply can run for screens, and a container drawn around that much text reads as a wall
@@ -152,6 +193,9 @@ function UserTurn({ message, sessionId }: { message: ChatMessage; sessionId: str
  *
  * Nothing here reports that a reply is on its way. The status line under the transcript does
  * that for the whole turn, and a spinner in the thread as well would be the same fact twice.
+ *
+ * The hover rule for the cost lives here rather than on the row it reveals, because CSS is what
+ * keeps it free: see ReplyCost.
  */
 function AssistantTurn({
   message,
@@ -176,7 +220,15 @@ function AssistantTurn({
   const rounds = roundsOf(message);
 
   return (
-    <Box sx={{ minWidth: 0 }} data-testid="chat-message-assistant">
+    <Box
+      sx={{
+        minWidth: 0,
+        position: 'relative',
+        [`& .${REPLY_COST_CLASS}`]: { opacity: 0, pointerEvents: 'none', transition: 'opacity 120ms' },
+        [`&:hover .${REPLY_COST_CLASS}`]: { opacity: 1, pointerEvents: 'auto' },
+      }}
+      data-testid="chat-message-assistant"
+    >
       {/* The turn in the order it happened: each round's prose, then the tools that round went
           on to run, then the next round's prose. A reply that touched six files across ten
           rounds is a narrative, and every row piled up after every word is not that narrative. */}
@@ -218,6 +270,8 @@ function AssistantTurn({
           runs. It lived in the composer before and read as a property of the input box rather
           than of the answer being written. */}
       {status && <Box sx={{ mt: 1 }}>{status}</Box>}
+
+      <ReplyCost {...(message.usage ? { usage: message.usage } : {})} />
     </Box>
   );
 }
