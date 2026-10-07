@@ -164,7 +164,8 @@ describe('UserApiKeyRepository.createIfUnderCap', () => {
       'standard'
     );
     expect(result).toBe('at_cap');
-    // The key was inserted then revoked; active count must remain at the cap.
+    // Rejected key must be deleted entirely, not left as a DISABLED row.
+    await expect(UserApiKey.countDocuments({ userId, name: 'over' })).resolves.toBe(0);
     await expect(userApiKeyRepository.countActiveByUserId(userId, 'standard')).resolves.toBe(3);
   });
 

@@ -150,16 +150,20 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  async countActiveByUserId(userId: string, pool: ApiKeyCapPool = 'standard'): Promise<number> {
-    // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
-    // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
-    // `$ne` (not `$nin` on a list) so a legacy row with no metadata stays in the standard pool.
-    return this.model.countDocuments({
+  // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
+  // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
+  // `$ne` (not `$nin` on a list) so a legacy row with no metadata stays in the standard pool.
+  private activeKeyFilter(userId: string, pool: ApiKeyCapPool) {
+    return {
       userId,
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
       'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
-    });
+    };
+  }
+
+  async countActiveByUserId(userId: string, pool: ApiKeyCapPool = 'standard'): Promise<number> {
+    return this.model.countDocuments(this.activeKeyFilter(userId, pool));
   }
 
   async createIfUnderCap(
@@ -167,34 +171,37 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     cap: number,
     pool: ApiKeyCapPool
   ): Promise<IUserApiKeyDocument | 'at_cap'> {
+    const userId = (doc as { userId: string }).userId;
     const created = await this.model.create(doc);
-    const userId = (doc as { userId: string }).userId; // any: IBaseRepository create param is opaque here
-    const activeFilter = {
-      userId,
-      status: ApiKeyStatus.ACTIVE,
-      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
-      'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
-    };
-    const count = await this.model.countDocuments(activeFilter);
-    if (count <= cap) return created;
-    // Over cap: keep the oldest `cap` keys so all concurrent callers agree on
-    // which keys survive without coordination (stable sort by createdAt, _id).
-    const survivors = await this.model
-      .find(activeFilter)
-      .sort({ createdAt: 1, _id: 1 })
-      .limit(cap)
-      .select('_id')
-      .lean<{ _id: mongoose.Types.ObjectId }[]>()
-      .exec();
-    const survivorIds = new Set(survivors.map(s => String(s._id)));
-    if (!survivorIds.has(String(created._id))) {
-      await this.model.updateOne(
-        { _id: created._id, status: { $ne: ApiKeyStatus.DISABLED } },
-        { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedReason: 'cap_exceeded' } }
-      );
-      return 'at_cap';
+    try {
+      const filter = this.activeKeyFilter(userId, pool);
+      const count = await this.model.countDocuments(filter);
+      // Over cap: keep the oldest `cap` keys so concurrent callers in the same process
+      // agree on which keys survive (stable sort by createdAt, _id). Cross-process
+      // clock skew on a same-millisecond insert can land at cap+1; that narrow window
+      // requires an atomic counter to close completely.
+      if (count > cap) {
+        const survivors = await this.model
+          .find(filter)
+          .sort({ createdAt: 1, _id: 1 })
+          .limit(cap)
+          .select('_id')
+          .lean<{ _id: mongoose.Types.ObjectId }[]>()
+          .exec();
+        const survivorIds = new Set(survivors.map(s => String(s._id)));
+        if (!survivorIds.has(String(created._id))) {
+          // Hard-delete via the raw driver: the soft-delete plugin's deleteOne would
+          // only set deletedAt, leaving the row visible with status ACTIVE.
+          await this.model.collection.deleteOne({ _id: created._id });
+          return 'at_cap';
+        }
+      }
+      return created;
+    } catch (err) {
+      // Best-effort cleanup: remove the dangling insert before propagating.
+      await this.model.collection.deleteOne({ _id: created._id });
+      throw err;
     }
-    return created;
   }
 
   findByProductId(productId: string) {
