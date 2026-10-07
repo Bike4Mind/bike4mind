@@ -163,6 +163,7 @@ describe('other object settings use makeObjectSetting', () => {
     'contextTelemetryAlerts',
     'logoSettings',
     'RapidReplySettings',
+    'releaseNotesConfig',
     'whatsNewConfig',
     'whatsNewSyncConfig',
   ] as const;
