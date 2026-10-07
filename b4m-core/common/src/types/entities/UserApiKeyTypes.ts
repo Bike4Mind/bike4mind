@@ -210,7 +210,7 @@ export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Objec
 
 /**
  * White-label config for an embed key (epic #41), rendered by the widget serve
- * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedKey.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
  * whitelabel entitlement - the serve route re-checks on every request.
  */
