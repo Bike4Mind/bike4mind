@@ -57,13 +57,16 @@ export function useDriveFolderPicker({
   onBeforeRedirect?: (authUrl: string) => void;
 }): { openFolderPicker: () => Promise<void>; isPicking: boolean } {
   const { data: config } = useConfig();
-  const googleClientId = config?.googleClientId;
+  // Read after the token await: a picker opened on mount (the post-OAuth resume) can start before
+  // server config has loaded, and this closure would otherwise keep that render's undefined.
+  const googleClientIdRef = useRef(config?.googleClientId);
   const [openPicker] = useDrivePicker();
   // The library's openPicker silently no-ops until its own picker-loaded state flips, so after
   // waiting for the API the call must go through the latest render's openPicker, not this closure's.
   const openPickerRef = useRef(openPicker);
   useEffect(() => {
     openPickerRef.current = openPicker;
+    googleClientIdRef.current = config?.googleClientId;
   });
   const [isPicking, setIsPicking] = useState(false);
 
@@ -101,6 +104,7 @@ export function useDriveFolderPicker({
         redirectToConsent(token.authUrl);
         return;
       }
+      const googleClientId = googleClientIdRef.current;
       if (!token.accessToken || !googleClientId) {
         toast.error('Google Drive is unavailable right now. Please try again.');
         setIsPicking(false);

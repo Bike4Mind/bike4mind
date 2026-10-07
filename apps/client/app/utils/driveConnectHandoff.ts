@@ -77,31 +77,19 @@ export function saveDriveConnectHandoff(handoff: DriveConnectHandoffInput, authU
   }
 }
 
-/**
- * Reads and clears the pending handoff in one step, so it is used at most once. Null when there is
- * none, it does not parse, it is older than the TTL, or it belongs to another user, account scope,
- * or OAuth attempt.
- */
-export function consumeDriveConnectHandoff({
-  userId,
-  organizationId,
-  oauthState,
-  now = Date.now(),
-}: {
-  userId: string;
-  organizationId: string | null;
-  oauthState: string;
-  now?: number;
-}): DriveConnectHandoff | null {
-  let raw: string | null;
-  try {
-    raw = sessionStorage.getItem(STORAGE_KEY);
-    sessionStorage.removeItem(STORAGE_KEY);
-  } catch {
-    return null;
-  }
-  if (!raw) return null;
+type HandoffOwner = { userId: string; organizationId: string | null; now?: number };
 
+const readHandoff = (): string | null => {
+  const raw = sessionStorage.getItem(STORAGE_KEY);
+  sessionStorage.removeItem(STORAGE_KEY);
+  return raw;
+};
+
+const parseOwnedHandoff = (
+  raw: string | null,
+  { userId, organizationId, now = Date.now() }: HandoffOwner
+): DriveConnectHandoff | null => {
+  if (!raw) return null;
   let parsed: ReturnType<typeof handoffSchema.safeParse>;
   try {
     parsed = handoffSchema.safeParse(JSON.parse(raw));
@@ -114,22 +102,67 @@ export function consumeDriveConnectHandoff({
   const age = now - handoff.savedAt;
   if (age < 0 || age > DRIVE_CONNECT_HANDOFF_TTL_MS) return null;
   if (handoff.userId !== userId || handoff.organizationId !== organizationId) return null;
-  if (handoff.oauthState !== oauthState) return null;
   return handoff;
+};
+
+/**
+ * Reads and clears the pending handoff in one step, so it is used at most once. Null when there is
+ * none, it does not parse, it is older than the TTL, or it belongs to another user, account scope,
+ * or OAuth attempt.
+ */
+export function consumeDriveConnectHandoff({
+  oauthState,
+  ...owner
+}: HandoffOwner & { oauthState: string }): DriveConnectHandoff | null {
+  let raw: string | null;
+  try {
+    raw = readHandoff();
+  } catch {
+    return null;
+  }
+  const handoff = parseOwnedHandoff(raw, owner);
+  return handoff?.oauthState === oauthState ? handoff : null;
 }
 
 /**
- * One-shot signal from the callback to DrivePendingConnectAction to open the folder picker once the
- * resumed wizard mounts. Cleared on read, so a StrictMode double-mount opens it once.
+ * Moves the handoff saved for a failed OAuth attempt (`fromState`) onto the retry's authorize URL,
+ * because the server mints a fresh state per connect and the failed one can never complete. Only the
+ * state and TTL clock change; any other or foreign handoff is dropped. Never throws.
  */
-let drivePickerResumePending = false;
-
-export function requestDrivePickerResume(): void {
-  drivePickerResumePending = true;
+export function rebindDriveConnectHandoff({
+  fromState,
+  authUrl,
+  ...owner
+}: HandoffOwner & { fromState: string; authUrl: string }): void {
+  try {
+    const handoff = parseOwnedHandoff(readHandoff(), owner);
+    if (!handoff || handoff.oauthState !== fromState) return;
+    const { v: _v, oauthState: _oauthState, savedAt: _savedAt, ...input } = handoff;
+    saveDriveConnectHandoff(input, authUrl, owner.now);
+  } catch {
+    // storage blocked: the retry still redirects, the user just is not returned to the wizard
+  }
 }
 
-export function takeDrivePickerResume(): boolean {
-  const pending = drivePickerResumePending;
-  drivePickerResumePending = false;
-  return pending;
+/** How long after the callback the resumed wizard may still claim the picker-open signal. */
+export const DRIVE_PICKER_RESUME_TTL_MS = 60 * 1000;
+
+/**
+ * One-shot signal from the callback to DrivePendingConnectAction to open the folder picker once the
+ * resumed wizard mounts. Bound to the user it was raised for and short-lived, so a wizard that never
+ * mounted cannot open the picker on a later, unrelated Create (or for whoever signs in next). Cleared
+ * on read, so a StrictMode double-mount opens it once.
+ */
+let drivePickerResume: { userId: string; at: number } | null = null;
+
+export function requestDrivePickerResume(userId: string, now = Date.now()): void {
+  drivePickerResume = { userId, at: now };
+}
+
+export function takeDrivePickerResume(userId?: string, now = Date.now()): boolean {
+  const pending = drivePickerResume;
+  drivePickerResume = null;
+  if (!pending || !userId || pending.userId !== userId) return false;
+  const age = now - pending.at;
+  return age >= 0 && age <= DRIVE_PICKER_RESUME_TTL_MS;
 }

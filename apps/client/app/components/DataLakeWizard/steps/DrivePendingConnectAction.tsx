@@ -49,7 +49,7 @@ export default function DrivePendingConnectAction() {
   });
 
   useEffect(() => {
-    if (takeDrivePickerResume()) void openFolderPicker();
+    if (takeDrivePickerResume(useUser.getState().currentUser?.id)) void openFolderPicker();
     // Mount-only: the resume signal is one-shot and only meaningful as the resumed wizard appears.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

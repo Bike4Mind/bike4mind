@@ -6,9 +6,10 @@ const h = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   toastError: vi.fn(),
+  clientId: 'gcid' as string | undefined,
 }));
 
-vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: 'gcid' } }) }));
+vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: h.clientId } }) }));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
 vi.mock('sonner', () => ({ toast: { error: h.toastError } }));
@@ -20,6 +21,7 @@ const realLocation = window.location;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.clientId = 'gcid';
   Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
 });
 
@@ -105,5 +107,26 @@ describe('useDriveFolderPicker', () => {
     expect(h.openPicker).not.toHaveBeenCalled();
     expect(h.toastError).toHaveBeenCalledWith('Google Drive is still loading. Please try again.');
     expect(result.current.isPicking).toBe(false);
+  });
+
+  it("uses the client id that loads while the token is in flight, not the first render's", async () => {
+    h.clientId = undefined;
+    let resolveToken: (value: { data: { accessToken: string } }) => void = () => undefined;
+    h.get.mockReturnValue(new Promise(resolve => (resolveToken = resolve)));
+    vi.stubGlobal('google', { picker: {} });
+    const { result, rerender } = render();
+    const openFromFirstRender = result.current.openFolderPicker;
+
+    let done: Promise<void> | undefined;
+    act(() => {
+      done = openFromFirstRender();
+    });
+    h.clientId = 'gcid';
+    rerender();
+    resolveToken({ data: { accessToken: 'tok' } });
+    await act(() => done);
+
+    expect(h.toastError).not.toHaveBeenCalled();
+    expect(h.openPicker).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'gcid' }));
   });
 });

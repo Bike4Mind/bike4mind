@@ -141,7 +141,7 @@ describe('DrivePendingConnectAction', () => {
   });
 
   it('opens the folder picker once when mounted by a resumed wizard', () => {
-    requestDrivePickerResume();
+    requestDrivePickerResume('user-1');
 
     const { unmount } = wrap(<DrivePendingConnectAction />);
     expect(h.openFolderPicker).toHaveBeenCalledTimes(1);
@@ -149,6 +149,12 @@ describe('DrivePendingConnectAction', () => {
     unmount();
     wrap(<DrivePendingConnectAction />);
     expect(h.openFolderPicker).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not open the picker from a signal raised for another user', () => {
+    requestDrivePickerResume('user-2');
+    wrap(<DrivePendingConnectAction />);
+    expect(h.openFolderPicker).not.toHaveBeenCalled();
   });
 
   it('does not open the picker on an ordinary mount', () => {

@@ -3,7 +3,11 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import { startGoogleDriveConnect } from '@client/app/hooks/data/googleDrive';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { consumeDriveConnectHandoff, requestDrivePickerResume } from '@client/app/utils/driveConnectHandoff';
+import {
+  consumeDriveConnectHandoff,
+  rebindDriveConnectHandoff,
+  requestDrivePickerResume,
+} from '@client/app/utils/driveConnectHandoff';
 import { GOOGLE_DRIVE_CONNECT_ERROR } from '@client/shared/googleDriveConnectErrors';
 import { LinearProgress } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
@@ -18,8 +22,20 @@ const readStringParam = (search: Record<string, unknown>, key: 'code' | 'state' 
 
 const readErrorCode = (error: unknown): unknown => (isAxiosError(error) ? error.response?.data?.code : undefined);
 
-const connectAgain = () => {
-  startGoogleDriveConnect().catch((error: unknown) => {
+const currentOwner = () => {
+  const userId = useUser.getState().currentUser?.id;
+  return userId ? { userId, organizationId: activeOrgId() ?? null } : null;
+};
+
+/**
+ * Restarts the connect. A wizard or lake handoff saved for the failed attempt moves onto the new
+ * attempt's state, so the retry still returns the user to where they started.
+ */
+const connectAgain = (failedState: string) => {
+  startGoogleDriveConnect(authUrl => {
+    const owner = currentOwner();
+    if (owner) rebindDriveConnectHandoff({ ...owner, fromState: failedState, authUrl });
+  }).catch((error: unknown) => {
     console.error('Error restarting Google Drive connection:', error);
     toast.error('Error connecting to Google Drive');
   });
@@ -37,10 +53,12 @@ const CONNECT_FAILURE_MESSAGES: Record<GoogleDriveConnectErrorCode, string> = {
 const isConnectErrorCode = (code: unknown): code is GoogleDriveConnectErrorCode =>
   typeof code === 'string' && Object.hasOwn(CONNECT_FAILURE_MESSAGES, code);
 
-const reportConnectFailure = (error: unknown) => {
+const reportConnectFailure = (error: unknown, failedState: string) => {
   const code = readErrorCode(error);
   if (isConnectErrorCode(code)) {
-    toast.error(CONNECT_FAILURE_MESSAGES[code], { action: { label: 'Connect again', onClick: connectAgain } });
+    toast.error(CONNECT_FAILURE_MESSAGES[code], {
+      action: { label: 'Connect again', onClick: () => connectAgain(failedState) },
+    });
     return;
   }
   console.error('Error connecting to Google Drive:', error);
@@ -53,9 +71,9 @@ const reportConnectFailure = (error: unknown) => {
  * opens the folder picker; an existing lake reopens in the manager, where the user picks the folder.
  */
 const resumeDriveConnect = (oauthState: string) => {
-  const userId = useUser.getState().currentUser?.id;
-  if (!userId) return;
-  const handoff = consumeDriveConnectHandoff({ userId, organizationId: activeOrgId() ?? null, oauthState });
+  const owner = currentOwner();
+  if (!owner) return;
+  const handoff = consumeDriveConnectHandoff({ ...owner, oauthState });
   if (!handoff) return;
   if (handoff.kind === 'lake') {
     useDataLakeWizardStore.getState().openManager('mine', handoff.dataLakeId);
@@ -68,7 +86,7 @@ const resumeDriveConnect = (oauthState: string) => {
     autoDerivedTagPrefix: handoff.autoDerivedTagPrefix,
     optionalSteps: handoff.optionalSteps,
   });
-  requestDrivePickerResume();
+  requestDrivePickerResume(owner.userId);
 };
 
 /**
@@ -105,7 +123,7 @@ const GoogleDriveCallbackPage = () => {
       .then(
         () => true,
         (e: unknown) => {
-          reportConnectFailure(e);
+          reportConnectFailure(e, state);
           return false;
         }
       )

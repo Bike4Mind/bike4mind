@@ -191,7 +191,7 @@ describe('GoogleDriveCallbackPage', () => {
       expect(wizard.config.name).toBe('Research');
       expect(wizard.config.tagPrefix).toBe('research');
       expect(wizard.optionalSteps).toEqual({ preview: true, taxonomy: false });
-      expect(takeDrivePickerResume()).toBe(true);
+      expect(takeDrivePickerResume('user-1')).toBe(true);
       expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
       expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
     });
@@ -204,7 +204,7 @@ describe('GoogleDriveCallbackPage', () => {
 
       await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
       expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
-      expect(takeDrivePickerResume()).toBe(false);
+      expect(takeDrivePickerResume('user-1')).toBe(false);
     });
 
     it('does not resume when consent was cancelled', async () => {
@@ -214,7 +214,7 @@ describe('GoogleDriveCallbackPage', () => {
       render(<GoogleDriveCallbackPage />);
 
       expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
-      expect(takeDrivePickerResume()).toBe(false);
+      expect(takeDrivePickerResume('user-1')).toBe(false);
     });
 
     it.each([
@@ -230,7 +230,61 @@ describe('GoogleDriveCallbackPage', () => {
 
       await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
       expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
-      expect(takeDrivePickerResume()).toBe(false);
+      expect(takeDrivePickerResume('user-1')).toBe(false);
+    });
+  });
+
+  describe('connecting again after a failed attempt', () => {
+    const RETRY_URL = 'https://accounts.google.com/auth?state=retry-state';
+
+    const failThenRetry = async () => {
+      rejectWithCode('GOOGLE_DRIVE_CONNECT_EXPIRED');
+      h.startConnect.mockImplementation(async (onBeforeRedirect?: (authUrl: string) => void) => {
+        onBeforeRedirect?.(RETRY_URL);
+      });
+      const { unmount } = render(<GoogleDriveCallbackPage />);
+      await waitFor(() => expect(h.toastError).toHaveBeenCalledTimes(1));
+      const [, options] = h.toastError.mock.calls[0];
+      options.action.onClick();
+      await waitFor(() => expect(h.startConnect).toHaveBeenCalledTimes(1));
+      unmount();
+    };
+
+    const completeRetry = async () => {
+      h.search = { code: 'retry-code', state: 'retry-state' };
+      h.apiGet.mockReset().mockResolvedValue({ data: undefined });
+      h.navigate.mockClear();
+      render(<GoogleDriveCallbackPage />);
+      await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+    };
+
+    it('resumes the wizard when the retry completes', async () => {
+      saveWizardDraft();
+      await failThenRetry();
+      await completeRetry();
+
+      expect(useDataLakeWizardStore.getState().isOpen).toBe(true);
+      expect(useDataLakeWizardStore.getState().config.name).toBe('Research');
+      expect(takeDrivePickerResume('user-1')).toBe(true);
+    });
+
+    it('does not carry over a draft saved for a different attempt', async () => {
+      saveWizardDraft('https://accounts.google.com/auth?state=older-state');
+      await failThenRetry();
+      await completeRetry();
+
+      expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
+      expect(takeDrivePickerResume('user-1')).toBe(false);
+    });
+
+    it('does not carry the draft over to another signed-in user', async () => {
+      saveWizardDraft();
+      h.userId = 'user-2';
+      await failThenRetry();
+      h.userId = 'user-1';
+      await completeRetry();
+
+      expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
     });
   });
 
@@ -252,7 +306,7 @@ describe('GoogleDriveCallbackPage', () => {
       expect(store.managerTab).toBe('mine');
       expect(store.managerLakeId).toBe('lake-7');
       expect(store.isOpen).toBe(false);
-      expect(takeDrivePickerResume()).toBe(false);
+      expect(takeDrivePickerResume('user-1')).toBe(false);
       expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
     });
 

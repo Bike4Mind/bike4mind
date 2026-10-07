@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   consumeDriveConnectHandoff,
   DRIVE_CONNECT_HANDOFF_TTL_MS,
+  DRIVE_PICKER_RESUME_TTL_MS,
+  rebindDriveConnectHandoff,
   requestDrivePickerResume,
   saveDriveConnectHandoff,
   takeDrivePickerResume,
@@ -121,10 +123,57 @@ describe('driveConnectHandoff', () => {
     expect(consumeDriveConnectHandoff(match)).toBeNull();
   });
 
-  it('hands out the picker-resume signal once', () => {
-    expect(takeDrivePickerResume()).toBe(false);
-    requestDrivePickerResume();
-    expect(takeDrivePickerResume()).toBe(true);
-    expect(takeDrivePickerResume()).toBe(false);
+  it('hands out the picker-resume signal once, to the user it was raised for', () => {
+    expect(takeDrivePickerResume('user-1', T0)).toBe(false);
+    requestDrivePickerResume('user-1', T0);
+    expect(takeDrivePickerResume('user-1', T0 + 1)).toBe(true);
+    expect(takeDrivePickerResume('user-1', T0 + 1)).toBe(false);
+  });
+
+  it.each([
+    ['another user', 'user-2', T0 + 1],
+    ['no signed-in user', undefined, T0 + 1],
+    ['a signal past its TTL', 'user-1', T0 + DRIVE_PICKER_RESUME_TTL_MS + 1],
+    ['a clock before the signal', 'user-1', T0 - 1],
+  ])('refuses and clears the picker-resume signal for %s', (_label, userId, now) => {
+    requestDrivePickerResume('user-1', T0);
+    expect(takeDrivePickerResume(userId, now)).toBe(false);
+    expect(takeDrivePickerResume('user-1', T0 + 1)).toBe(false);
+  });
+
+  describe('rebinding to a retry', () => {
+    const owner = { userId: 'user-1', organizationId: 'org-1' };
+    const RETRY_URL = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x&state=st-2';
+
+    it("moves the failed attempt's draft onto the retry state and restarts its TTL", () => {
+      saveDriveConnectHandoff(wizardDraft, AUTH_URL, T0);
+      rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL, now: T0 + 5000 });
+
+      expect(consumeDriveConnectHandoff({ ...match, oauthState: 'st-1' })).toBeNull();
+      saveDriveConnectHandoff(wizardDraft, AUTH_URL, T0);
+      rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL, now: T0 + 5000 });
+      expect(
+        consumeDriveConnectHandoff({ ...owner, oauthState: 'st-2', now: T0 + 5000 + DRIVE_CONNECT_HANDOFF_TTL_MS })
+      ).toEqual({ ...wizardDraft, v: 1, oauthState: 'st-2', savedAt: T0 + 5000 });
+    });
+
+    it.each([
+      ['another attempt', { fromState: 'st-other' }],
+      ['another user', { userId: 'user-2' }],
+      ['another org', { organizationId: null }],
+      ['an expired draft', { now: T0 + DRIVE_CONNECT_HANDOFF_TTL_MS + 1 }],
+      ['a retry URL without state', { authUrl: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x' }],
+    ])('drops instead of rebinding a draft for %s', (_label, override) => {
+      saveDriveConnectHandoff(wizardDraft, AUTH_URL, T0);
+      rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL, now: T0 + 1, ...override });
+      expect(sessionStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('never throws when storage is blocked', () => {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      expect(() => rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL })).not.toThrow();
+    });
   });
 });

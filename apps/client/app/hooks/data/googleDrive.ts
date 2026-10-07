@@ -24,14 +24,18 @@ export type LakeDriveConnection = {
   disconnectStalled: boolean;
 };
 
-/** Start the personal Google Drive OAuth flow by sending the browser to Google's consent screen. */
-export async function startGoogleDriveConnect(): Promise<void> {
+/**
+ * Start the personal Google Drive OAuth flow by sending the browser to Google's consent screen.
+ * `onBeforeRedirect` gets the server-issued authorize URL first and must not throw.
+ */
+export async function startGoogleDriveConnect(onBeforeRedirect?: (authUrl: string) => void): Promise<void> {
   const response = await api.post<{ authUrl: string }>('/api/google-drive/connect');
+  onBeforeRedirect?.(response.data.authUrl);
   window.location.href = response.data.authUrl;
 }
 
 export function useConnectGoogleDrive() {
-  return useMutation({ mutationFn: startGoogleDriveConnect });
+  return useMutation({ mutationFn: () => startGoogleDriveConnect() });
 }
 
 export type DriveDisconnectImpact = { affectedOrgConnections: number; affectedPersonalConnections: number };
