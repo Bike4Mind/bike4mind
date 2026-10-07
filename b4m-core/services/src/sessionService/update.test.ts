@@ -630,6 +630,24 @@ describe('updateSession - lake-scope derivation on attach', () => {
       expect(update.mock.calls[0][1]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
   });
+
+  describe('includeLibraryFiles', () => {
+    it.each([true, false])('persists %s, so turning the library off sticks', async value => {
+      const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:x'], lakeScopeExplicit: true }, []);
+
+      await updateSession(user, { id: 'session-1', includeLibraryFiles: value } as never, adapters as never);
+
+      expect(update.mock.calls[0][1]).toMatchObject({ includeLibraryFiles: value });
+    });
+
+    it('leaves the stored value alone when omitted', async () => {
+      const { update, adapters } = makeAdapters({ includeLibraryFiles: false }, []);
+
+      await updateSession(user, { id: 'session-1', name: 'renamed' } as never, adapters as never);
+
+      expect(update.mock.calls[0][1]).not.toHaveProperty('includeLibraryFiles');
+    });
+  });
 });
 
 describe('updateSession - added knowledge ids are access-checked', () => {

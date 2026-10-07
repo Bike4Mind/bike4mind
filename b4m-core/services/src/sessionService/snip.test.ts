@@ -67,6 +67,7 @@ describe('snipSession', () => {
       corpusGroundingMode: 'retrieve',
       retrievalExcludeFilenameMarkers: ['draft'],
       retrievalVectorizedOnly: true,
+      includeLibraryFiles: false,
       forceKnowledgeRetrieval: true,
     });
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
@@ -79,6 +80,7 @@ describe('snipSession', () => {
         corpusGroundingMode: 'retrieve',
         retrievalExcludeFilenameMarkers: ['draft'],
         retrievalVectorizedOnly: true,
+        includeLibraryFiles: false,
       })
     );
   });

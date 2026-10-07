@@ -63,6 +63,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       // takes createSession's "explicit wins" arm, so it costs no DB read.
       retrievalTags: session.retrievalTags,
       lakeScopeExplicit: session.lakeScopeExplicit,
+      includeLibraryFiles: session.includeLibraryFiles,
       // Carried so a persisted opt-out (`false`) survives the copy: createSession reads an explicit
       // lake scope as forced retrieval, and omitting this would turn that opt-out back ON here.
       // An ABSENT flag is deliberately left to that implication rather than pinned to `false`, so a

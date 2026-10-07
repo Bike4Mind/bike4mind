@@ -316,6 +316,18 @@ describe('createSession forced retrieval from an explicit lake scope', () => {
     expect(session.forceKnowledgeRetrieval).toBe(false);
   });
 
+  it('persists includeLibraryFiles: false, and leaves it absent when not sent', async () => {
+    const { adapters } = makeAdapters();
+    const off = await createSession(
+      user,
+      { name: 'n', retrievalTags: ['datalake:acme'], lakeScopeExplicit: true, includeLibraryFiles: false },
+      adapters as never
+    );
+    expect(off.includeLibraryFiles).toBe(false);
+    const plain = await createSession(user, { name: 'n' }, adapters as never);
+    expect(plain).not.toHaveProperty('includeLibraryFiles');
+  });
+
   it('leaves the flag unset on an ordinary session that named no lake', async () => {
     const { adapters } = makeAdapters();
     const session = await createSession(user, { name: 'n' }, adapters as never);

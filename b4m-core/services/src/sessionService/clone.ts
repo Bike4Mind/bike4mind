@@ -104,6 +104,7 @@ export const cloneSession = async (
       ? {
           retrievalTags: session.retrievalTags,
           lakeScopeExplicit: session.lakeScopeExplicit,
+          includeLibraryFiles: session.includeLibraryFiles,
           forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
           // Rides with the lake scope, which a non-owner does not inherit.
           corpusGroundingMode: session.corpusGroundingMode,

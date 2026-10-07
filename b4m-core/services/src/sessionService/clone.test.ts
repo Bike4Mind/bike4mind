@@ -117,6 +117,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
       corpusGroundingMode: 'retrieve',
       retrievalExcludeFilenameMarkers: ['draft'],
       retrievalVectorizedOnly: true,
+      includeLibraryFiles: false,
       forceKnowledgeRetrieval: true,
     });
 
@@ -131,6 +132,8 @@ describe('cloneSession - redaction at the copy boundary', () => {
     );
     const created = db.sessions.create.mock.calls[0][0];
     expect(created.corpusGroundingMode).toBe(ownerId === 'caller-1' ? 'retrieve' : undefined);
+    // Rides with the lake scope a non-owner does not inherit, so it cannot pin their re-derived one.
+    expect(created.includeLibraryFiles).toBe(ownerId === 'caller-1' ? false : undefined);
   });
 
   /**

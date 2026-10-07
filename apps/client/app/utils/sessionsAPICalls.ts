@@ -74,8 +74,17 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
  */
 export type SessionUpdatePayload = Partial<ISessionDocument> & Pick<SessionUpdateRequest, 'lakeScope'>;
 
+// `includeLibraryFiles` is stripped because a whole-session echo (a rename) would otherwise resend a
+// possibly stale cached value over a newer toggle; setSessionIncludeLibraryFiles is its only sender.
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
-  const response = await api.put(`/api/sessions/${sessionData.id}`, sessionData);
+  const body = { ...sessionData };
+  delete body.includeLibraryFiles;
+  const response = await api.put(`/api/sessions/${sessionData.id}`, body);
+  return response.data;
+};
+
+export const setSessionIncludeLibraryFiles = async (id: string, includeLibraryFiles: boolean) => {
+  const response = await api.put(`/api/sessions/${id}`, { includeLibraryFiles });
   return response.data;
 };
 

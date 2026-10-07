@@ -64,6 +64,14 @@ export const SessionUpdateRequestSchema = z.object({
         'is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve ' +
         'from, so its forced retrieval is skipped rather than run against every lake.'
     ),
+  includeLibraryFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether a lake-scoped session also grounds on your own library (files you own, or that are ' +
+        'shared with you or your groups) alongside its lakes. Omit to leave it unchanged; while never ' +
+        'set, the library is excluded only when the session names a lake.'
+    ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
   // an upload that lands in notebook context by default has consented to this
@@ -111,6 +119,10 @@ export const SessionResponseSchema = z.object({
     .boolean()
     .optional()
     .describe('True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".'),
+  includeLibraryFiles: z
+    .boolean()
+    .optional()
+    .describe('Whether a lake-scoped session also grounds on your own library. Absent when never set.'),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which
@@ -167,6 +179,7 @@ export const CreateSessionRequestSchema = z.object({
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   corpusGroundingMode: z
     .enum(DATA_LAKE_GROUNDING_MODES)
     .optional()
