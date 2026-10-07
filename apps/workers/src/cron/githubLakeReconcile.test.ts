@@ -59,6 +59,7 @@ type ConnFields = {
   status: string;
   reconcileEnqueuedSha: string | null;
   reconcileEnqueuedAt: Date;
+  lastSyncedAt: Date;
 };
 const conn = (id: string, fields: Partial<ConnFields> = {}) => ({
   id,
@@ -203,6 +204,17 @@ describe('githubLakeReconcile cron', () => {
     ]);
     expect((await runGitHubLakeReconcile({ now: NOW })).enqueued).toBe(1);
     expect(h.markReconcileEnqueued).toHaveBeenCalledWith('c1', 'new', new Date(NOW));
+  });
+
+  it('does not back off a target whose earlier enqueue was followed by a recorded sync', async () => {
+    h.findDueForReconcile.mockResolvedValue([
+      conn('c1', {
+        reconcileEnqueuedSha: 'new',
+        reconcileEnqueuedAt: new Date(NOW - 60 * 60_000),
+        lastSyncedAt: new Date(NOW - 30 * 60_000),
+      }),
+    ]);
+    expect(await runGitHubLakeReconcile({ now: NOW })).toMatchObject({ enqueued: 1, backoff: 0 });
   });
 
   it('backs off a lost-access re-enqueue the same way', async () => {

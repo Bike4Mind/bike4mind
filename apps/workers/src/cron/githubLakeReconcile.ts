@@ -105,7 +105,15 @@ export async function runGitHubLakeReconcile({
   const enqueue = async (conn: DueConnection, target: string | null): Promise<Outcome> => {
     const connectionId = String(conn.id);
     const lastAt = conn.reconcileEnqueuedAt?.getTime();
-    if (lastAt !== undefined && now - lastAt < RETRY_COOLDOWN_MS && (conn.reconcileEnqueuedSha ?? null) === target) {
+    // A sync recorded since that enqueue means it did not stall, so a HEAD that moved back to the same
+    // target (force-push, revert) is new work, not a retry.
+    const syncedSince = lastAt !== undefined && (conn.lastSyncedAt?.getTime() ?? -Infinity) >= lastAt;
+    if (
+      lastAt !== undefined &&
+      !syncedSince &&
+      now - lastAt < RETRY_COOLDOWN_MS &&
+      (conn.reconcileEnqueuedSha ?? null) === target
+    ) {
       return 'backoff';
     }
     try {

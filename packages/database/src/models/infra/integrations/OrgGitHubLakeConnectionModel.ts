@@ -100,7 +100,10 @@ OrgGitHubLakeConnectionSchema.index({ installationId: 1 }, { name: 'org_gh_lake_
 OrgGitHubLakeConnectionSchema.index({ organizationId: 1 }, { name: 'org_gh_lake_conn_org_id' });
 
 // The scheduled reconcile's oldest-checked-first scan.
-OrgGitHubLakeConnectionSchema.index({ reconcileCheckedAt: 1, _id: 1 }, { name: 'org_gh_lake_conn_reconcile_checked' });
+OrgGitHubLakeConnectionSchema.index(
+  { reconcileCheckedAt: 1, _id: 1 },
+  { name: 'org_gh_lake_conn_reconcile_checked_id' }
+);
 
 export interface IOrgGitHubLakeConnectionModel extends Model<IOrgGitHubLakeConnectionDocument & IMongoDocument> {}
 
