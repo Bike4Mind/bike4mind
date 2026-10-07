@@ -1073,6 +1073,36 @@ describe('runModelDiscovery', () => {
       expect(result.diff[0]).toMatchObject({ modelId: 'kimi-k3', promoted: true, blockedBy: [] });
     });
 
+    it('records the adapter literal as the first price row and appends nothing on the next run', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const kimi = harness([
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+
+      await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(kimi.prices.rows).toHaveLength(1);
+      expect(kimi.prices.rows[0]).toMatchObject({ modelId: 'kimi-k3', unit: 'per_token' });
+      expect(kimi.prices.rows[0].note).toMatch(/^discovery:adapter-literal@/);
+      const [tier] = Object.values(kimi.prices.rows[0].pricing);
+      expect(tier.input).toBeCloseTo(3 / 1_000_000, 12);
+      expect(tier.output).toBeCloseTo(15 / 1_000_000, 12);
+
+      await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(kimi.prices.rows).toHaveLength(1);
+    });
+
     it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {
       const unpriced: DiscoveredModel = {
         modelId: 'gpt-unpriced-9',
@@ -1084,6 +1114,7 @@ describe('runModelDiscovery', () => {
 
       expect(result.diff[0]).toMatchObject({ modelId: 'gpt-unpriced-9', promoted: false });
       expect(result.diff[0].blockedBy).toContain('no-trusted-price');
+      expect(blocked.prices.rows).toEqual([]);
     });
 
     it('never supersedes an operator price row', async () => {
