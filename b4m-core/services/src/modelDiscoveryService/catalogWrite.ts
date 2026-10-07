@@ -827,8 +827,9 @@ export function claimedGroups(
 
 /**
  * Trusted per sec 5.9: a provider's own API, two aggregators inside the
- * agreement band, or a price the catalog already holds. A lone aggregator is a
- * flag, not a price.
+ * agreement band, or a price the catalog already holds (a row in force or an
+ * adapter price literal, both arriving as `knownPricedModelIds`). A lone
+ * aggregator is a flag, not a price.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,
