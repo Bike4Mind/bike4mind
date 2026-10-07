@@ -577,8 +577,8 @@ export interface RunModelDiscoveryOptions {
   minSourceIntervalMs?: number;
   /**
    * Extra ids to treat as priced, unioned with the models that have a per_token
-   * row in force. A driver pricing a model outside the ModelPrice collection is
-   * the only reason to set it.
+   * row in force and the models an adapter price literal covers. A driver
+   * pricing a model outside both is the only reason to set it.
    */
   knownPricedModelIds?: ReadonlySet<string>;
   /** Injectable clock. Tests drive deadlines with it; production leaves it unset. */
