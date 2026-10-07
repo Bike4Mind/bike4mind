@@ -30,7 +30,7 @@ export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: Discov
   [ModelBackend.VoyageAI]: creds => creds.voyageai !== null,
   [ModelBackend.Ollama]: creds => creds.ollama !== null,
   [ModelBackend.LocalImage]: creds => creds.imageGen !== null,
-  [ModelBackend.Bedrock]: creds => creds.awsIam,
+  [ModelBackend.Bedrock]: creds => creds.bedrock,
   [ModelBackend.AWS]: creds => creds.awsIam,
 };
 

@@ -7,6 +7,7 @@ import {
   stripToolArtifactMarkup,
   ARTIFACT_DELIVERED_PLACEHOLDER,
   ARTIFACT_REMOVED_PLACEHOLDER,
+  bedrockClientCredentials,
   type ModelInfo,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
@@ -147,6 +148,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     };
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
+      ...(bedrockClientCredentials() ?? {}),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
@@ -214,6 +216,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // Always create a fresh client to avoid stale credentials in warm Lambdas
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
+      ...(bedrockClientCredentials() ?? {}),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
