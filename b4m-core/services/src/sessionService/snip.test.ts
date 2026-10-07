@@ -55,6 +55,34 @@ describe('snipSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
 
+  // `citationStyle` is create-only, so a snip that drops it is stuck on the 'named' default for good.
+  it('carries the source session citationStyle onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
+      forceKnowledgeRetrieval: true,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        corpusGroundingMode: 'retrieve',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+      })
+    );
+  });
+
   /**
    * Pins `knowledgeIdsFromSourceSession`: the snip must copy the source's knowledgeIds without
    * re-running the access filter, which would drop a teammate-authored organization-lake file the
