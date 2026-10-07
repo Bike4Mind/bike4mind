@@ -381,42 +381,16 @@ Sessions represent conversations/notebooks. They are created implicitly when sen
 #### List Sessions
 
 \`\`\`
-GET /api/sessions
+GET /api/v1/sessions
 \`\`\`
 
-**Query Parameters:**
-
-| Param | Type | Description |
-|-------|------|-------------|
-| page | number | Page number |
-| limit | number | Items per page |
-| search | string | Search by title |
-| projectId | string | Filter by project |
-| tags | string | Filter by tags |
-| sort | string | Sort field |
-
-**Response:**
-
-\`\`\`json
-{
-  "sessions": [
-    {
-      "id": "sess_abc123",
-      "title": "Quarterly Analysis Discussion",
-      "messageCount": 12,
-      "model": "gpt-4o",
-      "projectId": "proj_xyz",
-      "tags": ["analysis"],
-      "isFavorite": false,
-      "createdAt": "2025-01-15T10:00:00Z",
-      "updatedAt": "2025-01-15T11:30:00Z"
-    }
-  ],
-  "total": 87,
-  "page": 1,
-  "limit": 20
-}
-\`\`\`
+> **This endpoint is now generated from its contract.** The full request/response
+> reference - query parameters, the item shape, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`listSessions\`, derived from the same
+> object the handler validates with.
+>
+> It lists only the sessions you own, newest first, and is cursor-paginated: pass
+> \`next_cursor\` back as \`cursor\` until it is \`null\`.
 
 #### Update a Session
 
@@ -438,6 +412,7 @@ PUT /api/sessions/[id]
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | /api/sessions | List sessions |
+| GET | /api/v1/sessions | List your own sessions (cursor-paginated) |
 | POST | /api/v1/sessions | Create a new session (legacy path: /api/sessions/create) |
 | GET | /api/sessions/[id] | Get session details |
 | PUT | /api/sessions/[id] | Update session |

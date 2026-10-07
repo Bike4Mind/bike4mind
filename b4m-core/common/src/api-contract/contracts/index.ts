@@ -18,6 +18,7 @@ import { createFileUploadContract, getFileContract } from './files.contract';
 import { createEmbeddingsContract } from './embeddings.contract';
 import { getQuestContract } from './quest.contract';
 import { createSessionContract } from './sessionCreate.contract';
+import { listSessionsContract } from './sessionList.contract';
 import {
   listDataLakesContract,
   getDataLakeContract,
@@ -63,6 +64,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   createEmbeddingsContract,
   getQuestContract,
   createSessionContract,
+  listSessionsContract,
   listDataLakesContract,
   getDataLakeContract,
   getDataLakeFileContract,
