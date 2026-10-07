@@ -271,3 +271,32 @@ describe('the branch menu notice with the worktree toggle on', () => {
     expect(row.branchNotice).toMatch(/nothing is checked out/i);
   });
 });
+
+/**
+ * Between ticking the box and sending the first message the toggle is on and nothing exists.
+ * The row has to say so: "runs in" would name a folder that is not on disk, and silence reads
+ * as the toggle having failed.
+ */
+describe('the worktree chip before the first turn has made one', () => {
+  const pending = { ...project, workspace: true };
+  const lookup = { isRepository: true, count: 3, checkedOut: 'main' };
+
+  it('says the worktree is made on the first message', () => {
+    const row = describeChipRow(pending, lookup);
+
+    expect(row.worktree.tooltip).toMatch(/first message/i);
+    expect(row.worktree.tooltip).not.toMatch(/runs in/i);
+  });
+
+  it('tells the user the pick is still free to change', () => {
+    expect(describeChipRow(pending, lookup).branchNotice).toMatch(/still change this/i);
+  });
+
+  it('drops that line once the worktree exists', () => {
+    const made = { ...pending, workspaceBranch: 'b4m/thing-a1b2c3', workingDirectory: '/w/b4m+thing-a1b2c3' };
+    const row = describeChipRow(made, { ...lookup, checkedOut: 'b4m/thing-a1b2c3' });
+
+    expect(row.branchNotice).not.toMatch(/still change this/i);
+    expect(row.worktree.tooltip).toContain('/w/b4m+thing-a1b2c3');
+  });
+});

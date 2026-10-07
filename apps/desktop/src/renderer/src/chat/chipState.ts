@@ -141,11 +141,22 @@ export function describeChipRow(
   };
 }
 
-/** Where the session runs, and - once it is in a worktree - which branch that worktree is on. */
+/**
+ * Where the session runs, and - once it is in a worktree - which branch that worktree is on.
+ *
+ * The middle state has its own sentence because it is a real one the user sits in: the box is
+ * ticked and nothing exists yet. Saying "runs in" there would name a folder that is not on
+ * disk, and saying nothing would read as the toggle having failed.
+ */
 function worktreeTooltip(project: ChatProject, relocated: boolean): string {
-  if (!relocated) return 'Run this session on its own branch, cut from the one picked, in its own git worktree';
-  const on = project.workspaceBranch ? ` on ${project.workspaceBranch}` : '';
-  return `Runs in the worktree at ${project.workingDirectory}${on}`;
+  if (relocated) {
+    const on = project.workspaceBranch ? ` on ${project.workspaceBranch}` : '';
+    return `Runs in the worktree at ${project.workingDirectory}${on}`;
+  }
+  if (project.workspace) {
+    return 'A branch and a worktree are cut from the branch you picked when you send your first message';
+  }
+  return 'Run this session on its own branch, cut from the one picked, in its own git worktree';
 }
 
 /** The branch the session is on, or an admission that there is not one to show. */
@@ -182,12 +193,15 @@ function branchTooltip(project: ChatProject, { checkedOut, isRepository }: Branc
 function branchNotice(project: ChatProject, { isRepository, count, checkedOut }: BranchLookup): string | null {
   if (count === 0) return isRepository ? 'This repository has no branches yet.' : 'Not a git repository.';
   if (project.workspace) {
-    // The worktree-on sentence after the branch became a base: picking `main` means "start from
-    // main", not "work on main". Said here because the two readings differ by an entire branch,
-    // and the one the user arrives with is the wrong one.
+    // Two things the user cannot see and would otherwise get wrong. That picking `main` means
+    // "start from main" rather than "work on main" - the readings differ by an entire branch.
+    // And that nothing has happened yet, so changing the pick now is free.
+    const pending = project.workspaceBranch
+      ? ''
+      : ' Nothing is cut until you send your first message, so you can still change this.';
     return (
       'With worktree on, the branch you pick is the BASE: this session gets a new branch cut ' +
-      'from it, in a worktree of its own. The branch you pick is never checked out here.'
+      `from it, in a worktree of its own. The branch you pick is never checked out here.${pending}`
     );
   }
   const stays = checkedOut ? ` ${project.workingDirectory} stays on ${checkedOut}.` : '';

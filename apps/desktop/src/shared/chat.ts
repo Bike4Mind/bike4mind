@@ -792,7 +792,14 @@ export interface ChatProject {
    * cut from, not the branch anything checks out; with it off nothing checks out at all.
    */
   branch: string;
-  /** True when the session runs in its own git worktree cut from `branch` rather than in `directory`. */
+  /**
+   * True when the session is to run in its own git worktree cut from `branch`.
+   *
+   * The choice, not the fact: the worktree is made on the session's first turn, so between
+   * ticking the box and sending a message this is on while `workingDirectory` is still
+   * `directory`. That pending state is what `workspaceBranch` being absent means, and it is
+   * how a user who changes their mind about the base costs nothing.
+   */
   workspace: boolean;
   /**
    * The branch the app cut for this session's worktree, once it has one.
@@ -800,13 +807,16 @@ export interface ChatProject {
    * Recorded rather than re-derived because deriving it again would cut a SECOND branch: the
    * name carries a random suffix, so nothing about the session reproduces it. Handing it back
    * to resolveWorkspace is what makes a restart, or any re-read of the project, land in the
-   * worktree this session already has. Absent with `workspace` off, and on sessions stored
-   * before the app cut branches of its own.
+   * worktree this session already has.
+   *
+   * Absent with `workspace` off, on a session whose first turn has not run yet, and on sessions
+   * stored before the app cut branches of its own.
    */
   workspaceBranch?: string;
   /**
-   * Where this session's tools actually run: the worktree when `workspace` is on, and
-   * `directory` when it is off. Always granted to the tools for this session.
+   * Where this session's tools actually run: the worktree once `workspace` has been acted on,
+   * and `directory` both when the toggle is off and before the first turn has made one. Always
+   * granted to the tools for this session.
    */
   workingDirectory: string;
   /** Extra folders granted to this session alone, on top of `workingDirectory`. */
@@ -1175,13 +1185,7 @@ export interface CreateCodeSessionRequest {
  * that could not be made. Nothing is stored when it fails, so there is no half-created session
  * to clean up.
  */
-export type CreateCodeSessionResult =
-  | {
-      ok: true;
-      session: ChatSessionSummary;
-      /** Set when an existing worktree was adopted. */ reusedWorkspace?: boolean;
-    }
-  | { ok: false; error: string };
+export type CreateCodeSessionResult = { ok: true; session: ChatSessionSummary } | { ok: false; error: string };
 
 /**
  * A change to what an EXISTING Code session is grounded in. Every field is optional; an
