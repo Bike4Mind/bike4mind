@@ -40,6 +40,8 @@ const MOVED_MODULES = [
       'fabFileVectorize',
       'generationCallback',
       'githubWebhook',
+      'imageEdit',
+      'imageGeneration',
       'lakeInconsistencyModelDetection',
       'lakeMemoryExtraction',
       'notebookCuration',
