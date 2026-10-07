@@ -30,7 +30,8 @@ env:
 
 jobs:
   auto-changeset:
-    # Skip: forks, dependabot, Version Packages PR, non-repo
+    # Skip: forks, dependabot, Version Packages PR, non-repo. Must stay in sync with the
+    # changeset steps of `validate` in semantic-pr-title.yml.
     if: >-
       github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') &&
       github.actor != 'dependabot[bot]' &&
