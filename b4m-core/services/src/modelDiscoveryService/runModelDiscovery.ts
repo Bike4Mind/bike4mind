@@ -17,6 +17,7 @@ import {
 } from '@bike4mind/common';
 import {
   adapterModelIds,
+  adapterPriceLadders,
   adapterPriceTiers,
   resolveCatalogRecords,
   type ResolvedCatalogRecord,
@@ -809,6 +810,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     // lands in the same run as the catalog row that makes it a model at all.
     knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
     adapterTiers,
+    adapterLadders: await adapterPriceLadders(),
     bandPct: ctx.bandPct,
     runStartedAt: effectiveAt,
   });
