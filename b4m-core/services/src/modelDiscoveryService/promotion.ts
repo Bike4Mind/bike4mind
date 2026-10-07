@@ -38,7 +38,7 @@ export interface PromotionInput {
   record: Pick<ModelRecord, 'backend' | 'adapterFamily' | 'dispatchProfile' | 'reasoning' | 'freeToRun'>;
   policy: DiscoveryAutoEnablePolicy;
   credentials: DiscoveryCredentials;
-  /** A price from a trusted tier: a provider API, or two aggregators that agree. */
+  /** A price from a trusted tier: a provider API, two aggregators that agree, or one the catalog already holds. */
   hasTrustedPrice: boolean;
   /**
    * The reason a source gave for disabling this model THIS run, if it did. Blocks promotion: the
