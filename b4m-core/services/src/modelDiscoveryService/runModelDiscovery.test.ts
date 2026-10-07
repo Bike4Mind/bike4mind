@@ -1050,7 +1050,8 @@ describe('runModelDiscovery', () => {
 
     it('promotes a model priced only by an adapter literal when no price row or source quotes it', async () => {
       // Moonshot publishes no pricing, so kimi-k3 has no source price and, on an
-      // environment where the seed was never applied, no row in force either.
+      // environment where the seed was never applied, no row in force either. Its
+      // only price is the literal in kimiBackend, so this fails if that is removed.
       const kimiK3: DiscoveredModel = {
         modelId: 'kimi-k3',
         patch: {
