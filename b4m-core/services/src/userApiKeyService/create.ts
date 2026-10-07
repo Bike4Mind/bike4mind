@@ -21,6 +21,7 @@ import { KEY_PREFIX_LENGTH } from './constants';
 import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
 import { assertNoScopeEscalation } from './assertNoScopeEscalation';
 import { generateCallbackSigningSecret } from './callbackSigningSecret';
+import { computeKeyDigest } from './keyDigest';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -28,6 +29,10 @@ import { generateCallbackSigningSecret } from './callbackSigningSecret';
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 
 export { API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/common';
+
+export const MAX_ACTIVE_KEYS_PER_USER = 10;
+/** Live federated-exchange keys per user, i.e. distinct relying-party apps in use at once. */
+export const MAX_ACTIVE_EXCHANGE_KEYS_PER_USER = 25;
 
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
@@ -135,13 +140,14 @@ export interface CreateUserApiKeyResult {
 /**
  * Generate a secure API key with the format: b4m_live_[32_random_chars]
  */
-function generateApiKey(): { key: string; keyPrefix: string; keyHash: string } {
+function generateApiKey(): { key: string; keyPrefix: string; keyHash: string; keyDigest: string } {
   const randomPart = randomBytes(16).toString('hex'); // 32 chars
   const key = `b4m_live_${randomPart}`;
   const keyPrefix = key.substring(0, KEY_PREFIX_LENGTH);
   const keyHash = bcrypt.hashSync(key, 12);
+  const keyDigest = computeKeyDigest(key);
 
-  return { key, keyPrefix, keyHash };
+  return { key, keyPrefix, keyHash, keyDigest };
 }
 
 export const createUserApiKey = async (
@@ -245,20 +251,36 @@ export const createUserApiKey = async (
     }
   }
 
-  // Per-user cap: max 10 active keys. Skip only for the shared system user -
-  // keyed on userId === systemUserId (NOT on scope) to prevent rogue-admin bypass.
-  const MAX_ACTIVE_KEYS_PER_USER = 10;
+  // Exchange keys sit outside the standard cap only because they are short-lived and
+  // tagged to one relying party (pages/api/oauth/ai-token.ts keeps one per (user, client)).
+  // Refuse one that is neither, so the separate pool can't mint an unbounded long-lived key.
+  const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
+  if (isExchangeKey && (!params.expiresAt || !params.metadata.oauthClientId)) {
+    throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
+  }
+
+  // Per-user caps, one per ApiKeyCapPool: 10 standard keys, and a separate ceiling on
+  // concurrently authorized federated apps so they never crowd out the user's own keys.
+  // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
+  // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
   if (!isSystemUser) {
-    const activeCount = await db.userApiKeys.countActiveByUserId(userId);
-    if (activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
+    const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
+    const activeCount = await db.userApiKeys.countActiveByUserId(userId, pool);
+    if (isExchangeKey && activeCount >= MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) {
+      throw new BadRequestError(
+        `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`,
+        { errorCode: API_KEY_USER_CAP_ERROR_CODE }
+      );
+    }
+    if (!isExchangeKey && activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
       throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
         errorCode: API_KEY_USER_CAP_ERROR_CODE,
       });
     }
   }
 
-  const { key, keyPrefix, keyHash } = generateApiKey();
+  const { key, keyPrefix, keyHash, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
 
   const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
@@ -267,6 +289,7 @@ export const createUserApiKey = async (
     userId,
     name: params.name,
     keyHash,
+    keyDigest,
     keyPrefix,
     callbackSigningSecret: encryptAtRest(callbackSigningSecret),
     callbackSigningSecretCreatedAt: new Date(),

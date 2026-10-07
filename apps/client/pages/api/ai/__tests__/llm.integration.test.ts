@@ -159,13 +159,21 @@ const FOREIGN_ORG = '650000000000000000000def';
 function fire({
   apiKey = VALID_KEY as string | null,
   body,
-}: { apiKey?: string | null; body?: Record<string, unknown> } = {}) {
+  headers,
+}: { apiKey?: string | null; body?: Record<string, unknown>; headers?: Record<string, string> } = {}) {
   const { req, res } = createMocks(
     {
       method: 'POST',
       url: '/api/ai/llm',
-      body: { sessionId: 'sess-1', message: 'Hello there', ...body },
-      headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
+      body: {
+        sessionId: 'sess-1',
+        message: 'Hello there',
+        historyCount: 10,
+        fabFileIds: [],
+        params: { model: 'gpt-4o' },
+        ...body,
+      },
+      headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}), ...headers },
     },
     { eventEmitter: EventEmitter }
   );
@@ -289,6 +297,67 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
   });
 
+  describe('agentIds stamped on a newly created session (GH #2600)', () => {
+    const getOrCreateArgs = () => mockGetOrCreateSession.mock.calls[0][0] as { agentIds?: string[] };
+    const invokedBody = () => (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+
+    it('forwards agentIds to getOrCreateSession and keeps it out of invoke()', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { agentIds: ['a1', 'a2'] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(getOrCreateArgs().agentIds).toEqual(['a1', 'a2']);
+      // Session-creation input, never a completion parameter.
+      expect(invokedBody()).not.toHaveProperty('agentIds');
+    });
+
+    // Rejected at the route, beside the deniedTools check, before a session is created or dispatched.
+    it('rejects a non-array agentIds (422) before creating a session', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { agentIds: 'x' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().code).toBe('AGENT_IDS_INVALID');
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('rejects an agentIds array with a non-string element', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire({ body: { agentIds: ['ok', 1] } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData().code).toBe('AGENT_IDS_INVALID');
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('origin forwarded to getOrCreateSession', () => {
+    const forwardedOrigin = () => (mockGetOrCreateSession.mock.calls[0][0] as { origin?: unknown }).origin;
+
+    it('stamps web for a JWT/browser caller (the New Chat composer)', async () => {
+      const { req, res } = fire({ apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(forwardedOrigin()).toEqual({ channel: 'web' });
+    });
+
+    it('stamps api with the authenticating key id for an API-key caller', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(forwardedOrigin()).toEqual({ channel: 'api', apiKeyId: 'k1' });
+    });
+
+    it('stamps cli for a JWT caller sending the CLI client header', async () => {
+      const { req, res } = fire({ apiKey: null, headers: { 'x-b4m-client': 'b4m-cli/1.0.0' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(forwardedOrigin()).toEqual({ channel: 'cli' });
+    });
+  });
+
   describe('audit attribution of a tool-driven lake write', () => {
     const invokedApiKeyId = () => (mockInvoke.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId;
 
@@ -323,6 +392,8 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     await handler(req, res);
     expect(res._getStatusCode()).toBe(403);
     expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
   });
 
   it('bills the caller own org when the request omits organizationId', async () => {
@@ -364,6 +435,46 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(res._getJSONData().code).toBe('SYSTEM_PROMPT_INVALID');
     expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['historyCount', { historyCount: undefined }],
+    ['fabFileIds', { fabFileIds: undefined }],
+    ['params', { params: undefined }],
+  ])('rejects a body missing %s (422) without creating a session', async (_field, override) => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire({ body: { sessionId: undefined, sessionName: 'New notebook', ...override } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid body on an existing session (422) without moving lastNotebookId', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire({ body: { historyCount: undefined } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('leaves lastNotebookId alone when invoke() finds no session (404)', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockInvoke.mockResolvedValue(undefined);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('moves lastNotebookId to the session once the quest is created', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUserUpdate).toHaveBeenCalledWith(expect.objectContaining({ lastNotebookId: 'sess-1' }));
   });
 
   it('accepts a systemPrompt at exactly the cap (200) and forwards it to invoke', async () => {

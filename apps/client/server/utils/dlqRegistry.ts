@@ -115,6 +115,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'videoGenerationQueue',
   },
   {
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+  },
+  {
     label: 'liveops-triage',
     displayName: 'LiveOps Triage',
     application: 'LiveOpsTriage',
@@ -197,6 +203,12 @@ const DLQ_REGISTRY = [
     displayName: 'Bob Panel Run',
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
+  },
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
   },
   {
     label: 'data-lake-cleanup',

@@ -631,7 +631,7 @@ This is also the one place OpenAI specifically is required: help vectors are alw
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:
 
-- **consumes queues** - research tasks, image generation and image edit, and the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`);
+- **consumes queues** - research tasks, image generation and image edit, the RAG ingestion pipeline (`fabFileChunkQueue` -> `fabFileVectorizeQueue`), and the Google Drive and GitHub data-lake syncs (`driveLakeIngestQueue`, `githubLakeIngestQueue`, `githubLakeRevokeQueue`, `driveDisconnectPurgeQueue`);
 - **consumes enrichment events** - memento creation, session auto-naming, summaries, and tagging, delivered via `SELF_HOST_EVENT_QUEUE`;
 - **runs the scheduler** - the task scheduler (research follow-ups) every 5 minutes, plus a safety-net scan that re-enqueues any uploaded file whose chunking never started.
 
@@ -676,6 +676,40 @@ The age comparison uses elapsed time, not a local-time calendar schedule. Restar
 The worker runs the shared quest timeout sweep at startup and every five minutes, the same cadence as the hosted cron. A quest still `running` with no update for more than two minutes is settled as `done`: any reply, image, or tool output it produced is kept, and a quest with nothing to show gets a timeout error instead. A live run refreshes its quest every ten seconds, so only a run that has stopped ages past the threshold. The sweep writes the database only and sends no client notification; an open chat picks up the settled quest on its next fetch. Quests last updated more than seven days ago are left alone, and one run settles at most 500, so a backlog drains over several ticks. After an upgrade, the first runs also settle quests left `running` during the previous seven days.
 
 The age comparison uses elapsed time, not a calendar schedule. Restart runs one sweep immediately; missed slots coalesce into that scan. Startup and interval runs share the worker's in-flight guard, and shutdown drains a running sweep within the worker grace period. Each quest is written only if it is still unfinished at that moment, so a run that completes, or a client's read-time recovery that settles the quest first, is never overwritten. Keep the single worker replica. Self-host logs this sweep locally and sends no CloudWatch metrics; the hosted cron keeps its metrics.
+
+## GitHub repository data lakes
+
+A data lake can sync from a GitHub repository through a GitHub App you create and own. The integration is off until you configure it: with the App settings blank, connecting a repository fails with "The data-lake GitHub App is not configured on this deployment", and the webhook answers `503`.
+
+**GitHub must be able to reach your instance.** Pushes and uninstalls arrive as webhooks on `<APP_URL>/api/webhooks/github/lake`. A tailnet-only install ([Path A](#path-a-tailscale-tailnet-recommended-for-friends)) is not reachable from GitHub, so repositories connect and sync once but never re-sync on push, and an uninstall is never seen. Use [Path B](#path-b-public-domain-with-the-bundled-caddy-proxy), whose Caddy proxy already forwards that path, or another public HTTPS front.
+
+Create the App under **Settings -> Developer settings -> GitHub Apps** (personal or organization):
+
+| GitHub App field | Value |
+|---|---|
+| Callback URL | `<APP_URL>/data-lakes/github/callback` (list it first) |
+| Request user authorization (OAuth) during installation | on (this greys out Setup URL; leave it empty) |
+| Redirect on update | on |
+| Webhook URL | `<APP_URL>/api/webhooks/github/lake` |
+| Webhook secret | a long random string (`openssl rand -hex 32`) |
+| Repository permissions | Contents: read-only, Metadata: read-only |
+| Subscribe to events | Push (installation events are always delivered) |
+| Where can this App be installed | your choice; users pick repositories when installing |
+
+`APP_URL` must be the exact public origin, the same value the CSRF allow-list uses. Then generate a client secret and a private key on the App page and fill these in `.env.selfhost`:
+
+```bash
+GITHUB_LAKE_APP_ID=123456                 # "App ID" on the App page
+GITHUB_LAKE_APP_SLUG=my-b4m-lakes         # the github.com/apps/<slug> part
+GITHUB_LAKE_APP_CLIENT_ID=Iv23...
+GITHUB_LAKE_APP_CLIENT_SECRET=...
+GITHUB_LAKE_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_LAKE_APP_WEBHOOK_SECRET=...        # the same string as the App's webhook secret
+```
+
+The private key can be written on one line with literal `\n` separators, as above. All five App credentials are needed together: if any is missing, connecting stays refused. Re-run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d` after changing them so `app` and `worker` pick them up.
+
+This App is separate from the GitHub OAuth app behind `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`; don't reuse one for the other. The `worker` consumes the ingest and revoke queues, so nothing else needs to run. Default-branch pushes trigger a re-sync, and uninstalling the App or removing a repository from it disconnects the lake.
 
 ## Queue storage and container replacement
 
@@ -1021,3 +1055,94 @@ Verification exercises the actual calculator and disposable Mongo, including use
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/apiKeyBaselineCalculation.test.ts src/selfhost/apiKeyBaselineCalculation.test.ts src/mongoTestTimeoutBudget.test.ts
 VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/apiKeyBaselineCalculation.e2e.test.ts
 ```
+
+## Notebook submission errors
+
+The notebook curation endpoint requires the configured local event queue to accept each start event. A missing queue URL or rejected enqueue reaches the API's existing error response instead of returning 202. The requirement is per call: the background session groomer publishes the same event with the default best-effort delivery, as do all other background enrichment events. The hosted publisher contract is unchanged.
+
+A 202 response establishes broker acceptance only; export completion is recorded later by the curation consumer. No pending job row is created by the submission endpoint; job IDs exist only in the request/event payload at this stage.
+
+Batch submission is not atomic. If one enqueue fails after another succeeds, the API returns an error while the accepted event remains queued. A lost acknowledgement can likewise leave accepted work behind. Retrying creates new submission IDs; this change does not promise rollback, deduplicated retries or exactly-once processing.
+
+## Permanent data-lake cleanup
+
+The local worker consumes `dataLakeCleanupQueue` one message at a time. Configure `DATA_LAKE_CLEANUP_QUEUE` and its `DATA_LAKE_CLEANUP_QUEUE_DLQ` from `.env.selfhost.example`, then recreate the broker with the updated `elasticmq.conf`. Keep the broker's retained volume. The source queue redrives to its dedicated dead-letter queue after three deliveries; this consumer does not use the worker's default exhausted-message deletion policy. Other queues retain their existing policies.
+
+Run exactly one local worker. This path does not implement a distributed execution lease. A cleanup can take longer than the hosted twelve-minute visibility window, so the consumer renews that window every minute until dispatch settles. A renewal failure prevents acknowledgement, even if the cleanup subsequently completes; replay is idempotent. Shutdown waits only for the existing bounded grace period; it does not guarantee a full cleanup drain. If the process exits during cleanup, recovery relies on same-generation replay after visibility expires. Before maintenance or replay, verify the previous worker process has stopped, and do not start a second worker against the same queue.
+
+Cleanup atomically marks its exact purge generation as started before destructive effects. A failed enqueue may release an unstarted claim to the deleted list, but retains its identity so a delayed acknowledgement cannot bypass a newer request. Started cleanup stays `purging` after failure and cannot be restored. Restores performed by this version rotate the generation so delayed keyed and unkeyed legacy messages cannot destroy a subsequently deleted lake; restores completed before this version are not retroactively fenced. Legacy messages are admitted only while the lake has no keyed generation. Stale generations are refused without destructive effects; an already-started matching generation can resume after its own cleanup removed the manager grants, including legacy unkeyed work only while the stored generation remains unkeyed. Missing claims on keyed generations and different claims still require authorization.
+
+Stored objects are deleted before their file rows. Chunks are deleted in batches of at most 1,000, retaining the file row as a retry locator. The final transaction re-reads a bounded chunk set and commits it with the file row; an overflow returns to batch cleanup. This covers chunks committed before that transaction, not arbitrary ingestion after cleanup commits. Earlier batches can remain deleted after a failure; replay removes the remainder. Mongo must support transactions; the supplied Compose Mongo runs as a replica set. Optional connector, memory and retrieval-index cleanup retain their existing dependencies and failure behavior.
+
+### Explicit dead-letter replay
+
+Inspect and correct the failure before replaying one selected message. Preserve its complete body, including `purgeClaimId` and actor; do not create a new claim or manually mark a partly purged lake as deleted. A generation refused after restore or a newer purge is deliberately not replayable as the old request. The existing hosted DLQ admin UI is not newly wired for local queues by this change.
+
+With the previous worker stopped, use an endpoint and queue URLs reachable from the machine running these commands. This example receives one message, copies its original body to the source, and removes the dead-letter copy only after an accepted send. A failed send leaves the original available after its visibility timeout. Lost send acknowledgements can create a duplicate; the same-generation recovery checks still apply.
+
+```sh
+(
+set -e
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs receive-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --max-number-of-messages 1 --visibility-timeout 60 > cleanup-replay.json
+jq -e '.Messages | length == 1' cleanup-replay.json
+jq -r '.Messages[0].Body' cleanup-replay.json > cleanup-body.json
+aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs send-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE" --message-body file://cleanup-body.json &&
+  aws --endpoint-url "$AWS_ENDPOINT_URL_SQS" sqs delete-message --queue-url "$DATA_LAKE_CLEANUP_QUEUE_DLQ" --receipt-handle "$(jq -r '.Messages[0].ReceiptHandle' cleanup-replay.json)"
+)
+```
+
+Resume the single worker and verify the lake, file rows, chunks and exact stored objects are gone; another lake's objects must remain. Keep the payload private. Queue emptiness alone does not establish completed cleanup.
+
+Focused verification:
+
+```sh
+pnpm --filter @bike4mind/database test src/models/ai/DataLakeModel.purge.test.ts src/models/content/FabFileModel.cleanupTransaction.test.ts
+pnpm --filter @bike4mind/services test src/dataLakeService/cleanupDeletedDataLake.test.ts
+pnpm --filter @bike4mind/workers test src/selfhost/dataLakeCleanupQueue.test.ts
+pnpm --filter @bike4mind/client test server/queueHandlers/dataLakeCleanup.test.ts
+# Requires an isolated loopback MinIO, a disposable bucket, and test AWS credentials.
+CLEANUP_TEST_S3_ENDPOINT=http://127.0.0.1:19000 CLEANUP_TEST_S3_BUCKET=cleanup-test pnpm --filter @bike4mind/client test:integration server/queueHandlers/dataLakeCleanup.e2e.test.ts
+```
+
+The external-service suite skips when its explicit endpoint/bucket are absent. The always-on `dataLakeCleanup.recovery.e2e.test.ts` runs the real handler and replica-set Mongo with controlled storage and existing connector/memory-key test boundaries, including grant-removal recovery and transactional rollback. Mongo fencing and bounded-batch crash tests also run independently. These are application-level controls, not current Kubernetes deployment acceptance.
+
+### Daily lexical inconsistency sweep
+
+The single worker runs the existing deterministic inconsistency scan at 04:00 UTC. It reads active lakes and writes findings for human review; it does not change source documents or invoke a model. There is no startup run: starting after 04:00 waits until tomorrow, while starting exactly at 04:00 runs that slot. A delayed wake coalesces missed days into one run. The worker prevents overlapping runs and waits within its existing shutdown grace period; it does not provide distributed coordination or guarantee completion beyond that grace period.
+
+The shared scan retains the limits and between-page time budget defined in `apps/workers/src/cron/lakeInconsistencySweep.ts`. Attempted lakes are stamped for fairness even on failure. Findings use stable identities, and dismissed findings stay dismissed. A finding-write failure withholds a fresh summary timestamp; the next scheduled pass can retry. A failure in one lake does not abort the others. The local sweep emits no CloudWatch metrics; the hosted cron retains its run and outcome metrics.
+
+Verification uses the actual lexical algorithm and disposable Mongo, asserting persisted source excerpts, finding identity, dismissals, summary timestamps and recovery after injected write failures. This establishes application behavior, not a Kubernetes deployment drill. Model-driven inconsistency detection remains a separate queue workflow.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/cron/lakeInconsistencySweep.test.ts src/mongoTestTimeoutBudget.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/lakeInconsistencySweep.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/cron/lakeInconsistencySweep.e2e.test.ts
+```
+
+## Local notebook curation
+
+The worker routes notebook start events to the notebook queue and consumes one curation job at a time. The default transcript export uses the existing curation service without a model. Executive summaries still require a configured operations model; transcript verification does not establish summary-provider availability.
+
+Notebook worker startup requires `NOTEBOOK_CURATION_QUEUE_DLQ` and verifies that the source queue redrives after three deliveries to that configured queue's actual ARN. Missing, malformed or mismatched redrive, or an attribute lookup failure, logs an error and disables only notebook consumption for that worker process; unrelated queues and scheduled jobs still start. Correct the configuration or broker availability and restart the worker to retry admission. Persisted queue attributes require explicit verification and repair; updating the configuration file does not migrate them. If a later delivery exceeds three attempts, it is retained without running curation again; repair broker redrive and replay the unchanged job body. The worker never substitutes local deletion for dead-letter retention.
+
+Curation uses a cooperative ten-minute budget and renews the fifteen-minute message visibility while the handler is active. The budget prevents starting subsequent persistence stages after expiry; it does not cancel an in-flight database, model or storage request. Run a single worker. Shutdown retains the existing bounded drain period, not an unlimited completion guarantee.
+
+Prepared object keys include the job identity and the digest of the actual artifact bytes. A Mongo transaction commits the file row, session cache/link, credit deduction and completion receipt together. Duplicate deliveries within the receipt retention window reuse the committed result without another debit. Completion-notification failure does not reverse the persisted result. The existing completion-receipt retention is fourteen days; this does not promise indefinite deduplication.
+
+Object storage is outside the Mongo transaction. A failed attempt without a receipt retains its content-hashed object, because deleting it could race another attempt using the same key. Identical transcript bytes reuse the key; generated summaries can differ between attempts and leave multiple unreferenced objects. A differing loser object is removed best-effort after a winning receipt is visible. A process crash can leave an unreferenced object; this change does not provide an orphan-object sweeper.
+
+The notebook queue uses broker redrive after three failed deliveries; the shared local event queue preserves five attempts before redrive. The latter retains failed messages for all enabled local application-event handlers; intentionally ignored notification/telemetry event types remain ignored. Replay only after resolving the cause, retaining the original job identity. Queue acceptance is not export completion. The endpoint retains its per-call required-acceptance policy described above.
+
+Verification includes the actual API body, both local queues, actual event and queue handlers, transcript generation, Mongo records and readable MinIO bytes. Authentication middleware and WebSocket delivery are controlled test boundaries. Tests also cover transactional rollback, concurrent result selection, completed replay and failure after commit. This is not a Kubernetes or external model-provider drill.
+
+The live test invokes the API handler directly, not through an HTTP server, and its restart check creates another worker instance, not another container. It also verifies native dead-letter retention and replay after second-hop enqueue failure and actual missing-bucket errors. Use disposable services and predeclare `notebookEvents` / `notebookEventsDLQ` and `notebookCurationQueue` / `notebookCurationQueueDLQ`, with event redrive count five and notebook redrive count three. Supply their local endpoints, queue URLs and fixture credentials through the environment; the MinIO fixture bucket is `notebook-proof`. These tests write fixture objects and must not target production services.
+
+```sh
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test src/selfhost/eventDispatch.test.ts src/selfhost/notebookCurationQueue.test.ts
+VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/notebookCurationCommit.e2e.test.ts
+# Also set AWS_ENDPOINT_URL_SQS, AWS_ENDPOINT_URL_S3, AWS_REGION and fixture AWS credentials.
+B4M_SELF_HOST=true NOTEBOOK_LIVE_PROOF=true SELF_HOST_EVENT_QUEUE=http://127.0.0.1:29324/000000000000/notebookEvents NOTEBOOK_QUEUE_URL=http://127.0.0.1:29324/000000000000/notebookCurationQueue VITEST_MAX_WORKERS=2 pnpm --filter @bike4mind/workers test:integration src/selfhost/notebookCurationLive.e2e.test.ts
+```
+
+For operational replay, use the configured broker endpoint to receive the failed message from `notebookCurationQueueDLQ` or `selfHostEventQueueDLQ`, resolve the failure, send its unchanged body to the corresponding source queue, then delete the dead-letter message only after that send succeeds. Preserve `curationJobId`; submitting the API again creates a different job and is not the same replay guarantee.

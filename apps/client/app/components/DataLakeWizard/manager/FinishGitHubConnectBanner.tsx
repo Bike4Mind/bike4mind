@@ -23,8 +23,8 @@ type FinishGitHubConnectLake = {
  * App is approved.
  *
  * Shown only once both connection reads have resolved to "none": a failed or in-flight read, a Drive
- * folder, or any file in the lake hides it. The lake records no intended connector, so an empty
- * connector-fed lake still waiting on a Drive connect shows it too.
+ * folder, or any file in the lake hides it. It does not read the lake's `pendingConnector` yet, so an
+ * empty connector-fed lake still waiting on a Drive connect shows it too.
  */
 export default function FinishGitHubConnectBanner({
   lake,
@@ -64,7 +64,7 @@ export default function FinishGitHubConnectBanner({
           data-testid={`github-finish-connect-btn-${lake.id}`}
           startDecorator={<GitHubIcon />}
           loading={isPending}
-          onClick={begin}
+          onClick={() => begin()}
         >
           Finish connecting GitHub
         </Button>

@@ -26,6 +26,7 @@ const {
   mockArmCallback,
   mockFindCallbackById,
   mockClaimCallbackDispatch,
+  mockOrgFindAccessibleById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -38,6 +39,7 @@ const {
   mockArmCallback: vi.fn(),
   mockFindCallbackById: vi.fn(),
   mockClaimCallbackDispatch: vi.fn(),
+  mockOrgFindAccessibleById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -86,6 +88,13 @@ vi.mock('@bike4mind/database', async orig => {
     userApiKeyRepository: {
       ...(actual.userApiKeyRepository as object),
       findCallbackSigningSecret: (...a: unknown[]) => mockFindCallbackSigningSecret(...a),
+    },
+    organizationRepository: {
+      ...(actual.organizationRepository as object),
+      shareable: {
+        ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
+      },
     },
   };
 });
@@ -288,11 +297,19 @@ describe('POST /api/v1/video-generations (integration - contract auth + validati
   });
 
   describe('caller scoping', () => {
-    it('rejects an organizationId the caller is not a member of (404) before enqueuing', async () => {
-      mockResolveBillingOrgId.mockRejectedValue(new NotFoundError('Organization not found'));
+    it('rejects an organizationId the caller is not a member of (403) before enqueuing', async () => {
+      // The real resolveBillingOrgId -> resolveActiveOrg chain runs here with only the membership
+      // gate stubbed, so this pins the status the route actually returns, not a mocked rejection.
+      // Unlike llm.integration.test.ts, orgAccess stays mocked file-wide so every other case gets
+      // the beforeEach echo of organizationId and skips the real membership lookup.
+      const { resolveBillingOrgId: realResolveBillingOrgId } =
+        await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      mockResolveBillingOrgId.mockImplementation(realResolveBillingOrgId);
+      mockOrgFindAccessibleById.mockResolvedValueOnce(null);
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
       await handler(req, res);
-      expect(res._getStatusCode()).toBe(404);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockOrgFindAccessibleById).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
       expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
       expect(mockInvoke).not.toHaveBeenCalled();
     });

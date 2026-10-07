@@ -26,10 +26,16 @@ vi.mock('@bike4mind/services/llm', async importOriginal => {
 });
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: vi.fn().mockResolvedValue({ _id: 'owner-1', id: 'owner-1' }) },
-  adminSettingsRepository: {},
+  // Lakes disabled, so the save tool answers right after its adapter gate without writing.
+  adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(false) },
   apiKeyRepository: {},
-  dataLakeRepository: {},
-  dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]) },
+  dataLakeRepository: {
+    findBySlug: vi.fn(),
+    findBySlugAmongIds: vi.fn(),
+    setStats: vi.fn(),
+    activateIfDraft: vi.fn(),
+  },
+  dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]), listByLake: vi.fn() },
   fallbackLakeSettingsRepository: {},
   // ToolContext.db.organizations is required since #1674 (org membership set).
   organizationRepository: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
@@ -38,6 +44,9 @@ vi.mock('@bike4mind/database', () => ({
   imageModerationIncidentRepository: {},
   projectRepository: {},
   lakeAccessEventRepository: {},
+  lakeMembershipRemovalRepository: {},
+  lakeConfigChangeEventRepository: {},
+  lakeMembershipChangeEventRepository: {},
   scopedSettingsRepository: {},
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -102,5 +111,19 @@ describe('createDeepAgentToolMaterializer', () => {
       config?: { web_search?: { imageUrlSigningSecret?: string } };
     };
     expect(opts?.config?.web_search?.imageUrlSigningSecret).toBe('test-secret');
+  });
+
+  it('hands the lake write tools their audit adapters and no organization', async () => {
+    const tools = await materialize()(['save_content_to_data_lake'], 'owner-1');
+    const toolDeps = buildSharedToolsSpy.mock.calls[0]?.[0] as { db: Record<string, unknown>; organizationId?: string };
+    expect(toolDeps.db.lakeMembershipRemovals).toBeDefined();
+    expect(toolDeps.db.lakeConfigChangeEvents).toBeDefined();
+    expect(toolDeps.db.lakeMembershipChangeEvents).toBeDefined();
+    expect(toolDeps.organizationId).toBeUndefined();
+
+    const save = tools.find(t => t.toolSchema.name === 'save_content_to_data_lake');
+    const reply = await save?.toolFn({ content: 'hello', fileName: 'note.md', dataLakeId: 'lake-1' });
+    expect(reply).not.toMatch(/not available on this surface/);
+    expect(reply).toMatch(/Data lakes are not enabled/);
   });
 });

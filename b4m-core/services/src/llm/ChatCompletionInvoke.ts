@@ -336,6 +336,7 @@ export class ChatCompletionInvoke {
             q.reply = null;
             q.replies = [];
             q.questMasterReply = null;
+            q.fallbackInfo = null;
             q.images = [];
             q.prompt = message;
             q.fabFileIds = messageFileIds || []; // ONLY message files
@@ -357,6 +358,7 @@ export class ChatCompletionInvoke {
                 reply: q.reply,
                 replies: q.replies,
                 questMasterReply: q.questMasterReply,
+                fallbackInfo: q.fallbackInfo,
                 images: q.images,
                 prompt: q.prompt,
                 fabFileIds: q.fabFileIds,

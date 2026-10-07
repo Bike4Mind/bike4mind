@@ -46,7 +46,8 @@ export interface DataLakeAccessContext {
      * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
      * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).
      */
-    organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'>;
+    organizations: Pick<IOrganizationRepository, 'findMembershipOrgIds'> &
+      Partial<Pick<IOrganizationRepository, 'findIdsWithAdminRights'>>;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see
      * IFallbackLakeSetting). Used only by getDataLakePrompts' registry-candidate branch; absent
@@ -123,8 +124,8 @@ export interface DataLakeAccessContext {
    */
   entitlementKeysResolved?: boolean;
   /**
-   * Opt-in for the account-wide `excludedByAccessCount` query, which is an extra DB round trip on
-   * every resolve. Only `ChatCompletionProcess.getDataLakeAccessContext` reads the result (the
+   * Opt-in for the account-wide `excludedByAccessCount` query, which costs two extra DB reads on
+   * every resolve (the administered-org lookup and the count). Only `ChatCompletionProcess.getDataLakeAccessContext` reads the result (the
    * retrieval-summary telemetry); every other vouched host (lake-memory card, forced retrieval,
    * lake-prompt injection, `resolveRetrievalLakeScope`) needs `entitlementKeysResolved` for
    * `lakeViewComplete` but would throw the number away. Separate from that flag for exactly this
@@ -624,6 +625,13 @@ export async function getDynamicDataLakeAccess(
     if (context.measureExcludedByAccessCount === true && !opts.includeDraftLakes) {
       if (excludedByAccessCountPrerequisitesComplete) {
         try {
+          // Browse lists a non-member org admin's org lakes, so the count must see them as visible.
+          // A throw lands in the catch below: a failed lookup is unknown, never a false 0. A host
+          // that does not wire the reader keeps the membership-only bound.
+          const administeredOrgIds =
+            userId && typeof context.db.organizations.findIdsWithAdminRights === 'function'
+              ? await context.db.organizations.findIdsWithAdminRights(userId)
+              : undefined;
           excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
             userTags,
             entitlementKeys,
@@ -631,7 +639,7 @@ export async function getDynamicDataLakeAccess(
             userId,
             // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
             // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
-            { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+            { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds], administeredOrgIds }
           );
         } catch (err) {
           context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);

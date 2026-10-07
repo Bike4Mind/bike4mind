@@ -9,6 +9,7 @@ import {
   cacheRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import {
   ConflictError,
@@ -16,6 +17,7 @@ import {
   TooManyRequestsError,
   isLeaseHeld,
   toScanSummary,
+  type AccessContext,
   type IDataLakeDocument,
 } from '@bike4mind/common';
 import { Request, Response } from 'express';
@@ -222,23 +224,29 @@ async function renderStoredReport(
  * here, a normal-sized lake exhausted the request with every call it had already made billed and
  * nothing persisted - a 504, no findings, and one of three hourly attempts spent. So this door does
  * what `POST /lake-memory` does: check the preconditions, take the cap, enqueue, return 202. The
- * handler (`queueHandlers/lakeInconsistencyModelDetection`) gets a 10-minute budget, a DLQ and a
+ * handler (`apps/workers/src/queueHandlers/lakeInconsistencyModelDetection`) gets a 10-minute budget, a DLQ and a
  * retry, and writes findings batch by batch as it goes.
  *
  * The response is deliberately NOT the run's result - there is no result yet. Findings arrive at
  * `GET /api/data-lakes/:id/findings?detector=model`, which is already the read door for these rows.
  */
-async function enqueueModelDetection(
-  lake: Awaited<ReturnType<typeof dataLakeService.assertLakeWriteAccess>>,
-  userId: string,
-  res: Response
-) {
-  // A lease held means a run is already reading this lake. Only a fast, honest rejection for the
-  // human clicking twice - the claim that actually excludes a concurrent run is in the handler,
-  // guarded in the query, because two requests can both read "no lease" before either enqueues.
-  if (isLeaseHeld(lake.modelInconsistencyRunAt, new Date(), MODEL_INCONSISTENCY_RUN_LEASE_MS)) {
-    throw new ConflictError('A model inconsistency run is already in progress for this lake.');
-  }
+async function enqueueModelDetection(lakeId: string, ctx: AccessContext, res: Response) {
+  // The manage gate runs inside the transaction so a grant revoke committing mid-request collides on
+  // the lake doc and the retry re-reads live grants. The cap and the enqueue are external and run
+  // after commit, because the callback re-runs on retry.
+  const lake = await withTransaction(async () => {
+    const gated = await dataLakeService.assertLakeWriteAccess(lakeId, ctx, gateDeps);
+
+    // A lease held means a run is already reading this lake. Only a fast, honest rejection for the
+    // human clicking twice - the claim that actually excludes a concurrent run is in the handler,
+    // guarded in the query, because two requests can both read "no lease" before either enqueues.
+    if (isLeaseHeld(gated.modelInconsistencyRunAt, new Date(), MODEL_INCONSISTENCY_RUN_LEASE_MS)) {
+      throw new ConflictError('A model inconsistency run is already in progress for this lake.');
+    }
+    // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+    await dataLakeRepository.touchIfStable(gated.id);
+    return gated;
+  });
 
   // A missing queue URL is a deployment misconfiguration, so fail here rather than reporting 202 for
   // work nothing will ever consume. Checked before the per-lake cap below, as the lake-memory door
@@ -261,7 +269,7 @@ async function enqueueModelDetection(
     }
   }
 
-  await sendToQueue(queueUrl, { dataLakeId: lake.id, userId });
+  await sendToQueue(queueUrl, { dataLakeId: lake.id, userId: ctx.userId });
 
   return res.status(202).json({ ok: true, queued: true });
 }
@@ -294,9 +302,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
 
-    if (isModelDetectorRequest(req)) return enqueueModelDetection(lake, ctx.userId, res);
+    if (isModelDetectorRequest(req)) return enqueueModelDetection(id, ctx, res);
+
+    // Gated before detection so a stranger never triggers the scan; re-gated inside the transaction
+    // below, which is what serializes the writes against a concurrent grant revoke.
+    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
@@ -328,41 +339,49 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // than drifting by the write's latency - and so `renderStoredReport` below can use the summary's
     // own date to select the rows this run saw.
     const allFindings = [...report.findings, ...suppressed];
-    const { failed } = await dataLakeService.recordLakeFindings(
-      lake.id,
-      allFindings,
-      { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
-      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
-    );
 
-    // A run that did not record every finding does not get to date a summary, and does not get a
-    // 200. The service isolates per-finding failures into `failed` rather than throwing - so it
-    // NEVER throws for an unavailable collection, and an earlier version of this handler that
-    // merely reordered the two writes would have sailed past N failures and stamped a fresh
-    // `inconsistencyComputedAt` over zero persisted rows. That is the precise lie the ordering was
-    // supposed to prevent: `countsByKind` claiming problems a curator has no rows for.
-    //
-    // Failing instead of storing is safe to retry: `recordDetected` is an idempotent upsert, so a
-    // second attempt converges on the same rows, and the last COMPLETE run's summary stays in place
-    // and correctly dated meanwhile.
-    if (failed > 0) {
-      req.logger?.warn('Lake findings partially recorded; summary not stored', {
-        dataLakeId: lake.id,
-        failed,
-        total: allFindings.length,
+    // Re-gated inside the transaction so a grant revoke committing during the scan above collides on
+    // the lake doc and the retry re-reads live grants. The `update` below is itself a lake-doc write,
+    // so no separate `touchIfStable` is needed. Nothing external runs in the callback (it re-runs on retry).
+    const stored = await withTransaction(async () => {
+      await dataLakeService.assertLakeWriteAccess(lake.id, ctx, gateDeps);
+      const { failed } = await dataLakeService.recordLakeFindings(
+        lake.id,
+        allFindings,
+        { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt, failFast: true },
+        { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+      );
+
+      // A run that did not record every finding does not get to date a summary, and does not get a
+      // 200. The service isolates per-finding failures into `failed` rather than throwing - so it
+      // NEVER throws for an unavailable collection, and an earlier version of this handler that
+      // merely reordered the two writes would have sailed past N failures and stamped a fresh
+      // `inconsistencyComputedAt` over zero persisted rows. That is the precise lie the ordering was
+      // supposed to prevent: `countsByKind` claiming problems a curator has no rows for.
+      //
+      // Failing instead of storing is safe to retry: `recordDetected` is an idempotent upsert, so a
+      // second attempt converges on the same rows, and the last COMPLETE run's summary stays in place
+      // and correctly dated meanwhile.
+      if (failed > 0) {
+        req.logger?.warn('Lake findings partially recorded; summary not stored', {
+          dataLakeId: lake.id,
+          failed,
+          total: allFindings.length,
+        });
+        throw new Error(`Recorded ${allFindings.length - failed} of ${allFindings.length} findings`);
+      }
+
+      // The SUMMARY only - `toScanSummary` drops the findings. Storing them here as well is what used
+      // to make this an overwritable blob with no identity per finding, and it also kept a retention
+      // obligation on the lake document that nothing could discharge: a finding carries a 240-char
+      // excerpt of each source, and the purge-time sweeps reach rows only.
+      const summary = toScanSummary(report);
+      await dataLakeRepository.update({
+        id: lake.id,
+        inconsistencyReport: summary,
+        inconsistencyComputedAt: computedAt,
       });
-      throw new Error(`Recorded ${allFindings.length - failed} of ${allFindings.length} findings`);
-    }
-
-    // The SUMMARY only - `toScanSummary` drops the findings. Storing them here as well is what used
-    // to make this an overwritable blob with no identity per finding, and it also kept a retention
-    // obligation on the lake document that nothing could discharge: a finding carries a 240-char
-    // excerpt of each source, and the purge-time sweeps reach rows only.
-    const stored = toScanSummary(report);
-    await dataLakeRepository.update({
-      id: lake.id,
-      inconsistencyReport: stored,
-      inconsistencyComputedAt: computedAt,
+      return summary;
     });
 
     // Rendered through the same helper GET uses, so "run it now" and "show me the last run" return

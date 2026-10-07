@@ -10,6 +10,8 @@ export default defineConfig({
     'src/dataLakeService/lakeGateWideningRule.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
+    'src/generationJobs/index.ts',
+    'src/videoJobs/index.ts',
     'src/agentProactiveMessagingService/index.ts',
     'src/cliCompletions.ts',
     'src/llm/index.ts',

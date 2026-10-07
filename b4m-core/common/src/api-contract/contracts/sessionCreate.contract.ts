@@ -10,10 +10,11 @@ export const createSessionContract = defineEndpoint({
   summary: 'Create a session',
   description:
     'Creates a session (called a "notebook" in the product UI). Pass the returned `id` as ' +
-    '`session_id` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API ' +
+    '`sessionId` to `POST /api/chat`, then poll `GET /api/v1/quests/{id}` for the reply. An API ' +
     'key needs `notebooks:write` for this call, so a chat round trip needs that scope as well as ' +
-    '`ai:chat`. Unknown body fields are ignored. Naming a data lake with `dataLakeId` seeds the ' +
-    "session with that lake's retrieval defaults.",
+    '`ai:chat`. Unknown body fields are ignored. Naming a data lake with `dataLakeId` (ids come from ' +
+    "`GET /api/v1/data-lakes`) seeds the session with that lake's retrieval defaults and turns on " +
+    'forced retrieval.',
   tags: ['Sessions'],
   auth: 'apiKeyOrJwt',
   // notebooks:write only, and ai:chat is deliberately not OR'd in: create can attach the session

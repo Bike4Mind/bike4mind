@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/workers",
-  "version": "0.0.2",
+  "version": "0.0.5",
   "private": true,
   "scripts": {
     "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
@@ -14,8 +14,11 @@
     "@aws-sdk/client-lambda": "^3.1080.0",
     "@aws-sdk/client-s3": "^3.1080.0",
     "@aws-sdk/client-sqs": "^3.1080.0",
+    "@aws-sdk/s3-request-presigner": "^3.1080.0",
+    "@bike4mind/auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
+    "@bike4mind/db-core": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/infra": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
@@ -31,6 +34,7 @@
     "mailparser": "^3.9.26",
     "mongodb": "^6.20.0",
     "mongoose": "^8.24.1",
+    "p-limit": "^7.3.2",
     "sst": "4.17.1",
     "uuid": "^14.0.2",
     "zod": "^4.4.3"

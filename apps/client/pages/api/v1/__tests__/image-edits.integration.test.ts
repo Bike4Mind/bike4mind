@@ -24,6 +24,7 @@ const {
   mockArmCallback,
   mockFindCallbackById,
   mockClaimCallbackDispatch,
+  mockOrgFindAccessibleById,
 } = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockUserFindById: vi.fn(),
@@ -36,6 +37,7 @@ const {
   mockArmCallback: vi.fn(),
   mockFindCallbackById: vi.fn(),
   mockClaimCallbackDispatch: vi.fn(),
+  mockOrgFindAccessibleById: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -84,6 +86,13 @@ vi.mock('@bike4mind/database', async orig => {
     userApiKeyRepository: {
       ...(actual.userApiKeyRepository as object),
       findCallbackSigningSecret: (...a: unknown[]) => mockFindCallbackSigningSecret(...a),
+    },
+    organizationRepository: {
+      ...(actual.organizationRepository as object),
+      shareable: {
+        ...((actual.organizationRepository as { shareable?: object })?.shareable ?? {}),
+        findAccessibleById: (...a: unknown[]) => mockOrgFindAccessibleById(...a),
+      },
     },
   };
 });
@@ -201,6 +210,30 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  describe('referenceImageFabFileIds', () => {
+    const REFS = ['ref-1', 'ref-2'];
+
+    it('accepts reference images for a gpt-image model (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { referenceImageFabFileIds: REFS } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
+      );
+    });
+
+    it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({ body: { model: 'flux-pro-1.1', referenceImageFabFileIds: REFS } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/referenceImageFabFileIds.*flux-pro-1\.1/);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a body that fails the contract schema (422) before enqueuing the edit', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire({ body: { image: undefined } });
@@ -286,11 +319,19 @@ describe('POST /api/v1/image-edits (integration - contract auth + validation)', 
   });
 
   describe('caller scoping', () => {
-    it('rejects an organizationId the caller is not a member of (404) before enqueuing', async () => {
-      mockResolveBillingOrgId.mockRejectedValue(new NotFoundError('Organization not found'));
+    it('rejects an organizationId the caller is not a member of (403) before enqueuing', async () => {
+      // The real resolveBillingOrgId -> resolveActiveOrg chain runs here with only the membership
+      // gate stubbed, so this pins the status the route actually returns, not a mocked rejection.
+      // Unlike llm.integration.test.ts, orgAccess stays mocked file-wide because the forwarding
+      // case below needs mockResolveBillingOrgId to return a fixed org.
+      const { resolveBillingOrgId: realResolveBillingOrgId } =
+        await vi.importActual<typeof import('@server/utils/orgAccess')>('@server/utils/orgAccess');
+      mockResolveBillingOrgId.mockImplementation(realResolveBillingOrgId);
+      mockOrgFindAccessibleById.mockResolvedValueOnce(null);
       const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
       await handler(req, res);
-      expect(res._getStatusCode()).toBe(404);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockOrgFindAccessibleById).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
       expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
       expect(mockInvoke).not.toHaveBeenCalled();
     });

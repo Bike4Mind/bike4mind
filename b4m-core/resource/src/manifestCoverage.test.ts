@@ -121,6 +121,7 @@ const UNREACHABLE_ON_SELF_HOST: Record<string, string> = {
   tavernHeartbeatQueue: 'premium overlay (b4m-tavern) handler; open core cannot consume it',
   optihashiRunCompletionQueue: 'premium overlay handler; open core cannot consume it',
   bobRunQueue: 'premium overlay handler; open core cannot consume it',
+  libreoncologyAudioRenderQueue: 'premium overlay handler; open core cannot consume it',
 };
 
 /**
@@ -140,7 +141,6 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
   // candidates to wire next.
   questExportQueue: 'reachable from /api/quest-plans/[id]/export - candidate to wire',
   slackExportQueue: 'reachable from /api/slack/export/async - candidate to wire',
-  dataLakeCleanupQueue: 'reachable from /api/data-lakes/[id]/lifecycle - candidate to wire',
   githubWebhookQueue: 'reachable from /api/webhooks/github/[token] - candidate to wire',
 
   // Surfaced by teaching the scanner the cast form. Read at two admin routes (webhook delivery

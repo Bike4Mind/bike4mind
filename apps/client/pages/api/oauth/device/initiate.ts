@@ -8,9 +8,10 @@ import {
 } from '@server/utils/oauth/deviceAuthHelpers';
 import { z } from 'zod';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const InitiateRequestSchema = z.object({
-  client_id: z.literal('b4m-cli'),
+  client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
 const handler = baseApi({ auth: false })
@@ -21,7 +22,7 @@ const handler = baseApi({ auth: false })
     })
   )
   .post(async (req, res) => {
-    InitiateRequestSchema.parse(req.body);
+    const { client_id: clientId } = InitiateRequestSchema.parse(req.body);
 
     // Global, not per-IP: IP headers are spoofable when the origin is reached directly.
     // count-then-create is not atomic; concurrent initiates can overshoot by the in-flight count. Atomic counter if that matters.
@@ -42,6 +43,7 @@ const handler = baseApi({ auth: false })
     await deviceAuthorizationRepository.create({
       deviceCode: digestDeviceCode(deviceCode),
       userCode,
+      clientId,
       status: 'pending',
       userId: null,
       expiresAt: new Date(Date.now() + 600000), // 10 minutes

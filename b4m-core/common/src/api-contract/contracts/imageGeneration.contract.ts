@@ -1,4 +1,5 @@
 import { defineEndpoint } from '../defineEndpoint';
+import { EXAMPLE_RESOURCE_ID, EXAMPLE_SESSION_ID } from '../exampleIds';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
 // Specific files, not the barrel (`../../schemas`) - see the note in tools.contract.ts
 // (the barrel drags in @bike4mind/hearth, unbuilt in the CI openapi job).
@@ -22,8 +23,8 @@ export const imageQuestPollResult = {
     '`type` before reading `images`; `errorCode` is absent on unclassified failures, so its absence does ' +
     'not mean success.',
   example: {
-    id: '664f1c2b9a1e4d0012ab34cd',
-    sessionId: '664f1c2b9a1e4d0012ab34aa',
+    id: EXAMPLE_RESOURCE_ID,
+    sessionId: EXAMPLE_SESSION_ID,
     status: 'done',
     type: 'message',
     images: ['3f6c1a52-9d1e-4b7a-8c2f-5e0d4a9b1c7e.png'],
@@ -45,9 +46,14 @@ export const generateImageContract = defineEndpoint({
     'image yet, and the call never blocks on the render. Poll `GET /api/v1/quests/{id}` until `status` is ' +
     '`"done"` (see the `generateImage200PollResult` schema). Omit `sessionId` to create a new session. ' +
     'The prompt is resolved against the session history first, so a follow-up such as "make it darker" ' +
-    'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. ' +
-    '`referenceImageFabFileIds` (gpt-image models only) passes up to 4 already-uploaded images as style ' +
-    'anchors, after the input image taken from `fabFileIds`. Credits are checked when the render runs, so ' +
+    'binds to the previous image; `enhancedPrompt` reports the prompt actually sent to the model. Send ' +
+    '`prompt_resolution: "literal"` to skip that step and have the prompt sent as written (apart ' +
+    "from truncation to the model's prompt limit). " +
+    '`referenceImageFabFileIds` passes up to 4 already-uploaded images as style anchors, after the input ' +
+    'image taken from `fabFileIds`. Only gpt-image models accept them: sending any with another model is ' +
+    'rejected with a 400 rather than ignored. Which `size` values a model accepts, and whether it honours ' +
+    '`background`, `seed`, `quality`, `n` and reference images, is listed per model in the `image` block ' +
+    'of `GET /api/v1/models`. Credits are checked when the render runs, so ' +
     'insufficient credits arrive on the polled quest rather than as a 422. `POST /api/ai/generate-image` ' +
     'is a legacy alias of this endpoint. Authenticate with an API key (`b4m_live_`) or a JWT.\n\n' +
     GENERATION_CALLBACK_DESCRIPTION,
@@ -64,7 +70,10 @@ export const generateImageContract = defineEndpoint({
       schema: GenerateImageResponseSchema,
       pollResult: imageQuestPollResult,
     },
-    400: { description: `The ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`, schema: ApiErrorSchema },
+    400: {
+      description: `\`referenceImageFabFileIds\` is set for a non-gpt-image model, or the ${GENERATION_CALLBACK_REJECTED_DESCRIPTION}`,
+      schema: ApiErrorSchema,
+    },
     404: {
       description:
         'The session, or the quest being retried, does not exist or is not accessible to the caller. A ' +

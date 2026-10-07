@@ -1,5 +1,5 @@
 import { apiKeyUsageLogRepository } from '@bike4mind/database/auth';
-import { IUserApiKeyBaseline } from '@bike4mind/common';
+import type { ApiKeyBillingOwnerType, ApiKeyCompletionSource, IUserApiKeyBaseline } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 export interface LogApiKeyUsageParams {
@@ -10,6 +10,8 @@ export interface LogApiKeyUsageParams {
   method: string;
   responseTime: number;
   statusCode: number;
+  source: ApiKeyCompletionSource;
+  ownerType: ApiKeyBillingOwnerType;
   logger?: Logger;
 }
 
@@ -23,7 +25,7 @@ export class ApiKeyUsageManager {
    * This is called after each API request authenticated with an API key
    */
   static async logUsage(params: LogApiKeyUsageParams): Promise<void> {
-    const { keyId, userId, ipAddress, endpoint, method, responseTime, statusCode, logger } = params;
+    const { keyId, userId, ipAddress, endpoint, method, responseTime, statusCode, source, ownerType, logger } = params;
 
     try {
       logger?.debug('Logging API key usage', {
@@ -44,6 +46,8 @@ export class ApiKeyUsageManager {
         method,
         responseTime,
         statusCode,
+        source,
+        ownerType,
       });
 
       logger?.debug('API key usage logged successfully', {

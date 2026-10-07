@@ -42,6 +42,7 @@ import {
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
   videoGenerationDLQ,
+  generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -52,6 +53,7 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -369,6 +371,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: videoGenerationDLQ,
   },
   {
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+    queue: generationJobDLQ,
+  },
+  {
     label: 'liveops-triage',
     displayName: 'LiveOps Triage',
     application: 'LiveOpsTriage',
@@ -475,6 +484,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
     queue: bobRunQueueDLQ,
+  },
+  // queues.ts - LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology)
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+    queue: libreoncologyAudioRenderQueueDLQ,
   },
 ];
 

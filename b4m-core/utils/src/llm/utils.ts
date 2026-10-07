@@ -13,6 +13,7 @@ import {
   IFabFileRepository,
   IMessage,
   isAudioMimeType,
+  isMediaOnlyMimeType,
   isGeminiModelId,
   isImageAttachment,
   isImageServeable,
@@ -1325,6 +1326,7 @@ async function cosineSearch(
 export type FabFileNoticeBand =
   | 'unresolved'
   | 'audio'
+  | 'video'
   | 'image_not_serveable'
   | 'image_too_large'
   | 'vision_unsupported'
@@ -1524,20 +1526,20 @@ export async function processFabFilesServer(
     // false explicitly on the two text paths that can partially deliver.
     let fullyDelivered = false;
     try {
-      // Audio (generated TTS / sound effects) is never LLM input: no model
-      // accepts audio, and the non-image branch below would otherwise try to
-      // read the bytes as text. This is the authoritative attachment guard -
-      // every chat/agent path funnels through here, so a file that slips past
-      // the attach UI still can't reach the model.
-      if (isAudioMimeType(file.mimeType)) {
+      // Generated audio and video are never LLM input: no model accepts them as attachments, and the
+      // non-image branch below would otherwise try to read the bytes as text. This is the authoritative
+      // attachment guard - every chat/agent path funnels through here, so a file that slips past the
+      // attach UI still can't reach the model.
+      if (isMediaOnlyMimeType(file.mimeType)) {
+        const mediaKind = isAudioMimeType(file.mimeType) ? 'audio' : 'video';
         logger.warn(
-          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+          `[processFabFilesServer] Skipping ${mediaKind} file ${file.fileName} - ${mediaKind} is not attachable to an LLM.`
         );
         fileNotices.push({
           fabFileId: file.id,
           fileName: file.fileName,
-          band: 'audio',
-          message: `"${noticeFileName(file.fileName)}" is an audio file and was not sent: no model accepts audio as input.`,
+          band: mediaKind,
+          message: `"${noticeFileName(file.fileName)}" is ${mediaKind === 'audio' ? 'an audio' : 'a video'} file and was not sent: no model accepts ${mediaKind} as input.`,
           delivered: false,
         });
         return;
@@ -2022,7 +2024,6 @@ export async function processFabFilesServer(
                 delivered: false,
               });
             } else {
-              logger.updateMetadata({ filePath: file.filePath });
               throw e;
             }
           }
@@ -2031,9 +2032,28 @@ export async function processFabFilesServer(
       if (delivered) deliveredFileIds.add(file.id);
       if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
-      logger.updateMetadata({ fileId: file.id });
-      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
-      throw error;
+      // Per-line metadata, not updateMetadata: that mutates the run's shared logger, so every later
+      // line - for every other file, and the rest of the run - was stamped with this file's ids.
+      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}:`, error, {
+        fileId: file.id,
+        filePath: file.filePath,
+      });
+      // Content already reached the prompt (a later step such as the metadata update threw), so
+      // reporting read_failed would contradict what the model received.
+      if (delivered) {
+        deliveredFileIds.add(file.id);
+        if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
+        return;
+      }
+      // Contain the failure to this file. Rethrowing rejected the whole Promise.all, so one
+      // unreadable attachment dropped every sibling that had read fine along with it.
+      fileNotices.push({
+        fabFileId: file.id,
+        fileName: file.fileName,
+        band: 'read_failed',
+        message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: an unexpected error occurred while extracting its content.`,
+        delivered: false,
+      });
     }
   };
 

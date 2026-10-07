@@ -30,6 +30,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
+import { pickerAttachedAgents, resolveDispatchAgent, resolveDispatchMaxIterations } from './resolveDispatchAgent';
 import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
@@ -779,6 +780,7 @@ export function useSendMessage({
           currentSession: notebook,
           model: model as any,
           workBenchFiles,
+          agentIds: workBenchAgents.map(a => a.id),
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
           optimisticSessionId: optimisticTmpId ?? undefined,
@@ -825,6 +827,7 @@ export function useSendMessage({
           currentSession: notebook,
           model: model as ModelName,
           workBenchFiles,
+          agentIds: workBenchAgents.map(a => a.id),
           sendJsonMessage,
           promptFileIds: messageLevelFileIds,
           enableQuestMaster: options?.forceEnableQuestMaster ?? isQuestMasterEnabled,
@@ -907,16 +910,18 @@ export function useSendMessage({
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
     //     (preserves the earlier `@specific-agent` UX). A briefcase
     //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
-    //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
-    //     the executor build a synthetic profile from admin defaults.
+    //   - Without (toggle ON or `@agent` literal): run as the first agent
+    //     attached with the Agents picker on the composer-selected model, or
+    //     dispatch agentless when none is attached and let the executor build a
+    //     synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
       try {
-        // Prefer the dispatched agent's own text model - the orchestration
-        // agent when present, else the first plain @mentioned agent - so a
-        // personality-only agent runs on its `preferredModel` rather than the
-        // caller's current selection. Mirrors the `agentId` and
-        // `preferredImageModel` resolution above (#agent-mode-persona). Falls
-        // back to the caller's `model` when neither agent pins one.
+        // Same set the composer's Agents badge shows (SessionBottom `displayAgents`).
+        const pickerAgents = pickerAttachedAgents(currentSessionId, sessionAgents, workBenchAgents);
+        const dispatchAgent = resolveDispatchAgent(orchestrationAgent, mentionedAgent, pickerAgents);
+        // Only an @mentioned agent's `preferredModel` overrides the composer model
+        // (#agent-mode-persona). A picker-attached agent sets `agentId` alone, so the
+        // composer-selected model still wins for it, as it does in chat mode.
         const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
         // `currentSessionId` is a stale render-closure value on `/new` (still null even
         // after the Data Lake seam above just created + set the session), so fall back to
@@ -978,18 +983,17 @@ export function useSendMessage({
         // optimistic bubble instead of waiting for the persisted Quest on reload.
         createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
 
-        // Iteration cap comes from the agent doc; left unset when agentless so
-        // the executor fills it from admin defaults.
-        const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
-        const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
+        // Iteration cap comes from the agent doc; unset when agentless or the agent has no
+        // default thoroughness, so the executor fills it from admin defaults.
+        const maxIters = resolveDispatchMaxIterations(dispatchAgent);
+        // A briefcase `toolsOverride` wins the whitelist so an agent can't
         // drop the tools the prompt needs (see `resolveDispatchTools`). An agentless send
         // ships the user's Smart Tools marked ambient; the server unions them onto the
         // profile it resolves rather than replacing it.
         const { enabledTools, enabledToolsAreAmbient } = resolveDispatchTools(
           options?.toolsOverride,
           effectiveTools,
-          orchestrationAgent?.allowedTools
+          dispatchAgent?.allowedTools
         );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
@@ -1006,14 +1010,12 @@ export function useSendMessage({
           query: prompt,
           model: dispatchModel,
           organizationId: organizationId ?? undefined,
-          // Forward the @mentioned agent's id so the executor injects its
-          // persona and runs as that agent. Prefer the orchestration-configured
-          // agent (carries tool whitelist + iteration caps); otherwise fall back
-          // to the first plain @mentioned agent so a personality-only agent is
-          // still run-as rather than ignored in favor of the synthetic default
-          // (#agent-mode-persona / @-tag-enables-agent). Absent (no mention)
+          // The executor injects this agent's persona and runs as it, so its own
+          // tool policy applies (#agent-mode-persona / @-tag-enables-agent).
+          // Orchestration @mention, then plain @mention, then the first
+          // picker-attached agent; absent only when none of those exist, which
           // triggers the synthetic-profile path on the executor.
-          agentId: orchestrationAgent?.id ?? mentionedAgent?.id,
+          agentId: dispatchAgent?.id,
           enabledTools,
           enabledToolsAreAmbient,
           maxIterations: maxIters,

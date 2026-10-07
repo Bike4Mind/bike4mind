@@ -1,9 +1,10 @@
+import { APP_NAME, WEBSITE_URL } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
 import type { Cheerio, CheerioAPI } from 'cheerio';
 import mime from 'mime-types';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent, validateUrlForFetch } from './ssrfProtection';
-import { readPageTitle } from './pageTitle';
+import { lastPathSegment, readPageTitle } from './pageTitle';
 
 // Centralized URL regex - handles ports, query params, fragments
 export const URL_REGEX =
@@ -30,6 +31,8 @@ interface ParsedContent {
   textContent: Buffer | string;
   mimeType: string;
   ext: string | null;
+  /** The url actually fetched after redirects; fallback titles and site-name cleanup use it. */
+  finalUrl: string;
 }
 
 // Default timeout for URL fetching (10 seconds)
@@ -115,14 +118,8 @@ function redactUrlCredentials(raw: string): string {
   }
 }
 
-/** Last path segment, used only as a display-name fallback when a page has no `<title>`. */
-function lastPathSegment(url: string): string {
-  try {
-    return new URL(url).pathname.split('/').filter(Boolean).pop() ?? url;
-  } catch {
-    return url.split('/')?.pop() ?? url;
-  }
-}
+// Sites like Wikipedia reject library default UAs; their policy wants a product name plus a contact URL.
+const INGEST_USER_AGENT = `Mozilla/5.0 (compatible; ${APP_NAME || 'App'}/1.0${WEBSITE_URL ? `; +${WEBSITE_URL}` : ''})`;
 
 /**
  * Fetch one URL without following redirects, so the caller can SSRF-validate each hop itself.
@@ -144,6 +141,7 @@ function lastPathSegment(url: string): string {
  */
 async function fetchWithoutRedirects(url: string, timeoutMs: number) {
   return axios.get(url, {
+    headers: { 'User-Agent': INGEST_USER_AGENT },
     // BOTH agents, because the scheme is not fixed across a chain: an https URL can 302 to http, and
     // axios picks the agent per request from the scheme it is currently on.
     httpAgent: ssrfSafeHttpAgent,
@@ -233,12 +231,50 @@ const NON_CONTENT_SELECTOR = [
 ].join(', ');
 
 /**
+ * Elements that are running content themselves; a promo-named one is a content slug, not chrome.
+ * Includes rows and captions, which a promo class names a table row or figure caption, not a card.
+ */
+const PROMO_CONTENT_ELEMENT_SELECTOR =
+  'h1, h2, h3, h4, h5, h6, p, li, td, th, tr, dt, dd, pre, ul, ol, dl, table, blockquote, figure, figcaption, caption';
+
+/** Structured content a promo card must not wrap: dropping the card would drop it too. */
+const PROMO_STRUCTURED_CONTENT_SELECTOR = 'ul, ol, dl, table, blockquote, figure, pre, code';
+
+/** Containers whose controls are inline in a sentence or cell, not a card's standalone call to action. */
+const PROMO_INLINE_CONTROL_CONTAINER_SELECTOR = 'p, li, td, th, dt, dd, figcaption, caption';
+
+/**
+ * Class words a page uses for promotional chrome - the offer card, the newsletter box, the
+ * sign-up band. The Readability "unlikely candidate" idea, cut down to words that never name an
+ * article's own content. Matched as whole tokens (`offer-card`, `newsletter-form`),
+ * never substrings, so `coffee` or `offered` cannot match. Being HIDDEN is deliberately not a
+ * signal: a collapsed accordion answer is just as hidden as a script-revealed offer card.
+ */
+const PROMO_TOKENS = new Set(['cta', 'promo', 'promotion', 'offer', 'newsletter', 'subscribe', 'signup', 'upsell']);
+
+/** `btn`, `btn-primary`, `button`, `button-classic`: a link styled as a call-to-action button. */
+const BUTTON_CLASS_PATTERN = /^(btn|button)(-|$)/;
+
+/** Bootstrap's in-text link style, which matches `BUTTON_CLASS_PATTERN` but is not a button. */
+const NOT_A_BUTTON_CLASS = 'btn-link';
+
+/**
+ * Most text a `PROMO_TOKENS` block may hold. An offer card or newsletter box is a heading, a line
+ * of pitch and a button; a promo word on anything bigger names a section of the page (an `.offer`
+ * holding the terms, a newsletter archive's issue body), not chrome.
+ */
+const MAX_PROMO_TEXT_CHARS = 300;
+
+/**
  * What counts as a control when judging a control strip. Broader than `NON_CONTENT_SELECTOR`,
  * because a link is content in prose but a control in a nav bar - `a[href]` is the only reason the
  * strip rule can see an unmarked `<div>` of nav links as chrome at all.
  */
 const CONTROL_SELECTOR =
   'a[href], button, input, select, textarea, summary, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"]';
+
+/** `CONTROL_SELECTOR` plus `form`: a newsletter box is a form even when its inputs are hidden. */
+const PROMO_CONTROL_SELECTOR = `${CONTROL_SELECTOR}, form`;
 
 /**
  * Containers a control strip can be. Headings and `<p>` are excluded: `<h2><a>Title</a></h2>` is
@@ -258,6 +294,12 @@ const STRIP_CONTAINER_SELECTOR = 'div, span, ul, ol, nav, header, footer, aside,
  * than anything the candidate's own subtree can show.
  */
 const PROSE_ANCESTOR_SELECTOR = 'p, h1, h2, h3, h4, h5, h6, li, dt, dd, blockquote, figcaption, caption';
+
+/**
+ * Places a button-styled link can be the whole of (a release table's version link, a heading's
+ * anchor), where removing it empties real content.
+ */
+const BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR = `${PROSE_ANCESTOR_SELECTOR}, td, th`;
 
 /**
  * Minimum controls for a `<ul>`/`<ol>` candidate specifically - higher than the general
@@ -374,24 +416,32 @@ function hasProseAncestor($: CheerioAPI, element: DomNode, boundary: DomNode): b
   return false;
 }
 
+type Sibling = { type?: string; data?: string; prev?: Sibling | null; next?: Sibling | null } | null | undefined;
+
+/** Nearest sibling in `step` direction, skipping comments and whitespace-only text. */
+function nearestSibling(start: Sibling, step: 'prev' | 'next'): Sibling {
+  let current = start;
+  while (current && (current.type === 'comment' || (current.type === 'text' && !squash(current.data ?? ''))))
+    current = current[step];
+  return current;
+}
+
 /**
  * True when `element` sits directly between two pieces of running text - a non-whitespace text
- * node as its immediately preceding or following sibling. That is the tag-agnostic version of
- * "this element sits inside running prose": `PROSE_ANCESTOR_SELECTOR` only protects a candidate
- * whose ANCESTOR is one of a fixed list of tags (`p`, headings, `li`, ...), so the same inline
- * `<span>` wrapping two links reads as protected prose inside a `<p>` but as a standalone chrome
- * candidate inside a `<div>`, `<section>` or `<td>` - none of which are prose landmarks, but all of
- * which routinely hold hand-written or CMS-rendered sentences. A text-node sibling is the
- * strongest tag-independent signal that removing `element` would leave a dangling sentence rather
- * than delete a block of chrome, regardless of what its parent is called.
+ * node as its nearest preceding or following sibling (comments are looked through). That is the
+ * tag-agnostic version of "this element sits inside running prose": `PROSE_ANCESTOR_SELECTOR` only
+ * protects a candidate whose ANCESTOR is one of a fixed list of tags (`p`, headings, `li`, ...), so
+ * the same inline `<span>` wrapping two links reads as protected prose inside a `<p>` but as a
+ * standalone chrome candidate inside a `<div>`, `<section>` or `<td>` - none of which are prose
+ * landmarks, but all of which routinely hold hand-written or CMS-rendered sentences. A text-node
+ * sibling is the strongest tag-independent signal that removing `element` would leave a dangling
+ * sentence rather than delete a block of chrome, regardless of what its parent is called.
  */
 function hasAdjacentProseText(element: DomNode): boolean {
-  const node = element as { prev?: DomNode | null; next?: DomNode | null };
-  const isNonWhitespaceText = (sibling: DomNode | null | undefined): boolean => {
-    const candidate = sibling as { type?: string; data?: string } | null | undefined;
-    return !!candidate && candidate.type === 'text' && squash(candidate.data ?? '').length > 0;
-  };
-  return isNonWhitespaceText(node.prev) || isNonWhitespaceText(node.next);
+  const node = element as Sibling & object;
+  return [nearestSibling(node.prev, 'prev'), nearestSibling(node.next, 'next')].some(
+    sibling => !!sibling && sibling.type === 'text'
+  );
 }
 
 /**
@@ -426,11 +476,83 @@ function isControlStrip($: CheerioAPI, element: DomNode): boolean {
   return strippedOutsideControls.length <= budget;
 }
 
+function hasButtonClass(element: DomNode): boolean {
+  const classes = ((element as { attribs?: Record<string, string> }).attribs?.class ?? '').split(/\s+/);
+  return !classes.includes(NOT_A_BUTTON_CLASS) && classes.some(token => BUTTON_CLASS_PATTERN.test(token));
+}
+
 /**
- * Removes control strips and non-content elements from `scope`, together, with ONE rollback
- * covering both.
+ * True when the nearest non-whitespace, non-comment sibling on either side is inline markup
+ * (`<em>`, a plain link) - running text the candidate (a button link or promo block) would be cut
+ * out of. A neighbouring button link does not count:
+ * CTAs come in rows ("Create your free CSA" / "All downloads and formats").
+ */
+function hasAdjacentInlineElement($: CheerioAPI, element: DomNode): boolean {
+  const node = element as Sibling & object;
+  return [nearestSibling(node.prev, 'prev'), nearestSibling(node.next, 'next')].some(
+    sibling =>
+      !!sibling &&
+      sibling.type === 'tag' &&
+      $(sibling as DomNode).is(INLINE_SELECTOR) &&
+      !hasButtonClass(sibling as DomNode)
+  );
+}
+
+/**
+ * True when `element` is labelled as promotional chrome by its own class (`PROMO_TOKENS`); ids are
+ * ignored because they are usually content-derived slugs (`#subscribe-to-a-topic`). Declined for
+ * inline elements and anything in or beside running prose, for content elements themselves
+ * (`PROMO_CONTENT_ELEMENT_SELECTOR`), inside a table or figure, and for anything holding an h1-h3,
+ * structured content (`PROMO_STRUCTURED_CONTENT_SELECTOR`), an `<article>`/`<main>`, or more than
+ * `MAX_PROMO_TEXT_CHARS` of text: a promo word on a wrapper that big names a page section, not
+ * chrome. Also requires a standalone control inside (`PROMO_CONTROL_SELECTOR` outside any
+ * `PROMO_INLINE_CONTROL_CONTAINER_SELECTOR`): a card without a button, or whose only link sits in a
+ * sentence, is indistinguishable from a short fact about the offer.
+ */
+function isPromoBlock($: CheerioAPI, element: DomNode, documentRoot: DomNode | undefined): boolean {
+  const classAttr = (element as { attribs?: Record<string, string> }).attribs?.class ?? '';
+  const tokens = classAttr.toLowerCase().split(/[^a-z0-9]+/);
+  if (!tokens.some(token => PROMO_TOKENS.has(token))) return false;
+  const $element = $(element);
+  if (documentRoot && hasProseAncestor($, element, documentRoot)) return false;
+  if (hasAdjacentProseText(element) || hasAdjacentInlineElement($, element)) return false;
+  return (
+    !$element.is(`html, body, main, article, ${INLINE_SELECTOR}, ${PROMO_CONTENT_ELEMENT_SELECTOR}`) &&
+    $element.closest('table, figure').length === 0 &&
+    $element
+      .find(PROMO_CONTROL_SELECTOR)
+      .toArray()
+      .some(control =>
+        $(control)
+          .parents(PROMO_INLINE_CONTROL_CONTAINER_SELECTOR)
+          .toArray()
+          .every(container => !$.contains(element, container))
+      ) &&
+    $element.find(`h1, h2, h3, main, article, ${PROMO_STRUCTURED_CONTENT_SELECTOR}`).length === 0 &&
+    squash($element.text()).length <= MAX_PROMO_TEXT_CHARS
+  );
+}
+
+/**
+ * True when `element` is a link styled as a standalone call-to-action button ("Try it free",
+ * "Create your free CSA") - a control by the page's own styling, even when it sits beside prose in
+ * a container `isControlStrip` rightly refuses to strip whole. Declined inside prose, a heading or a
+ * table cell (`BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR`), when running text or an inline element flanks
+ * it, and when its label reads like prose rather than a button.
+ */
+function isButtonLink($: CheerioAPI, element: DomNode): boolean {
+  if (!hasButtonClass(element)) return false;
+  if (hasAdjacentProseText(element) || hasAdjacentInlineElement($, element)) return false;
+  if ($(element).closest(BUTTON_LINK_CONTENT_ANCESTOR_SELECTOR).length > 0) return false;
+  const label = squash($(element).text());
+  return label.length <= MAX_CONTROL_LABEL_CHARS && !/[.!?]\s/.test(label);
+}
+
+/**
+ * Removes control strips, non-content elements, promo blocks and CTA button links from `scope`,
+ * together, with ONE rollback covering all of them.
  *
- * Both prunings are done via a placeholder swap rather than an outright `remove()`, so either can
+ * These prunings are done via a placeholder swap rather than an outright `remove()`, so they can
  * be undone. They are decided together - not the strip rule with its own guard and the non-content
  * removal with none - because a subtree that is real content by itself can sit entirely inside a
  * `label`/`dialog`/`aria-hidden` wrapper (a client framework's whole-page aria-hidden mount, an
@@ -479,7 +601,19 @@ function pruneChromeFromScope($: CheerioAPI, scope: Cheerio<DomNode>): boolean {
     return placeholder;
   });
 
-  const nonContentEls = scope.find(NON_CONTENT_SELECTOR).toArray();
+  const nonContentEls = [
+    ...new Set([
+      ...scope.find(NON_CONTENT_SELECTOR).toArray(),
+      ...scope
+        .find('[class]')
+        .toArray()
+        .filter(element => isPromoBlock($, element, documentRoot)),
+      ...scope
+        .find('a[href][class]')
+        .toArray()
+        .filter(element => isButtonLink($, element)),
+    ]),
+  ];
   const nonContentPlaceholders = nonContentEls.map(element => {
     const placeholder = $('<div></div>');
     $(element).replaceWith(placeholder);
@@ -729,7 +863,13 @@ export async function fetchAndParseURL(url: string, { logger }: { logger: Logger
     } else {
       logger.log(`Fetched ${title} with mimetype ${urlMimeType} and parsed ${fetched}`);
     }
-    return { title, textContent: urlContent, mimeType: urlMimeType, ext: mime.extension(urlMimeType) || null };
+    return {
+      title,
+      textContent: urlContent,
+      mimeType: urlMimeType,
+      ext: mime.extension(urlMimeType) || null,
+      finalUrl: currentUrl,
+    };
   } catch (error) {
     // Redacted for the same reason as the success log: this metadata is attached to the log record, and
     // a failure is exactly when a malformed credentialed URL is most likely to be the input.

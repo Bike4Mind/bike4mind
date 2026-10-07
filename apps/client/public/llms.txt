@@ -29,6 +29,31 @@ self-hosted deployment.
 - Some routes are not in the contract yet. If one you need is missing, say so
   rather than guessing its shape.
 
+## Grounded answer
+
+To answer from a data lake's files, the key needs `datalake:read`,
+`notebooks:write` and `ai:chat`. Four calls:
+
+1. `GET /api/v1/data-lakes`: pick a lake `id`. Paginated: pass `next_cursor`
+   back as `cursor` until it is `null`.
+2. `POST /api/v1/sessions` with `{"name", "dataLakeId"}`: keep the response
+   `id`. `dataLakeId` already turns on forced retrieval, so do not send
+   `forceKnowledgeRetrieval`.
+3. `POST /api/chat` with `{"sessionId", "message"}`: read
+   `tracking_info.quest_id` from the reply.
+4. Poll `GET /api/v1/quests/{quest_id}` while `status` is `pending` or
+   `running`; stop at `done` or `stopped`.
+
+- Check for failure before reading the answer: `type: "error"` (with
+  `errorCode` when classified) or a `stopped` status is a failed turn. A run
+  that died part-way still polls back as `done`, with `promptMeta.finishReason`
+  set to `timeout` or `abandoned`: treat that text as partial.
+- `replies[]` holds content slots, not separate answers. The answer is every
+  entry concatenated in order (no separator), with any `<think>...</think>`
+  blocks removed. If `replies` is empty, use `reply` (it can be `null`).
+- Polling does not use the daily key quota.
+- Request and response shapes: the [API reference](/api/v1/docs).
+
 ## API
 
 - [OpenAPI contract](/api/v1/openapi.json): the machine-readable HTTP API. Served

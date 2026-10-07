@@ -612,10 +612,25 @@ const deepAgentsRoute = createRoute({
   ),
 });
 
+// Layout for the QA status pages: layoutRoute's providers and consent guard without the notebook
+// sidenav/header. A rootRoute child like adminRoute; the login redirect comes from RestrictedPage.
+const qaStatusLayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: 'qa-status-layout',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
+  component: () => (
+    <RestrictedPage requireAdmin={false}>
+      <ProviderBundle>
+        <Outlet />
+      </ProviderBundle>
+    </RestrictedPage>
+  ),
+});
+
 // QA status (admin only). Exported so pages read typed search/params via
 // `qaStatusRoute.useSearch()` etc.; filters live in the URL so links deep-link.
 export const qaStatusRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status',
   validateSearch: parseQaStatusSearch,
   component: () => (
@@ -628,7 +643,7 @@ export const qaStatusRoute = createRoute({
 });
 
 export const qaRunRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/runs/$id',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -642,7 +657,7 @@ export const qaRunRoute = createRoute({
 // The router encodes the key into one segment (it contains / > ? #); the page
 // re-sends it as ?testKey=.
 export const qaTestRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => qaStatusLayoutRoute,
   path: '/status/tests/$testKey',
   component: () => (
     <RestrictedPage requireAdmin>
@@ -1147,9 +1162,6 @@ const routeTree = rootRoute.addChildren([
     agentExecutionHistoryRoute,
     agentMissionRoute,
     deepAgentsRoute,
-    qaStatusRoute,
-    qaRunRoute,
-    qaTestRoute,
     shareRoute,
     reportPublicRoute,
     organizationsRoute,
@@ -1162,6 +1174,8 @@ const routeTree = rootRoute.addChildren([
     hearthRoute,
     ...builtAppShellPremiumRoutes,
   ]),
+  // QA status pages (admin layout without the sidenav)
+  qaStatusLayoutRoute.addChildren([qaStatusRoute, qaRunRoute, qaTestRoute]),
   // Standalone auth routes (no layout)
   authCallbackRoute,
   authSuccessRoute,

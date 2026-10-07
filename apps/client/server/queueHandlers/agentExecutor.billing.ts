@@ -174,6 +174,12 @@ export type IterationBillingEffects = {
   addIterationBilling: (billing: IIterationBilling) => Promise<void>;
   sendProgress: (creditsUsed: number, iterationIndex: number) => Promise<void>;
   logGuardTrip: (details: { inputTokensDelta: number; contextWindow: number }) => void;
+  logNegativeDelta: (details: {
+    costDelta: number;
+    toolCostUsd: number;
+    cumulativeCost: number;
+    previousCumulativeCost: number;
+  }) => void;
   usdToCredits: (usd: number) => number;
   now: () => number;
 };
@@ -213,10 +219,49 @@ function advanceCounters(counters: BillingCounters, checkpoint: BillingCheckpoin
   counters.cacheWriteTokens = checkpoint.totalCacheWriteTokens;
 }
 
+type IterationTokenRecord = Pick<
+  IIterationBilling,
+  'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'
+>;
+
+/**
+ * Rebuild `counters` on resume from the persisted per-iteration token deltas. `cumulativeCost`
+ * is re-priced with this invocation's `modelInfo` (the rate `billIteration` will use), never
+ * carried over, so a price change between invocations cannot make the next delta negative.
+ */
+export function reseedCounters(
+  iterationBilling: readonly IterationTokenRecord[],
+  modelInfo: ModelInfo | undefined
+): BillingCounters {
+  const counters: BillingCounters = {
+    cumulativeCost: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  for (const billing of iterationBilling) {
+    counters.inputTokens += billing.inputTokens;
+    counters.outputTokens += billing.outputTokens;
+    counters.cacheReadTokens += billing.cacheReadTokens;
+    counters.cacheWriteTokens += billing.cacheWriteTokens;
+  }
+  if (iterationBilling.length > 0 && modelInfo) {
+    counters.cumulativeCost = getTextModelCost(
+      modelInfo,
+      counters.inputTokens,
+      counters.outputTokens,
+      counters.cacheReadTokens,
+      counters.cacheWriteTokens
+    );
+  }
+  return counters;
+}
+
 /**
  * Bill one completed iteration against the model's cumulative cost, advancing
  * `counters` in place. No-op unless the cost has grown since the last billed
- * iteration.
+ * iteration; a shrinking agent cost is surfaced with a warn (`logNegativeDelta`).
  */
 export async function billIteration(params: BillIterationParams): Promise<void> {
   const { iterationIndex, checkpoint, counters, modelInfo, model, startTime, effects } = params;
@@ -235,7 +280,20 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   // Settle the agent's own cost growth plus any tool-internal spend (#630). Tool spend is
   // already priced per-tool, so it adds directly as USD. Both terms are >= 0, so an
   // iteration with tool usage is always billable (never hits the no-op return below).
-  const costDelta = cumulativeCost - counters.cumulativeCost + toolUsage.costUsd;
+  const agentCostDelta = cumulativeCost - counters.cumulativeCost;
+  const costDelta = agentCostDelta + toolUsage.costUsd;
+  // Should be unreachable: the rate is fixed per invocation and resume re-prices `counters` at
+  // that same rate (`reseedCounters`), so a negative agent delta means counters and checkpoint
+  // have diverged. Checked on the agent term alone so positive tool spend cannot mask it; the
+  // settle below is unchanged (net <= 0 skips with counters left put, net > 0 charges the net).
+  if (agentCostDelta < 0) {
+    effects.logNegativeDelta({
+      costDelta: agentCostDelta,
+      toolCostUsd: toolUsage.costUsd,
+      cumulativeCost,
+      previousCumulativeCost: counters.cumulativeCost,
+    });
+  }
   if (costDelta <= 0) return;
 
   // Agent-only per-iteration token deltas (checkpoint totals are agent-loop only). These
@@ -353,4 +411,48 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     timestamp: new Date(effects.now()),
   });
   await effects.sendProgress(credits, iterationIndex);
+}
+
+export type SubagentMediaSettlementEffects = {
+  usdToCredits: (usd: number) => number;
+  deductCredits: (credits: number) => Promise<void>;
+  /** Mirrors the charge onto the child's `totalCreditsUsed` audit counter. */
+  recordAuditCredits: (credits: number) => Promise<void>;
+  /** Analytics dual-write, same shape as `billIteration`'s, so margin reporting sees this COGS. */
+  recordUsageEvent: (event: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    cacheWriteTokens: number;
+    costUsd: number;
+    creditsCharged: number;
+  }) => void;
+};
+
+/**
+ * Charges the generated-media USD a dispatched subagent accrued via `foldGeneratedMediaUsd`.
+ * That path has no per-iteration loop (and no token deduction yet), so media settles once,
+ * after the run, on every exit: the provider cost was paid whether the run completed, was
+ * aborted or threw. Drains `pending` so a second call cannot double-charge. Returns the
+ * credits charged.
+ */
+export async function settleSubagentMediaUsage(
+  pending: PendingToolUsage,
+  effects: SubagentMediaSettlementEffects
+): Promise<number> {
+  const usage = takeToolUsage(pending);
+  if (usage.costUsd <= 0) return 0;
+  const credits = effects.usdToCredits(usage.costUsd);
+  if (credits <= 0) return 0;
+  await effects.deductCredits(credits);
+  effects.recordUsageEvent({
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    costUsd: usage.costUsd,
+    creditsCharged: credits,
+  });
+  await effects.recordAuditCredits(credits);
+  return credits;
 }

@@ -15,7 +15,6 @@ const h = vi.hoisted(() => ({
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
-  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
 }));
 
 vi.mock('@bike4mind/services', () => ({
@@ -48,7 +47,6 @@ vi.mock('@bike4mind/database', async () => {
       countDataLakeFilesByMembership: h.countDataLakeFilesByMembership,
       countDataLakeFilesByMembershipArm: h.countDataLakeFilesByMembershipArm,
       countDistinctDataLakeFilesByMembership: h.countDistinctDataLakeFilesByMembership,
-      countDistinctUncategorizedDataLakeFilesByMembership: h.countDistinctUncategorizedDataLakeFilesByMembership,
     },
   };
 });
@@ -72,7 +70,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     h.countDataLakeFilesByMembership.mockReset().mockResolvedValue({});
     h.countDataLakeFilesByMembershipArm.mockReset().mockResolvedValue({});
     h.countDistinctDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
-    h.countDistinctUncategorizedDataLakeFilesByMembership.mockReset().mockResolvedValue(0);
   });
 
   it('reads the lake documents in ONE call whatever the lake count', async () => {
@@ -140,7 +137,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
       lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
-      totalUncategorizedFileCount: 0,
     });
     expect(h.findByDatalakeTags).not.toHaveBeenCalled();
   });
@@ -192,30 +188,6 @@ describe('queryDataLakeTagCounts lake-document lookup', () => {
     expect(result.totalLakeFileCount).toBe(13);
     // Still served, still prefix-based: it sizes the tag TREE, which is prefix-keyed.
     expect(result.uniqueArticleCounts.total).toBe(0);
-  });
-
-  it('sizes the merged bucket from a distinct count, not a sum of the per-lake figures', async () => {
-    // Summing would be wrong on both edges: it double-counts a file loose in two lakes, and counts
-    // one that another lake already files under a branch the merged tree renders.
-    h.countDataLakeFilesByMembership.mockResolvedValue({
-      'datalake:lake-0': { total: 3, uncategorized: 2 },
-      'datalake:lake-1': { total: 3, uncategorized: 2 },
-    });
-    h.countDistinctUncategorizedDataLakeFilesByMembership.mockResolvedValue(1);
-
-    const result = await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
-
-    expect(result.totalUncategorizedFileCount).toBe(1);
-  });
-
-  it('narrows the merged bucket against every accessible prefix, not just the open ones', async () => {
-    // A dynamic lake's prefix is exactly where the merged tree DOES have a branch, so leaving it
-    // out would put already reachable files back in the bucket.
-    await queryDataLakeTagCounts(req, [lake(0), lake(1)]);
-
-    const [scopeArg, prefixArg] = h.countDistinctUncategorizedDataLakeFilesByMembership.mock.calls[0];
-    expect(scopeArg).toEqual(scopes());
-    expect(prefixArg).toEqual(expect.arrayContaining(['lake0:', 'lake1:']));
   });
 
   it('passes the SAME scopes to the distinct total as to the per-lake counts', async () => {
