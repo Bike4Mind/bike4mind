@@ -24,7 +24,7 @@ const draft: AttachmentDraft = {
   clear: () => {},
 };
 
-const usage: ComposerUsage = { contextTokens: 44_000, contextWindow: 200_000, credits: 31_667 };
+const usage: ComposerUsage = { contextTokens: 44_000, contextLimit: 200_000, credits: 31_667 };
 
 function statusMarkup(props: Partial<Parameters<typeof Composer>[0]> = {}): string {
   return renderToStaticMarkup(
@@ -87,7 +87,7 @@ describe('the composer indicator', () => {
    * same thing "<1%" does for the words.
    */
   it('floors the arc so a tiny measured context still reads as measured', () => {
-    const tiny = { contextTokens: 900, contextWindow: 1_050_000, credits: 31_667 };
+    const tiny = { contextTokens: 900, contextLimit: 1_050_000, credits: 31_667 };
     expect(ringValue({ usage: tiny })).toBe(4);
     // Escaped because this reads the attribute out of static markup, not out of the DOM.
     expect(ringLabel({ usage: tiny })).toBe('Context &lt;1%');
@@ -99,7 +99,7 @@ describe('the composer indicator', () => {
    * lives in that tooltip whether or not a window was ever stated.
    */
   it('draws an empty ring, not a full-looking one, for a window the catalog does not state', () => {
-    const unstated = { contextTokens: 44_000, contextWindow: null, credits: 31_667 };
+    const unstated = { contextTokens: 44_000, contextLimit: null, credits: 31_667 };
     expect(ringValue({ usage: unstated })).toBe(0);
     expect(ringLabel({ usage: unstated })).toBe('Context --');
   });

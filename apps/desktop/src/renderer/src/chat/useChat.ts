@@ -13,6 +13,7 @@ import type {
   ReasoningEffortSetting,
   UpdateProjectRequest,
 } from '@shared/chat';
+import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
 import { describeReturn } from './queuedMessages';
 import { applyLiveEvent, coalesceLiveEvents, startReply, type LiveReplyEvent } from '@shared/liveReply';
 import { applyReplyDone } from './replyDone';
@@ -471,12 +472,23 @@ export function useConversation(
         return;
       }
 
-      // A message that arrived without anyone typing it - a spawned session reporting back.
-      // Appended rather than folded into a streaming reply: it belongs to no turn in flight.
+      // A message that arrived without anyone typing it - a spawned session reporting back, or
+      // a compaction's boundary. Appended rather than folded into a streaming reply: it belongs
+      // to no turn in flight.
       if (event.type === 'message') {
         setMessages(current =>
-          current.some(message => message.id === event.message.id) ? current : [...current, event.message]
+          current.some(message => message.id === event.message.id) ? current : appendArrived(current, event.message)
         );
+        return;
+      }
+
+      if (event.type === 'auto-compact') {
+        setCommandProgress(event.running ? 'Context limit reached - compacting before your message goes out...' : null);
+        if (event.error) {
+          setNotice(
+            `Could not compact automatically, so your message went out with the whole conversation. ${event.error}`
+          );
+        }
         return;
       }
 
@@ -527,7 +539,7 @@ export function useConversation(
         : {
             // Temporary: main assigns the persisted id. They meet again on the next load, which
             // is the only place the difference could show, and by then this one is gone.
-            id: `pending-${Date.now()}`,
+            id: `${OPTIMISTIC_ID_PREFIX}${Date.now()}`,
             role: 'user',
             content: prompt,
             createdAt: new Date().toISOString(),
@@ -561,7 +573,7 @@ export function useConversation(
         setMessages(current => [
           ...current,
           {
-            id: `pending-${Date.now()}`,
+            id: `${OPTIMISTIC_ID_PREFIX}${Date.now()}`,
             role: 'user',
             content: prompt,
             createdAt: new Date().toISOString(),

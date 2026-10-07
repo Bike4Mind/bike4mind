@@ -1,6 +1,9 @@
-import type { ChatMessage, ChatToolCall, ChatUsage } from '@shared/chat';
+import type { ChatToolCall, ChatUsage } from '@shared/chat';
+import { AUTO_COMPACT_PERCENT, autoCompactThreshold } from '@shared/contextLimit';
 import { pendingCodePhrase, type PendingCode } from './codeStream';
 import { activePhrase } from './toolRows';
+
+export { contextTokens, inputSide, latestReply } from '@shared/contextLimit';
 
 /**
  * What the status line under the transcript knows about the turn in flight.
@@ -146,11 +149,11 @@ export function statusFields(turn: TurnProgress, now: number, activity: string):
 }
 
 /**
- * How full the model's context window is, and what the account has left to spend.
+ * How full the conversation's context is, and what the account has left to spend.
  *
  * Every field is nullable and every null means NOT KNOWN rather than zero: a fresh conversation
  * has measured no request, a backend may state no window, and `/api/v1/me` can be unreachable.
- * A stand-in zero in any of the three reads as a fact the server never stated.
+ * A stand-in zero in any of them reads as a fact the server never stated.
  */
 export interface ComposerUsage {
   /**
@@ -158,8 +161,15 @@ export interface ComposerUsage {
    * is window occupancy, which is not the same quantity as `totalTokens` above.
    */
   contextTokens: number | null;
-  /** The active model's window, from the server's catalog. Null when it states none. */
-  contextWindow: number | null;
+  /**
+   * What the percentage and the ring measure against: the model's window, capped - see
+   * effectiveContextLimit. Not the raw window, because the conversation compacts well before a
+   * 1M window fills, and a ring at 30% on the eve of a compaction would be telling the user it
+   * had room it does not.
+   */
+  contextLimit: number | null;
+  /** The model's own window, from the server's catalog, for the tooltip only. Null when unstated. */
+  modelWindow?: number | null;
   /** The account's personal credit balance. Null when it could not be read. */
   credits: number | null;
   /** Why the balance is null, for the tooltip. Never set alongside a real balance. */
@@ -170,82 +180,6 @@ export interface ComposerUsage {
 
 /** Stands in for a figure nobody has stated, so the row keeps its shape and reads as unknown. */
 const UNKNOWN = '--';
-
-/**
- * The input side of one request: everything that occupied the context window to serve it.
- *
- * Cache reads are INCLUDED here and excluded from `totalTokens`, and the difference is the
- * whole point of the two functions. `totalTokens` is a COST proxy, so it drops the tokens that
- * were served cheaply from cache; this is an OCCUPANCY measure, and a cached token takes up
- * exactly as much of the window as a fresh one. Folding the two together makes the status line
- * either overprice a tool loop or understate how full it is.
- */
-export function inputSide(usage: ChatUsage | null | undefined): number | null {
-  if (!usage) return null;
-  const parts = [usage.inputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens];
-  if (parts.every(part => part === undefined)) return null;
-  return parts.reduce((sum: number, part) => sum + (part ?? 0), 0);
-}
-
-/**
- * How full the window was when this reply's last request went out.
- *
- * The LAST ROUND's input, never a sum over the rounds. An agent turn makes one request per tool
- * round and each one re-sends the conversation so far, so summing them counts the same context
- * dozens of times over and sails past 100% in any real tool loop. The message's own `usage` is
- * that sum - it is the turn's BILL, and it is the wrong number for this.
- *
- * A message with tool calls but no rounds was stored before rounds were recorded: its per-round
- * inputs were never kept, so the answer is unknown rather than its summed bill.
- */
-export function contextTokens(message: ChatMessage | null | undefined): number | null {
-  if (!message || message.role !== 'assistant') return null;
-
-  const rounds = message.rounds;
-  if (rounds?.length) {
-    for (let index = rounds.length - 1; index >= 0; index--) {
-      const measured = inputSide(rounds[index].usage);
-      if (measured !== null) return measured;
-    }
-    return null;
-  }
-
-  if (message.toolCalls?.length) return null;
-  return inputSide(message.usage);
-}
-
-/**
- * The reply whose request the context figure describes: the most recent assistant message.
- *
- * Messages typed since are deliberately skipped rather than counted - they will occupy the
- * window on the next request, and this reports what the last one actually used.
- *
- * The scan STOPS at a context boundary, which is what makes the indicator answer the question
- * the user asked `/clear` or `/compact` to change. The request behind a reply from before the
- * boundary measured a window that no longer exists, and reporting it would tell the user their
- * compaction did nothing. With no reply since, the answer is null - not measured yet - and the
- * figure reads as unknown until the next turn states a real one.
- *
- * `turnOpen` exists because a reply being streamed has stated nothing to measure yet. Its
- * `rounds` and its own `usage` both arrive with the terminal event, and the 'usage' events in
- * between carry the turn's running BILL, which is the wrong quantity for occupancy - see
- * inputSide. Read off the open reply, the figure would be unknown for the whole turn, so the
- * indicator would blank itself the moment the user pressed send. With it set, an assistant
- * message that measures nothing is passed over and the last request that DID state a figure is
- * the one reported, which is why the ring holds still through a turn and steps at the end of
- * it. Only while the turn is open: a settled conversation still reports its newest reply, so a
- * stored message that measured nothing still reads as unknown rather than as an older turn.
- */
-export function latestReply(messages: readonly ChatMessage[], turnOpen = false): ChatMessage | null {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (message.boundary) return null;
-    if (message.role !== 'assistant') continue;
-    if (turnOpen && contextTokens(message) === null) continue;
-    return message;
-  }
-  return null;
-}
 
 /** "22" for a window that is 22% full; null when either half of the fraction is unknown. */
 export function contextPercent(tokens: number | null, window: number | null): number | null {
@@ -259,7 +193,8 @@ export function contextPercent(tokens: number | null, window: number | null): nu
  *
  * The number itself is one hover and one squint away, and the user glancing at the composer is
  * asking one question - do I still have room? Primary up to three quarters, warning past it,
- * danger once a long reply plus its tool results would not fit. Returned as a Joy palette name
+ * danger once a long reply plus its tool results would not fit - which is also where the next
+ * message compacts the conversation first. Returned as a Joy palette name
  * rather than a colour so both themes get their own value for it.
  *
  * An unknown occupancy is neutral: there is no band to be in, and borrowing the full-window
@@ -267,7 +202,7 @@ export function contextPercent(tokens: number | null, window: number | null): nu
  */
 export function occupancyColor(percent: number | null): 'neutral' | 'primary' | 'warning' | 'danger' {
   if (percent === null) return 'neutral';
-  if (percent >= 90) return 'danger';
+  if (percent >= AUTO_COMPACT_PERCENT) return 'danger';
   if (percent >= 75) return 'warning';
   return 'primary';
 }
@@ -316,7 +251,7 @@ function formatOccupancy(percent: number, tokens: number): string {
  * is known, which is the caller's cue to fall back to its own word.
  */
 export function usageLabel(usage: ComposerUsage): string | null {
-  const percent = contextPercent(usage.contextTokens, usage.contextWindow);
+  const percent = contextPercent(usage.contextTokens, usage.contextLimit);
   if (percent === null && usage.credits === null) return null;
 
   return `Context ${percent === null ? UNKNOWN : formatOccupancy(percent, usage.contextTokens ?? 0)}`;
@@ -325,6 +260,17 @@ export function usageLabel(usage: ComposerUsage): string | null {
 /** "31,667" - the balance as the server stated it, grouped so a five-figure number stays readable. */
 export function formatCredits(balance: number): string {
   return Math.round(balance).toLocaleString('en-US');
+}
+
+/**
+ * When the conversation will compact itself, and the model's own window where the cap hides it,
+ * so nobody has to work out from "/ 400k" why a 1M model stops short of 1M.
+ */
+function describeCompaction(limit: number, modelWindow: number | null): string {
+  const at = `Compacts automatically at ${formatTokens(autoCompactThreshold(limit))}`;
+  return modelWindow !== null && modelWindow > limit
+    ? `${at} - the model's own window is ${formatTokens(modelWindow)}`
+    : at;
 }
 
 /**
@@ -339,14 +285,15 @@ export function describeUsage(usage: ComposerUsage): string | null {
 
   if (usage.contextTokens === null) {
     lines.push('Context - nothing measured in this conversation yet');
-  } else if (usage.contextWindow === null) {
+  } else if (usage.contextLimit === null) {
     // No percentage, rather than a percentage of a window this client made up.
     lines.push(`Context ${formatTokens(usage.contextTokens)} used - this model reports no window size`);
   } else {
-    const percent = contextPercent(usage.contextTokens, usage.contextWindow) ?? 0;
+    const percent = contextPercent(usage.contextTokens, usage.contextLimit) ?? 0;
     const share = formatOccupancy(percent, usage.contextTokens);
-    lines.push(`Context ${formatTokens(usage.contextTokens)} / ${formatTokens(usage.contextWindow)} (${share})`);
+    lines.push(`Context ${formatTokens(usage.contextTokens)} / ${formatTokens(usage.contextLimit)} (${share})`);
   }
+  if (usage.contextLimit !== null) lines.push(describeCompaction(usage.contextLimit, usage.modelWindow ?? null));
 
   lines.push(
     usage.credits === null

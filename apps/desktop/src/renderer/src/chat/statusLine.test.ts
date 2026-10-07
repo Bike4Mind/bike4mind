@@ -331,7 +331,7 @@ describe('latestReply', () => {
     expect(contextTokens(latestReply([before, boundary]))).toBeNull();
     // Unknown rather than estimated, which is this file's rule everywhere: the next request is
     // what states the new occupancy, and a client-side guess drawn as a fact would be worse.
-    expect(usageLabel({ contextTokens: null, contextWindow: 200_000, credits: 31_667 })).toBe('Context --');
+    expect(usageLabel({ contextTokens: null, contextLimit: 200_000, credits: 31_667 })).toBe('Context --');
   });
 
   it('reports the first reply measured after the boundary, not the ones before it', () => {
@@ -437,7 +437,7 @@ describe('contextPercent', () => {
 });
 
 describe('usageLabel', () => {
-  const known: ComposerUsage = { contextTokens: 44_000, contextWindow: 200_000, credits: 31_667 };
+  const known: ComposerUsage = { contextTokens: 44_000, contextLimit: 200_000, credits: 31_667 };
 
   it('carries the window figure alone; the balance is a hover away', () => {
     expect(usageLabel(known)).toBe('Context 22%');
@@ -446,18 +446,18 @@ describe('usageLabel', () => {
 
   it('keeps its shape when the window figure is missing, so the row does not jump', () => {
     expect(usageLabel({ ...known, contextTokens: null })).toBe('Context --');
-    expect(usageLabel({ ...known, contextWindow: null })).toBe('Context --');
+    expect(usageLabel({ ...known, contextLimit: null })).toBe('Context --');
   });
 
   // The hover target has to survive a balance this client could not read, and a window figure
   // it has not measured - otherwise the one field that still knows something is unreachable.
   it('still shows a field while either figure is known', () => {
     expect(usageLabel({ ...known, credits: null })).toBe('Context 22%');
-    expect(usageLabel({ contextTokens: null, contextWindow: null, credits: 0 })).toBe('Context --');
+    expect(usageLabel({ contextTokens: null, contextLimit: null, credits: 0 })).toBe('Context --');
   });
 
   it('says nothing when it knows nothing, leaving the caller its own fallback', () => {
-    expect(usageLabel({ contextTokens: null, contextWindow: null, credits: null })).toBeNull();
+    expect(usageLabel({ contextTokens: null, contextLimit: null, credits: null })).toBeNull();
   });
 });
 
@@ -465,7 +465,7 @@ describe('describeUsage', () => {
   it('spells both figures out and names them apart from what the turn cost', () => {
     const detail = describeUsage({
       contextTokens: 44_000,
-      contextWindow: 200_000,
+      contextLimit: 200_000,
       credits: 31_667,
       lastTurn: { inputTokens: 2000, cacheReadInputTokens: 120_000, outputTokens: 500, usdCost: 0.42 },
     });
@@ -474,8 +474,25 @@ describe('describeUsage', () => {
     expect(detail).toContain('Last turn 2.0k new input, 120k cached, 500 output - $0.42');
   });
 
+  it('measures against the capped limit, and says where it compacts and what the model allows', () => {
+    const detail = describeUsage({
+      contextTokens: 111_000,
+      contextLimit: 400_000,
+      modelWindow: 1_050_000,
+      credits: 12,
+    });
+    expect(detail).toContain('Context 111k / 400k (28%)');
+    expect(detail).toContain("Compacts automatically at 360k - the model's own window is 1.1M");
+  });
+
+  it('leaves the model window out when it is the limit itself', () => {
+    const detail = describeUsage({ contextTokens: 44_000, contextLimit: 200_000, modelWindow: 200_000, credits: 12 });
+    expect(detail).toContain('Compacts automatically at 180k');
+    expect(detail).not.toContain('own window');
+  });
+
   it('reports the tokens without inventing a window when the model states none', () => {
-    const detail = describeUsage({ contextTokens: 44_000, contextWindow: null, credits: 12 });
+    const detail = describeUsage({ contextTokens: 44_000, contextLimit: null, credits: 12 });
     expect(detail).toContain('Context 44k used - this model reports no window size');
     expect(detail).not.toContain('%');
   });
@@ -483,7 +500,7 @@ describe('describeUsage', () => {
   it('says why the balance is missing rather than showing a zero', () => {
     const detail = describeUsage({
       contextTokens: null,
-      contextWindow: 200_000,
+      contextLimit: 200_000,
       credits: null,
       creditsError: 'Could not read your balance from this server.',
     });
@@ -515,13 +532,13 @@ describe('a real turn against a very large window', () => {
   // Under half a percent of a 1.05M window. "0%" would render a measured context exactly like
   // no context at all, which is the one thing every other field here refuses to do.
   it('says <1% rather than 0% for an occupancy that is real but tiny', () => {
-    const usage: ComposerUsage = { contextTokens: 4190, contextWindow: 1_050_000, credits: 1991 };
+    const usage: ComposerUsage = { contextTokens: 4190, contextLimit: 1_050_000, credits: 1991 };
     expect(usageLabel(usage)).toBe('Context <1%');
     expect(describeUsage(usage)).toContain('Context 4.2k / 1.1M (<1%)');
   });
 
   it('still says 0% when there is genuinely nothing in the window', () => {
-    expect(usageLabel({ contextTokens: 0, contextWindow: 1_050_000, credits: 1991 })).toBe('Context 0%');
+    expect(usageLabel({ contextTokens: 0, contextLimit: 1_050_000, credits: 1991 })).toBe('Context 0%');
   });
 
   // A turn costs tens of credits against a balance in the thousands. Compacting the balance
@@ -529,7 +546,7 @@ describe('a real turn against a very large window', () => {
   // Exact rather than compacted, because the balance only appears on hover now and a reader
   // who went looking for it wants the figure, not a rounded "2.0k" that a turn cannot move.
   it('moves the balance on hover after a single turn', () => {
-    const at = (credits: number) => describeUsage({ contextTokens: 4190, contextWindow: 1_050_000, credits });
+    const at = (credits: number) => describeUsage({ contextTokens: 4190, contextLimit: 1_050_000, credits });
     expect(at(2045)).toContain('Credits 2,045 personal balance');
     expect(at(1991)).toContain('Credits 1,991 personal balance');
   });
