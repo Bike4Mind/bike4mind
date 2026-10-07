@@ -10,6 +10,7 @@ import { BadRequestError, NotFoundError, parseOrBadRequest } from '@server/utils
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -53,11 +54,12 @@ const resolveReprocessableFabFile = async (
   if (!dataLakeId) return null;
 
   // Scope-gated like the whole-lake sibling, which declares DATA_LAKE_READ_SCOPES and calls this on
-  // its POST. Asserted HERE rather than on `baseApi` so the owner path keeps its existing scope
-  // behaviour: this route is otherwise scope-less, and declaring a lake gate on the route would 403
-  // every file-scoped key that reprocesses its own file. Without it, a key deliberately minted
-  // without `datalake:write` could do through this door exactly what /api/data-lakes/:id/rechunk
-  // refuses it. No-op for a browser caller - assertScope returns early when there is no apiKeyInfo.
+  // its POST. Asserted HERE rather than on `baseApi` so the owner path keeps its existing (files:write)
+  // scope alone: this in-handler check only fires on the named-lake path, and declaring a lake gate on
+  // the route would 403 every file-scoped key that reprocesses its own file. Without it, a key
+  // deliberately minted without `datalake:write` could do through this door exactly what
+  // /api/data-lakes/:id/rechunk refuses it. No-op for a browser caller - assertApiKeyScope returns
+  // early when there is no apiKeyInfo.
   assertDataLakeWriteScope(req);
 
   // Throws (400) when the caller cannot rebuild the named lake. Not folded into the 404 below: the
@@ -97,7 +99,7 @@ const resolveReprocessableFabFile = async (
  * member file they do not own - see `resolveReprocessableFabFile` for why it is required to be
  * explicit.
  */
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(
   asyncHandler(async (req: Request<unknown, unknown, ReprocessBody>, res) => {
     // Zod, not a hand-written `!fabFileId` check, for the same reason the whole-lake sibling
     // parses with `RechunkInput`: `dataLakeId` now flows straight into `assertLakeRebuildAccess`'s

@@ -74,7 +74,7 @@ const StatusFilters: FC<Props> = ({ search, facets, onChange }) => {
         onKeyDown={e => e.key === 'Enter' && commitBranch()}
         sx={{ width: 200 }}
       />
-      <ButtonGroup size="sm">
+      <ButtonGroup size="sm" spacing={0.5}>
         {(['7d', '30d'] as const).map(r => (
           <Button
             key={r}

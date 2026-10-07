@@ -9,7 +9,7 @@ import {
 import type { ToolDefinition } from '../../base/types';
 import { createDataLake } from '../../../../dataLakeService/createDataLake';
 import { TAG_PREFIX_UNAVAILABLE_CODE } from '../../../../dataLakeService/tagPrefixCollision';
-import { buildToolAccessContext } from '../../helpers/toolAccessContext';
+import { buildToolAccessContext, toolAuditPrincipal } from '../../helpers/toolAccessContext';
 import {
   DATA_LAKES_DISABLED_MESSAGE,
   NOT_AVAILABLE_MESSAGE,
@@ -95,7 +95,7 @@ export const createDataLakeTool: ToolDefinition = {
           const ctx = await buildToolAccessContext(context);
           if (!canCreateInOrg(ctx, organizationId)) {
             return (
-              'The lake could not be created in the active organization from chat, so nothing was created. ' +
+              'The lake could not be created in the active organization, so nothing was created. ' +
               'The user can create it in that organization from the Data Lakes manager, or switch to their ' +
               'personal account and ask again.'
             );
@@ -109,7 +109,8 @@ export const createDataLakeTool: ToolDefinition = {
               context.userId,
               { name, slug, description, fileTagPrefix: prefixCandidate(basePrefix, attempt) },
               { db: adapters, logger: context.logger },
-              organizationId
+              organizationId,
+              toolAuditPrincipal(context)
             );
             const scope = lake.organizationId ? 'shared with the active organization' : 'personal';
             return (

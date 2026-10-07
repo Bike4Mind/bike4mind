@@ -5,7 +5,7 @@ import { emitMetrics } from '@server/utils/cloudwatch';
 
 /**
  * Namespace for quest-lifecycle operational metrics; must match the timeout sweep's
- * (apps/client/server/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
+ * (apps/workers/src/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
  * `Stage` dimension in sync with infra/alarms.ts.
  */
 export const QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';

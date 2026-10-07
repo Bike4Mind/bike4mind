@@ -1,18 +1,19 @@
 import { describe, it, expect, beforeEach, Mock } from 'vitest';
 import { addFiles } from './addFiles';
-import { createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
+import { captureWrites, createMockProjectRepository, createMockFabFileRepository } from '../__tests__/utils/testUtils';
 import { IFabFileRepository, IProjectRepository, IUserDocument, NotFoundError, Permission } from '@bike4mind/common';
 
-// TODO: Skipped temporarily due to test failures that need fixing
-describe.skip('projectService - addFiles', () => {
+describe('projectService - addFiles', () => {
   const contributorId = 'contributor-123';
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
   let adapters: { db: { projects: IProjectRepository; fabFiles: IFabFileRepository } };
+  let fabFileWrites: unknown[];
 
   beforeEach(() => {
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
+    fabFileWrites = captureWrites(mockFabFileRepo.update);
     adapters = {
       db: {
         projects: mockProjectRepo,
@@ -67,25 +68,29 @@ describe.skip('projectService - addFiles', () => {
 
     expect(result).toEqual(mockProject);
 
-    expect(mockProjectRepo.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...mockProject,
-        fileIds: expect.arrayContaining([...existingFileIds, ...fileIds]),
-        updatedAt: expect.any(Date),
-      })
-    );
+    expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).toHaveBeenCalledTimes(1);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0]).toStrictEqual([
+      mockUser,
+      { id: projectId, fileIds: [...existingFileIds, ...fileIds], updatedAt: expect.any(Date) },
+    ]);
+    expect((mockProjectRepo.updateWithUpdateAccess as Mock).mock.calls[0][0]).toBe(mockUser);
 
-    for (const file of mockFiles) {
-      expect(mockFabFileRepo.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...file,
-          users: expect.arrayContaining([
-            { userId: projectOwnerId, permissions: [Permission.read], projectId },
-            { userId: contributorId, permissions: [Permission.read], projectId },
-          ]),
-        })
-      );
-    }
+    expect(mockFabFileRepo.update).toHaveBeenCalledTimes(fileIds.length);
+    fileIds.forEach((id, i) => {
+      expect(fabFileWrites[i]).toStrictEqual({
+        id,
+        users: [
+          {
+            userId: projectOwnerId,
+            permissions: [Permission.read, Permission.update],
+            projectId,
+            sessionId: undefined,
+          },
+          { userId: contributorId, permissions: [Permission.read], projectId, sessionId: undefined },
+        ],
+      });
+    });
   });
 
   it('should throw error when project is not found', async () => {
@@ -93,11 +98,14 @@ describe.skip('projectService - addFiles', () => {
     (mockProjectRepo.shareable.findUpdateAccessById as Mock).mockResolvedValueOnce(null);
 
     await expect(addFiles(mockUser, { projectId: 'any', fileIds: ['any'] }, adapters)).rejects.toThrow(NotFoundError);
+    expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
   it('should throw error when some files are not accessible', async () => {
     const mockUser = { id: contributorId } as IUserDocument;
-    const mockProject = { id: 'project-1', userId: 'owner-1' };
+    const mockProject = { id: 'project-1', userId: 'owner-1', fileIds: [], users: [] };
     const fileIds = ['file-1', 'file-2'];
     const mockFiles = [{ id: 'file-1' }]; // Only one file found
 
@@ -107,6 +115,9 @@ describe.skip('projectService - addFiles', () => {
     await expect(addFiles(mockUser, { projectId: 'any', fileIds }, adapters)).rejects.toThrow(
       'Some files are not accessible'
     );
+    expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
+    expect(mockFabFileRepo.update).not.toHaveBeenCalled();
   });
 
   it('should throw validation error for invalid parameters', async () => {
@@ -121,5 +132,6 @@ describe.skip('projectService - addFiles', () => {
     expect(mockProjectRepo.shareable.findUpdateAccessById).not.toHaveBeenCalled();
     expect(mockFabFileRepo.shareable.findAllAccessibleByIds).not.toHaveBeenCalled();
     expect(mockProjectRepo.update).not.toHaveBeenCalled();
+    expect(mockProjectRepo.updateWithUpdateAccess).not.toHaveBeenCalled();
   });
 });

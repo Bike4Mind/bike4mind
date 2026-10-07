@@ -3,6 +3,7 @@ import { auth as googleAuth } from '@googleapis/drive';
 import dayjs from 'dayjs';
 import type { Response } from 'express';
 import { User, orgGoogleDriveConnectionRepository } from '@bike4mind/database';
+import { driveConnectionOwnerOf, type DriveConnectionOwner } from '@bike4mind/common';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
 import { BadRequestError } from '@server/utils/errors';
 import { createStateToken } from '@server/auth/jwtStateStore';
@@ -152,7 +153,7 @@ async function personalRefreshTokenOf(userId: string): Promise<string | null> {
 }
 
 /**
- * Tear down an org Drive connection: revoke its org-owned credential at Google (unless it is BORROWED
+ * Tear down a Drive connection: revoke its org-owned credential at Google (unless it is BORROWED
  * - see below), then hard-delete the row, which releases the global driveFolderId claim.
  *
  * This is the single teardown seam on purpose - the revoke belongs to *releasing a connection*, not to
@@ -172,9 +173,15 @@ async function personalRefreshTokenOf(userId: string): Promise<string | null> {
  * profile (which now genuinely revokes). A credential the user no longer holds has no such owner, so
  * this connection is its last live handle and it does get revoked.
  */
-export async function releaseDriveConnection(connectionId: string, organizationId: string): Promise<boolean> {
-  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
+export async function releaseDriveConnection(connectionId: string, owner: DriveConnectionOwner): Promise<boolean> {
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);
   if (!connection) return false;
+
+  // A personal connection holds no credential of its own - it syncs on its owner's live grant, which
+  // only that owner's profile disconnect may revoke - so dropping the row is its whole teardown.
+  if (!connection.oauthRefreshToken) {
+    return orgGoogleDriveConnectionRepository.release(connectionId, owner);
+  }
 
   const connectionToken = decryptStoredToken(connection.oauthRefreshToken);
   const isBorrowed = !!connectionToken && connectionToken === (await personalRefreshTokenOf(connection.connectedBy));
@@ -186,13 +193,13 @@ export async function releaseDriveConnection(connectionId: string, organizationI
     await revokeDriveGrant(connection.oauthRefreshToken, `org connection ${connectionId}`);
   }
 
-  return orgGoogleDriveConnectionRepository.release(connectionId, organizationId);
+  return orgGoogleDriveConnectionRepository.release(connectionId, owner);
 }
 
 /**
  * Tear down whatever Drive connection feeds a lake, for a caller that only has the lake id - the
  * phase-2 purge sweep. Resolves the connection GLOBALLY and regardless of `enabled` (see
- * findByDataLakeIdAny) and takes the organizationId off the row itself, because the purge runs while
+ * findByDataLakeIdAny) and takes the owner off the row itself, because the purge runs while
  * the lake document is on its way out and must not depend on re-deriving the org from it.
  *
  * Without this the purge left the row behind, and because driveFolderId is globally unique with no
@@ -205,7 +212,7 @@ export async function releaseDriveConnection(connectionId: string, organizationI
 export async function releaseDriveConnectionForLake(dataLakeId: string): Promise<boolean> {
   const connection = await orgGoogleDriveConnectionRepository.findByDataLakeIdAny(dataLakeId);
   if (!connection) return false;
-  return releaseDriveConnection(connection.id, connection.organizationId);
+  return releaseDriveConnection(connection.id, driveConnectionOwnerOf(connection));
 }
 
 /**
@@ -295,37 +302,64 @@ export async function getValidUserDriveAccessToken(userId: string): Promise<stri
 }
 
 /**
- * Resolve a valid Drive access token for an ORG connection (the ingest job's credential).
+ * Whether a token-resolution failure needs the user to reconnect, as opposed to a blip (Google 5xx,
+ * network, Mongo) that the next poll can retry. Only the former may mark a connection
+ * `credential_error`: nothing but a manual reconnect clears that state, and the poll skips it.
+ */
+function isTerminalDriveGrantError(e: unknown): boolean {
+  // getValidUserDriveAccessToken's expected states (unlinked, unreadable, empty refresh) are all reconnects.
+  if (e instanceof BadRequestError) return true;
+  if (!(e instanceof Error)) return false;
+  // google-auth-library surfaces a revoked/expired grant as a GaxiosError whose body is the OAuth error.
+  const response: unknown = 'response' in e ? e.response : undefined;
+  const data: unknown = response && typeof response === 'object' && 'data' in response ? response.data : undefined;
+  const oauthError: unknown = data && typeof data === 'object' && 'error' in data ? data.error : undefined;
+  return oauthError === 'invalid_grant' || e.message === 'invalid_grant';
+}
+
+/**
+ * Resolve a valid Drive access token for a connection (the ingest job's credential).
  *
- * Prefers the connection's own org-owned refresh token; until the org-owned connect flow (issue D)
- * populates it, falls back to the connecting user's personal Drive credential (`connectedBy`). On a
- * credential failure it marks the connection `credential_error` so the failure is observable rather
- * than silent. Loads the encrypted token via the org-scoped credential accessor (the caller passes
- * the connection's organizationId), never a default read.
+ * An org connection uses its own org-owned refresh token. A connection without one - every personal
+ * connection, and an org row from before the org-owned copy existed - uses the connecting user's live
+ * `User.googleDrive` grant (`connectedBy`). A terminal grant failure either way marks the connection
+ * `credential_error` so it is observable rather than silent; a transient one is rethrown untouched so
+ * the ingest handler releases the claim and the next poll retries. Loads the encrypted token via
+ * the owner-scoped credential accessor (the caller passes the connection's owner), never a default read.
  */
 export async function getValidConnectionDriveAccessToken(
   connectionId: string,
-  organizationId: string
+  owner: DriveConnectionOwner
 ): Promise<string> {
-  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, organizationId);
+  const connection = await orgGoogleDriveConnectionRepository.findByIdWithCredentials(connectionId, owner);
   if (!connection) throw new Error('Google Drive connection not found');
 
-  if (connection.oauthRefreshToken) {
-    try {
-      const refreshToken = decryptToken(connection.oauthRefreshToken);
+  try {
+    if (connection.oauthRefreshToken) {
+      const refreshToken = decryptConnectionRefreshToken(connection.oauthRefreshToken);
       if (refreshToken) {
         const credentials = await refreshAccessToken(refreshToken);
         if (credentials.access_token) return credentials.access_token;
       }
-    } catch (e) {
+    }
+    return await getValidUserDriveAccessToken(connection.connectedBy);
+  } catch (e) {
+    if (isTerminalDriveGrantError(e)) {
       await orgGoogleDriveConnectionRepository.updateHealth(connection.id, {
         status: 'credential_error',
         lastError: e instanceof Error ? e.message : String(e),
       });
-      throw e;
     }
+    throw e;
   }
+}
 
-  // Fallback: the connecting user's personal Drive token (today's connect flow stores there).
-  return getValidUserDriveAccessToken(connection.connectedBy);
+// An undecryptable org copy (post key-rotation / partial restore) cannot heal on retry, so it is a
+// reconnect - the same shape getValidUserDriveAccessToken gives the user's own unreadable token.
+function decryptConnectionRefreshToken(encrypted: string): string | null {
+  try {
+    return decryptToken(encrypted);
+  } catch {
+    throw new BadRequestError('Google Drive connection token unreadable - reconnect required');
+  }
 }

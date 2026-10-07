@@ -3,24 +3,11 @@ import { Box, Typography } from '@mui/joy';
 import type { PythonArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { artifactFileName } from '@client/app/utils/artifactFileName';
+import { detectPythonPackages } from '@client/app/utils/pythonPackages';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
-const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'sklearn'];
-
-const detectPackages = (code: string): string[] => {
-  const patterns = [/^import\s+(\w+)/gm, /^from\s+(\w+)\s+import/gm];
-  const detected: string[] = [];
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(code)) !== null) {
-      if (SUPPORTED_PACKAGES.includes(match[1])) detected.push(match[1]);
-    }
-  }
-  return detected;
-};
-
 const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId, index }) => {
-  const packages = detectPackages(artifact.content);
+  const packages = detectPythonPackages(artifact.content);
   const title = artifact.title || 'Python Script';
 
   const pythonArtifact: PythonArtifact = {

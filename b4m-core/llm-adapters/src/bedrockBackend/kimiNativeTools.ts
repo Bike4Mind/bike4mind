@@ -129,6 +129,8 @@ export class KimiNativeToolStream {
   private inSection = false;
   /** Inside a bare call (no section wrapper), which ends at CALL_END rather than SECTION_END. */
   private inBareCall = false;
+  /** True once a call marker was seen, even if it never parsed into a complete call. */
+  sawMarker = false;
 
   push(chunk: string): { text: string; toolCalls: ParsedNativeToolCall[] } {
     this.buffer += chunk;
@@ -153,6 +155,7 @@ export class KimiNativeToolStream {
           text += this.buffer.slice(0, start);
           this.buffer = this.buffer.slice(start + SECTION_BEGIN.length);
           this.inSection = true;
+          this.sawMarker = true;
           continue;
         }
         // A call can arrive with no section wrapper. Holding back only SECTION_BEGIN
@@ -162,6 +165,7 @@ export class KimiNativeToolStream {
           text += this.buffer.slice(0, bare);
           this.buffer = this.buffer.slice(bare);
           this.inBareCall = true;
+          this.sawMarker = true;
           continue;
         }
         // Neither marker in view: surface everything except a tail that might be either

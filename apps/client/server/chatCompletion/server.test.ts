@@ -32,12 +32,13 @@ vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProce
 // route (executeCompletion + credit attribution); stubbed so importing the route doesn't drag
 // in real DB models.
 const mockQuestSettleIfUnfinished = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const mockQuestFindById = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 const mockConnectDB = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockMongoose = vi.hoisted(() => ({ connection: { readyState: 1 } }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: mockConnectDB,
   mongoose: mockMongoose,
-  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished },
+  questRepository: { settleIfUnfinished: mockQuestSettleIfUnfinished, findById: mockQuestFindById },
   userApiKeyRepository: { findById: vi.fn().mockResolvedValue({ id: 'key1', name: 'Test Key' }) },
   adminSettingsRepository: {},
   apiKeyRepository: {},
@@ -106,8 +107,9 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers: vi.fn() }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
-import { createApp } from './server';
+import { createApp, drainInFlight } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
+import { questReplyText } from '@server/utils/questPollBody';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
 const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
@@ -190,7 +192,21 @@ describe('ChatCompletion /process', () => {
       status: 'stopped',
       type: 'error',
       reply: GENERIC_PROCESSING_FAILURE_REPLY,
+      replies: [GENERIC_PROCESSING_FAILURE_REPLY],
     });
+  });
+
+  // The poll body derives `reply` from visible slots, so a failure written only to `reply` would be
+  // hidden behind the partial answer that had already streamed.
+  it('appends the failure to already-streamed slots so the poll body still reports it', async () => {
+    mockQuestFindById.mockResolvedValueOnce({ replies: ['<think>plan</think>', 'Partial answer'] });
+    mockProcessQuest.mockRejectedValueOnce(new Error('boom'));
+    await post(VALID_BODY, { authorization: AUTH });
+
+    await vi.waitFor(() => expect(mockQuestSettleIfUnfinished).toHaveBeenCalledTimes(1));
+    const patch = mockQuestSettleIfUnfinished.mock.calls[0][1];
+    expect(patch.replies).toEqual(['Partial answer', GENERIC_PROCESSING_FAILURE_REPLY]);
+    expect(questReplyText(patch)).toBe(`Partial answer${GENERIC_PROCESSING_FAILURE_REPLY}`);
   });
 
   // Operator-facing signal: a quest-processing failure must emit a metric even though the user
@@ -260,6 +276,38 @@ describe('ChatCompletion /health', () => {
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, readyState: 1 });
+  });
+});
+
+describe('ChatCompletion SIGTERM drain', () => {
+  it('logs an error naming the count when the drain window expires with work still running', async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn() };
+      const inFlight = new Set([new Promise<void>(() => {})]);
+
+      const outcome = drainInFlight({ inFlight, logger, drainTimeoutMs: 1000 });
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(await outcome).toBe('timed-out');
+      // A quest cut off by SIGKILL must leave an ERROR line for the log subscription;
+      // the info-level "Drain complete" that follows is invisible to LiveOps.
+      expect(logger.error).toHaveBeenCalledWith('Drain window expired with in-flight quests - they will be cut off', {
+        count: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not log an error when the in-flight work drains inside the window', async () => {
+    const logger = { error: vi.fn() };
+    const inFlight = new Set([Promise.resolve()]);
+
+    const outcome = await drainInFlight({ inFlight, logger, drainTimeoutMs: 1000 });
+
+    expect(outcome).toBe('drained');
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });
 
@@ -377,6 +425,23 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(params.options).toMatchObject({ stream: true, temperature: 0.4, maxTokens: 256 });
     expect(params.options.tools).toHaveLength(1);
     expect(params.options.tools[0].toolSchema.name).toBe('lookup');
+  });
+
+  it.each(['GET', 'PUT', 'HEAD'])('405s %s with Allow: POST, ahead of auth', async method => {
+    const res = await fetch(`${baseUrl}/api/ai/v1/completions`, {
+      method,
+      headers: { 'x-request-id': 'req-405' },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+    if (method !== 'HEAD') {
+      expect(await res.json()).toEqual({
+        error: `Method ${method} is not allowed. Allowed: POST`,
+        request_id: 'req-405',
+      });
+    }
+    expect(mockAuth.verifyApiKey).not.toHaveBeenCalled();
+    expect(mockAuth.verifyJwtToken).not.toHaveBeenCalled();
   });
 });
 

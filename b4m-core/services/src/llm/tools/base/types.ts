@@ -3,6 +3,7 @@ import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclus
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
+import type { GeneratedImageCounter } from '../../recordGeneratedImages';
 import {
   IChatHistoryItemDocument,
   ILatticeModel,
@@ -101,6 +102,8 @@ export interface ToolContext {
     };
     // Extended db adapters for tools that need them
     fabfiles?: IFabFileRepository;
+    /** The image tools bump the session's imageCount through this (see recordGeneratedImages). */
+    sessions?: GeneratedImageCounter;
     fabfilechunks?: Pick<
       IFabFileChunkRepository,
       | 'findByFabFileId'
@@ -216,6 +219,13 @@ export interface ToolContext {
    * write by it must re-check membership itself - see create_data_lake. Absent = personal context.
    */
   organizationId?: string;
+  /**
+   * The `b4m_live_` key that authenticated the turn, when one did (`/api/chat`, `/api/ai/llm`).
+   * Server-derived from `req.apiKeyInfo`, never from a request body. Attribution only: a lake
+   * write the tool drives is audited under the key (see buildToolAccessContext), while
+   * authorization still runs as `userId`. Absent = a session turn.
+   */
+  apiKeyId?: string;
   /**
    * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
    * resolved from the session and threaded down via the tool-builder deps (mirrors

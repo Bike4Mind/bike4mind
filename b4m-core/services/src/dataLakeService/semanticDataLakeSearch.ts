@@ -103,6 +103,8 @@ export interface SemanticChunkResult {
   fileId: string;
   fileName: string;
   fileTags: string[];
+  /** The file's owner, needed so a dynamic lake's prefix arm can attribute the chip - see citableOriginFor. */
+  fileUserId?: string;
   /** The source document's own vintage (#3048), for the passage header. Null when it has none. */
   documentDate: Date | null;
   chunkText: string;
@@ -804,6 +806,7 @@ async function scanAndRank(args: {
           fileId: chunk.fabFileId,
           fileName: file.fileName,
           fileTags: file.fileTags,
+          fileUserId: file.userId,
           // `?? null` despite the field now being required above: the type stops a TYPED builder
           // from dropping it, this stops an undefined reaching the row from a structurally-typed
           // caller. SemanticChunkResult's contract is null-for-undated, and the render channels key

@@ -29,7 +29,7 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
-  isGPTImage2Model,
+  rejectsTransparentBackground,
   isGPTImageModel,
   MAX_REFERENCE_IMAGES,
   supportsImageEdit,
@@ -72,6 +72,7 @@ import { startQuestHeartbeat } from './questHeartbeat';
 // Aliased: this module also has a private method named validateUserCredits.
 import { validateUserCredits as validateImageUserCredits } from './tools/base/utils';
 import { getQuestErrorCode } from '@bike4mind/common';
+import { recordGeneratedImages } from './recordGeneratedImages';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -108,6 +109,8 @@ interface IImageEditServiceOptions {
   db: {
     sessions: {
       findById: (id: string) => Promise<ISessionDocument | null | undefined>;
+      /** Feeds the sidebar's image marker (ISession.imageCount). Optional so test fakes compile. */
+      incrementImageCount?: (sessionId: string, count: number) => Promise<void>;
     };
     quests: IChatHistoryItemRepository;
     connections: {
@@ -194,7 +197,7 @@ export class ImageEditService {
     // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
     // promptMeta is built, so the persisted model matches what actually renders and bills.
     const model =
-      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+      rest.background === 'transparent' && rejectsTransparentBackground(requestedModel)
         ? ImageModels.GPT_IMAGE_1_5
         : requestedModel;
 
@@ -229,13 +232,24 @@ export class ImageEditService {
       quest.images = [];
       quest.replies = [];
       quest.status = undefined;
+      // A failed run leaves `type: 'error'`, and the success path never resets it, so a successful
+      // retry would still tell pollers and the callback to discard the render.
+      quest.type = 'message';
+      quest.errorCode = undefined;
       quest.promptMeta = promptMeta;
-      await this.db.quests.update({
-        id: quest.id,
-        images: quest.images,
-        replies: quest.replies,
-        promptMeta: quest.promptMeta,
-      });
+      // `undefined` alone is dropped from $set, so the prior terminal status would survive and let
+      // armGenerationCallback dispatch the previous run's outcome at once, and a stale errorCode
+      // would outlive a successful retry. Unset both explicitly (mirrors ChatCompletionInvoke).
+      await this.db.quests.update(
+        {
+          id: quest.id,
+          images: quest.images,
+          replies: quest.replies,
+          type: quest.type,
+          promptMeta: quest.promptMeta,
+        },
+        { unset: ['status', 'errorCode'] }
+      );
     } else {
       // Create the associated quest record.  We'll update this as we go.
       quest = await this.db.quests.create({
@@ -270,10 +284,13 @@ export class ImageEditService {
       }
 
       quest.type = 'error';
+      quest.status = 'done';
       quest.reply = errorMessage;
       // Write only the fields this error path sets, not the whole stale quest: this catch can run
       // after the success-path update above, and a whole-doc write would clobber that update.
-      await this.db.quests.update({ id: quest.id, type: quest.type, reply: quest.reply });
+      // `status` settles the quest like process()'s own catch does, so a poller (and an armed
+      // completion callback) sees a terminal failure instead of a quest stuck in flight.
+      await this.db.quests.update({ id: quest.id, type: quest.type, status: quest.status, reply: quest.reply });
     }
 
     return quest;
@@ -411,7 +428,9 @@ export class ImageEditService {
     // silently turn a valid request into an opaque image. Resolved before billing so
     // credits key off the model actually used.
     const model =
-      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
+      background === 'transparent' && rejectsTransparentBackground(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -774,6 +793,8 @@ export class ImageEditService {
         creditsUsed: quest.creditsUsed,
       });
 
+      await recordGeneratedImages(this.db.sessions, sessionId, 1, logger);
+
       // Remove prompt loading message on the client
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
@@ -802,8 +823,10 @@ export class ImageEditService {
           }
         );
 
-        // Dual-write usage event: analytics only, never billing.
-        this.db.usageEvents
+        // Dual-write usage event: analytics only, never billing. Awaited because a write still in
+        // flight when the Lambda handler returns can be frozen and never land; the catch keeps it
+        // from failing the request.
+        await this.db.usageEvents
           ?.record({
             requestId: questId,
             userId,

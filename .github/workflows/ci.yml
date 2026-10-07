@@ -10,9 +10,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    # Exclude prod-targeted PRs — those are the staging→production promotion
-    # and `main` already validates them; a redundant CI run isn't worth it.
-    branches-ignore: [prod]
     types: [opened, synchronize, reopened, ready_for_review]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
@@ -696,6 +693,14 @@ jobs:
           # Serial with full pools measured faster on the data and misc legs, with no
           # oversubscription by construction. vitestWorkerBudget.test.ts pins this.
           pnpm --recursive --workspace-concurrency=1 "${filter_args[@]}" "$SHARD_SCRIPT" "${script_args[@]}"
+
+      - name: Verify telemetry retention across DST
+        if: matrix.shard.name == 'workers-integration'
+        env:
+          TZ: America/New_York
+          VITEST_MAX_WORKERS: '2'
+          TMPDIR: /dev/shm
+        run: pnpm --filter @bike4mind/workers test:integration src/cron/telemetryCleanup.retention.e2e.test.ts
 
       # Tests that live outside every pnpm workspace, which the sharded run above cannot reach:
       # infra/ has no package.json, and scripts/codemods and scripts/__tests__ are not in

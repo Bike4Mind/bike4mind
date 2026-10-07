@@ -33,7 +33,10 @@ import {
   OpenAIImageQuality,
   OpenAIImageSize,
   OpenAIImageStyle,
+  clampImageQualityForModel,
   isGPTImageModel,
+  isGPTImage25Model,
+  supportsTransparentBackground,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -57,7 +60,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
-import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
+import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -84,6 +87,12 @@ const getQualityOptions = (modelId: string): { value: OpenAIImageQuality; label:
         { value: 'low', label: 'Low' },
         { value: 'medium', label: 'Medium' },
         { value: 'high', label: 'High' },
+        ...(isGPTImage25Model(modelId)
+          ? [
+              { value: 'xhigh' as const, label: 'Extra High' },
+              { value: 'max' as const, label: 'Max' },
+            ]
+          : []),
       ]
     : [
         { value: 'standard', label: 'Standard' },
@@ -272,9 +281,10 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
   useEffect(() => {
     if (!open) return;
     const validQualities = getQualityOptions(contextImageModel).map(option => option.value);
-    if (!validQualities.includes(_quality)) {
-      setLLM({ quality: getDefaultQuality(contextImageModel) });
-    }
+    if (validQualities.includes(_quality)) return;
+    // An xhigh/max pick carried off a 2.5 model steps down to 'high', as it would render.
+    const clamped = clampImageQualityForModel(contextImageModel, _quality);
+    setLLM({ quality: validQualities.includes(clamped) ? clamped : getDefaultQuality(contextImageModel) });
   }, [open, contextImageModel, _quality, setLLM]);
 
   const imageSettings = [
@@ -292,8 +302,8 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       },
       testId: 'image-setting-temperature-input',
     },
-    // Image Size (hidden for Kontext)
-    ...(!isKontextModel
+    // Image Size (hidden when the model's sizing takes no size)
+    ...(showsImageSizeRow(contextImageModel)
       ? [
           {
             label: 'Image Size',
@@ -525,6 +535,14 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                   )}
                   {selectedModelInfo.max_tokens && (
                     <MetadataChip label={`${selectedModelInfo.max_tokens} max`} mode={mode} variant="default" />
+                  )}
+                  {supportsTransparentBackground(selectedModel) && (
+                    <MetadataChip
+                      label="Transparent background"
+                      mode={mode}
+                      variant="purple"
+                      tooltip="Can render PNG/WebP images with a real transparent background - ask for a cutout, icon, sticker or logo with no backdrop."
+                    />
                   )}
                   {selectedModelInfo.contextWindow && (
                     <MetadataChip

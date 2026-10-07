@@ -10,10 +10,11 @@ export const renderScopeTableRows = (): string =>
     scope => `| \`${scope.value}\` | ${scope.description.replaceAll('|', '\\|')} |`
   ).join('\n');
 
-export const API_REFERENCE_CONTENT = `
+/** `baseUrl` is the deployment's origin, so the examples are runnable as copied. */
+export const getApiReferenceContent = (baseUrl: string): string => `
 # ${getBrandName()} API Reference
 
-Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`https://your-deployment.example.com\` (production) or \`https://staging.your-deployment.example.com\` (staging).
+Complete API documentation for ${getBrandName()}, a cognitive workbench platform. All endpoints are served from \`${baseUrl}\`.
 
 ---
 
@@ -48,17 +49,13 @@ flows) get the refresh token in the response body and send it back the same way.
 
 ### API Key Authentication
 
-API keys use the \`b4m_live_\` prefix and can be passed via either header:
+API keys use the \`b4m_live_\` prefix. Send one as a bearer token:
 
 \`\`\`
-X-API-Key: b4m_live_xxxxx
+Authorization: Bearer b4m_live_xxxxx
 \`\`\`
 
-or
-
-\`\`\`
-Authorization: ApiKey b4m_live_xxxxx
-\`\`\`
+The legacy \`X-API-Key: b4m_live_xxxxx\` and \`Authorization: ApiKey b4m_live_xxxxx\` forms are still accepted.
 
 **Managing API keys:**
 
@@ -704,30 +701,54 @@ POST /api/ai/llm
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
 
-#### Image Generation and Editing (async)
+#### Image Generation, Editing, and Video Generation (async)
 
 \`\`\`
 POST /api/v1/image-generations
 POST /api/v1/image-edits
+POST /api/v1/video-generations
 \`\`\`
 
 **Required API-key scope:** \`ai:generate\`.
 
 > **These endpoints are generated from their contracts.** The full request/response
 > reference - every field, its type, defaults, and validation rules, including the
-> \`referenceImageFabFileIds\` style anchors - lives in the [generated API docs](/api/v1/docs)
-> under \`generateImage\` and \`editImage\`, derived from the same objects the handlers
-> validate with.
+> \`referenceImageFabFileIds\` style anchors and the optional \`callbackUrl\` - lives in the
+> [generated API docs](/api/v1/docs) under \`generateImage\`, \`editImage\`, and
+> \`generateVideo\`, derived from the same objects the handlers validate with.
 >
-> Both are asynchronous: the call queues the render and returns a quest with no image yet,
-> so it never blocks on generation. Poll \`GET /api/v1/quests/{id}\` until \`status\` is \`done\`
-> (see [Poll Quest Status](#poll-quest-status)); a render that failed arrives there as
-> \`type: "error"\`, not as a 4xx. \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\`
-> are legacy aliases of the same handlers and keep working.
+> All three are asynchronous: the call queues the render and returns a quest with no
+> image/video yet, so it never blocks on generation. Poll \`GET /api/v1/quests/{id}\`
+> until \`status\` is \`done\` (see [Poll Quest Status](#poll-quest-status)); a render that failed
+> arrives there as \`type: "error"\`, not as a 4xx. Pass \`callbackUrl\` (an https URL) to
+> receive a signed \`POST\` instead of polling (at-least-once: dedupe on
+> \`X-Webhook-Event-ID\`) - see the \`generateVideo\` contract
+> description in the [generated API docs](/api/v1/docs) for the header/retry/signing
+> details, which apply the same way to all three endpoints. \`POST /api/ai/generate-image\`,
+> \`POST /api/ai/edit-image\`, and \`POST /api/ai/generate-video\` are legacy aliases of the
+> same handlers and keep working.
+
+#### Voice Sessions
+
+\`\`\`
+GET  /api/v1/voice/voices
+POST /api/v1/voice/sessions
+POST /api/v1/voice/sessions/{id}/end
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+> **These endpoints are generated from their contracts.** The full request/response
+> reference lives in the [generated API docs](/api/v1/docs) under \`listVoices\`,
+> \`createVoiceSession\`, and \`endVoiceSession\`, derived from the same objects the handlers
+> validate with. \`createVoiceSession\` reserves credits for the maximum call length (when credit enforcement is on) and returns a
+> \`clientBootstrap\` for the ElevenLabs Conversational AI SDK; call \`endVoiceSession\` when the call
+> ends to refund the unused part. \`/api/voice/v2/voices\`, \`/api/voice/v2/sessions\`, and
+> \`/api/voice/v2/sessions/{id}/end\` are legacy aliases of the same handlers and keep working.
 
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|
@@ -736,7 +757,7 @@ A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract gen
 
 The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
 
-Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives.
+Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models the completion event stream in full. The audio endpoints return raw audio bytes by default, so the spec documents their \`audio/*\` media types and the \`X-B4M-Audio-*\` response headers that report where the saved copy lives. Audio too large to return inline (over ~4MB) is delivered by a time-limited signed URL instead: a 303 redirect for raw bytes, or \`delivery: 'url'\` in the \`encoding: 'base64'\` JSON body.
 
 #### AI Endpoints Summary
 
@@ -745,7 +766,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
-| POST | /api/ai/generate-video | Video generation (Sora) |
 | POST | /api/ai/barkeep-chat | Tavern AI barkeep conversation |
 | POST | /api/ai/tavern-conversation | Tavern NPC conversation |
 | POST | /api/ai/v1/completions | Streaming completions (custom SSE contract, not OpenAI-compatible) |
@@ -881,6 +901,20 @@ issues no browser session \u2014 unlike \`/api/identify\`, which does both.
 > **This endpoint is generated from its contract.** The full response reference lives
 > in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
 > object the handler validates against.
+
+#### Get the Caller's Credit Balance
+
+\`\`\`
+GET /api/v1/credits
+\`\`\`
+
+**Required API-key scope:** any one of \`me:read\`, \`ai:chat\`, \`ai:generate\`.
+
+Returns only \`balance\` - the same number as \`credits.balance\` on \`GET /api/v1/me\` -
+so a key scoped for spend can check it can afford a batch before starting one.
+
+> **This endpoint is generated from its contract.** See \`getCreditBalance\` in the
+> [generated API docs](/api/v1/docs).
 
 ---
 
@@ -1526,7 +1560,7 @@ Real-time updates are delivered via WebSocket. Connect to the WebSocket endpoint
 
     \`\`\`bash
     # Send a correlation ID and read it back from the response headers
-    curl -i -X POST https://your-deployment.example.com/api/chat \\
+    curl -i -X POST ${baseUrl}/api/chat \\
       -H "Authorization: Bearer $TOKEN" \\
       -H "Content-Type: application/json" \\
       -H "X-Request-ID: my-trace-001" \\

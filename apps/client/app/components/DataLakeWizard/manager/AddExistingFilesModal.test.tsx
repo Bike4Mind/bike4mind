@@ -3,10 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { debounce } from 'lodash';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import AddExistingFilesModal, { partitionLakeAddCandidates } from './AddExistingFilesModal';
 import type { ManagerLake } from './shared';
+
+// The component's own debounced search survives unmount unless cancelled; wrapping the real
+// debounce lets the regression test below inspect (and assert on) the instance it creates.
+vi.mock('lodash', async importOriginal => ({
+  ...(await importOriginal<typeof import('lodash')>()),
+  debounce: vi.fn((await importOriginal<typeof import('lodash')>()).debounce),
+}));
 
 // A row's click reaches GenericAddItemsModal's toggle wrapper, so these tests drive the real
 // selection plumbing rather than calling the component's own handlers.
@@ -277,5 +285,16 @@ describe('AddExistingFilesModal', () => {
   it('hides the draft notice on an active lake', () => {
     renderModal();
     expect(screen.queryByText(/This lake is a draft/)).toBeNull();
+  });
+
+  it('cancels the pending search debounce on unmount', () => {
+    const { unmount } = renderModal();
+    const results = vi.mocked(debounce).mock.results;
+    const debouncedInstance = results[results.length - 1]?.value;
+    const cancelSpy = vi.spyOn(debouncedInstance, 'cancel');
+
+    unmount();
+
+    expect(cancelSpy).toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'crypto';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { Resource } from 'sst';
+import { stripChoicesFromReplies, visibleReplyText } from '@bike4mind/common';
 import { questRepository } from '@bike4mind/database';
 import { QuestStartBodySchema } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
@@ -25,6 +26,20 @@ import { emitProcessingFailed } from '../processingFailedMetric';
  * `registerInternalRoutes`.
  */
 export const GENERIC_PROCESSING_FAILURE_REPLY = 'Something went wrong while processing your request. Please try again.';
+
+/**
+ * The failure text as its own slot after whatever already streamed, with `reply` rebuilt from the
+ * slots - the same shape as setErrorReply in ChatCompletionProcess. Writing only `reply` would lose
+ * the failure from the poll body, which derives `reply` from visible slots when there are any
+ * (questReplyText in server/utils/questPollBody.ts).
+ */
+export function processingFailureReply(streamed: string[] | undefined): { reply: string; replies: string[] } {
+  const visiblePartial = stripChoicesFromReplies(streamed ?? [])
+    .replies.map(slot => visibleReplyText(slot))
+    .filter(text => text.length > 0);
+  const replies = [...visiblePartial, GENERIC_PROCESSING_FAILURE_REPLY];
+  return { replies, reply: replies.join('') };
+}
 
 /**
  * Shared-secret bearer check. Both the frontend Lambda and this service link
@@ -98,10 +113,13 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       // message (`quest.reply = err.message`) and marks the quest terminal before it rethrows, so an
       // unconditional write here replaces a specific, actionable diagnostic with this generic one.
       try {
+        // The processor has already thrown, so nothing streams into the slots between this read
+        // and the guarded write below.
+        const streamed = (await questRepository.findById(params.questId))?.replies;
         const settled = await questRepository.settleIfUnfinished(params.questId, {
           status: 'stopped',
           type: 'error',
-          reply: GENERIC_PROCESSING_FAILURE_REPLY,
+          ...processingFailureReply(streamed),
         });
         if (!settled) {
           logger.info('Quest already settled by the processor; kept its own error reply', {

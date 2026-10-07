@@ -337,3 +337,90 @@ describe('CitableSources badge tooltips open above the chip', () => {
     await expectOpensAbove(screen.getByTestId('citable-truncated-badge'));
   });
 });
+
+/**
+ * Internal chips name where the file came from. `owned` is the conversation owner's, so the labels
+ * are asserted to be neutral rather than viewer-relative.
+ */
+describe('CitableSources origin label', () => {
+  const internalChip = (id: string, sourceOrigin?: unknown): CitableSource => ({
+    id,
+    type: 'document',
+    title: `${id}.md`,
+    url: `/opti?mode=datalake&article=${id}`,
+    status: 'complete',
+    metadata: { sourceSystem: 'knowledge_base', ...(sourceOrigin === undefined ? {} : { sourceOrigin }) },
+  });
+
+  const labelsOf = (citables: CitableSource[]) => {
+    render(
+      <TestWrapper>
+        <CitableSources citables={citables} />
+      </TestWrapper>
+    );
+    return screen.getAllByTestId('citable-source-origin-label').map(el => el.textContent);
+  };
+
+  it('names each chip by its own lake or library', () => {
+    expect(
+      labelsOf([
+        internalChip('a', { kind: 'lake', lakes: [{ id: 'a', name: 'Alpha Lake' }] }),
+        internalChip('b', { kind: 'lake', lakes: [{ id: 'b', name: 'Beta Lake' }] }),
+        internalChip('c', { kind: 'library', owned: true }),
+      ])
+    ).toEqual(['Alpha Lake', 'Beta Lake', 'Personal library']);
+  });
+
+  it('summarises a multi-lake chip and lists every lake in the tooltip', async () => {
+    const [label] = labelsOf([
+      internalChip('a', {
+        kind: 'lake',
+        lakes: [
+          { id: 'a', name: 'Alpha Lake' },
+          { id: 'b', name: 'Beta Lake' },
+          { id: 'c', name: 'Gamma Lake' },
+        ],
+      }),
+    ]);
+    expect(label).toBe('Alpha Lake +2');
+
+    fireEvent.mouseOver(screen.getByTestId('citable-source-origin-label'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Alpha Lake, Beta Lake, Gamma Lake');
+  });
+
+  it('labels a library file the owner does not own as shared', () => {
+    expect(labelsOf([internalChip('a', { kind: 'library', owned: false })])).toEqual(['Shared library']);
+  });
+
+  it('keeps Data Lake for a chip with no origin', () => {
+    expect(labelsOf([internalChip('a')])).toEqual(['Data Lake']);
+  });
+
+  it.each([
+    ['lakes not an array', { kind: 'lake', lakes: 'x' }],
+    ['empty lakes', { kind: 'lake', lakes: [] }],
+    ['lakes without string names', { kind: 'lake', lakes: [{ id: 'a' }, null, { id: 'b', name: 7 }] }],
+    ['unknown kind', { kind: 'weird' }],
+    ['library without boolean owned', { kind: 'library', owned: 'yes' }],
+    ['a string', 'string'],
+    ['null', null],
+  ])('falls back to Data Lake for a malformed origin (%s)', (_name, origin) => {
+    expect(labelsOf([internalChip('a', origin)])).toEqual(['Data Lake']);
+  });
+
+  it('skips lake entries without a name but keeps the rest', () => {
+    expect(
+      labelsOf([internalChip('a', { kind: 'lake', lakes: [{ id: 'x' }, { id: 'b', name: 'Beta Lake' }] })])
+    ).toEqual(['Beta Lake']);
+  });
+
+  it('leaves an external web chip on its hostname', () => {
+    render(
+      <TestWrapper>
+        <CitableSources citables={[baseCitable]} />
+      </TestWrapper>
+    );
+    expect(screen.queryByTestId('citable-source-origin-label')).not.toBeInTheDocument();
+    expect(screen.getByText('example.com')).toBeInTheDocument();
+  });
+});

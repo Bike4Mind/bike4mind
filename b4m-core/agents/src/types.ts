@@ -301,7 +301,23 @@ export interface AgentRunOptions {
    * dedup. Not provided: behavior is unchanged.
    */
   workflowReminder?: () => string | null;
+  /**
+   * Host-supplied drain for asynchronous feedback produced off the critical
+   * path while tools ran (e.g. post-edit type/lint diagnostics). Called at the
+   * two decision points where the model can still act on it:
+   * - `'turn'`: after an iteration's tool calls, folded into the
+   *   "Based on the tool results above..." nudge (so it adds no extra
+   *   iteration boundary for history trimming).
+   * - `'final'`: when the model answers without tool calls and iterations
+   *   remain. A non-empty return turns that answer into a thought and runs one
+   *   more iteration with the feedback as the next user message.
+   * The host owns the wait budget per phase and must return promptly; return
+   * null/'' when there is nothing to report. Not provided: behavior is unchanged.
+   */
+  drainFeedback?: (phase: FeedbackDrainPhase) => Promise<string | null>;
 }
+
+export type FeedbackDrainPhase = 'turn' | 'final';
 
 /**
  * Options for `runIteration()` only. `toolGate` lives here rather than on

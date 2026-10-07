@@ -10,6 +10,7 @@ import { createMocks } from 'node-mocks-http';
  */
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -20,7 +21,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: {} }));
@@ -75,5 +76,9 @@ describe('GET /api/files/getFabFileNameById - object-level guard', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ name: 'mine.txt' });
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
   });
 });

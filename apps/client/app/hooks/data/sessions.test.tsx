@@ -8,6 +8,8 @@ import {
   getOrFetchSession,
   useSummarizeSession,
   useUpdateSessionTags,
+  sessionMatchesListFilters,
+  updateSessionsQueryData,
 } from './sessions';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { ISessionDocument } from '@bike4mind/common';
@@ -368,5 +370,116 @@ describe('useUpdateSessionTags', () => {
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(toast.error).toHaveBeenCalledWith(`Failed to start generating tags for "${SESSION_NAME}"`);
+  });
+});
+
+// Truth table for the predicate gating updateSessionsQueryData's create-path: must stay in
+// lockstep with the server's sessionListFilterQuery (SessionModel.ts).
+describe('sessionMatchesListFilters', () => {
+  const webSession = { imageCount: 0, origin: undefined } as Pick<ISessionDocument, 'imageCount' | 'origin'>;
+  const apiSession = {
+    imageCount: 0,
+    origin: { channel: 'api' },
+  } as Pick<ISessionDocument, 'imageCount' | 'origin'>;
+
+  it('matches everything when there are no filters', () => {
+    expect(sessionMatchesListFilters(webSession, undefined)).toBe(true);
+    expect(sessionMatchesListFilters(apiSession, undefined)).toBe(true);
+  });
+
+  it('treats a session with no recorded origin as "web" for both origin and excludeOrigin', () => {
+    expect(sessionMatchesListFilters(webSession, { origin: 'web' })).toBe(true);
+    expect(sessionMatchesListFilters(webSession, { origin: 'api' })).toBe(false);
+    expect(sessionMatchesListFilters(webSession, { excludeOrigin: 'web' })).toBe(false);
+    expect(sessionMatchesListFilters(webSession, { excludeOrigin: 'api' })).toBe(true);
+  });
+
+  it('matches an explicit origin.channel against origin / excludeOrigin', () => {
+    expect(sessionMatchesListFilters(apiSession, { origin: 'api' })).toBe(true);
+    expect(sessionMatchesListFilters(apiSession, { origin: 'web' })).toBe(false);
+    expect(sessionMatchesListFilters(apiSession, { excludeOrigin: 'api' })).toBe(false);
+    expect(sessionMatchesListFilters(apiSession, { excludeOrigin: 'web' })).toBe(true);
+  });
+
+  it('gates on hasImages in both directions, treating a missing imageCount as zero', () => {
+    const noCount = { origin: undefined } as Pick<ISessionDocument, 'imageCount' | 'origin'>;
+    expect(sessionMatchesListFilters(noCount, { hasImages: false })).toBe(true);
+    expect(sessionMatchesListFilters(noCount, { hasImages: true })).toBe(false);
+    expect(sessionMatchesListFilters({ ...webSession, imageCount: 2 }, { hasImages: true })).toBe(true);
+    expect(sessionMatchesListFilters({ ...webSession, imageCount: 2 }, { hasImages: false })).toBe(false);
+  });
+
+  it('requires every set filter to match (AND, not OR)', () => {
+    const apiWithImages = { imageCount: 3, origin: { channel: 'api' } } as Pick<
+      ISessionDocument,
+      'imageCount' | 'origin'
+    >;
+    expect(sessionMatchesListFilters(apiWithImages, { origin: 'api', hasImages: true })).toBe(true);
+    expect(sessionMatchesListFilters(apiWithImages, { origin: 'api', hasImages: false })).toBe(false);
+    expect(sessionMatchesListFilters(apiWithImages, { origin: 'web', hasImages: true })).toBe(false);
+  });
+});
+
+// Integration-level: a real QueryClient holding several simultaneously-cached filtered variants
+// of the sidebar list (the actual shape sidenavFilters.ts produces), proving a single write only
+// lands in the caches whose filter it satisfies. This is the regression this fix exists for: an
+// API-created session fanning in over the "Hide API" view must never appear there, even for one frame.
+describe('updateSessionsQueryData', () => {
+  const apiOriginSession = {
+    id: 'new-api-session',
+    name: 'From API key',
+    imageCount: 0,
+    origin: { channel: 'api' },
+  } as ISessionDocument;
+
+  const seedEmptyPage = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.setQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[], {
+      pages: [{ data: [], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+
+  const dataOf = (queryClient: QueryClient, key: unknown[]) =>
+    queryClient.getQueryData<InfiniteData<SessionsPage>>(key as readonly unknown[])?.pages[0]?.data ?? [];
+
+  it('creates into an unfiltered cache and into a cache whose origin filter the session satisfies', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const unfilteredKey = ['sessions', 'own', '', ''];
+    const matchingOriginKey = ['sessions', 'own', '', '', { origin: 'api' }];
+    seedEmptyPage(queryClient, unfilteredKey);
+    seedEmptyPage(queryClient, matchingOriginKey);
+
+    updateSessionsQueryData(queryClient, 'write', apiOriginSession);
+
+    expect(dataOf(queryClient, unfilteredKey)).toContainEqual(expect.objectContaining({ id: 'new-api-session' }));
+    expect(dataOf(queryClient, matchingOriginKey)).toContainEqual(expect.objectContaining({ id: 'new-api-session' }));
+  });
+
+  it('does NOT create into a cache whose filter the session fails to satisfy (the "Hide API" regression)', () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+    const imagesOnlyKey = ['sessions', 'own', '', '', { hasImages: true }];
+    seedEmptyPage(queryClient, hideApiKey);
+    seedEmptyPage(queryClient, imagesOnlyKey);
+
+    updateSessionsQueryData(queryClient, 'write', apiOriginSession);
+
+    expect(dataOf(queryClient, hideApiKey)).toHaveLength(0);
+    expect(dataOf(queryClient, imagesOnlyKey)).toHaveLength(0);
+  });
+
+  it('still updates an item already present in a filtered cache in place, independent of the filter gate', () => {
+    // The create-path gate assumes origin/imageCount only ever move further INTO a match
+    // (see sessionMatchesListFilters' doc comment); an update to an item already cached is
+    // therefore never blocked, only a brand-new insert is.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const hideApiKey = ['sessions', 'own', '', '', { excludeOrigin: 'api' }];
+    queryClient.setQueryData<InfiniteData<SessionsPage>>(hideApiKey as readonly unknown[], {
+      pages: [{ data: [{ ...apiOriginSession, name: 'Old name' }], hasMore: false }],
+      pageParams: [{ page: 1 }],
+    });
+
+    updateSessionsQueryData(queryClient, 'write', apiOriginSession);
+
+    expect(dataOf(queryClient, hideApiKey)).toContainEqual(expect.objectContaining({ name: 'From API key' }));
   });
 });

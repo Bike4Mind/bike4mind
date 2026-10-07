@@ -21,6 +21,14 @@ export type CompletionSource = 'web' | 'cli' | 'api' | 'agent' | 'system';
 
 export const COMPLETION_SOURCES = ['web', 'cli', 'api', 'agent', 'system'] as const;
 
+/** The sources an API-key-authed request can carry - see {@link resolveApiCompletionSource}. */
+export const API_KEY_COMPLETION_SOURCES = ['api', 'cli'] as const satisfies readonly CompletionSource[];
+
+export type ApiKeyCompletionSource = (typeof API_KEY_COMPLETION_SOURCES)[number];
+
+export const isApiKeyCompletionSource = (source: CompletionSource): source is ApiKeyCompletionSource =>
+  (API_KEY_COMPLETION_SOURCES as readonly CompletionSource[]).includes(source);
+
 /**
  * Response shape for the `/api/admin/usage-by-source` endpoint and any
  * consumer that surfaces counter-log activity grouped by `metadata.source`.
@@ -141,7 +149,7 @@ export interface IApiKeyScopePreflight {
  * different pipeline). We distinguish CLI from raw API by the `b4m-cli/`
  * User-Agent header set by the CLI's HTTP client.
  */
-export function resolveApiCompletionSource(headers: Record<string, string | undefined>): CompletionSource {
+export function resolveApiCompletionSource(headers: Record<string, string | undefined>): ApiKeyCompletionSource {
   const lookup = (name: string): string | undefined => {
     const lower = name.toLowerCase();
     for (const key of Object.keys(headers)) {

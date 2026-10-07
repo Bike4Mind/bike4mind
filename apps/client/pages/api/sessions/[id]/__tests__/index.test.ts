@@ -108,7 +108,7 @@ function fire({
   apiKey = VALID_KEY as string | null,
   body,
 }: {
-  method: 'GET' | 'PUT' | 'DELETE';
+  method: 'GET' | 'HEAD' | 'PUT' | 'DELETE' | 'POST' | 'PATCH';
   apiKey?: string | null;
   body?: unknown;
 }) {
@@ -351,6 +351,25 @@ describe('/api/sessions/[id] (integration - dispatcher + contract wiring)', () =
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ newLastNotebookId: null });
+    });
+  });
+
+  describe('a verb the path does not serve', () => {
+    it.each(['POST', 'PATCH'] as const)('405s %s with the full Allow set, before auth', async method => {
+      const { req, res } = fire({ method, apiKey: null });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(405);
+      expect(res.getHeader('Allow')).toBe('GET, HEAD, PUT, DELETE');
+      expect(res._getJSONData()).toEqual(expect.objectContaining({ request_id: expect.any(String) }));
+      expect(mockValidate).not.toHaveBeenCalled();
+    });
+
+    it('serves HEAD from the GET router rather than 405ing it', async () => {
+      mockGetSession.mockResolvedValue({ id: 'sess-1', name: 'Untitled', userId: 'user-1' });
+      const { req, res } = fire({ method: 'HEAD' });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockGetSession).toHaveBeenCalledWith('user-1', { id: 'sess-1' }, expect.anything());
     });
   });
 });

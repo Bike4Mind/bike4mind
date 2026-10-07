@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import type { UserQuestionPayload, UserQuestionResponse, UserQuestionAnswer } from '@bike4mind/services/llm';
+import { escapeTerminalControlChars } from './PermissionPrompt';
 
 export interface UserQuestionPromptProps {
   payload: UserQuestionPayload;
@@ -180,7 +181,7 @@ export function UserQuestionPrompt({ payload, onResponse }: UserQuestionPromptPr
 
       {/* Question text */}
       <Box marginTop={1}>
-        <Text bold>{currentQuestion.question}</Text>
+        <Text bold>{escapeTerminalControlChars(currentQuestion.question)}</Text>
       </Box>
 
       {/* Options */}
@@ -195,7 +196,7 @@ export function UserQuestionPrompt({ payload, onResponse }: UserQuestionPromptPr
               <Text color="cyan">{idx + 1}.</Text>
               <Text color={isHighlighted ? 'cyan' : undefined} bold={isHighlighted}>
                 {' '}
-                {prefix} {opt.label}
+                {prefix} {escapeTerminalControlChars(opt.label)}
               </Text>
               {/* Inline text input on the same line as Other */}
               {idx === otherIndex && isHighlighted ? (
@@ -208,7 +209,8 @@ export function UserQuestionPrompt({ payload, onResponse }: UserQuestionPromptPr
                   />
                 </Box>
               ) : (
-                opt.description && idx !== otherIndex && <Text dimColor> - {opt.description}</Text>
+                opt.description &&
+                idx !== otherIndex && <Text dimColor> - {escapeTerminalControlChars(opt.description)}</Text>
               )}
             </Box>
           );

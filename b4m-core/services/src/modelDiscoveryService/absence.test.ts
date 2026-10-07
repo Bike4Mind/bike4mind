@@ -14,6 +14,11 @@ const base = new Map([
   known('claude-opus-5', ModelBackend.Anthropic),
 ]);
 
+const bedrockBase = new Map([
+  known('global.anthropic.claude-sonnet-4-6', ModelBackend.Bedrock),
+  known('anthropic.claude-3-haiku-20240307-v1:0', ModelBackend.Bedrock),
+]);
+
 describe('planAbsence', () => {
   it('records a sighting for every model a successful source listed', () => {
     const plan = planAbsence({
@@ -54,6 +59,38 @@ describe('planAbsence', () => {
     });
 
     expect(plan.sighted).toContain('gpt-7');
+  });
+
+  it('sights a Bedrock profile id through the foundation id its listing carried', () => {
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(['anthropic.claude-sonnet-4-6']),
+      base: bedrockBase,
+    });
+
+    expect(plan.sighted).toContain('global.anthropic.claude-sonnet-4-6');
+    expect(plan.missed).not.toContain('global.anthropic.claude-sonnet-4-6');
+  });
+
+  it('freezes an unlisted Bedrock profile id instead of counting it missed', () => {
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(),
+      base: bedrockBase,
+    });
+
+    expect(plan.missed).not.toContain('global.anthropic.claude-sonnet-4-6');
+    expect(plan.sighted).not.toContain('global.anthropic.claude-sonnet-4-6');
+  });
+
+  it('still misses a bare Bedrock id the listing did not report', () => {
+    const plan = planAbsence({
+      coveredBackends: new Set([ModelBackend.Bedrock]),
+      sightedModelIds: new Set(),
+      base: bedrockBase,
+    });
+
+    expect(plan.missed).toContain('anthropic.claude-3-haiku-20240307-v1:0');
   });
 });
 
