@@ -676,7 +676,7 @@ BEDROCK_AWS_SECRET_ACCESS_KEY=...
 BEDROCK_AWS_SESSION_TOKEN=...
 ```
 
-With SSO, `aws configure export-credentials --format env` prints the three values; copy them under the `BEDROCK_` prefix. Temporary credentials expire after a few hours, and an expired set shows up as a Bedrock auth error in discovery runs and in chat - re-export and restart the stack. The account needs Bedrock model access in us-east-1 and us-east-2, the regions chat requests are sent to.
+With SSO, `aws configure export-credentials --format env` prints the three values; copy them under the `BEDROCK_` prefix. Temporary credentials expire after a few hours, and an expired set shows up as a Bedrock auth error in discovery runs and in chat - re-export and re-run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d` so the services pick them up (a plain `restart` keeps the old values). The account needs Bedrock model access in us-east-1 and us-east-2, the regions chat requests are sent to.
 
 Once set, Bedrock models appear in the picker, discovery lists and promotes them, and chat to them works. Without them, each discovery run logs one `bedrock skipped` info line. The default chat model stays the direct-Anthropic one either way. AWS Transcribe (speech-to-text) and Bedrock embeddings stay hosted-only: Transcribe reads media from S3, which self-host keeps in MinIO.
 
