@@ -52,6 +52,7 @@ describe('ChatService agent browser', () => {
     drainEvents: () => [],
     settle: async () => undefined,
     close: async () => undefined,
+    stop: () => undefined,
   };
 
   beforeEach(async () => {

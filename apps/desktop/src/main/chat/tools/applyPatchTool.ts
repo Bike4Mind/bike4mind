@@ -446,6 +446,7 @@ async function runPatch(input: Record<string, unknown>, context: ToolContext): P
       assertUnchanged(`${plan.key}\x00${target}`, target, fingerprint(state.exists, state.content));
     }
     if (context.signal.aborted) throw new Error('The turn was stopped before this change was written.');
+    context.beginWrite?.();
 
     await writeChanges(plan);
     for (const change of plan.changes) if (change.status !== 'D') recordRecentFile(context, change.to);

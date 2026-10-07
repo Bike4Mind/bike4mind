@@ -110,8 +110,13 @@ export interface ToolReporter {
 export interface BrowserPage {
   /** Where the page is now; empty before the first navigation. */
   currentUrl(): string;
-  /** Load a URL and wait for it to settle. Resolves with where it ended up. */
-  navigate(url: string): Promise<{ url: string; title: string; status?: number }>;
+  /**
+   * Load a URL and wait for it to settle. Resolves with where it ended up; `stillLoading` when it
+   * showed a page but was still loading at the deadline, and was stopped there.
+   */
+  navigate(url: string): Promise<{ url: string; title: string; status?: number; stillLoading?: boolean }>;
+  /** Stop whatever the page is loading, as the toolbar's stop button would. */
+  stop(): void;
   back(): Promise<void>;
   snapshot(maxChars: number): Promise<{ url: string; title: string; text: string; truncated: boolean }>;
   click(ref: string): Promise<string>;
@@ -167,6 +172,13 @@ export interface ToolContext {
    */
   workingDirectory?: string;
   signal: AbortSignal;
+  /**
+   * Called by a tool the moment it starts changing something that must not be left half done,
+   * after its last abort check. From then on a stop waits for this call instead of abandoning it
+   * (see interruptible.ts). Throws if the turn has already been stopped. Absent outside the chat
+   * loop, where nothing abandons a call.
+   */
+  beginWrite?(): void;
   /**
    * Paths the app protects whatever the user granted - its own userData above all, which holds
    * the access token. A granted home folder would otherwise expose the vault to a shell command.
