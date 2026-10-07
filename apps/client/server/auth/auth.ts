@@ -79,10 +79,12 @@ export const auth = handler
 
     // Custom callback ensures 401 responses are JSON (not plain text "Unauthorized")
     // so that API consumers (OAuth clients, SPAs) can reliably parse error responses.
+    // The body is the shared ApiErrorSchema envelope (CONVENTIONS.md section 1); written
+    // directly rather than thrown so every expired-token call does not log a warn.
     passport.authenticate('jwt', { session: false }, (err: Error | null, user: Express.User | false) => {
       if (err) return next(err);
       if (!user) {
-        return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
+        return res.status(401).json({ error: 'Authentication required', request_id: req.requestId });
       }
       req.user = user;
       next();
@@ -102,7 +104,11 @@ export const auth = handler
         '/api/auth/mfa/status', // Needed by MFAEnforcementWrapper to check user MFA status
       ];
 
-      if (!allowed.some(path => req.url.startsWith(path))) {
+      // Exact match: a prefix here would also admit the sibling passkey/[id] DELETE route.
+      const allowedExact = ['/api/auth/mfa/passkey/authenticate-options', '/api/auth/mfa/passkey/authenticate'];
+      const pathname = req.url.split('?')[0];
+
+      if (!allowed.some(path => req.url.startsWith(path)) && !allowedExact.includes(pathname)) {
         req.logger?.info(`[AUTH] Blocked request to ${req.url} for user ${req.user.id} due to mfaPending.`);
         return res.status(401).json({
           error: 'MFA setup or verification required.',

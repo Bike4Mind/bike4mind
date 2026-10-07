@@ -389,9 +389,10 @@ export interface ISpendLatency {
  * Request-outcome counts over the window. The error rate folds `errors` and
  * `timeouts` together (both are failed calls); `refusals` and `degenerates` are counted
  * separately so each COULD read as its own rate rather than an error - a degenerate call did
- * return content and bill normally, it just stopped making progress first. Today only
- * `degenerates` has a writer (see `earlyStopStamp.ts`) and its own `degenerateRate` KPI;
- * `refusals` has no writer anywhere in the repo yet.
+ * return content and bill normally, it just stopped making progress first. `degenerates` are
+ * written via `earlyStopStamp.ts`; `refusals` there too for a settled refusal, and by the
+ * chat/CLI completion paths for a safety-classifier refusal that fell back (an unbilled row
+ * per refused call, so the fallback's own row still counts in `total`).
  */
 export interface ISpendStatusCounts {
   total: number;
@@ -626,4 +627,7 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * data-lake spend view.
    */
   lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
+
+  /** Lifetime USD COGS of research spend attributed to one data lake (feature: 'operations'). */
+  lakeResearchLifetimeUsd(dataLakeId: string): Promise<number>;
 }

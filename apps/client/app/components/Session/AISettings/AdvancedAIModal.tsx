@@ -105,7 +105,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
-import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
+import { defaultImageSize, getAvailableImageSizes, showsImageSizeRow } from './imageSizeOptions';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
@@ -657,7 +657,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // Provider and capability notices, rendered as one stacked block below the description.
   const notices = [
     // Same test the picker groups by, so the notice can never disagree with the provider
-    // section a model is filed under. A name-only check missed Sora.
+    // section a model is filed under. A name-only check missed models whose id does not carry the provider name.
     ...(getModelBackend(modelInfo) === 'OpenAI'
       ? ['This model shares session content with OpenAI for training purposes']
       : []),
@@ -1709,9 +1709,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
 
   const imageSettings = useMemo(
     () => [
-      ...(isKontextModel
-        ? []
-        : [
+      ...(showsImageSizeRow(shownModel)
+        ? [
             {
               label: 'Image Size',
               type: 'select' as const,
@@ -1723,7 +1722,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               tooltip: FIELD_TOOLTIPS.imageSize,
               testId: 'model-details-size-select',
             },
-          ]),
+          ]
+        : []),
       {
         label: 'Quality',
         tooltip: FIELD_TOOLTIPS.imageQuality,

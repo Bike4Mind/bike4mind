@@ -22,6 +22,7 @@ import {
   fabFileModerationDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
+  generationCallbackQueueDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -40,7 +41,7 @@ import {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
-  videoGenerationDLQ,
+  generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -51,6 +52,7 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -228,6 +230,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: imageEditDLQ,
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+    queue: generationCallbackQueueDLQ,
+  },
+  {
     label: 'research-engine',
     displayName: 'Research Engine',
     application: 'ResearchEngine',
@@ -354,11 +363,11 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: githubLakeRevokeQueueDLQ,
   },
   {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
-    queue: videoGenerationDLQ,
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+    queue: generationJobDLQ,
   },
   {
     label: 'liveops-triage',
@@ -467,6 +476,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
     queue: bobRunQueueDLQ,
+  },
+  // queues.ts - LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology)
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
+    queue: libreoncologyAudioRenderQueueDLQ,
   },
 ];
 

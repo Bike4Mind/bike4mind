@@ -31,11 +31,12 @@ import { Request } from 'express';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
+import { FILES_WRITE_SCOPES } from '@server/files/fileScopes';
 
 const s3Client = createS3Client();
 const EXPIRES = 600; // 10 minutes
 
-const handler = baseApi().post(async (req: Request, res) => {
+const handler = baseApi({ requiredScopes: FILES_WRITE_SCOPES }).post(async (req: Request, res) => {
   const userId = req.user.id;
   const data = BatchPresignedUrlRequestInput.parse(req.body);
 

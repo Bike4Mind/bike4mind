@@ -1,5 +1,5 @@
 import { accessibleBy } from '@casl/mongoose';
-import { Permission, searchSchema, SessionEvents, redactSessionsForClient } from '@bike4mind/common';
+import { Permission, sessionSearchSchema, SessionEvents, redactSessionsForClient } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import qs from 'qs';
@@ -14,7 +14,9 @@ const handler = baseApi()
    */
   .get<Request<unknown, unknown, unknown, Record<string, string>>>(
     asyncHandler(async (req, res) => {
-      const { search, surface, pagination, orderBy } = searchSchema.parse(qs.parse(req.query));
+      const { search, surface, pagination, orderBy, origin, excludeOrigin, hasImages } = sessionSearchSchema.parse(
+        qs.parse(req.query)
+      );
 
       const result = req.user
         ? await sessionService.searchOwnSessions(
@@ -24,6 +26,9 @@ const handler = baseApi()
               surface,
               pagination,
               orderBy,
+              origin,
+              excludeOrigin,
+              hasImages,
             },
             {
               db: {

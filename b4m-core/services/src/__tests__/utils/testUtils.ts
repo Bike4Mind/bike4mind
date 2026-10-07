@@ -25,7 +25,8 @@ import {
   ResearchTaskExecutionType,
   IResearchAgent,
 } from '@bike4mind/common';
-import { MockedFunction, MockedObject, vi } from 'vitest';
+import type { Logger } from '@bike4mind/observability';
+import { expect, Mock, MockedFunction, MockedObject, vi } from 'vitest';
 
 export const createMockRepository = <T>(): IBaseRepository<T> => ({
   findById: vi.fn(),
@@ -90,9 +91,11 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   softDeleteByIdsForUserBatch: vi.fn(),
   findAllByIds: vi.fn(),
   findExistingIdsByIds: vi.fn(),
+  findExistingIdsIncludingDeletedByIds: vi.fn(),
   findCitableFieldsByIds: vi.fn(),
   findCitableFieldsWithTagsByIds: vi.fn(),
   findByBatchId: vi.fn(),
+  findToolGeneratedBySessionId: vi.fn(),
   claimIndexNotification: vi.fn(),
   search: vi.fn(),
   executeSearch: vi.fn(),
@@ -116,7 +119,9 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findByDriveFileIdsInDataLake: vi.fn(),
   findByDriveConnectionIdInDataLake: vi.fn(),
   countByDriveConnectionIdInDataLake: vi.fn(),
+  findLiveNonMembersByDriveConnectionId: vi.fn(),
   findByGitHubConnectionIdInDataLake: vi.fn(),
+  countByGitHubConnectionIdInDataLake: vi.fn(),
   findDriveFileIdsByBatchId: vi.fn(),
   markUploaded: vi.fn(),
   markFailedIfNotAlready: vi.fn(),
@@ -154,7 +159,6 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   countDataLakeFilesByMembership: vi.fn(),
   countDataLakeFilesByMembershipArm: vi.fn(),
   countDistinctDataLakeFilesByMembership: vi.fn(),
-  countDistinctUncategorizedDataLakeFilesByMembership: vi.fn(),
   archiveByDataLakeTag: vi.fn(),
   unarchiveByDataLakeTag: vi.fn(),
   findArchivedByDataLakeTag: vi.fn(),
@@ -194,6 +198,7 @@ export const createMockSessionRepository = (): MockedObject<ISessionRepository> 
     upsertByClaudeConversationId: vi.fn() as MockedFunction<ISessionRepository['upsertByClaudeConversationId']>,
     search: vi.fn(),
     findByIdAndUserId: vi.fn(),
+    incrementImageCount: vi.fn(),
     findAllWithKnowledgeId: vi.fn(),
     pullKnowledgeIds: vi.fn(),
     searchByUserId: vi.fn(),
@@ -267,10 +272,10 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findIdsAdministeredBy: vi.fn(),
     findIdsWithAdminRights: vi.fn(),
     incrementCredits: vi.fn(),
-    incrementCurrentStorage: vi.fn(),
     findByIdAndUserId: vi.fn(),
     ensureUserDetails: vi.fn(),
     removeMember: vi.fn(),
+    setMemberMaxCredits: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
     findMemberUserIds: vi.fn(),
@@ -363,4 +368,29 @@ export const mockResearchAgent = (value: Partial<IResearchAgent> = {}): IResearc
   };
 
   return Object.assign(mock, value) as IResearchAgent;
+};
+
+// Shared spies, never reset between tests: assert with toHaveBeenCalledWith, not a call count.
+export const silentLogger = {
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  updateMetadata: vi.fn(),
+} as unknown as Logger;
+
+// statusLog timestamps are wall-clock, so only the status sequence is pinned.
+export const statusLog = (...statuses: string[]) => statuses.map(status => ({ status, timestamp: expect.any(Date) }));
+
+/**
+ * Records each partial passed to a mocked repository write. Cloned at call time: pushShareable
+ * mutates `users` in place, so mock.calls would also match a write made before the grants were
+ * pushed.
+ */
+export const captureWrites = (update: (...args: never[]) => unknown): unknown[] => {
+  const writes: unknown[] = [];
+  (update as Mock).mockImplementation(async (partial: unknown) => {
+    writes.push(structuredClone(partial));
+  });
+  return writes;
 };

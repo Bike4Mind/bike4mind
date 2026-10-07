@@ -1,4 +1,9 @@
-import { DEGENERATE_FINISH_REASON, TRUNCATED_FINISH_REASON, type UsageEventStatus } from '@bike4mind/common';
+import {
+  DEGENERATE_FINISH_REASON,
+  REFUSAL_FINISH_REASON,
+  TRUNCATED_FINISH_REASON,
+  type UsageEventStatus,
+} from '@bike4mind/common';
 
 /**
  * What a reply that stopped early carries: the user-facing warning, and the outcome recorded
@@ -41,6 +46,16 @@ export function buildEarlyStopStamp(finishReason: string | undefined | null): Ea
     return { warning: DEGENERATE_WARNING, usageEventStatus: 'degenerate' };
   }
   return null;
+}
+
+/**
+ * The status a settled call's UsageEvent records for how generation ended. A refusal carries no
+ * early-stop warning (the model's own reply explains it) but must still count toward the admin
+ * Spend tab's Refusal Rate.
+ */
+export function usageEventStatusForFinish(finishReason: string | undefined | null): UsageEventStatus {
+  if (finishReason === REFUSAL_FINISH_REASON) return 'refusal';
+  return buildEarlyStopStamp(finishReason)?.usageEventStatus ?? 'ok';
 }
 
 /** Appended as its own reply slot when a tool-loop turn finishes without writing an answer. */

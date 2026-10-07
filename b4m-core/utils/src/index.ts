@@ -82,7 +82,6 @@ export * from './questMasterToolSchema';
 export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
-export * from './videoGeneration';
 export * from './soundGeneration';
 export * from './musicGeneration';
 export * from './analytics';

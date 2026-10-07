@@ -13,6 +13,7 @@ import {
   IFabFileRepository,
   IMessage,
   isAudioMimeType,
+  isMediaOnlyMimeType,
   isGeminiModelId,
   isImageAttachment,
   isImageServeable,
@@ -27,6 +28,9 @@ import {
   SupportedEmbeddingModel,
   isUnlimitedHistory,
   resolveHistoryFetchLimit,
+  formatChoicesBlock,
+  MIN_REPLY_CHOICES,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BaseStorage,
@@ -396,6 +400,35 @@ function historyTextReply(item: Pick<IChatHistoryItem, 'replies' | 'researchMode
   return reply || researchModeReplyText(item.researchModeResults);
 }
 
+/**
+ * Whether the slot `historyTextReply` picks (the first non-`<think>` one) is also the turn's last
+ * visible slot. On a multi-slot turn it is a pre-tool preamble, which must never carry the block.
+ */
+function isFinalVisibleReply(item: Pick<IChatHistoryItem, 'replies'>): boolean {
+  const replies = item.replies ?? [];
+  const firstNonThinkIndex = replies.findIndex(r => !r.trim().startsWith('<think>'));
+  if (firstNonThinkIndex === -1) return false;
+  let lastVisibleIndex = -1;
+  for (let i = replies.length - 1; i >= 0; i--) {
+    if (visibleReplyText(replies[i])) {
+      lastVisibleIndex = i;
+      break;
+    }
+  }
+  return lastVisibleIndex !== -1 && firstNonThinkIndex === lastVisibleIndex;
+}
+
+/**
+ * The turn's history text with its stored choices re-attached as a ```choices block. Finalize
+ * strips the block from the stored reply, so without this the model sees its own earlier turns end
+ * without one and drifts into omitting it. Model-facing only; the stored quest is never touched.
+ */
+function withStoredChoices(text: string, item: Pick<IChatHistoryItem, 'suggestedChoices'>): string {
+  const options = item.suggestedChoices?.options;
+  if (!text || !options || options.length < MIN_REPLY_CHOICES) return text;
+  return text + formatChoicesBlock(options);
+}
+
 /** Stands in for a tool_result whose returnValue was never recorded; must not be empty. */
 export const TOOL_RESULT_NOT_RECORDED = '[tool result not recorded]';
 
@@ -528,6 +561,7 @@ export async function fetchAndProcessPreviousMessages(
     verbatimTokenBudget,
     excludeCurrentPrompt = false,
     model,
+    includeReplyChoices = false,
   }: {
     db: {
       quests: Pick<IChatHistoryItemRepository, 'getMostRecentChatHistory'>;
@@ -560,6 +594,14 @@ export async function fetchAndProcessPreviousMessages(
      * automatically for every caller instead of depending on each one remembering to opt in.
      */
     model?: string;
+    /**
+     * Re-attach each turn's stored `suggestedChoices` to its assistant text as a choices block.
+     * Set only when REPLY_CHOICES_GUIDANCE was requested this turn (ChatCompletionProcess
+     * `replyChoicesOffered`). That does not guarantee the model actually saw the guidance this
+     * turn - the system-prompt budget can still evict it (see systemPromptSources.ts) - so history
+     * can demonstrate a format offered but not delivered on the current request.
+     */
+    includeReplyChoices?: boolean;
   }
 ): Promise<
   [
@@ -694,7 +736,12 @@ export async function fetchAndProcessPreviousMessages(
       const assistantContent: MessageContentObject[] = [];
 
       if (textReply) {
-        assistantContent.push({ type: 'text', text: stripToolOutputMarker(textReply) } as MessageContentText);
+        // No choices block here: this text precedes the tool_use parts, so it would teach the model
+        // to offer choices before calling a tool.
+        assistantContent.push({
+          type: 'text',
+          text: stripToolOutputMarker(textReply),
+        } as MessageContentText);
       }
 
       for (const fc of toolCalls) {
@@ -725,7 +772,13 @@ export async function fetchAndProcessPreviousMessages(
     // Priority 3: Legacy fallback - text-only replies
     else {
       const textReply = historyTextReply(cur);
-      if (textReply) acc.push({ role: 'assistant', content: stripToolOutputMarker(textReply) });
+      if (textReply) {
+        const text = stripToolOutputMarker(textReply);
+        // Only re-attach when the picked slot is also the turn's final visible answer - see
+        // isFinalVisibleReply for why an earlier slot must never get the block.
+        const reattach = includeReplyChoices && isFinalVisibleReply(cur);
+        acc.push({ role: 'assistant', content: reattach ? withStoredChoices(text, cur) : text });
+      }
     }
 
     return acc;
@@ -1273,6 +1326,7 @@ async function cosineSearch(
 export type FabFileNoticeBand =
   | 'unresolved'
   | 'audio'
+  | 'video'
   | 'image_not_serveable'
   | 'image_too_large'
   | 'vision_unsupported'
@@ -1472,20 +1526,20 @@ export async function processFabFilesServer(
     // false explicitly on the two text paths that can partially deliver.
     let fullyDelivered = false;
     try {
-      // Audio (generated TTS / sound effects) is never LLM input: no model
-      // accepts audio, and the non-image branch below would otherwise try to
-      // read the bytes as text. This is the authoritative attachment guard -
-      // every chat/agent path funnels through here, so a file that slips past
-      // the attach UI still can't reach the model.
-      if (isAudioMimeType(file.mimeType)) {
+      // Generated audio and video are never LLM input: no model accepts them as attachments, and the
+      // non-image branch below would otherwise try to read the bytes as text. This is the authoritative
+      // attachment guard - every chat/agent path funnels through here, so a file that slips past the
+      // attach UI still can't reach the model.
+      if (isMediaOnlyMimeType(file.mimeType)) {
+        const mediaKind = isAudioMimeType(file.mimeType) ? 'audio' : 'video';
         logger.warn(
-          `[processFabFilesServer] Skipping audio file ${file.fileName} — audio is not attachable to an LLM.`
+          `[processFabFilesServer] Skipping ${mediaKind} file ${file.fileName} - ${mediaKind} is not attachable to an LLM.`
         );
         fileNotices.push({
           fabFileId: file.id,
           fileName: file.fileName,
-          band: 'audio',
-          message: `"${noticeFileName(file.fileName)}" is an audio file and was not sent: no model accepts audio as input.`,
+          band: mediaKind,
+          message: `"${noticeFileName(file.fileName)}" is ${mediaKind === 'audio' ? 'an audio' : 'a video'} file and was not sent: no model accepts ${mediaKind} as input.`,
           delivered: false,
         });
         return;
@@ -1970,7 +2024,6 @@ export async function processFabFilesServer(
                 delivered: false,
               });
             } else {
-              logger.updateMetadata({ filePath: file.filePath });
               throw e;
             }
           }
@@ -1979,9 +2032,28 @@ export async function processFabFilesServer(
       if (delivered) deliveredFileIds.add(file.id);
       if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
     } catch (error) {
-      logger.updateMetadata({ fileId: file.id });
-      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}: ${error}`);
-      throw error;
+      // Per-line metadata, not updateMetadata: that mutates the run's shared logger, so every later
+      // line - for every other file, and the rest of the run - was stamped with this file's ids.
+      logger.error(`🕐 [processFabFilesServer] Error processing file ${file.fileName}:`, error, {
+        fileId: file.id,
+        filePath: file.filePath,
+      });
+      // Content already reached the prompt (a later step such as the metadata update threw), so
+      // reporting read_failed would contradict what the model received.
+      if (delivered) {
+        deliveredFileIds.add(file.id);
+        if (fullyDelivered) fullyDeliveredFileIds.add(file.id);
+        return;
+      }
+      // Contain the failure to this file. Rethrowing rejected the whole Promise.all, so one
+      // unreadable attachment dropped every sibling that had read fine along with it.
+      fileNotices.push({
+        fabFileId: file.id,
+        fileName: file.fileName,
+        band: 'read_failed',
+        message: `"${noticeFileName(file.fileName)}" could not be read and was not sent: an unexpected error occurred while extracting its content.`,
+        delivered: false,
+      });
     }
   };
 

@@ -5,6 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // path's two lake gates are stubbed (below), plus the repository layer (@bike4mind/database)
 // and AWS-touching modules.
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   findActiveByUserId: vi.fn(),
   findActiveTaxonomyByUserId: vi.fn(),
   findTaxonomyAttentionByUserId: vi.fn(),
@@ -23,6 +26,8 @@ const h = vi.hoisted(() => ({
   findAll: vi.fn().mockResolvedValue([]),
   assertLakeWriteAccess: vi.fn(),
   assertLakeAdmission: vi.fn(),
+  claimUploadHistory: vi.fn().mockResolvedValue(true),
+  listGrantsByLake: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -45,6 +50,14 @@ vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
     ...actual,
+    withTransaction: async (fn: () => unknown) => {
+      h.tx.push('enter');
+      try {
+        return await fn();
+      } finally {
+        h.tx.push('exit');
+      }
+    },
     dataLakeBatchRepository: {
       ...actual.dataLakeBatchRepository,
       findActiveByUserId: h.findActiveByUserId,
@@ -52,10 +65,13 @@ vi.mock('@bike4mind/database', async importOriginal => {
       findTaxonomyAttentionByUserId: h.findTaxonomyAttentionByUserId,
       forceFailStuckTaxonomy: h.forceFailStuckTaxonomy,
       markTerminalIfActive: h.markTerminalIfActive,
+      claimUploadHistory: h.claimUploadHistory,
       create: h.batchCreate,
     },
+    dataLakeAccessGrantRepository: { ...actual.dataLakeAccessGrantRepository, listByLake: h.listGrantsByLake },
     dataLakeRepository: {
       ...actual.dataLakeRepository,
+      touchIfStable: h.touchIfStable,
       findById: h.dlFindById,
       setStats: h.dlSetStats,
       activateIfDraft: h.activateIfDraft,
@@ -83,7 +99,11 @@ vi.mock('@bike4mind/services', async importOriginal => {
   };
 });
 vi.mock('@server/dataLakes/toAccessContext', () => ({
-  toAccessContext: vi.fn(async (r: { user: { id: string } }) => ({ userId: r.user.id, isAdmin: false })),
+  toAccessContext: vi.fn(async (r: { user: { id: string; administeredOrgIds?: string[] } }) => ({
+    userId: r.user.id,
+    isAdmin: false,
+    administeredOrgIds: r.user.administeredOrgIds ?? [],
+  })),
 }));
 
 import handler from '../index';
@@ -99,6 +119,7 @@ const run = (res: unknown) => (handler as (req: unknown, res: unknown) => Promis
 describe('GET /api/data-lakes/batches - reconciler wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.findActiveByUserId.mockResolvedValue([]);
     h.findTaxonomyAttentionByUserId.mockResolvedValue([]);
   });
@@ -143,7 +164,13 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
     };
     h.findActiveByUserId.mockResolvedValue([stuckBatch]);
     h.findActiveTaxonomyByUserId.mockResolvedValue([]);
-    h.markTerminalIfActive.mockResolvedValue({ ...stuckBatch, status: 'completed_with_errors' });
+    h.markTerminalIfActive.mockResolvedValue({
+      ...stuckBatch,
+      status: 'completed_with_errors',
+      vectorizedFiles: 3,
+      failedFiles: 0,
+      skippedFiles: 0,
+    });
     h.dlFindById.mockResolvedValue({
       id: 'lake1',
       datalakeTag: 'datalake:orga:acme',
@@ -158,6 +185,14 @@ describe('GET /api/data-lakes/batches - reconciler wiring', () => {
 
     expect(h.dlSetStats).toHaveBeenCalledWith('lake1', expect.anything());
     expect(h.activateIfDraft).not.toHaveBeenCalled();
+    // The abandoned upload gets its own History row ahead of any status change.
+    expect(h.recordConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'upload-files',
+        principalId: 'u1',
+        changes: [expect.objectContaining({ after: 'Upload stopped: 3 files added' })],
+      })
+    );
     expect(h.recordConfigChange).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'auto-activate' }));
   });
 
@@ -191,6 +226,7 @@ describe('POST /api/data-lakes/batches - admission contract wiring', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.assertLakeWriteAccess.mockResolvedValue(LAKE);
     h.batchCreate.mockResolvedValue({ id: 'b1' });
   });
@@ -213,5 +249,103 @@ describe('POST /api/data-lakes/batches - admission contract wiring', () => {
 
     await expect(runPost(res)).rejects.toThrow('refused');
     expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/batches - uploader rung', () => {
+  const ORG_LAKE = {
+    id: 'lake1',
+    status: 'active',
+    datalakeTag: 'datalake:lake',
+    createdByUserId: 'someone-else',
+    organizationId: 'org1',
+  };
+  const runPost = (user: { id: string; administeredOrgIds?: string[] }, res: unknown) =>
+    (handler as (req: unknown, res: unknown) => Promise<void>)(
+      { method: 'POST', user, logger: console, body: { dataLakeId: 'lake1', totalFiles: 2, totalSizeBytes: 10 } },
+      res
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.tx.length = 0;
+    h.assertLakeWriteAccess.mockResolvedValue(ORG_LAKE);
+    h.batchCreate.mockResolvedValue({ id: 'b1' });
+    h.listGrantsByLake.mockResolvedValue([]);
+    h.assertLakeAdmission.mockResolvedValue(undefined);
+  });
+
+  // The History row is written later from a queue handler that only knows the uploader's id, so an
+  // org admin with no grant would record as `system` unless the rung is captured here.
+  it('stores the org-admin rung on the batch for an org admin with no grant', async () => {
+    await runPost({ id: 'admin1', administeredOrgIds: ['org1'] }, makeRes().res);
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ uploaderManageRung: 'org-admin' }));
+    expect(h.listGrantsByLake).toHaveBeenCalledWith('lake1', { activeAsOf: expect.any(Date) });
+  });
+
+  it('stores the grant rung for a curator', async () => {
+    h.listGrantsByLake.mockResolvedValue([{ principalType: 'user', principalId: 'cur1', role: 'curator' }]);
+    await runPost({ id: 'cur1' }, makeRes().res);
+    expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ uploaderManageRung: 'grant-curator' }));
+  });
+});
+
+describe('POST /api/data-lakes/batches - write serialization', () => {
+  const LAKE = { id: 'lake-oid-1', status: 'active', datalakeTag: 'datalake:lake', createdByUserId: 'u1' };
+  const runPost = (res: unknown) =>
+    (handler as (req: unknown, res: unknown) => Promise<void>)(
+      {
+        method: 'POST',
+        user: { id: 'u1' },
+        logger: console,
+        body: { dataLakeId: 'my-lake', totalFiles: 2, totalSizeBytes: 10 },
+      },
+      res
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.tx.length = 0;
+    h.assertLakeWriteAccess.mockResolvedValue(LAKE);
+    h.assertLakeAdmission.mockResolvedValue(undefined);
+    h.listGrantsByLake.mockResolvedValue([]);
+    h.batchCreate.mockResolvedValue({ id: 'b1' });
+  });
+
+  it('gates, grades and creates inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeWriteAccess.mockImplementation(async () => {
+      h.tx.push('gate');
+      return LAKE;
+    });
+    h.batchCreate.mockImplementation(async () => {
+      h.tx.push('write');
+      return { id: 'b1' };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    await runPost(makeRes().res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('neither creates nor touches when the gate throws', async () => {
+    h.assertLakeWriteAccess.mockRejectedValue(new Error('Data lake not found'));
+
+    await expect(runPost(makeRes().res)).rejects.toThrow(/not found/i);
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
+
+  it('answers 400 without writing or touching when the lake is not ingestable', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...LAKE, status: 'archiving' });
+    const { res } = makeRes();
+
+    await runPost(res);
+
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

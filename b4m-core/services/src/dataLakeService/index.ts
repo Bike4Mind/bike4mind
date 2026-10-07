@@ -19,7 +19,9 @@ export {
   isEffectiveOwner,
   isLakeCreator,
   resolveEffectiveOwnerIds,
+  resolveLakeManageRung,
   type LakeGrant,
+  type SerializeLakeClaim,
 } from './manageRule';
 export * from './authorizeLakeManage';
 // The per-turn manage re-check. Exported so the admin key-mint route screens a lake binding
@@ -57,7 +59,10 @@ export * from './demoteDataLake';
 export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';
+export { recordLakeConfigChange } from './recordLakeConfigChange';
+export { diffLakeConfig } from './diffLakeConfig';
 export * from './recordLakeMembershipChange';
+export * from './recordLakeUploadBatch';
 export * from './prefixArmMembership';
 export * from './chunkPolicyConflict';
 export * from './admissionContract';
@@ -80,6 +85,8 @@ export * from './applyTaxonomySuggestions';
 export * from './dismissTaxonomySuggestion';
 export * from './getDynamicDataLakeTags';
 export * from './narrowLakeAccessToSession';
+export * from './sessionLakeAdmission';
+export * from './vetPreauthorizedLakeIds';
 export * from './embeddingMismatch';
 export * from './retrievalUnavailable';
 export * from './supersession';

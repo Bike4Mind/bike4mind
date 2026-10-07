@@ -8,12 +8,15 @@ const h = vi.hoisted(() => ({
   grantingLakes: vi.fn(),
   resolveAccessibleLakes: vi.fn(),
   record: vi.fn().mockResolvedValue(undefined),
+  baseApiOptions: undefined as unknown,
 }));
 
 // Same routing shape as index.put.test.ts: the module registers get/put/delete in sequence and
-// the exported default routes by method, so a single import can drive just the GET handler.
+// the exported default routes by method, so a single import can drive just the GET handler. Also
+// captures the options `baseApi` was called with, for the scope-gate test below.
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -62,11 +65,12 @@ const route = handler as unknown as RouteHandler;
 
 const LAKES = [{ id: 'lake1', datalakeTag: 'datalake:lake1' }];
 
-const makeReq = (id = 'file-1') => ({
+const makeReq = (id = 'file-1', overrides: Record<string, unknown> = {}) => ({
   method: 'GET',
   query: { id },
   user: { id: 'u1' },
   logger: { updateMetadata: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  ...overrides,
 });
 
 const makeRes = () => {
@@ -79,6 +83,30 @@ beforeEach(() => {
   h.record.mockResolvedValue(undefined);
   h.resolveAccessibleLakes.mockResolvedValue(LAKES);
   h.generateSignedUrl.mockResolvedValue({ id: 'file-1', fileUrl: 'https://signed.example/file-1' });
+});
+
+describe('GET /api/files/:id - scope gate', () => {
+  it('requires files:read or files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:read', 'files:write'] });
+  });
+
+  it('rejects a files:write-only key with a 403 before loading the file', async () => {
+    await expect(
+      route(makeReq('file-1', { apiKeyInfo: { keyId: 'k', scopes: ['files:write'] } }), makeRes().res)
+    ).rejects.toThrow(/files:read is required/);
+
+    expect(h.getFabFile).not.toHaveBeenCalled();
+    expect(h.findById).not.toHaveBeenCalled();
+  });
+
+  it('allows a files:read key through the gate on the happy path', async () => {
+    h.getFabFile.mockResolvedValue({ id: 'file-1', fileName: 'mine.pdf' });
+    const { res, json } = makeRes();
+
+    await route(makeReq('file-1', { apiKeyInfo: { keyId: 'k', scopes: ['files:read'] } }), res);
+
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-1' }));
+  });
 });
 
 describe('GET /api/files/:id access-event audit - lake-accessible fallback', () => {

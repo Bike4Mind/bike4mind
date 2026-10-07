@@ -15,7 +15,7 @@
  * platform admin who is not a member of the lake reaches neither its files nor its membership
  * through the public API.
  */
-import type { Request, Response } from 'express';
+import type { Request } from 'express';
 import {
   addDataLakeFileContract,
   getDataLakeFileContract,
@@ -33,7 +33,9 @@ import {
   fabFileRepository,
   lakeMembershipRemovalRepository,
   scopedSettingsRepository,
+  withTransaction,
 } from '@bike4mind/database';
+import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -134,12 +136,17 @@ const addRouter = nextRouteForContract(addDataLakeFileContract, { rateLimit: per
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
-    const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
-    const fileId = fileIdOrNotFound(req.validatedParams.file_id);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };
-    const result = await dataLakeService.addFileToDataLake(actor, lake.id, fileId, {
-      db: { ...membershipWriteDb, scopedSettings: scopedSettingsRepository },
-      logger: req.logger,
+    const { lake, fileId, result } = await withTransaction(async () => {
+      const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
+      const fileId = fileIdOrNotFound(req.validatedParams.file_id);
+      const result = await dataLakeService.addFileToDataLake(actor, lake.id, fileId, {
+        db: { ...membershipWriteDb, scopedSettings: scopedSettingsRepository },
+        logger: req.logger,
+      });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return { lake, fileId, result };
     });
     const body: DataLakeFileMembershipResponse = {
       lake_id: lake.id,
@@ -154,12 +161,16 @@ const removeRouter = nextRouteForContract(removeDataLakeFileContract, { rateLimi
   .use(requireFeatureEnabled('EnableDataLakes'))
   .delete(async (req, res) => {
     const ctx = await toMemberAccessContext(req);
-    const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
-    const fileId = fileIdOrNotFound(req.validatedParams.file_id);
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo) };
-    const result = await dataLakeService.removeFileFromDataLake(actor, lake.id, fileId, {
-      db: membershipWriteDb,
-      logger: req.logger,
+    const { lake, fileId, result } = await withTransaction(async () => {
+      const lake = await assertLakeMembershipWritable(req.validatedParams.id, ctx, req.logger);
+      const fileId = fileIdOrNotFound(req.validatedParams.file_id);
+      const result = await dataLakeService.removeFileFromDataLake(actor, lake.id, fileId, {
+        db: membershipWriteDb,
+        logger: req.logger,
+      });
+      await dataLakeRepository.touchIfStable(lake.id);
+      return { lake, fileId, result };
     });
     const body: DataLakeFileMembershipResponse = {
       lake_id: lake.id,
@@ -170,16 +181,8 @@ const removeRouter = nextRouteForContract(removeDataLakeFileContract, { rateLimi
     return res.json(body);
   });
 
-// One contract per method, and nextRouteForContract refuses a verb its contract does not declare,
-// so each method has its own router and this dispatches between them.
-export default function handler(req: Request, res: Response) {
-  // Each router's declared param type carries its contract's validated fields, which exist only
-  // once its own prelude has run - a plain incoming Request satisfies that at runtime but not
-  // structurally, hence the casts.
-  if (req.method === 'POST') return addRouter(req as Parameters<typeof addRouter>[0], res);
-  if (req.method === 'DELETE') return removeRouter(req as Parameters<typeof removeRouter>[0], res);
-  return getRouter(req as Parameters<typeof getRouter>[0], res);
-}
+// One contract per method, each on its own router (see dispatchByMethod).
+export default dispatchByMethod({ GET: getRouter, POST: addRouter, DELETE: removeRouter });
 
 export const config = {
   api: { externalResolver: true },

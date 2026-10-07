@@ -150,13 +150,19 @@ async function runFullPipeline(
     enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
+    // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
+    skipReplyChoices: true,
     // Inject the voice agent's system prompt (ElevenLabs-rendered, incl. per-user
     // override) at the top of the context so it drives the response persona.
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),
   };
 
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
-  const quest = await invokeService.invoke({ body: invokeBody, userId: sessionCtx.userId });
+  const quest = await invokeService.invoke({
+    body: invokeBody,
+    userId: sessionCtx.userId,
+    apiKeyId: sessionCtx.apiKeyId,
+  });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
   onQuestCreated(quest.id);
@@ -167,6 +173,9 @@ async function runFullPipeline(
       ...invokeBody,
       questId: quest.id,
       userId: sessionCtx.userId,
+      // From the verified token, never the request body. process() reads the tool context's key
+      // from this body only, so without it a key-minted call reaches tools as a signed-in session.
+      apiKeyId: sessionCtx.apiKeyId,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,

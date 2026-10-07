@@ -16,6 +16,7 @@ export * from './EmbeddingCacheModel';
 export * from './LakeAccessEventModel';
 export * from './DataLakeSpendNotificationModel';
 export * from './DataLakeCorpusActionModel';
+export * from './GenerationJobModel';
 export * from './DataLakeFindingModel';
 export * from './DataLakeProposalModel';
 export * from './DataLakeResearchConfigModel';

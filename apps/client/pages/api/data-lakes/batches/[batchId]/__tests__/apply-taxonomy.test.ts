@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   applyTaxonomySuggestions: vi.fn(),
   toAccessContext: vi.fn(),
+  serializeLakeClaim: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as upload-complete.test.ts).
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 // Real toAccessContext pulls in entitlements/subscription lookups that are out of scope here;
 // stub it to the caller identity, same shape the route previously built inline.
+vi.mock('@server/dataLakes/serializeLakeClaim', () => ({ serializeLakeClaim: h.serializeLakeClaim }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../apply-taxonomy';
@@ -87,7 +89,7 @@ describe('POST /api/data-lakes/batches/[batchId]/apply-taxonomy', () => {
       { userId: 'u1', isAdmin: false },
       'b1',
       [tags[0]],
-      expect.anything()
+      expect.objectContaining({ serializeClaim: h.serializeLakeClaim })
     );
     expect(json).toHaveBeenCalledWith({ success: true, filesUpdated: 3, unchanged: 1, skipped: 2 });
   });
@@ -100,7 +102,7 @@ describe('POST /api/data-lakes/batches/[batchId]/apply-taxonomy', () => {
       { userId: 'admin1', isAdmin: true },
       'b1',
       [],
-      expect.anything()
+      expect.objectContaining({ serializeClaim: h.serializeLakeClaim })
     );
   });
 });

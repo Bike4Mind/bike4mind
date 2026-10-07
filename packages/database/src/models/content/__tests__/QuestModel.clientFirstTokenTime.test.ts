@@ -17,13 +17,33 @@ describe('questRepository.setClientFirstTokenTime', () => {
     await mongoServer.stop();
   });
 
-  it('keeps promptMeta the pipeline wrote after the caller read the quest', async () => {
-    const quest = await Quest.create({
-      sessionId: 'session-1',
-      type: 'message',
-      timestamp: new Date(),
-      prompt: 'hello',
+  const createQuest = () =>
+    Quest.create({ sessionId: 'session-1', type: 'message', timestamp: new Date(), prompt: 'hello' });
+
+  const readRaw = (id: string) => Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
+
+  it('survives a later whole-quest save from a copy read before it was posted', async () => {
+    const quest = await createQuest();
+    const pipelineCopy = await questRepository.findById(quest.id);
+
+    await expect(questRepository.setClientFirstTokenTime(quest.id, 250)).resolves.toBe(true);
+
+    await questRepository.update({
+      ...pipelineCopy!,
+      promptMeta: {
+        ...pipelineCopy!.promptMeta,
+        performance: { firstChunkTime: 10, firstTokenTime: 20, totalResponseTime: 900 },
+        statusLog: [{ status: 'done', timestamp: new Date() }],
+      },
     });
+
+    const raw = await readRaw(quest.id);
+    expect(raw?.clientFirstTokenTime).toBe(250);
+    expect(raw?.promptMeta.performance).toMatchObject({ firstChunkTime: 10, firstTokenTime: 20, totalResponseTime: 900 });
+  });
+
+  it('leaves promptMeta the pipeline already wrote untouched', async () => {
+    const quest = await createQuest();
     await questRepository.update({
       id: quest.id,
       promptMeta: {
@@ -32,34 +52,23 @@ describe('questRepository.setClientFirstTokenTime', () => {
       },
     });
 
-    await expect(questRepository.setClientFirstTokenTime(quest.id, 250)).resolves.toBe(true);
+    await questRepository.setClientFirstTokenTime(quest.id, 250);
 
-    const raw = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(quest.id) });
-    expect(raw?.promptMeta.performance).toMatchObject({
-      firstChunkTime: 10,
-      firstTokenTime: 20,
-      clientFirstTokenTime: 250,
-    });
+    const raw = await readRaw(quest.id);
+    expect(raw?.clientFirstTokenTime).toBe(250);
+    expect(raw?.promptMeta.performance).toMatchObject({ firstChunkTime: 10, firstTokenTime: 20 });
     expect(raw?.promptMeta.statusLog).toHaveLength(1);
   });
 
-  it('creates the path on a quest with no promptMeta yet', async () => {
-    const quest = await Quest.create({ sessionId: 'session-1', type: 'message', timestamp: new Date(), prompt: 'hi' });
-
-    await questRepository.setClientFirstTokenTime(quest.id, 99);
-
-    const raw = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(quest.id) });
-    expect(raw?.promptMeta.performance.clientFirstTokenTime).toBe(99);
-  });
-
-  it('creates the path on a quest whose promptMeta is null', async () => {
-    const quest = await Quest.create({ sessionId: 'session-1', type: 'message', timestamp: new Date(), prompt: 'hi' });
+  it('writes on a quest whose promptMeta is null', async () => {
+    const quest = await createQuest();
     await Quest.collection.updateOne({ _id: new mongoose.Types.ObjectId(quest.id) }, { $set: { promptMeta: null } });
 
     await expect(questRepository.setClientFirstTokenTime(quest.id, 42)).resolves.toBe(true);
 
-    const raw = await Quest.collection.findOne({ _id: new mongoose.Types.ObjectId(quest.id) });
-    expect(raw?.promptMeta.performance.clientFirstTokenTime).toBe(42);
+    const raw = await readRaw(quest.id);
+    expect(raw?.clientFirstTokenTime).toBe(42);
+    expect(raw?.promptMeta).toBeNull();
   });
 
   it('reports no match for an unknown quest', async () => {

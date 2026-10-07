@@ -117,8 +117,6 @@ export interface DataLakeArticlesQuery {
   limit?: string;
   sortBy?: string;
   sortDir?: string;
-  /** 'true' narrows to the merged-tree Uncategorized bucket - see queryDataLakeArticles. */
-  uncategorized?: string | string[];
 }
 
 /**
@@ -215,9 +213,9 @@ async function buildLakeMembershipScopes(
  * lake's arm and becomes an unanchored prefix match on the whole result set - a bypass any of the
  * OR'd lakes can ride. Registry lakes keep matching through the OPEN `dataLakeTagPrefixes` arm.
  *
- * `queryDataLakeTagCounts` deliberately does NOT use this: `countDataLakeFilesByMembership` re-applies
- * each scope in its own `$facet` branch, so the pipeline's cross-lake `$or` only widens the candidate
- * pool and never a per-lake count - each number still comes from that lake's own filter.
+ * `queryDataLakeTagCounts` uses it for the tree counters (one shared `$or`), but not for the per-lake
+ * `countDataLakeFilesByMembership*` calls: those re-apply each scope in its own `$facet` branch, so
+ * they keep the registry scopes.
  *
  * An ALLOW-list on `kind`, not `!== 'registry'`: the invariant is "only creator-anchored arms may
  * enter the shared `$or`", and a future third kind whose prefix arm is likewise unanchored would
@@ -239,7 +237,7 @@ export async function queryDataLakeArticles(
   if (lakes.length === 0) return { data: [], total: 0, hasMore: false };
 
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
-  const { openTagPrefixes, scopedTagPrefixes } = splitTagPrefixes(lakes);
+  const { openTagPrefixes } = splitTagPrefixes(lakes);
 
   // Single-article fetch (deep link) - authorize it against the accessible lakes.
   // Access = the file carries an accessible lake's unique meta-tag (covers dynamic
@@ -285,13 +283,6 @@ export async function queryDataLakeArticles(
     await buildLakeMembershipScopes(lakes, 'data-lake-articles-browse', req.logger)
   );
 
-  // The merged tree's Uncategorized bucket: lake members categorized under NONE of the accessible
-  // prefixes, so a file categorized in any one lake stays out of it (it is already reachable under
-  // that lake's branch). `restrictToDataLake` is not optional here - the narrowing is a top-level
-  // AND, so without it the broad owner/shared arms stay in and the "bucket" would be every
-  // personal file the caller owns that happens to carry none of these prefixes.
-  const uncategorizedOnly = firstQueryValue(query.uncategorized) === 'true';
-  const allTagPrefixes = [...openTagPrefixes, ...scopedTagPrefixes];
   const result = await fabFilesService.search(
     user.id,
     {
@@ -329,7 +320,6 @@ export async function queryDataLakeArticles(
       dataLakeTags,
       dataLakeTagPrefixes: openTagPrefixes,
       lakeMemberships,
-      ...(uncategorizedOnly ? { restrictToDataLake: true, lacksContentPrefixTags: allTagPrefixes } : {}),
     }
   );
 
@@ -355,7 +345,6 @@ export async function queryDataLakeTagCounts(
   lakeArmCounts: Record<string, { metaCount: number; prefixOnlyCount: number }>;
   uncategorizedFileCounts: Record<string, number>;
   totalLakeFileCount: number;
-  totalUncategorizedFileCount: number;
 }> {
   if (lakes.length === 0) {
     return {
@@ -365,7 +354,6 @@ export async function queryDataLakeTagCounts(
       lakeArmCounts: {},
       uncategorizedFileCounts: {},
       totalLakeFileCount: 0,
-      totalUncategorizedFileCount: 0,
     };
   }
   const dataLakeTags = lakes.map(dl => dl.datalakeTag);
@@ -373,15 +361,9 @@ export async function queryDataLakeTagCounts(
   // The positional prefix list drives the tree's regex grouping (both static + dynamic
   // content tags appear as branches). The ownership gate that keeps a colliding prefix from
   // surfacing another tenant's tags is `$or: buildOwnershipConditions(...)` inside the counter -
-  // base access (owned/shared/group), not a prefix arm of these options.
+  // base access (owned/shared/group) plus the creator-anchored `lakeMemberships` arms below.
   const allPrefixes = [...openTagPrefixes, ...scopedTagPrefixes];
   const user = req.user!;
-  const countOptions = {
-    userGroups: user.groups ?? [],
-    dataLakeTags,
-    dataLakeTagPrefixes: openTagPrefixes,
-  };
-
   // Per-lake sizes come from the membership predicate, not from `<prefix>:` tag matches: a lake
   // whose files carry only the meta-tag (what the upload wizard produces) counts 0 under the
   // prefix rule, and a file carrying several taxonomy tags counts several times. It previously
@@ -393,30 +375,28 @@ export async function queryDataLakeTagCounts(
   // rather than sharing one $or, so an unanchored prefix arm stays confined to its own lake's count.
   const membershipScopes = await buildLakeMembershipScopes(lakes, 'data-lake-tag-counts', req.logger);
 
+  // The tree counts are multi-lake like the browse, so they take only the creator-anchored arms:
+  // without them a prefix-only member listed on open would be missing from these counts.
+  const countOptions = {
+    userGroups: user.groups ?? [],
+    dataLakeTags,
+    dataLakeTagPrefixes: openTagPrefixes,
+    lakeMemberships: dynamicMembershipScopesFor(membershipScopes),
+  };
+
   // The membership legs share one predicate on purpose, so the numbers the picker and the tree
   // show can be reconciled by a user rather than merely coexisting:
   //   lakeFileCounts[tag]           - what the picker shows for a lake
   //   uncategorizedFileCounts[tag]  - the slice of it the prefix-keyed tree cannot render, so the
   //                                   tree can offer it as a bucket instead of dropping it
   //   totalLakeFileCount            - the all-lakes row, DISTINCT across lakes
-  //   totalUncategorizedFileCount   - the MERGED tree's bucket: distinct members categorized under
-  //                                   no accessible prefix, so a file categorized in any one lake
-  //                                   stays out of it
   // `uniqueArticleCounts` stays prefix-based: it sizes the tag TREE, which is prefix-keyed.
-  const [
-    tagCounts,
-    uniqueArticleCounts,
-    membershipCounts,
-    lakeArmCounts,
-    totalLakeFileCount,
-    totalUncategorizedFileCount,
-  ] = await Promise.all([
+  const [tagCounts, uniqueArticleCounts, membershipCounts, lakeArmCounts, totalLakeFileCount] = await Promise.all([
     fabFileRepository.countDataLakeTagsByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeUniqueFilesByPrefix(user.id, allPrefixes, countOptions),
     fabFileRepository.countDataLakeFilesByMembership(membershipScopes),
     fabFileRepository.countDataLakeFilesByMembershipArm(membershipScopes),
     fabFileRepository.countDistinctDataLakeFilesByMembership(membershipScopes),
-    fabFileRepository.countDistinctUncategorizedDataLakeFilesByMembership(membershipScopes, allPrefixes),
   ]);
 
   const lakeFileCounts: Record<string, number> = {};
@@ -433,6 +413,5 @@ export async function queryDataLakeTagCounts(
     lakeArmCounts,
     uncategorizedFileCounts,
     totalLakeFileCount,
-    totalUncategorizedFileCount,
   };
 }

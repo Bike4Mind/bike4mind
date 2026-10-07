@@ -141,4 +141,20 @@ describe('music_generation tool', () => {
     // A failed generation must not settle a charge - onFinish is never reached.
     expect(context.onFinish).not.toHaveBeenCalled();
   });
+
+  it('persists the KB FabFile copy when saveGeneratedAudio is unset (defaults on)', async () => {
+    const context = createFakeContext();
+    await run(context, { prompt: 'lofi' });
+    expect(mockPersistFab).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors saveGeneratedAudio=false: uploads for inline playback but skips the KB FabFile copy', async () => {
+    const context = createFakeContext();
+    (context as { user: unknown }).user = { preferences: { saveGeneratedAudio: false } };
+    const result = await run(context, { prompt: 'lofi' });
+    expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
+    expect(mockPersistFab).not.toHaveBeenCalled();
+    expect(context.statusUpdate).toHaveBeenCalledWith({ images: ['stored-key.mp3'] });
+    expect(result).toBe('Successfully generated music');
+  });
 });

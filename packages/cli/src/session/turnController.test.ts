@@ -7,6 +7,9 @@ import type { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
 import type { TodoItem } from '../tools/writeTodosTool.js';
 import type { ModelInfo } from '@bike4mind/common';
+import { PostEditDiagnostics } from '../diagnostics/PostEditDiagnostics.js';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { getTokenCounter } from '../utils/tokenCounter.js';
 
 /**
  * Boundary tests for the extracted turn lifecycle (issue #228, phase 2). They
@@ -70,6 +73,7 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     todoStore: null,
     decisionStore: null,
     blockerStore: null,
+    postEditDiagnostics: null,
     workflowStores: {
       decisionStore: { decisions: [] },
       blockerStore: { blockers: [] },
@@ -81,13 +85,13 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
   return { ...base, ...overrides };
 }
 
-function seedSession(messages: Message[] = []): Session {
+function seedSession(messages: Message[] = [], model = 'claude-sonnet-4-6'): Session {
   const session: Session = {
     id: 'sess-1',
     name: 'test session',
     createdAt: ISO,
     updatedAt: ISO,
-    model: 'claude-sonnet-4-6',
+    model,
     messages,
     metadata: { totalTokens: 10, totalCost: 0, totalCredits: 2, toolCallCount: 1 },
   };
@@ -229,6 +233,27 @@ describe('runTurn', () => {
     expect(useCliStore.getState().pendingMessages).toHaveLength(0);
   });
 
+  it('keeps the steps that ran before an abort on the cancellation message', async () => {
+    seedSession([]);
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    const thought: AgentStep = { type: 'thought', content: 'reading the file', metadata: { timestamp: 0 } };
+    // Stands in for wireAgentEvents' step handler, which appends each step to
+    // the pending assistant message while the run is in flight.
+    const run = vi.fn(async () => {
+      const { pendingMessages, updatePendingMessage } = useCliStore.getState();
+      const last = pendingMessages.length - 1;
+      updatePendingMessage(last, { ...pendingMessages[last], metadata: { steps: [thought, observation('ok')] } });
+      throw abortError;
+    });
+
+    await runTurn('do it', makeCtx({ agent: { run } as unknown as ReActAgent }));
+
+    expect(useCliStore.getState().session!.messages[1]).toMatchObject({
+      metadata: { cancelled: true, steps: [thought, observation('ok')] },
+    });
+  });
+
   it('flushes durable workflow state onto the session when the turn is aborted (regression: #595)', async () => {
     seedSession([]);
     const abortError = new Error('The operation was aborted');
@@ -322,6 +347,48 @@ describe('runTurn', () => {
     // fired; the main-turn call follows it.
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
+  });
+
+  it('compacts a Claude session at a window where the same non-Claude session does not', async () => {
+    const messages: Message[] = Array.from({ length: 6 }, (_, i) => ({
+      id: `m${i}`,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: 'hi',
+      timestamp: ISO,
+    }));
+    const bigTools: ICompletionOptionTools[] = Array.from({ length: 60 }, (_, i) => ({
+      toolFn: async () => '',
+      toolSchema: {
+        name: `tool_${i}`,
+        description: 'x '.repeat(200),
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    }));
+    // Tools alone are ~2/3 of the window: unscaled, system prompt + tools + messages
+    // stay under 80%, but the x1.5 Claude calibration on the whole estimate pushes
+    // the same session over. Reverting forModel in turnController compacts neither.
+    const contextWindow = Math.floor(getTokenCounter().countToolSchemaTokens(bigTools) / 0.6);
+
+    const runFor = async (model: string) => {
+      seedSession(messages, model);
+      const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) =>
+        makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {})
+      );
+      const ctx = makeCtx({
+        agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
+        config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+        availableModels: [{ id: model, contextWindow } as unknown as ModelInfo],
+      });
+      await runTurn('next message', ctx);
+      return run;
+    };
+
+    const nonClaude = await runFor('plain-model');
+    const claude = await runFor('claude-sonnet-5');
+
+    expect(nonClaude).toHaveBeenCalledOnce();
+    expect(claude).toHaveBeenCalledTimes(2);
+    expect(claude.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
   });
 
   it('flushes durable workflow state onto the session before auto-compaction (regression: #595)', async () => {
@@ -454,6 +521,64 @@ describe('runTurn', () => {
 
       const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
       expect(options.workflowReminder).toBeUndefined();
+    });
+  });
+
+  describe('post-edit diagnostics', () => {
+    type RunOptions = { drainFeedback?: (phase: 'turn' | 'final') => Promise<string | null> };
+    const workspaceRoot = '/workspace/project';
+
+    function diagnosticsCtx(enabled: boolean) {
+      const postEditDiagnostics = new PostEditDiagnostics({
+        workspaceRoot,
+        check: async files => files.map(filePath => ({ filePath, line: 1, column: 1, code: 'TS2322', message: 'bad' })),
+      });
+      const drained: Array<string | null> = [];
+      const run = vi.fn(async (_query: unknown, options?: unknown) => {
+        // Stand-in for an edit tool firing mid-turn, then the agent draining before its next request.
+        postEditDiagnostics.enqueue('src/a.ts');
+        const drain = (options as RunOptions).drainFeedback;
+        if (drain) drained.push(await drain('final'));
+        return makeResult();
+      });
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        configStore: {
+          get: vi.fn(async () => ({ preferences: { postEditDiagnostics: enabled } })),
+        } as unknown as TurnContext['configStore'],
+        postEditDiagnostics,
+      });
+      return { ctx, run, drained, postEditDiagnostics };
+    }
+
+    it('drains edits made during the turn into the agent when the preference is on', async () => {
+      seedSession([]);
+      const { ctx, drained } = diagnosticsCtx(true);
+
+      await runTurn('hello', ctx);
+
+      expect(drained).toHaveLength(1);
+      expect(drained[0]).toContain('src/a.ts:1:1 - TS2322: bad');
+    });
+
+    it('stops collecting once the turn ends', async () => {
+      seedSession([]);
+      const { ctx, postEditDiagnostics } = diagnosticsCtx(true);
+
+      await runTurn('hello', ctx);
+      postEditDiagnostics.enqueue('src/b.ts');
+
+      expect(await postEditDiagnostics.drain(1000)).toBeNull();
+    });
+
+    it('passes no drain and collects nothing when the preference is off', async () => {
+      seedSession([]);
+      const { ctx, run, postEditDiagnostics } = diagnosticsCtx(false);
+
+      await runTurn('hello', ctx);
+
+      expect((run.mock.calls[0][1] as RunOptions).drainFeedback).toBeUndefined();
+      expect(await postEditDiagnostics.drain(1000)).toBeNull();
     });
   });
 });

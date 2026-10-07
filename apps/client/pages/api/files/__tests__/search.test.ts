@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { getDataLakeTags } from '@bike4mind/common';
+import { ApiKeyScope, getDataLakeTags } from '@bike4mind/common';
 
 /**
  * Route-layer coverage for GET /api/files/search. This route decides the scope the file list is
@@ -14,6 +14,7 @@ import { getDataLakeTags } from '@bike4mind/common';
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   searchArgs: undefined as unknown[] | undefined,
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -24,7 +25,7 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return { baseApi: (options: unknown) => ((mockRefs.baseApiOptions = options), chain) };
 });
 
 vi.mock('@bike4mind/database', () => ({
@@ -191,5 +192,37 @@ describe('GET /api/files/search', () => {
 
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow();
     expect(mockRefs.searchArgs).toBeUndefined();
+  });
+
+  it('requires files:read at the baseApi route gate', () => {
+    expect(mockRefs.baseApiOptions).toEqual({ requiredScopes: ['files:read'] });
+  });
+
+  describe('data-lake read scope', () => {
+    it('drops the lake tags for a files:read-only API key caller', async () => {
+      const { req, res } = invokeGet();
+      (req as any).apiKeyInfo = { scopes: [ApiKeyScope.READ_FILES] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual([]);
+    });
+
+    it('keeps the lake tags for a key holding datalake:read', async () => {
+      const { req, res } = invokeGet();
+      (req as any).apiKeyInfo = { scopes: [ApiKeyScope.READ_FILES, ApiKeyScope.DATALAKE_READ] };
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
+
+    it('keeps the lake tags for a JWT/browser caller (no apiKeyInfo)', async () => {
+      const { req, res } = invokeGet();
+
+      await mockRefs.getHandler!(req, res);
+
+      expect(scopeArg()?.dataLakeTags).toEqual(getDataLakeTags(USER_TAGS));
+    });
   });
 });

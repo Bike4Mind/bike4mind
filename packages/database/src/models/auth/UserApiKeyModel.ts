@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
+  ApiKeyCapPool,
   ApiKeyStatus,
   ApiKeyScope,
   CreditHolderType,
@@ -10,6 +11,7 @@ import {
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
+import { decryptAtRest, encryptAtRest } from '@bike4mind/utils/security';
 
 interface IUserApiKeyModel extends mongoose.Model<IUserApiKeyDocument> {}
 
@@ -88,6 +90,19 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
+  // Both lazy heals below run after a slow bcrypt compare, so they are conditioned on the keyHash
+  // that compare read: if a rotation committed in between, the filter misses and nothing is written.
+  async setKeyDigest(id: string, keyDigest: string, expectedKeyHash: string) {
+    await this.model.updateOne(
+      { _id: id, keyHash: expectedKeyHash, keyDigest: { $in: [null, ''] } },
+      { $set: { keyDigest } }
+    );
+  }
+
+  async healKeyPrefix(id: string, keyPrefix: string, expectedKeyHash: string) {
+    await this.model.updateOne({ _id: id, keyHash: expectedKeyHash }, { $set: { keyPrefix } });
+  }
+
   findActiveByKeyPrefix(keyPrefix: string) {
     return this.model
       .findOne({
@@ -135,8 +150,16 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  async countActiveByUserId(userId: string): Promise<number> {
-    return this.model.countDocuments({ userId, status: ApiKeyStatus.ACTIVE });
+  async countActiveByUserId(userId: string, pool: ApiKeyCapPool = 'standard'): Promise<number> {
+    // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
+    // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
+    // `$ne` (not `$nin` on a list) so a legacy row with no metadata stays in the standard pool.
+    return this.model.countDocuments({
+      userId,
+      status: ApiKeyStatus.ACTIVE,
+      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
+    });
   }
 
   findByProductId(productId: string) {
@@ -178,6 +201,26 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     });
   }
 
+  async setCallbackSigningSecret(id: string, secret: string, createdAt: Date) {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { callbackSigningSecret: encryptAtRest(secret), callbackSigningSecretCreatedAt: createdAt } }
+    );
+  }
+
+  async findCallbackSigningSecret(id: string) {
+    const key = await this.model
+      .findById(id)
+      .select('+callbackSigningSecret userId status expiresAt')
+      .lean<Pick<IUserApiKeyDocument, 'callbackSigningSecret' | 'userId' | 'status' | 'expiresAt'>>()
+      .exec();
+    // decryptAtRest returns '' for ciphertext it cannot decrypt; treat that as "no secret" so a
+    // broken key rotation fails the delivery rather than signing with an empty key.
+    const secret = key?.callbackSigningSecret ? decryptAtRest(key.callbackSigningSecret) : '';
+    if (!key || !secret) return null;
+    return { secret, userId: key.userId, status: key.status, expiresAt: key.expiresAt };
+  }
+
   async updateBaseline(id: string, baseline: IUserApiKeyDocument['metadata']['baseline']) {
     await this.model.updateOne(
       { _id: id },
@@ -195,6 +238,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     userId: { type: String, required: true },
     name: { type: String, required: true },
     keyHash: { type: String, required: true },
+    keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
     scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
@@ -205,6 +249,10 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     revokedAt: { type: Date },
     revokedBy: { type: String },
     revokedReason: { type: String },
+    // Encrypted at rest; select: false keeps it out of every read (and out of the whole-doc
+    // update() writes rotate/revoke do) except findCallbackSigningSecret. See IUserApiKey.
+    callbackSigningSecret: { type: String, select: false },
+    callbackSigningSecretCreatedAt: { type: Date },
     rateLimit: {
       requestsPerMinute: { type: Number, required: true, default: 60 },
       requestsPerDay: { type: Number, required: true, default: 1000 },
@@ -293,8 +341,10 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     toJSON: {
       virtuals: true,
       transform: function (doc, ret: any) {
-        // Never expose the keyHash in JSON responses
+        // Never expose the keyHash or keyDigest in JSON responses
         delete ret.keyHash;
+        delete ret.keyDigest;
+        delete ret.callbackSigningSecret;
         return ret;
       },
     },

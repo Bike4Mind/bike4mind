@@ -19,9 +19,10 @@ import { fileURLToPath } from 'node:url';
  * the next one.
  */
 
-// apps/client/server/utils -> apps/client is two levels up.
-const CLIENT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const SEARCH_ROOTS = ['server', 'pages'];
+// apps/client/server/utils -> the repo root is four levels up. apps/workers/src is walked too:
+// the hosted abandoned-execution sweep lives there, and it is one of the terminators.
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+const SEARCH_ROOTS = ['apps/client/server', 'apps/client/pages', 'apps/workers/src'];
 
 /** Repository methods that put an execution into a terminal status. */
 const TERMINATOR = /agentExecutionRepository\s*\.\s*(cleanupStaleActive|markAbandoned)\s*\(/;
@@ -39,9 +40,9 @@ function* walkTsFiles(dir: string): Generator<string> {
   }
 }
 
-const terminatingFiles = SEARCH_ROOTS.flatMap(root => [...walkTsFiles(resolve(CLIENT_ROOT, root))])
+const terminatingFiles = SEARCH_ROOTS.flatMap(root => [...walkTsFiles(resolve(REPO_ROOT, root))])
   .filter(file => TERMINATOR.test(readFileSync(file, 'utf8')))
-  .map(file => relative(CLIENT_ROOT, file))
+  .map(file => relative(REPO_ROOT, file))
   .sort();
 
 describe('every execution-terminating path settles its stranded quests', () => {
@@ -50,15 +51,15 @@ describe('every execution-terminating path settles its stranded quests', () => {
     // below, not by having to be added here. This only proves the walk works.
     expect(terminatingFiles).toEqual(
       expect.arrayContaining([
-        'pages/api/admin/agent-executions/cleanup.ts',
-        'server/cron/agentExecutionAbandonedSweep.ts',
-        'server/questmaster/v5/runQuestNode.ts',
-        'server/utils/startAgentExecution.ts',
+        'apps/client/pages/api/admin/agent-executions/cleanup.ts',
+        'apps/client/server/questmaster/v5/runQuestNode.ts',
+        'apps/client/server/utils/startAgentExecution.ts',
+        'apps/workers/src/cron/agentExecutionAbandonedSweep.ts',
       ])
     );
   });
 
   it.each(terminatingFiles)('%s settles the quests it strands', file => {
-    expect(readFileSync(resolve(CLIENT_ROOT, file), 'utf8')).toMatch(SETTLE);
+    expect(readFileSync(resolve(REPO_ROOT, file), 'utf8')).toMatch(SETTLE);
   });
 });

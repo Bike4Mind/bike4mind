@@ -19,8 +19,9 @@ export enum ApiKeyScope {
    * Read the key owner's OWN commercial state - tier, credit balance, entitlement
    * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
    * to generate text has no business enumerating what its owner has paid for. It
-   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
-   * suffix that puts it in the New-Key modal's read-only preset.
+   * reaches only `GET /api/v1/me` and its balance-only subset `GET /api/v1/credits`
+   * (which the AI scopes also open, since spend needs a pre-flight check), so it
+   * carries the `:read` suffix that puts it in the New-Key modal's read-only preset.
    */
   ME_READ = 'me:read',
   ADMIN = 'admin:*',
@@ -209,7 +210,7 @@ export const API_KEY_RATE_LIMIT_DEFAULTS: Readonly<IUserApiKeyRateLimit> = Objec
 
 /**
  * White-label config for an embed key (epic #41), rendered by the widget serve
- * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedKey.ts);
  * `hideBranding` is honored only when the key owner's plan carries the
  * whitelabel entitlement - the serve route re-checks on every request.
  */
@@ -225,6 +226,13 @@ export interface IUserApiKey {
   userId: string;
   name: string; // Human-friendly name
   keyHash: string; // Hashed secret (never store plain text)
+  /**
+   * Hex SHA-256 of the raw key: the fast validation path. Keys are 128-bit random
+   * tokens, so an unkeyed digest is not brute-forceable and needs no server secret.
+   * Absent on keys minted before it existed; validate falls back to bcrypt `keyHash`
+   * and writes it back on first successful use. Never serialized (see toJSON).
+   */
+  keyDigest?: string;
   keyPrefix: string; // First 16 chars for lookup (e.g., "b4m_live_xxxxxxx")
   scopes: ApiKeyScope[]; // Permissions array
   status: ApiKeyStatus;
@@ -245,6 +253,14 @@ export interface IUserApiKey {
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
   revokedReason?: string;
+  /**
+   * HMAC key that signs this key's generation completion callbacks, encrypted at rest and
+   * `select: false`, so it is absent from every read except findCallbackSigningSecret. The
+   * plaintext is returned once, when it is minted.
+   */
+  callbackSigningSecret?: string;
+  /** When the current signing secret was minted; absent = the key has none yet. */
+  callbackSigningSecretCreatedAt?: Date;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;
@@ -308,6 +324,15 @@ export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Or
 
 export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
 
+/**
+ * Which per-user active-key cap a key counts against. Federated-exchange keys
+ * (`createdFrom === 'oauth-exchange'`) are short-lived, at most one per (user, client),
+ * and minted by a relying party rather than the user, so they get their own pool
+ * instead of eating the user's dashboard/admin key slots. Caps live in
+ * b4m-core/services/src/userApiKeyService/create.ts.
+ */
+export type ApiKeyCapPool = 'standard' | 'oauth-exchange';
+
 export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocument> {
   findByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
@@ -322,6 +347,17 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Replaces both request ceilings; the enforcer picks them up on the next request. */
   setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
+  /**
+   * Stores the fast-path digest for a key validated via the legacy bcrypt hash. A no-op unless
+   * `expectedKeyHash` is still the stored hash and no digest is set: a backfill that lands after a
+   * rotation must not write the old key's digest over the new one.
+   */
+  setKeyDigest: (id: string, keyDigest: string, expectedKeyHash: string) => Promise<void>;
+  /**
+   * Upgrades a legacy short prefix to the current length, under the same `expectedKeyHash` guard as
+   * setKeyDigest, so a heal racing a rotation cannot repoint the doc at the rotated-away key.
+   */
+  healKeyPrefix: (id: string, keyPrefix: string, expectedKeyHash: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
@@ -330,7 +366,11 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    */
   revokeIfNotDisabled?: (id: string, revokedBy: string, revokedReason?: string) => Promise<void>;
   findExpiredKeys: () => Promise<IUserApiKeyDocument[]>;
-  countActiveByUserId: (userId: string) => Promise<number>;
+  /**
+   * Counts the user's ACTIVE keys that have not expired - an expired key cannot authenticate and must not consume a cap slot.
+   * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
+   */
+  countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;
@@ -347,4 +387,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Stores (encrypted) a freshly minted signing secret, replacing any previous one. */
+  setCallbackSigningSecret: (id: string, secret: string, createdAt: Date) => Promise<void>;
+  /** The decrypted signing secret plus the fields a delivery must re-check; null if the key is gone or has none. */
+  findCallbackSigningSecret: (
+    id: string
+  ) => Promise<{ secret: string; userId: string; status: ApiKeyStatus; expiresAt?: Date } | null>;
 }

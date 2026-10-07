@@ -77,14 +77,17 @@ function infoDescription(): string {
     ...Object.keys(RATE_LIMIT_HEADER_SPEC).map(header => `- \`${header}\``),
     '',
     'Reset values are Unix epoch seconds. Exceeding a ceiling returns `429` with a `Retry-After` header; wait ' +
-      'that long before retrying. `GET /api/v1/me` and the poll endpoints listed under Async jobs are exempt ' +
-      'from the per-day ceiling: a poll consumes no daily slot, and only the per-minute limit applies. A ' +
+      'that long before retrying. `GET /api/v1/me`, `GET /api/v1/credits` and the poll endpoints listed under ' +
+      'Async jobs are exempt from the per-day ceiling: a poll consumes no daily slot, and only the per-minute ' +
+      'limit applies. A ' +
       'request rejected for a bad key (`401`) or a missing scope (`403`) never reaches the limiter and carries ' +
       'no rate-limit headers.',
     '',
     '## Credits',
     'Generation endpoints spend credits from the balance shown at `credits.balance` on `GET /api/v1/me` (the ' +
-      "caller's personal ledger). A synchronous call that cannot be paid for fails with `422` and " +
+      "caller's personal ledger). A key without `me:read` reads the same number from `GET /api/v1/credits`, " +
+      'which accepts `ai:chat` and `ai:generate` too. A synchronous call that cannot be paid for fails with ' +
+      '`422` and ' +
       '`errorCode: "insufficient_credits"`. On a queued job the same code arrives on the polled result instead ' +
       '(see Async jobs), so check both places.',
     '',
@@ -168,7 +171,14 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  */
 const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
 
-function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string, method: string) {
+function codeSamples(
+  path: string,
+  body: unknown,
+  streaming: boolean,
+  authToken: string,
+  method: string,
+  hasBody: boolean
+) {
   // A raw OpenAPI path template (`/api/sessions/{id}`) is not a runnable URL - swap each
   // `{param}` for a `<param>` placeholder, matching this file's existing `<key>`/`<fabFileId>`
   // convention for "substitute your own value here", so a copy-pasted sample doesn't 404.
@@ -180,10 +190,6 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
   // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
   // matching the lowercase HTTP method name exactly.
   const pyMethod = method.toLowerCase();
-  // A GET/HEAD request cannot carry a body: browser and Node `fetch` both throw
-  // `TypeError: Request with GET/HEAD method cannot have body`, so a sample that
-  // sent one would be copy-paste-broken rather than merely redundant.
-  const hasBody = !['get', 'head'].includes(pyMethod);
   return [
     {
       lang: 'curl',
@@ -298,9 +304,10 @@ const RATE_LIMIT_HEADER_SPEC = {
 };
 
 /**
- * The auth failures `registerContract` INJECTS carry no rate-limit headers:
+ * The failures `registerContract` INJECTS carry no rate-limit headers:
  * `apiKeyAuth` throws on an invalid key (401) or an under-scoped one (403), and
- * `apiKeyRateLimit` is mounted AFTER it, so it never runs.
+ * the method guard 405s ahead of the whole auth chain (baseApi `allowedMethods`,
+ * defineLambdaRoute). `apiKeyRateLimit` is mounted AFTER all of them, so it never runs.
  *
  * That reasoning covers only the injected pair. A contract declaring its own 401
  * or 403 means something else entirely - `/api/ai/tts` 401s `provider_not_configured`
@@ -309,10 +316,10 @@ const RATE_LIMIT_HEADER_SPEC = {
  * status alone. 429 is never excluded: the middleware sets the headers before
  * throwing TooManyRequests.
  */
-const INJECTED_AUTH_STATUSES = new Set(['401', '403']);
+const INJECTED_PRE_LIMIT_STATUSES = new Set(['401', '403', '405']);
 
-function isInjectedAuthFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
-  return INJECTED_AUTH_STATUSES.has(status) && !declaredStatuses?.has(status);
+function isInjectedPreLimitFailure(status: string, declaredStatuses: ReadonlySet<string> | undefined): boolean {
+  return INJECTED_PRE_LIMIT_STATUSES.has(status) && !declaredStatuses?.has(status);
 }
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
@@ -345,6 +352,12 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
     { name: 'Images', description: 'Image generation and editing, queued and polled as quests.' },
     { name: 'Files', description: 'Upload files and fetch any file by id, with short-lived signed download URLs.' },
+    { name: 'Videos', description: 'Video generation, queued and polled as quests.' },
+    {
+      name: 'Voice',
+      description: 'Real-time voice conversations: list voices, open a call, and reconcile its credits when it ends.',
+    },
+    { name: 'Models', description: 'The models the caller can use, and the parameters each one accepts.' },
     { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
     {
       name: 'Data Lakes',
@@ -369,7 +382,18 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
       const scopes = meta.scopes[opId];
       if (scopes) op['x-required-scopes'] = scopes;
       const sample = meta.codeSamples[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken, method);
+      // Send a body only when the operation declares one. That keeps GET/HEAD samples runnable
+      // (`fetch` throws on a GET/HEAD body) and stops a body-less DELETE or POST from sending `{}`.
+      if (sample) {
+        op['x-codeSamples'] = codeSamples(
+          pathKey,
+          sample.body,
+          sample.streaming,
+          sample.authToken,
+          method,
+          op.requestBody !== undefined
+        );
+      }
 
       const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
       const declaredStatuses = meta.declaredStatuses.get(opId);
@@ -384,7 +408,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
         if (pollResultStatuses?.has(status)) {
           response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}${status}PollResult` } };
         }
-        if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
+        if (emitsRateLimitHeaders && !isInjectedPreLimitFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
         }
       }

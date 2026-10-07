@@ -1,4 +1,10 @@
-import type { IDataLakeAccessGrantRepository, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
+import {
+  ConflictError,
+  type IDataLakeAccessGrantRepository,
+  type IDataLakeDocument,
+  type IDataLakeRepository,
+  type IOrgGoogleDriveConnectionRepository,
+} from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import { canManageLake, isEffectiveOwner, type ManageActor } from './manageRule';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
@@ -23,6 +29,9 @@ interface SetLakeVisibilityAdapters extends LakeConfigAuditAdapters {
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
     dataLakes: Pick<IDataLakeRepository, 'findById' | 'update' | 'find'>;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+    // Required for the same reason as the event repo: a scope move that skipped the bound-Drive
+    // check would strand the connection silently (see the guard in setLakeVisibility).
+    orgGoogleDriveConnections: Pick<IOrgGoogleDriveConnectionRepository, 'findByDataLakeIdAny'>;
   };
 }
 
@@ -123,6 +132,16 @@ export const setLakeVisibility = async (
   // introduce a collision; flipping isPublic within the same org scope cannot. Guard the move
   // and surface a clear error instead of a raw E11000. (Same scope shape as createDataLake.)
   if (currentOrg !== targetOrg) {
+    // A Drive connection's owner is derived from its lake's scope (driveConnectionOwnerForLake), so
+    // moving the lake between personal and an org - or between orgs - leaves a bound row whose owner
+    // no longer matches: every manage door 404s, ingest drops each run, and the folder stays claimed.
+    // Any state counts (findByDataLakeIdAny): a disabled row still holds the folder claim.
+    if (await db.orgGoogleDriveConnections.findByDataLakeIdAny(existing.id)) {
+      throw new ConflictError(
+        "Disconnect this data lake's Google Drive folder before changing whether it belongs to an organization, then reconnect it afterwards."
+      );
+    }
+
     const scope = targetOrg ? { organizationId: targetOrg } : { organizationId: { $in: [null, ''] } };
     const clashes = await db.dataLakes.find({ ...scope, slug: existing.slug });
     if (clashes.some(l => l.id !== existing.id)) {

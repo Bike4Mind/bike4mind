@@ -1,12 +1,18 @@
-import { deviceAuthorizationRepository, digestDeviceCode } from '@bike4mind/database';
+import { cacheRepository, deviceAuthorizationRepository, digestDeviceCode } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { generateDeviceCode, generateUserCode } from '@server/utils/oauth/deviceAuthHelpers';
+import {
+  generateDeviceCode,
+  generateUserCode,
+  LIVE_PENDING_COUNTER_KEY,
+  MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
+} from '@server/utils/oauth/deviceAuthHelpers';
 import { z } from 'zod';
 import { isLocalAppUrl } from '@server/utils/validators';
+import { OAUTH_DEVICE_CLIENT_IDS } from '@bike4mind/common';
 
 const InitiateRequestSchema = z.object({
-  client_id: z.literal('b4m-cli'),
+  client_id: z.enum(OAUTH_DEVICE_CLIENT_IDS),
 });
 
 const handler = baseApi({ auth: false })
@@ -17,7 +23,45 @@ const handler = baseApi({ auth: false })
     })
   )
   .post(async (req, res) => {
-    InitiateRequestSchema.parse(req.body);
+    const { client_id: clientId } = InitiateRequestSchema.parse(req.body);
+
+    // Global, not per-IP: IP headers are spoofable when the origin is reached directly.
+    // Sliding-window TTL of 30 min (3x the 10-min auth TTL) keeps the key alive under sustained
+    // load and self-heals once all pending docs have been resolved or TTL-expired.
+    let { success: slotGranted } = await cacheRepository.incrementCounterConditional(
+      LIVE_PENDING_COUNTER_KEY,
+      MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
+      30 * 60_000
+    );
+
+    if (!slotGranted) {
+      // Counter may have drifted high from pending docs that expired without going through verify.
+      // Read the authoritative DB count, overwrite the cache, and retry once before refusing.
+      const trueCount = await deviceAuthorizationRepository.countPendingAndUnexpired();
+      if (trueCount < MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS) {
+        await cacheRepository.createOrUpdate({
+          key: LIVE_PENDING_COUNTER_KEY,
+          result: { count: trueCount },
+          expiresAt: new Date(Date.now() + 30 * 60_000),
+        });
+        ({ success: slotGranted } = await cacheRepository.incrementCounterConditional(
+          LIVE_PENDING_COUNTER_KEY,
+          MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
+          30 * 60_000
+        ));
+      }
+    }
+
+    if (!slotGranted) {
+      req.logger.warn(
+        `[OAUTH_DEVICE_INITIATE] pending device authorization cap reached (${MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS}); returning 503`
+      );
+      res.setHeader('Retry-After', 60);
+      return res.status(503).json({
+        error: 'temporarily_unavailable',
+        error_description: 'Too many pending device authorizations, try again later',
+      });
+    }
 
     const deviceCode = generateDeviceCode();
     const userCode = generateUserCode();
@@ -25,6 +69,7 @@ const handler = baseApi({ auth: false })
     await deviceAuthorizationRepository.create({
       deviceCode: digestDeviceCode(deviceCode),
       userCode,
+      clientId,
       status: 'pending',
       userId: null,
       expiresAt: new Date(Date.now() + 600000), // 10 minutes

@@ -1,3 +1,5 @@
+export const API_KEY_USER_CAP_ERROR_CODE = 'api_key_user_cap';
+
 /**
  * The one enumerated vocabulary for the `errorCode` field on a public error body
  * (CONVENTIONS.md section 1, "One error-code vocabulary").
@@ -15,6 +17,8 @@
  * local one.
  */
 export const API_ERROR_CODES = [
+  /** The user must revoke an active API key or wait for one to expire before minting another. */
+  API_KEY_USER_CAP_ERROR_CODE,
   /** The caller cannot afford the request; remediation is buying credits. */
   'insufficient_credits',
   /** The owner is solvent but this key hit its admin-set ceiling; remediation is raising the cap. */
@@ -23,6 +27,27 @@ export const API_ERROR_CODES = [
   'provider_not_configured',
   /** The provider REFUSED the key we sent. */
   'provider_rejected',
+  // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
+  'unsupported_duration',
+  'unsupported_aspect_ratio',
+  'unsupported_resolution',
+  'unsupported_mode',
+  'missing_input_image',
+  'unexpected_input_image',
+  'unsupported_audio_option',
+  'invalid_request',
+  'model_disabled',
+  'model_unavailable',
+  'input_image_not_found',
+  // Video job failure classifiers on the polled job resource; see VIDEO_JOB_PUBLIC_ERROR_CODES.
+  'content_blocked',
+  'provider_timeout',
+  'provider_error',
+  'region_unavailable',
+  'output_too_large',
+  'cancelled',
+  'idempotency_key_reused',
+  'invalid_idempotency_key',
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

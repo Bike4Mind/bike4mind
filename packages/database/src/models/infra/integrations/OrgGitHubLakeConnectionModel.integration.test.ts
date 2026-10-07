@@ -91,6 +91,47 @@ describe('OrgGitHubLakeConnectionModel - accessors', () => {
     expect((await orgGitHubLakeConnectionRepository.findByDataLakeIdAny('lake-1'))?.id).toBe(created.id);
     expect(await orgGitHubLakeConnectionRepository.findByDataLakeIdAny('lake-missing')).toBeFalsy();
   });
+
+  it('findByRepositoryIds resolves every connection binding any of the given repository ids, across orgs', async () => {
+    const first = await OrgGitHubLakeConnection.create(base);
+    const second = await OrgGitHubLakeConnection.create({
+      ...base,
+      organizationId: 'org-2',
+      targetDataLakeId: 'lake-2',
+      installationId: 222,
+      repositoryId: 2,
+      repositoryFullName: 'acme/two',
+    });
+
+    const found = await orgGitHubLakeConnectionRepository.findByRepositoryIds([1, 2, 999]);
+    expect(found.map(c => c.id).sort()).toEqual([first.id, second.id].sort());
+  });
+
+  it('findByRepositoryIds returns an empty array for an empty input, without querying', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findByRepositoryIds([])).toEqual([]);
+  });
+
+  it('findByRepositoryIds returns an empty array when none of the ids bind a lake', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findByRepositoryIds([999])).toEqual([]);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - findBoundDataLakeIds', () => {
+  it('returns the given lakes that have a row, disabled rows included, like findByDataLakeIdAny', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-2', repositoryId: 2, enabled: false });
+    await OrgGitHubLakeConnection.create({ ...base, targetDataLakeId: 'lake-other', repositoryId: 3 });
+
+    const bound = await orgGitHubLakeConnectionRepository.findBoundDataLakeIds(['lake-1', 'lake-2', 'lake-3']);
+    expect(bound.sort()).toEqual(['lake-1', 'lake-2']);
+  });
+
+  it('returns an empty array for an empty input', async () => {
+    await OrgGitHubLakeConnection.create(base);
+    expect(await orgGitHubLakeConnectionRepository.findBoundDataLakeIds([])).toEqual([]);
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - release', () => {
@@ -214,6 +255,14 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     expect(after?.lastSyncedAt).toBeInstanceOf(Date);
     expect(after?.ingestClaimToken).toBeUndefined();
   });
+
+  it('recordTreeCounts writes under the live claim and refuses a superseded token', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    expect(await repo.recordTreeCounts(id, token!, { candidateCount: 12, skippedCount: 3 })).toBe(true);
+    expect(await repo.recordTreeCounts(id, 'stale-token', { candidateCount: 1, skippedCount: 1 })).toBe(false);
+    expect(await repo.findById(id)).toMatchObject({ treeCandidateCount: 12, treeSkippedCount: 3 });
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {
@@ -286,6 +335,93 @@ describe('OrgGitHubLakeConnectionModel - setEnabledForLake', () => {
     expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: true });
     expect(await repo.setEnabledForLake('no-such-lake', false)).toBe(false);
   });
+
+  it('leaves a disconnecting row disabled: true is refused, false still disables', async () => {
+    const { id } = await repo.create(base);
+    await repo.markDisconnecting(id, 'org-1');
+    expect(await repo.setEnabledForLake('lake-1', true)).toBe(false);
+    expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: false });
+    expect(await repo.setEnabledForLake('lake-1', false)).toBe(true);
+    expect(await repo.findByDataLakeIdAny('lake-1')).toMatchObject({ enabled: false });
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - disconnect lifecycle', () => {
+  const ageDisconnect = (id: string, minutes: number) =>
+    OrgGitHubLakeConnection.updateOne(
+      { _id: id },
+      { $set: { disconnectRequestedAt: new Date(Date.now() - minutes * 60_000) } }
+    );
+
+  it('stamps disconnectRequestedAt and disables an idle connection, reporting it was created', async () => {
+    const { id } = await repo.create(base);
+    const marked = await repo.markDisconnecting(id, 'org-1');
+    expect(marked).toMatchObject({ created: true, previousEnabled: true });
+    expect(marked?.stamp).toBeInstanceOf(Date);
+    expect(await repo.findById(id)).toMatchObject({ enabled: false, disconnectRequestedAt: marked?.stamp });
+  });
+
+  it('reports created false and the already-disabled previousEnabled on a re-stamp', async () => {
+    const { id } = await repo.create(base);
+    const first = await repo.markDisconnecting(id, 'org-1');
+    await ageDisconnect(id, 30);
+    const second = await repo.markDisconnecting(id, 'org-1');
+    expect(first?.created).toBe(true);
+    expect(second).toMatchObject({ created: false, previousEnabled: false });
+    expect(second?.stamp.getTime()).toBeGreaterThanOrEqual(first!.stamp.getTime());
+  });
+
+  it('refuses a second mark while the first disconnect is fresh', async () => {
+    const { id } = await repo.create(base);
+    const first = await repo.markDisconnecting(id, 'org-1');
+    expect(await repo.markDisconnecting(id, 'org-1')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ disconnectRequestedAt: first!.stamp, enabled: false });
+  });
+
+  it('refuses while a sync claim is live', async () => {
+    const { id } = await repo.create(base);
+    await repo.claimForSync(id);
+    expect(await repo.markDisconnecting(id, 'org-1')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ enabled: true });
+  });
+
+  it('is org-scoped', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.markDisconnecting(id, 'org-2')).toBeNull();
+    expect(await repo.findById(id)).toMatchObject({ enabled: true });
+  });
+
+  it('cancelDisconnect restores enabled and clears the stamp when the stamp matches', async () => {
+    const { id } = await repo.create(base);
+    const marked = await repo.markDisconnecting(id, 'org-1');
+    expect(await repo.cancelDisconnect(id, 'org-1', marked!.stamp, marked!.previousEnabled)).toBe(true);
+    const after = await repo.findById(id);
+    expect(after).toMatchObject({ enabled: true });
+    expect(after?.disconnectRequestedAt).toBeUndefined();
+  });
+
+  it('cancelDisconnect is a no-op against a different stamp', async () => {
+    const { id } = await repo.create(base);
+    const marked = await repo.markDisconnecting(id, 'org-1');
+    const otherStamp = new Date(marked!.stamp.getTime() - 1000);
+    expect(await repo.cancelDisconnect(id, 'org-1', otherStamp, true)).toBe(false);
+    expect(await repo.findById(id)).toMatchObject({ enabled: false, disconnectRequestedAt: marked!.stamp });
+  });
+
+  it('touchDisconnect refreshes a pending disconnect s stamp', async () => {
+    const { id } = await repo.create(base);
+    await repo.markDisconnecting(id, 'org-1');
+    await ageDisconnect(id, 30);
+    const staleStamp = (await repo.findById(id))!.disconnectRequestedAt!;
+    expect(await repo.touchDisconnect(id)).toBe(true);
+    const after = await repo.findById(id);
+    expect(after?.disconnectRequestedAt?.getTime()).toBeGreaterThan(staleStamp.getTime());
+  });
+
+  it('touchDisconnect reports false when no disconnect is pending', async () => {
+    const { id } = await repo.create(base);
+    expect(await repo.touchDisconnect(id)).toBe(false);
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - recordLastError', () => {
@@ -298,6 +434,77 @@ describe('OrgGitHubLakeConnectionModel - recordLastError', () => {
 
   it('reports false for a missing connection', async () => {
     expect(await repo.recordLastError('000000000000000000000000', 'boom')).toBe(false);
+  });
+});
+
+describe('OrgGitHubLakeConnectionModel - reconcile selection', () => {
+  let seq = 0;
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+  const add = async (fields: Record<string, unknown> = {}) => {
+    seq += 1;
+    const { id } = await repo.create({ ...base, repositoryId: 1000 + seq, targetDataLakeId: `lake-r${seq}` });
+    if (Object.keys(fields).length > 0)
+      await OrgGitHubLakeConnection.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: fields });
+    return id;
+  };
+  const dueIds = async (limit = 50) => (await repo.findDueForReconcile(limit)).map(c => String(c.id));
+
+  it('includes connected, legacy unset status, and stale syncing claims (both windows)', async () => {
+    const connected = await add();
+    const legacy = await add();
+    await OrgGitHubLakeConnection.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(legacy) },
+      { $unset: { status: '' } }
+    );
+    const staleUnchained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(21) });
+    const staleChained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' });
+    expect((await dueIds()).sort()).toEqual([connected, legacy, staleUnchained, staleChained].sort());
+  });
+
+  it('excludes disabled, disconnecting, live syncing, and error connections', async () => {
+    await add({ enabled: false });
+    await add({ disconnectRequestedAt: new Date() });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(5) });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(30), activeIngestBatchId: 'b1' });
+    await add({ status: 'error' });
+    expect(await dueIds()).toEqual([]);
+  });
+
+  it('orders never-checked first, then oldest checked, and honors the limit', async () => {
+    const recent = await add({ reconcileCheckedAt: minutesAgo(1) });
+    const old = await add({ reconcileCheckedAt: minutesAgo(60) });
+    const never = await add();
+    expect(await dueIds()).toEqual([never, old, recent]);
+    expect(await dueIds(2)).toEqual([never, old]);
+    expect(await dueIds(0)).toEqual([]);
+  });
+
+  it('markReconcileChecked stamps only the given ids and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const b = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileChecked([a], at);
+    const after = await repo.findById(a);
+    expect(after?.reconcileCheckedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    expect((await repo.findById(b))?.reconcileCheckedAt).toBeUndefined();
+    await expect(repo.markReconcileChecked([], at)).resolves.toBeUndefined();
+    expect(await dueIds()).toEqual([b, a]);
+  });
+
+  it('markReconcileEnqueued records the target (including null) and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileEnqueued(a, 'abc123', at);
+    let after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBe('abc123');
+    expect(after?.reconcileEnqueuedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    await repo.markReconcileEnqueued(a, null, at);
+    after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBeNull();
   });
 });
 

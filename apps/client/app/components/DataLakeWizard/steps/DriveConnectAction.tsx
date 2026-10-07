@@ -4,19 +4,11 @@ import SyncIcon from '@mui/icons-material/Sync';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import {
-  useLakeDriveConnection,
-  useConnectDriveFolderToLake,
-  useDisconnectLakeDrive,
-} from '@client/app/hooks/data/googleDrive';
+import { useLakeDriveConnection, useDisconnectLakeDrive } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
-import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
+import { getServerErrorField } from '@client/app/utils/error';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
-
-/** The specific server `error` message off an axios failure, if the response carried one. */
-function serverError(e: unknown): string | undefined {
-  return (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
-}
 
 /**
  * Connect a Google Drive FOLDER to an EXISTING data lake: pick a folder and the connection is
@@ -27,25 +19,10 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   const { data: connection, isLoading, isError } = useLakeDriveConnection(lake.id);
-  const connect = useConnectDriveFolderToLake();
   const disconnect = useDisconnectLakeDrive();
+  const { openFolderPicker, isPicking, isConnecting } = useLakeDriveFolderConnect(lake.id);
 
   const lakeId = lake.id;
-
-  const { openFolderPicker, isPicking } = useDriveFolderPicker({
-    busy: connect.isPending,
-    onPicked: folder =>
-      connect.mutate(
-        { dataLakeId: lakeId, ...folder },
-        {
-          onSuccess: () =>
-            toast.success(`Syncing "${folder.folderName || folder.driveFolderId}" into this data lake...`),
-          // Surface the server's specific message (folder claimed elsewhere, lake already bound to a
-          // different folder, "connect Drive first", ...) rather than one generic string for every 409.
-          onError: (e: unknown) => toast.error(serverError(e) || 'Could not connect that folder. Please try again.'),
-        }
-      ),
-  });
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="drive-connection-loading" />;
@@ -96,7 +73,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             variant="outlined"
             color="neutral"
             startDecorator={<SyncIcon />}
-            loading={connect.isPending || isPicking}
+            loading={isConnecting || isPicking}
             onClick={openFolderPicker}
           >
             Re-sync
@@ -136,7 +113,8 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
                     );
                   },
                   // Surface e.g. the 409 "a sync is in progress" so the user knows to retry later.
-                  onError: (e: unknown) => toast.error(serverError(e) || 'Could not disconnect. Please try again.'),
+                  onError: (e: unknown) =>
+                    toast.error(getServerErrorField(e) || 'Could not disconnect. Please try again.'),
                 })
               }
             >
@@ -193,7 +171,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         variant="outlined"
         color="neutral"
         startDecorator={<CloudIcon />}
-        loading={isPicking || connect.isPending}
+        loading={isPicking || isConnecting}
         onClick={openFolderPicker}
         sx={{ alignSelf: 'flex-start' }}
       >

@@ -528,6 +528,7 @@ export class AcpServer {
 
   private async buildStack(): Promise<AgentStack> {
     const config = await this.configStore.load();
+    this.configStore.warnPendingMcpApprovals();
     await this.loadCustomCommands();
 
     const authTokens = await this.configStore.getAuthTokens();

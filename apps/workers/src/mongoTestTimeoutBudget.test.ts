@@ -17,7 +17,13 @@ describe('real-Mongo suites in apps/workers declare the shared 60s budget', () =
   it('finds the real-Mongo suites to audit (guards the detector itself)', () => {
     expect(audit.suites).toEqual(
       expect.arrayContaining([
+        'src/cron/dataLakeBatchReconcile.e2e.test.ts',
+        'src/cron/lakeHealthSweep.e2e.test.ts',
+        'src/cron/telemetryCleanup.e2e.test.ts',
         'src/events/sessionTaggingGate.e2e.test.ts',
+        'src/queueHandlers/dataLakeBatchRetryGating.e2e.test.ts',
+        'src/queueHandlers/resumeEmbeddingSpace.e2e.test.ts',
+        'src/queueHandlers/vectorizeStrandRecovery.e2e.test.ts',
         'src/selfhost/abandonedExecutionSweep.e2e.test.ts',
         'src/selfhost/questTimeoutSweep.e2e.test.ts',
       ])

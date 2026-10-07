@@ -43,6 +43,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'imageEditQueue',
   },
   {
+    label: 'generation-callback',
+    displayName: 'Generation Callback',
+    application: 'ImageGeneration',
+    sourceQueue: 'generationCallbackQueue',
+  },
+  {
     label: 'data-lake-research',
     displayName: 'Data Lake Research Run',
     application: 'DataLakeManagement',
@@ -103,10 +109,10 @@ const DLQ_REGISTRY = [
     sourceQueue: 'questExportQueue',
   },
   {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
   },
   {
     label: 'liveops-triage',
@@ -191,6 +197,12 @@ const DLQ_REGISTRY = [
     displayName: 'Bob Panel Run',
     application: 'BobIntegration',
     sourceQueue: 'bobRunQueue',
+  },
+  {
+    label: 'libreoncology-audio-render',
+    displayName: 'LibreOncology Audio Render',
+    application: 'LibreOncologyIntegration',
+    sourceQueue: 'libreoncologyAudioRenderQueue',
   },
   {
     label: 'data-lake-cleanup',

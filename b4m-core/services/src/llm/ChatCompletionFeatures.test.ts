@@ -19,7 +19,7 @@ import {
   SettingScopeLevel,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import type { ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
+import type { CitableSource, ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
@@ -2194,7 +2194,7 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
   // no repo wired). Every file's single chunk scores a perfect 1.0 against the [1,0] query, so it
   // always clears the similarity floor and is injected.
   const makeCtx = (
-    files: Array<{ id: string; fileName: string; tags: Array<{ name: string }> }>,
+    files: Array<{ id: string; fileName: string; tags: Array<{ name: string }>; userId?: string }>,
     lakes?: Array<Record<string, unknown>>,
     opts: {
       dataLakesThrows?: boolean;
@@ -2349,6 +2349,87 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     );
     expect(quest.promptMeta?.retrieval?.injectedLakePromptIds).toEqual(['lakeX']);
     expect(quest.promptMeta?.retrieval?.injectedLakePromptCount).toBe(1);
+  });
+
+  it("stamps each forced-retrieval chip with its file's lake or library origin", async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx(
+        [
+          { ...lakeFile('fA', 'datalake:x'), userId: 'someone-else' },
+          { id: 'mine', fileName: 'mine.pdf', tags: [], userId: OWNER },
+        ],
+        [makeLake()]
+      ) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    const citables = (quest.promptMeta?.citables ?? []) as CitableSource[];
+    const originById = Object.fromEntries(citables.map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      fA: { kind: 'lake', lakes: [{ id: 'lakeX', name: 'Lake X' }] },
+      mine: { kind: 'library', owned: true },
+    });
+  });
+
+  // The forced path's own lake set must keep a second lake and thread the file owner through, or a
+  // two-lake file loses a lake and the creator's prefix-only file reads as library.
+  it('names every lake a forced-retrieval file is in, and claims a prefix file only for the lake creator', async () => {
+    const quest = makeQuest();
+    const lakeY = makeLake({ id: 'lakeY', slug: 'y', name: 'Lake Y', fileTagPrefix: 'y:', datalakeTag: 'datalake:y' });
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx(
+        [
+          {
+            id: 'both',
+            fileName: 'both.pdf',
+            tags: [{ name: 'datalake:x' }, { name: 'datalake:y' }],
+            userId: 'someone-else',
+          },
+          { id: 'creatorPrefix', fileName: 'creator.pdf', tags: [{ name: 'x:notes' }], userId: OWNER },
+          { id: 'otherPrefix', fileName: 'other.pdf', tags: [{ name: 'x:notes' }], userId: 'someone-else' },
+        ],
+        [makeLake(), lakeY]
+      ) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    const citables = (quest.promptMeta?.citables ?? []) as CitableSource[];
+    const originById = Object.fromEntries(citables.map(c => [c.id, c.metadata?.sourceOrigin]));
+    expect(originById).toEqual({
+      both: {
+        kind: 'lake',
+        lakes: [
+          { id: 'lakeX', name: 'Lake X' },
+          { id: 'lakeY', name: 'Lake Y' },
+        ],
+      },
+      creatorPrefix: { kind: 'lake', lakes: [{ id: 'lakeX', name: 'Lake X' }] },
+      otherPrefix: { kind: 'library', owned: false },
+    });
+  });
+
+  it('leaves the forced-retrieval origin off when the lake read failed', async () => {
+    const quest = makeQuest();
+    const feature = new KnowledgeRetrievalFeature(
+      makeCtx([{ ...lakeFile('fA', 'datalake:x'), userId: 'someone-else' }], undefined, {
+        dataLakesThrows: true,
+      }) as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'anything'
+    );
+    const citables = (quest.promptMeta?.citables ?? []) as CitableSource[];
+    expect(citables).toHaveLength(1);
+    expect(citables[0].metadata).not.toHaveProperty('sourceOrigin');
   });
 
   it('records present-and-empty injectedLakePromptIds when no lake-tagged file was grounded on, without calling the resolver', async () => {

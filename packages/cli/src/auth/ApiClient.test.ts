@@ -4,11 +4,12 @@ import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRe
 vi.mock('../utils/Logger', () => ({ logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 const mockGetAuthTokens = vi.fn();
+const mockClearAuthTokens = vi.fn();
 vi.mock('../storage/ConfigStore', () => ({
   ConfigStore: class {
     getAuthTokens = mockGetAuthTokens;
     setAuthTokens = vi.fn();
-    clearAuthTokens = vi.fn();
+    clearAuthTokens = mockClearAuthTokens;
     isAuthenticated = vi.fn();
   },
 }));
@@ -20,7 +21,7 @@ vi.mock('./OAuthClient', () => ({
   },
 }));
 
-import { ApiClient, DEFAULT_API_TIMEOUT_MS } from './ApiClient';
+import { ApiClient, DEFAULT_API_TIMEOUT_MS, NotAuthenticatedError, SessionRevokedError } from './ApiClient';
 
 const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
   new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
@@ -44,6 +45,16 @@ const refreshHttpError = (status: number): AxiosError =>
     headers: {},
     config: {} as InternalAxiosRequestConfig,
   } as AxiosResponse);
+
+/** Await a promise expected to reject and return the Error it threw, typed. */
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (err) {
+    return err as Error;
+  }
+  throw new Error('Expected the request to reject');
+}
 
 describe('ApiClient.checkSessionValid', () => {
   let client: ApiClient;
@@ -106,6 +117,33 @@ describe('ApiClient.checkSessionValid', () => {
     expect(await client.checkSessionValid()).toBe(false);
   });
 
+  it('passes a provider-key 401 on the post-refresh retry through, not as a revoked session', async () => {
+    // The refreshed token is accepted, but the route 401s for a missing provider key; that
+    // must reach mapApiError intact rather than become "run /login".
+    let calls = 0;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      calls += 1;
+      if (calls === 1) return Promise.reject(make401(config));
+      return Promise.reject(
+        new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
+          status: 401,
+          statusText: 'Unauthorized',
+          data: { error: 'No TTS provider is configured', errorCode: 'provider_not_configured' },
+          headers: {},
+          config,
+        } as AxiosResponse)
+      );
+    }) as AxiosAdapter;
+    mockRefreshToken.mockResolvedValue({ access_token: 'fresh', refresh_token: 'refresh2', expires_in: 3600 });
+
+    const err = await rejection(client.post('/api/ai/tts', { text: 'hi' }));
+
+    expect(err).not.toBeInstanceOf(SessionRevokedError);
+    expect(err).toBeInstanceOf(AxiosError);
+    expect((err as AxiosError).response?.data).toMatchObject({ errorCode: 'provider_not_configured' });
+    expect(mockClearAuthTokens).not.toHaveBeenCalled();
+  });
+
   it('returns true when refresh fails with a 5xx - a transient outage, not a revocation', async () => {
     client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
       Promise.reject(make401(config))) as AxiosAdapter;
@@ -126,6 +164,87 @@ describe('ApiClient.checkSessionValid', () => {
     client.getAxiosInstance().defaults.adapter = (() => Promise.reject(new Error('Network Error'))) as AxiosAdapter;
 
     expect(await client.checkSessionValid()).toBe(true);
+  });
+});
+
+describe('ApiClient no-credential 401', () => {
+  let client: ApiClient;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client = new ApiClient('http://localhost:3000');
+  });
+
+  it('throws NotAuthenticatedError (not "expired") when a 401 arrives with no stored tokens', async () => {
+    // No API key and no stored tokens: there is nothing to refresh, so this must be a
+    // distinct "no credential" outcome, not the refresh-failure "expired" copy.
+    mockGetAuthTokens.mockResolvedValue(null);
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+
+    const err = await rejection(client.get('/api/sessions'));
+
+    expect(err).toBeInstanceOf(NotAuthenticatedError);
+    expect(err.name).toBe('NotAuthenticatedError');
+    expect(err.message).toContain('Authentication failed');
+    expect(err.message).not.toContain('expired');
+    expect(mockRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it('still reports "Authentication expired" when a stored token fails to refresh', async () => {
+    // Guards the path we must not change: a stored, expired token whose refresh is
+    // rejected stays a SessionRevokedError with the original wording.
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    });
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockRejectedValue(refreshHttpError(400));
+
+    const err = await rejection(client.get('/api/sessions'));
+
+    expect(err).toBeInstanceOf(SessionRevokedError);
+    expect(err.message).toContain('Authentication expired');
+  });
+
+  it('is not treated as a revocation when there are no tokens (checkSessionValid unchanged)', async () => {
+    mockGetAuthTokens.mockResolvedValue(null);
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+
+    expect(await client.checkSessionValid()).toBe(true);
+  });
+
+  it('reports no-credential (not expired) on the call after a failed refresh cleared the tokens', async () => {
+    let stored: unknown = {
+      accessToken: 'stale',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      userId: 'user-1',
+    };
+    mockGetAuthTokens.mockImplementation(async () => stored);
+    mockClearAuthTokens.mockImplementation(async () => {
+      stored = null;
+    });
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockRejectedValue(refreshHttpError(400));
+
+    try {
+      expect(await rejection(client.get('/api/sessions'))).toBeInstanceOf(SessionRevokedError);
+      expect(mockClearAuthTokens).toHaveBeenCalled();
+
+      const second = await rejection(client.get('/api/sessions'));
+
+      expect(second).toBeInstanceOf(NotAuthenticatedError);
+      expect(second.message).not.toContain('expired');
+    } finally {
+      mockGetAuthTokens.mockReset();
+      mockClearAuthTokens.mockReset();
+    }
   });
 });
 

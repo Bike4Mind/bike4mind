@@ -1,4 +1,4 @@
-import { runQuestTimeoutSweep } from '@server/cron/questTimeoutSweep';
+import { runQuestTimeoutSweep } from '@workers/cron/questTimeoutSweep';
 import type { SelfHostWorker } from './selfHostWorker';
 
 /** Matches the hosted questTimeoutSweep cron's rate(5 minutes) in infra/cron.ts. */

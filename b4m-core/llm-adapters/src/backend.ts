@@ -32,6 +32,14 @@ interface IChoiceBase {
   chunkText?: string | null;
   /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
   channel?: StreamChannel;
+  /**
+   * Whether chunkText is a tool-call argument fragment. Adapters whose prose shares a choice index
+   * with a tool call must set this; left undefined, a chunk at an index whose tool name is already
+   * known is treated as an argument fragment.
+   * While a tool is streaming, only `false` choices are forwarded to the client as text. An
+   * argument fragment (`true`) must arrive after the choice that carries its `tool` header.
+   */
+  toolArguments?: boolean;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
@@ -162,7 +170,8 @@ export interface ICompletionOptions {
    */
   complexity?: 'simple' | 'contextual' | 'complex';
   /**
-   * Explicit reasoning effort level for OpenAI reasoning models (O1, O3, GPT-5 series)
+   * Explicit reasoning effort level. Read by the OpenAI (reasoning models: O1, O3, GPT-5 series),
+   * Kimi (K3 only) and DeepSeek backends; ignored by the others (Anthropic, Gemini, Bedrock, xAI, Ollama).
    * When set, overrides the auto-classification from complexity
    * @see https://platform.openai.com/docs/guides/reasoning
    */

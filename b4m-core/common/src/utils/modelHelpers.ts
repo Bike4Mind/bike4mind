@@ -1,20 +1,21 @@
-import { IMAGE_MODELS, ImageModels, VIDEO_MODELS, VideoModels } from '../models';
-import { OPENAI_IMAGE_MODELS } from '../schemas/openai';
+import { IMAGE_MODELS, ImageModels } from '../models';
+import { EXTENDED_GPT_IMAGE_QUALITIES, OPENAI_IMAGE_MODELS, type ExtendedGptImageQuality } from '../schemas/openai';
 import { GEMINI_IMAGE_MODELS, type GeminiImageModel } from '../schemas/gemini';
 import { BFL_IMAGE_MODELS, type BFLImageModel } from '../schemas/bfl';
 import { normalizeEntitlementKey } from '../constants/dataLakes';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
+import { VIDEO_MODEL_IDS, type VideoModelId } from '../video/catalog';
 
 export const isImageModel = (model: string): model is ImageModels => {
   return IMAGE_MODELS.includes(model as ImageModels);
 };
 
-export const isVideoModel = (model: string): model is VideoModels => {
-  return VIDEO_MODELS.includes(model as VideoModels);
+// Public export with callers outside this repo: keep it when the video catalog changes.
+export const isVideoModel = (model: string): model is VideoModelId => {
+  return (VIDEO_MODEL_IDS as readonly string[]).includes(model);
 };
 
-type GptImageModelId =
-  ImageModels.GPT_IMAGE_1 | ImageModels.GPT_IMAGE_1_5 | ImageModels.GPT_IMAGE_1_MINI | ImageModels.GPT_IMAGE_2;
+type GptImageModelId = (typeof OPENAI_IMAGE_MODELS)[number];
 
 /** Returns true for GPT Image models, including versioned IDs (e.g. gpt-image-1.5-2025-12-16, gpt-image-2-2026-04-21). */
 export function isGPTImageModel(model: string): model is GptImageModelId;
@@ -75,10 +76,53 @@ export function supportsPromptUpsampling(model?: string | null): boolean {
   return isBflImageModel(model) || isGeminiImageModel(model);
 }
 
-/** Returns true specifically for gpt-image-2 (including versioned snapshots like gpt-image-2-2026-04-21). */
+/**
+ * Returns true for the gpt-image-2 family: gpt-image-2, its versioned snapshots (gpt-image-2-2026-04-21)
+ * and the gpt-image-2.5 models, which share gpt-image-2's flexible size rules (utils/imageSizes.ts).
+ * Where 2.5 differs from 2 - transparency, quality tiers, price - use the narrower predicates below.
+ */
 export function isGPTImage2Model(model?: string | null): boolean {
   if (!model) return false;
   return model === ImageModels.GPT_IMAGE_2 || model.startsWith('gpt-image-2');
+}
+
+/** Returns true for gpt-image-2.5-sunburst / -flare, including their dated snapshots. */
+export function isGPTImage25Model(model?: string | null): boolean {
+  if (!model) return false;
+  return model.startsWith('gpt-image-2.5-');
+}
+
+/**
+ * gpt-image-2 rejects background: 'transparent'; the 2.5 models accept it. Callers step a
+ * transparent request on such a model down to gpt-image-1.5 (ImageGeneration, ImageEdit, the
+ * image tools) or drop the field (OpenAIImageService).
+ */
+export function rejectsTransparentBackground(model?: string | null): boolean {
+  return isGPTImage2Model(model) && !isGPTImage25Model(model);
+}
+
+/**
+ * True for models that render a real alpha channel for background: 'transparent' (gpt-image-1.x
+ * and the 2.5 models). Every other provider ignores the field and returns an opaque image.
+ */
+export function supportsTransparentBackground(model?: string | null): boolean {
+  return isGPTImageModel(model) && !rejectsTransparentBackground(model);
+}
+
+export const isExtendedGptImageQuality = (quality: unknown): quality is ExtendedGptImageQuality =>
+  (EXTENDED_GPT_IMAGE_QUALITIES as readonly unknown[]).includes(quality);
+
+/**
+ * Steps 'xhigh'/'max' down to 'high' for a model that does not offer them, so every model renders
+ * and bills a tier it accepts. The single rule shared by OpenAIImageService (what is sent) and
+ * OpenAIImageCostCalculator (what is charged) - if they applied it differently, a user would be
+ * charged one tier and rendered another.
+ */
+export function clampImageQualityForModel<Quality extends string | null | undefined>(
+  model: string | null | undefined,
+  quality: Quality
+): Quality | 'high' {
+  return isExtendedGptImageQuality(quality) && !isGPTImage25Model(model) ? 'high' : quality;
 }
 
 /**

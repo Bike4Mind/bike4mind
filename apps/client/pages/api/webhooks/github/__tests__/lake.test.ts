@@ -48,6 +48,12 @@ vi.mock('@server/integrations/integrationAuditLogger', () => ({
 }));
 
 const handler = (await import('../lake')).default;
+const { Logger } = await import('@bike4mind/observability');
+const routeLogger = () =>
+  vi.mocked(Logger).mock.results.at(-1)?.value as Record<'info' | 'warn', ReturnType<typeof vi.fn>>;
+const IGNORED = '[githubLakeWebhook] ignored delivery';
+const expectIgnored = (reason: string, fields: Record<string, unknown>) =>
+  expect(routeLogger().info).toHaveBeenCalledWith(IGNORED, { reason, deliveryId: 'delivery-1', ...fields });
 
 const SECRET = 'lake-app-webhook-secret';
 const INSTALLATION_ID = 42;
@@ -159,6 +165,7 @@ describe('POST /api/webhooks/github/lake', () => {
       connectionId: 'conn1',
       manual: false,
     });
+    expect(routeLogger().info).not.toHaveBeenCalledWith(IGNORED, expect.anything());
   });
 
   it('rejects an unsigned push without touching the database or the queue', async () => {
@@ -205,8 +212,9 @@ describe('POST /api/webhooks/github/lake', () => {
     const { status, json } = await deliver({ body: pushPayload({ ref: 'refs/heads/feature/x' }) });
 
     expect(status).toBe(200);
-    expect(json).toMatchObject({ status: 'ignored' });
+    expect(json).toEqual({ status: 'ignored', reason: 'not the default branch' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('not_default_branch', { event: 'push', ref: 'refs/heads/feature/x', defaultBranch: 'main' });
   });
 
   it('ignores a tag push whose name matches the default branch', async () => {
@@ -214,13 +222,23 @@ describe('POST /api/webhooks/github/lake', () => {
 
     expect(status).toBe(200);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('not_default_branch', { event: 'push', ref: 'refs/tags/main', defaultBranch: 'main' });
   });
 
-  it('ignores a deletion of the default branch', async () => {
-    const { status } = await deliver({ body: pushPayload({ deleted: true }) });
+  it('ignores a deletion of the default branch, logged apart from a non-default push', async () => {
+    const { status, json } = await deliver({ body: pushPayload({ deleted: true }) });
 
     expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'not the default branch' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('branch_deleted', { event: 'push', ref: 'refs/heads/main', defaultBranch: 'main' });
+  });
+
+  it('logs a deleted non-default branch as not_default_branch', async () => {
+    await deliver({ body: pushPayload({ ref: 'refs/heads/feature/x', deleted: true }) });
+
+    expectIgnored('not_default_branch', { event: 'push', ref: 'refs/heads/feature/x', defaultBranch: 'main' });
+    expect(routeLogger().info).not.toHaveBeenCalledWith(IGNORED, expect.objectContaining({ reason: 'branch_deleted' }));
   });
 
   it('acknowledges a signed non-push, non-revocation event without queueing', async () => {
@@ -229,22 +247,27 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(status).toBe(200);
     expect(json).toEqual({ status: 'ignored', reason: 'not a handled event' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('unhandled_event', { event: 'ping' });
   });
 
   it('ignores a push for a repository no lake is connected to', async () => {
     h.findByInstallationId.mockResolvedValue([{ ...connection, repositoryId: 9999 }]);
-    const { status } = await deliver();
+    const { status, json } = await deliver();
 
     expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'no enabled lake for this repository' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('no_connection', { event: 'push', installationId: INSTALLATION_ID, repositoryId: REPOSITORY_ID });
   });
 
   it('ignores a push for a disabled connection', async () => {
     h.findByInstallationId.mockResolvedValue([{ ...connection, enabled: false }]);
-    const { status } = await deliver();
+    const { status, json } = await deliver();
 
     expect(status).toBe(200);
+    expect(json).toEqual({ status: 'ignored', reason: 'no enabled lake for this repository' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('connection_disabled', { event: 'push', connectionId: 'conn1' });
   });
 
   it('rejects a signed push payload with no installation', async () => {
@@ -253,6 +276,10 @@ describe('POST /api/webhooks/github/lake', () => {
 
     expect(status).toBe(400);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(routeLogger().warn).toHaveBeenCalledWith(
+      '[githubLakeWebhook] push payload has an unexpected shape',
+      expect.objectContaining({ deliveryId: 'delivery-1', error: expect.any(String) })
+    );
   });
 
   it('records the failure on the connection when the enqueue fails', async () => {
@@ -356,6 +383,7 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(h.connectDB).not.toHaveBeenCalled();
     expect(h.findByInstallationId).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('not_revoking_action', { event: 'installation_repositories', action: 'added' });
   });
 
   it('ignores installation.suspend (reversible, not a revoke)', async () => {
@@ -369,6 +397,7 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(h.connectDB).not.toHaveBeenCalled();
     expect(h.findByInstallationId).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expectIgnored('not_revoking_action', { event: 'installation', action: 'suspend' });
   });
 
   it('400s a malformed installation.deleted payload missing the installation id', async () => {
@@ -482,7 +511,6 @@ describe('POST /api/webhooks/github/lake', () => {
     expect(status).toBe(500);
     expect(json).toEqual({ message: 'Could not resolve the revoke' });
     expect(h.sendToQueue).not.toHaveBeenCalled();
-    const { Logger } = await import('@bike4mind/observability');
     const logger = vi.mocked(Logger).mock.results.at(-1)?.value as { error: ReturnType<typeof vi.fn> };
     expect(logger.error).toHaveBeenCalledWith(
       '[githubLakeWebhook] could not resolve the revoked connections',

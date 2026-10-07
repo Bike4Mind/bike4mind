@@ -94,8 +94,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * fabricated id. Same choice, for the same reason, as `usableObjectIds` in ../utils/mongo.
    *
    * Both misses report `null`. The row-not-found path used to resolve `undefined` while claiming
-   * `T | null`, so a caller narrowing with `!== null` (queueHandlers/emailBatch.ts) got past the
-   * guard and dereferenced it; two different miss values out of one method would be worse.
+   * `T | null`, so a caller narrowing with `!== null` (apps/workers/src/queueHandlers/emailBatch.ts)
+   * got past the guard and dereferenced it; two different miss values out of one method would be worse.
    */
   async findById(id: string) {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
@@ -216,6 +216,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     // past ours. Only the race is worth surfacing; a genuine not-found keeps `update`'s null contract.
     if (versioned) {
       const existsQuery = this.model.exists(idFilter as mongoose.FilterQuery<T>);
+      // A write that may reach a tombstone must also see one here, or a race on it reads as not-found.
+      if (queryOptions.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
       if (this._txn) existsQuery.session(this._txn);
       if (await existsQuery) {
         throw new ConcurrencyConflictError(this.model.modelName, { filter: idFilter });

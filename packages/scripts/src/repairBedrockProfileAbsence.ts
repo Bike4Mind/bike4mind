@@ -1,0 +1,181 @@
+import {
+  bedrockFoundationIdOf,
+  isFieldGroup,
+  ModelRecordWrite,
+  type FieldGroup,
+  type IModelCatalogRow,
+  type IModelCatalogRowInput,
+} from '@bike4mind/common';
+import { modelCatalogRepository, modelDiscoveryStateRepository } from '@bike4mind/database';
+import { resolveCatalogRecords } from '@bike4mind/llm-adapters';
+
+/**
+ * Must stay in sync with ABSENCE_NOTE_PREFIX in
+ * b4m-core/services/src/modelDiscoveryService/lifecyclePlan.ts: it is the prefix
+ * the absence protocol stamps on a graduation row.
+ */
+const ABSENCE_NOTE_PREFIX = 'discovery:absence@';
+
+export interface RepairBedrockProfileAbsenceOptions {
+  /** Default false: report the rows that would be appended and write nothing. */
+  apply?: boolean;
+  now?: Date;
+  log?: (message: string) => void;
+}
+
+export interface RepairCandidate {
+  modelId: string;
+  /** The bare foundation id behind the profile id. */
+  foundationId: string;
+  /** ISO instant the graduation row carried, when the note names one. */
+  graduatedAt?: string;
+}
+
+export interface RepairBedrockProfileAbsenceResult {
+  candidates: RepairCandidate[];
+  /** Rows appended, or that a dry run would append. */
+  repaired: number;
+}
+
+const isDeprecated = (lifecycle: unknown): boolean =>
+  typeof lifecycle === 'object' && lifecycle !== null && (lifecycle as { status?: unknown }).status === 'deprecated';
+
+/** The ISO instant after the absence marker in a graduation note, if any. */
+const graduatedAt = (note: string): string | undefined => {
+  const at = note.lastIndexOf(ABSENCE_NOTE_PREFIX);
+  if (at < 0) return undefined;
+  return note.slice(at + ABSENCE_NOTE_PREFIX.length) || undefined;
+};
+
+const deprecationOf = (patch: Record<string, unknown>): { status?: unknown; deprecationDate?: unknown } | null => {
+  const lifecycle = patch.lifecycle;
+  return typeof lifecycle === 'object' && lifecycle !== null ? lifecycle : null;
+};
+
+/** Dates may come back as Date or ISO string depending on how the row was written. */
+const sameInstant = (a: unknown, b: unknown): boolean => {
+  if (a === undefined || b === undefined) return a === b;
+  const left = new Date(a as string | Date).getTime();
+  const right = new Date(b as string | Date).getTime();
+  return !Number.isNaN(left) && left === right;
+};
+
+/**
+ * The graduation note behind a deprecated discovery row in force: the row's own,
+ * or that of an older absence row whose deprecation the row carries forward.
+ * A later discovery write restates every group the previous discovery row owned
+ * (catalogWrite claimedGroups), so an enrichment run after graduation copies the
+ * deprecated lifecycle under its own note and hides the absence row from
+ * rowsInForce. Only an unchanged copy counts: a different status or date means a
+ * source deprecated the id for its own reason.
+ */
+async function absenceGraduationNote(row: IModelCatalogRow): Promise<string | null> {
+  if (row.note?.includes(ABSENCE_NOTE_PREFIX)) return row.note;
+  if (!row.ownedGroups.includes('lifecycle')) return null;
+  const carried = deprecationOf(row.patch);
+  if (!carried || carried.status !== 'deprecated') return null;
+
+  const history = await modelCatalogRepository.historyForModel(row.modelId);
+  const graduation = history.find(
+    entry =>
+      entry.source === 'discovery' &&
+      entry.effectiveFrom < row.effectiveFrom &&
+      entry.note?.includes(ABSENCE_NOTE_PREFIX)
+  );
+  const origin = graduation ? deprecationOf(graduation.patch) : null;
+  if (!graduation?.note || !origin) return null;
+  return origin.status === carried.status && sameInstant(origin.deprecationDate, carried.deprecationDate)
+    ? graduation.note
+    : null;
+}
+
+/**
+ * One-off repair for Bedrock inference-profile ids that the absence protocol
+ * graduated to `deprecated` before discovery learned to sight a profile through
+ * its foundation id. Appends a discovery row that supersedes the graduation row
+ * (rowsInForce keeps the newest non-operator row per (modelId, source)) and
+ * cedes `lifecycle` back to seed, so a seeded-active id serves again while a
+ * seed-deprecated one stays deprecated. The row still owns the graduation row's
+ * other groups, so their identity/limits/dispatch do not fall back to seed.
+ * Operator rows are never part of the selector and are never written.
+ *
+ * Also selects a graduation a later discovery row carried forward unchanged (see
+ * absenceGraduationNote).
+ *
+ * Idempotent: the appended row becomes the discovery row in force, its note no
+ * longer matches the graduation prefix and it does not own `lifecycle`, so a
+ * second run finds nothing.
+ *
+ * The code fix has to be deployed first, or the next discovery run re-graduates
+ * the ids.
+ */
+export async function repairBedrockProfileAbsence(
+  options: RepairBedrockProfileAbsenceOptions = {}
+): Promise<RepairBedrockProfileAbsenceResult> {
+  const { apply = false, now = new Date(), log = console.log } = options;
+
+  const rows = await modelCatalogRepository.rowsInForce(now);
+  const resolved = resolveCatalogRecords(rows);
+
+  const candidates: RepairCandidate[] = [];
+  const planned: IModelCatalogRowInput[] = [];
+
+  for (const row of rows) {
+    if (row.source !== 'discovery') continue;
+    const foundationId = bedrockFoundationIdOf(row.modelId);
+    if (foundationId === null) continue;
+
+    const held = resolved.get(row.modelId)?.record;
+    if (!held || !isDeprecated(held.lifecycle)) continue;
+
+    const graduationNote = await absenceGraduationNote(row);
+    if (graduationNote === null) continue;
+
+    const parsed = ModelRecordWrite.safeParse(held);
+    if (!parsed.success) {
+      log(
+        `[repair-bedrock-profile-absence] skip ${row.modelId}: in-force record does not parse: ${parsed.error.message}`
+      );
+      continue;
+    }
+
+    // Deliberately do NOT claim `lifecycle`: this row supersedes the graduation
+    // row, so claiming it would pin the id in whatever state seed held at repair
+    // time and outrank a later seed retirement. Letting seed keep it restores a
+    // seeded-active id and leaves a seed-deprecated one deprecated.
+    const { lifecycle: _lifecycle, ...patch } = parsed.data;
+    candidates.push({ modelId: row.modelId, foundationId, graduatedAt: graduatedAt(graduationNote) });
+    planned.push({
+      modelId: row.modelId,
+      source: 'discovery',
+      patch,
+      ownedGroups: row.ownedGroups.filter((group): group is FieldGroup => isFieldGroup(group) && group !== 'lifecycle'),
+      effectiveFrom: now,
+      note: `discovery:absence-repair@${now.toISOString()}`,
+    });
+  }
+
+  for (const candidate of candidates) {
+    log(
+      `[repair-bedrock-profile-absence] ${apply ? 'restoring' : 'would restore'} ${candidate.modelId} ` +
+        `(foundation ${candidate.foundationId}${candidate.graduatedAt ? `, graduated ${candidate.graduatedAt}` : ''})`
+    );
+  }
+
+  if (!apply) return { candidates, repaired: candidates.length };
+
+  let repaired = 0;
+  for (let index = 0; index < planned.length; index += 1) {
+    const appended = await modelCatalogRepository.append(planned[index]);
+    // A concurrent writer skipping the append is not a repair we made; leave the
+    // state row alone so a later run retries.
+    if (!appended) continue;
+    repaired += 1;
+    // Clear the miss streak so the next discovery run starts from zero rather
+    // than re-graduating on a stale counter.
+    await modelDiscoveryStateRepository.recordSighting(candidates[index].modelId, now);
+  }
+
+  log(`[repair-bedrock-profile-absence] ${apply ? 'repaired' : 'would repair'} ${repaired} model(s)`);
+  return { candidates, repaired };
+}

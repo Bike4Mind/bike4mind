@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   RecommendedActionSchema,
   getRecommendedAction,
+  ttfvtState,
   type ContextTelemetry,
   type HistoricalBaselines,
 } from '@bike4mind/common';
@@ -47,6 +48,22 @@ export const DEFAULT_SLOS: SloConfig = {
   sloErrorRatePercent: 2,
   sloContextUtilizationPercent: 85,
 };
+
+/**
+ * TTFVT for operator-facing text, in seconds: an absent firstTokenTime is the never-rendered
+ * signal (the frozen-turn case), not missing data, so it must not read as N/A. unknown (neither
+ * stamp) is the only genuine N/A. See ttfvtState in @bike4mind/common.
+ */
+function formatTtfvtSeconds(firstTokenTimeMs?: number, firstChunkTimeMs?: number): string {
+  switch (ttfvtState(firstTokenTimeMs, firstChunkTimeMs)) {
+    case 'measured':
+      return `${((firstTokenTimeMs ?? 0) / 1000).toFixed(2)}s`;
+    case 'never-rendered':
+      return 'never rendered (streamed, nothing visible)';
+    default:
+      return 'N/A';
+  }
+}
 
 export interface LLMConfig {
   modelId: string;
@@ -196,10 +213,19 @@ export function generateRuleBasedAnalysis(
   }
 
   if (anomalies.slowFirstToken) {
-    const ttftSec = ((performance.firstTokenTimeMs ?? 0) / 1000).toFixed(1);
     const sloSec = (slos.sloFirstTokenTimeMs / 1000).toFixed(1);
-    findings.push(`Slow time to first token: ${ttftSec}s (SLO target: ${sloSec}s)`);
-    recommendations.push('Check for issues with model availability or API rate limiting');
+    // slowFirstToken is also set when the model streamed but nothing visible ever rendered;
+    // reporting that as "0.0s" would invert its meaning (a frozen turn is not fast).
+    if (ttfvtState(performance.firstTokenTimeMs, performance.firstChunkTimeMs) === 'never-rendered') {
+      findings.push(`Model streamed but no visible token ever rendered (first token SLO target: ${sloSec}s)`);
+      recommendations.push(
+        'Investigate streaming/render failures or hidden reasoning that never produced visible output'
+      );
+    } else {
+      const ttftSec = ((performance.firstTokenTimeMs ?? 0) / 1000).toFixed(1);
+      findings.push(`Slow time to first token: ${ttftSec}s (SLO target: ${sloSec}s)`);
+      recommendations.push('Check for issues with model availability or API rate limiting');
+    }
   }
 
   // SLO-aware utilization check (don't flag if within SLO)
@@ -375,7 +401,7 @@ ${
 
 ### Performance
 - Total Response Time: ${(performance.totalResponseTimeMs / 1000).toFixed(2)}s
-- Time to First Token: ${performance.firstTokenTimeMs ? `${(performance.firstTokenTimeMs / 1000).toFixed(2)}s` : 'N/A'}
+- Time to First Token: ${formatTtfvtSeconds(performance.firstTokenTimeMs, performance.firstChunkTimeMs)}
 
 ${
   tools && tools.length > 0
@@ -415,7 +441,7 @@ ${subagents.map(s => `- ${s.agentName.slice(0, 100)}: ${s.delegationCount} deleg
 
 ## SLO Context
 - Response Time P95 Target: ${(slos.sloResponseTimeP95Ms / 1000).toFixed(0)}s | This entry: ${(performance.totalResponseTimeMs / 1000).toFixed(2)}s
-- First Token Time Target: ${(slos.sloFirstTokenTimeMs / 1000).toFixed(1)}s | This entry: ${performance.firstTokenTimeMs ? `${(performance.firstTokenTimeMs / 1000).toFixed(2)}s` : 'N/A'}
+- First Token Time Target: ${(slos.sloFirstTokenTimeMs / 1000).toFixed(1)}s | This entry: ${formatTtfvtSeconds(performance.firstTokenTimeMs, performance.firstChunkTimeMs)}
 - Error Rate Target: ${slos.sloErrorRatePercent}%
 - Context Utilization Target: ${slos.sloContextUtilizationPercent}% | This entry: ${contextWindow.utilizationPercentage.toFixed(1)}%
 
@@ -831,8 +857,9 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
   // Performance
   sections.push(`### Performance`);
   sections.push(`- **Total Response Time:** ${(performance.totalResponseTimeMs / 1000).toFixed(2)}s`);
-  if (performance.firstTokenTimeMs) {
-    sections.push(`- **Time to First Token:** ${(performance.firstTokenTimeMs / 1000).toFixed(2)}s`);
+  const ttfvt = formatTtfvtSeconds(performance.firstTokenTimeMs, performance.firstChunkTimeMs);
+  if (ttfvt !== 'N/A') {
+    sections.push(`- **Time to First Token:** ${ttfvt}`);
   }
   sections.push('');
 

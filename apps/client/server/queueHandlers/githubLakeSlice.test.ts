@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   checkStorageLimit: vi.fn(),
   recomputeLakeStats: vi.fn(),
+  recordTreeCounts: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -86,6 +87,7 @@ const input = (over: Record<string, unknown> = {}) => ({
   lake: { id: 'lake1', datalakeTag: 'datalake:lake1' } as never,
   user: { id: 'owner1' } as never,
   remainingMs: () => 600_000,
+  recordTreeCounts: h.recordTreeCounts,
   logger,
   ...over,
 });
@@ -122,6 +124,7 @@ beforeEach(() => {
   h.checkStorageLimit.mockResolvedValue(undefined);
   h.recomputeLakeStats.mockResolvedValue(undefined);
   h.flush.mockResolvedValue(undefined);
+  h.recordTreeCounts.mockResolvedValue(undefined);
 });
 
 describe('runGitHubLakeSlice', () => {
@@ -147,6 +150,35 @@ describe('runGitHubLakeSlice', () => {
     });
     expect(h.retire).not.toHaveBeenCalled();
     expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  it('records the tree split under the sync rules, counting files only', async () => {
+    const directory = { path: 'src', mode: '040000', type: 'tree', sha: 'd1' };
+    const symlink = { path: 'link.md', mode: '120000', type: 'blob', sha: 'l1', size: 5 };
+    tree(
+      blob('README.md', 's1'),
+      blob('src/index.ts', 's2'),
+      blob('logo.png', 's3'),
+      blob('node_modules/x/index.js', 's4'),
+      blob('pnpm-lock.yaml', 's5'),
+      blob('big.md', 's6', 2 * 1024 * 1024),
+      directory as ReturnType<typeof blob>,
+      symlink
+    );
+    await runGitHubLakeSlice(input());
+    expect(h.recordTreeCounts).toHaveBeenCalledWith({ candidateCount: 2, skippedCount: 5 });
+  });
+
+  it('records the tree counts even when it refuses the tree as too many files', async () => {
+    tree(...Array.from({ length: 5001 }, (_, i) => blob(`f${i}.md`, `s${i}`)), blob('a.png', 'p1'));
+    await runGitHubLakeSlice(input());
+    expect(h.recordTreeCounts).toHaveBeenCalledWith({ candidateCount: 5001, skippedCount: 1 });
+  });
+
+  it('records no tree counts for a truncated tree', async () => {
+    h.getRecursiveTree.mockResolvedValue({ truncated: true, entries: [blob('a.md', 's1')] });
+    await runGitHubLakeSlice(input());
+    expect(h.recordTreeCounts).not.toHaveBeenCalled();
   });
 
   it('removes first, then ingests, and retires a changed file only after its replacement uploaded', async () => {

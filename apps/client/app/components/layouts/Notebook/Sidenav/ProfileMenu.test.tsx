@@ -132,3 +132,31 @@ describe('ProfileMenu - Cookie settings', () => {
     expect(useCookieSettings.getState().isOpen).toBe(true);
   });
 });
+
+describe('ProfileMenu - API Docs', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('opens the same-origin API docs in a new tab and closes the menu', () => {
+    // openExternalLinkByKey opens via a transient anchor click.
+    const clicked: HTMLAnchorElement[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this);
+    });
+    render(
+      <TestWrapper>
+        <ProfileMenu />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('profile-menu-card'));
+    fireEvent.click(screen.getByTestId('profile-menu-more'));
+
+    fireEvent.click(screen.getByTestId('profile-more-api-docs'));
+
+    expect(clicked).toHaveLength(1);
+    expect(clicked[0].getAttribute('href')).toBe('/api/v1/docs');
+    expect(clicked[0].target).toBe('_blank');
+    expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+  });
+});

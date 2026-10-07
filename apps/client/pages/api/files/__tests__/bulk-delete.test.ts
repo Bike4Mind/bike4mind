@@ -16,10 +16,12 @@ const h = vi.hoisted(() => ({
   activateIfDraft: vi.fn(),
   storageDelete: vi.fn(),
   recordConfigChange: vi.fn(),
+  baseApiOptions: undefined as unknown,
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions = options;
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign(
       (req: { method?: string }, res: unknown) => routes[req.method ?? 'DELETE']?.(req, res),
@@ -338,5 +340,11 @@ describe('bulk-delete - tag activity', () => {
     // The names are the owner's tags, not the actor's: touching them would bump a same-named tag in
     // the actor's own registry that they never changed.
     expect(h.touchLastActivityBy).not.toHaveBeenCalled();
+  });
+});
+
+describe('bulk-delete - scope gate', () => {
+  it('requires files:write at the baseApi route gate', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['files:write'] });
   });
 });

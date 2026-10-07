@@ -27,8 +27,8 @@ import {
   userRepository,
   UserApiKeyAuditLog,
 } from '@bike4mind/database/auth';
-import { userApiKeyService } from '@bike4mind/services';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { userApiKeyService, API_KEY_USER_CAP_ERROR_CODE } from '@bike4mind/services';
+import { ApiKeyScope, ApiKeyStatus, BadRequestError } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { checkFederatedGrant } from '@server/auth/federatedGrantGate';
 import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
@@ -209,6 +209,8 @@ const handler = baseApi({ auth: false })
     //    key can't be re-read (only its hash is stored), so we revoke any prior one and mint
     //    fresh. Tagged via metadata.oauthClientId - NOT productId, which carries a global
     //    per-product active-key cap that would reject mints past 20 concurrent users.
+    //    createdFrom 'oauth-exchange' puts the key in its own per-user cap pool (ApiKeyCapPool),
+    //    so live authorizations across many clients never consume the user's standard key slots.
     const existingKeys = await userApiKeyRepository.findByUserId(b4mUserId);
     const priorExchangeKeys = existingKeys.filter(
       k =>
@@ -224,21 +226,35 @@ const handler = baseApi({ auth: false })
       );
     }
 
-    const minted = await userApiKeyService.createUserApiKey(
-      b4mUserId,
-      {
-        name: `AI (federated: ${client.name})`,
-        scopes: requestedScopes,
-        expiresAt: new Date(Date.now() + AI_TOKEN_TTL_SECONDS * 1000),
-        metadata: {
-          clientIP: clientIp,
-          userAgent,
-          createdFrom: 'oauth-exchange',
-          oauthClientId: client_id,
+    let minted: Awaited<ReturnType<typeof userApiKeyService.createUserApiKey>>;
+    try {
+      minted = await userApiKeyService.createUserApiKey(
+        b4mUserId,
+        {
+          name: `AI (federated: ${client.name})`,
+          scopes: requestedScopes,
+          expiresAt: new Date(Date.now() + AI_TOKEN_TTL_SECONDS * 1000),
+          metadata: {
+            clientIP: clientIp,
+            userAgent,
+            createdFrom: 'oauth-exchange',
+            oauthClientId: client_id,
+          },
         },
-      },
-      { db: { userApiKeys: userApiKeyRepository, agents: agentRepository } }
-    );
+        { db: { userApiKeys: userApiKeyRepository, agents: agentRepository } }
+      );
+    } catch (err) {
+      // The per-user active-key cap is a client-visible refusal: answer it in OAuth
+      // shape like every other gate above rather than letting baseApi render a bare
+      // 400. Any other error is not ours to relabel - rethrow for the generic handler.
+      if (err instanceof BadRequestError && err.additionalInfo?.errorCode === API_KEY_USER_CAP_ERROR_CODE) {
+        req.logger.warn(
+          `[OAUTH_AI_TOKEN] per-user active API key cap reached for user ${b4mUserId} via client ${client_id}`
+        );
+        return res.status(400).json({ error: 'invalid_request', error_description: err.message });
+      }
+      throw err;
+    }
 
     // 8. Audit - a single `mint` entry (createUserApiKey does not emit one).
     await UserApiKeyAuditLog.create({

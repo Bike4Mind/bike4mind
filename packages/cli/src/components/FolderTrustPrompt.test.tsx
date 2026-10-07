@@ -19,6 +19,13 @@ describe('FolderTrustPrompt', () => {
     expect(frame).toContain('Not now');
   });
 
+  it('escapes control and bidi characters in the project root', () => {
+    const { lastFrame } = render(<FolderTrustPrompt projectRoot={'/home/me/re\rpo\u202e'} onSelect={() => {}} />);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('/home/me/re\\x0dpo\\u202e');
+    expect(frame).not.toContain('\u202e');
+  });
+
   it('selects not-now when Enter is pressed on the default (first) item', async () => {
     // The safe default: Enter-through on a fresh clone must not grant trust.
     const onSelect = vi.fn();

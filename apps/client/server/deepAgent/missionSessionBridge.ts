@@ -51,6 +51,7 @@ export function defaultBridgeDeps(logger: Logger): MissionBridgeDeps {
         clonedSourceId: null,
         forkedSourceId: null,
         lastUsedModel: null,
+        origin: { channel: 'agent' },
       } as Parameters<typeof sessionRepository.create>[0]);
       if (charter.sessionId) {
         // The stored session was missing (deleted notebook) - re-point off the

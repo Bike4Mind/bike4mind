@@ -124,21 +124,23 @@ function makeReq() {
   };
 }
 
-describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockVerifyVoiceSessionToken.mockReturnValue({
-      userId: 'user-1',
-      sessionId: 'session-1',
-      organizationId: undefined,
-      reasoningModelId: 'test-model',
-    });
-    mockFindDuplicateQuests.mockResolvedValue([]);
-    mockUserFindById.mockResolvedValue({ id: 'user-1' });
-    mockGetSettingsMap.mockResolvedValue({});
-    mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
-    mockProcess.mockResolvedValue(undefined);
+function primeSuccessfulTurn() {
+  vi.clearAllMocks();
+  mockVerifyVoiceSessionToken.mockReturnValue({
+    userId: 'user-1',
+    sessionId: 'session-1',
+    organizationId: undefined,
+    reasoningModelId: 'test-model',
   });
+  mockFindDuplicateQuests.mockResolvedValue([]);
+  mockUserFindById.mockResolvedValue({ id: 'user-1' });
+  mockGetSettingsMap.mockResolvedValue({});
+  mockInvoke.mockResolvedValue({ id: 'quest-1', replies: [], reply: '' });
+  mockProcess.mockResolvedValue(undefined);
+}
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
+  beforeEach(primeSuccessfulTurn);
 
   it('denies the data-lake tools on both the invoke and process bodies', async () => {
     const req = makeReq();
@@ -149,5 +151,48 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - deniedTools', () => {
     const expected = ['list_my_data_lakes', 'create_data_lake', 'save_content_to_data_lake'];
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
     expect((mockProcess.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual(expected);
+  });
+
+  // Speech streams from the raw reply, so a choices block would be read aloud.
+  it('withholds the reply-choices guidance on both the invoke and process bodies', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    type Body = { body: { skipReplyChoices?: boolean; skipAutoOffers?: boolean } };
+    for (const call of [mockInvoke.mock.calls[0][0], mockProcess.mock.calls[0][0]] as Body[]) {
+      expect(call.body.skipReplyChoices).toBe(true);
+      // Narrow on purpose: skipAutoOffers would also drop the knowledge and MCP offers voice uses.
+      expect(call.body.skipAutoOffers).toBeUndefined();
+    }
+  });
+});
+
+describe('POST /api/voice/v2/llm-proxy/chat/completions - apiKeyId', () => {
+  beforeEach(primeSuccessfulTurn);
+
+  type InvokeArg = { apiKeyId?: string };
+  type ProcessArg = { body: { apiKeyId?: string } };
+
+  // A scope-gated tool tells a key turn from a session turn only by ToolContext.apiKeyId, which
+  // process() reads from its body; invoke() carries it for the quest record.
+  it('forwards the key that minted the token to invoke() and the process() body', async () => {
+    mockVerifyVoiceSessionToken.mockReturnValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      organizationId: '',
+      reasoningModelId: 'test-model',
+      apiKeyId: 'key-1',
+    });
+
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBe('key-1');
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBe('key-1');
+  });
+
+  it('forwards no key id for a token minted by a signed-in session', async () => {
+    await handler(makeReq() as never, makeRes() as never);
+
+    expect((mockInvoke.mock.calls[0][0] as InvokeArg).apiKeyId).toBeUndefined();
+    expect((mockProcess.mock.calls[0][0] as ProcessArg).body.apiKeyId).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 // Type-only: ModelCatalogTypes imports ModelBackend from this module, so a value
 // import here would close a runtime cycle. These two are erased at compile time.
 import type { AdapterFamily, ModelDispatchProfile } from './types/entities/ModelCatalogTypes';
+import type { ImageModelCapabilities } from './utils/imageCapabilities';
 
 /**
  * Model backends
@@ -37,6 +38,8 @@ export enum ImageModels {
   GPT_IMAGE_1_5 = 'gpt-image-1.5',
   GPT_IMAGE_1_MINI = 'gpt-image-1-mini',
   GPT_IMAGE_2 = 'gpt-image-2',
+  GPT_IMAGE_2_5_SUNBURST = 'gpt-image-2.5-sunburst',
+  GPT_IMAGE_2_5_FLARE = 'gpt-image-2.5-flare',
   DALL_E_2 = 'dall-e-2',
   FLUX_PRO = 'flux-pro',
   FLUX_PRO_1_1 = 'flux-pro-1.1',
@@ -523,40 +526,12 @@ export const supportedSpeechToTextModels = z.enum(SpeechToTextModels);
 export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 
 /**
- * Video Models
- */
-export enum VideoModels {
-  SORA_2 = 'sora-2',
-  SORA_2_PRO = 'sora-2-pro',
-}
-
-export const VIDEO_MODELS = Object.values(VideoModels);
-export const supportedVideoModels = z.enum(VideoModels);
-export type VideoModelName = z.infer<typeof supportedVideoModels>;
-
-/**
- * Video size constraints and options for Sora
- */
-export const VIDEO_SIZE_CONSTRAINTS = {
-  SORA: {
-    durations: [4, 8, 12] as const,
-    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'] as const,
-    defaultDuration: 4,
-    defaultSize: '720x1280' as const,
-  },
-} as const;
-
-export type SoraDuration = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.durations)[number];
-export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
-
-/**
  * All supported models
  */
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
   ...SpeechToTextModels,
-  ...VideoModels,
 });
 
 export type ModelName = z.infer<typeof supportedModels>;
@@ -678,6 +653,11 @@ export type ModelInfo = {
    * id tables, and reproduces today's behavior exactly when it is absent.
    */
   dispatchProfile?: ModelDispatchProfile;
+  /**
+   * Size rules and supported params of an image model. Attached by GET /api/models (see
+   * getImageModelCapabilities), not by the backends, so every image row derives it the same way.
+   */
+  image?: ImageModelCapabilities;
 };
 
 // Pricing info type. Optional cache_read / cache_write override the defaults
@@ -693,6 +673,17 @@ type PricingInfo = {
 /** Anthropic-published default multipliers for prompt cache pricing. */
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
+
+/** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
+export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+  const thresholds = Object.keys(model.pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const threshold of thresholds) {
+    if (tokens <= threshold) return threshold;
+  }
+  return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
+};
 
 /**
  * Compute USD cost for a text model call.
@@ -725,18 +716,7 @@ export const getTextModelCost = (
     return cost;
   };
 
-  const thresholds: number[] = Object.keys(model.pricing)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  const tierForTokens = (tokens: number): number | null => {
-    for (const threshold of thresholds) {
-      if (tokens <= threshold) return threshold;
-    }
-    return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
-  };
-
-  const tier = tierForTokens(inputTokens);
+  const tier = pricingTierForTokens(model, inputTokens);
   if (tier === null) return alarmIfUnpriced(0);
 
   // Guard against a malformed or non-tiered pricing map (e.g. a flat

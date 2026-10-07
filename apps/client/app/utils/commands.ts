@@ -5,10 +5,8 @@ import {
   IChatHistoryItemDocument,
   IFabFileDocument,
   IMAGE_MODELS,
-  VIDEO_MODELS,
   ISessionDocument,
   ImageModelName,
-  VideoModelName,
   LLMApiRequestBody,
   LLMModelConfig,
 } from '@bike4mind/common';
@@ -29,6 +27,11 @@ export type CommandArgExtra = {
   currentSession: ISessionDocument | null;
   model: string;
   workBenchFiles: IFabFileDocument[];
+  /**
+   * Agents the composer's Agents panel has selected. Sent only on the turn that creates a session
+   * (see LLMCommandArgs.agentIds).
+   */
+  agentIds?: string[];
   sendJsonMessage?: WebsocketContextValue['sendJsonMessage'];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];
@@ -69,7 +72,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent' | '/feedback';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/edit_image' | '/create_agent' | '/feedback';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;
@@ -80,7 +83,7 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
   const handler = commandHandlers[command as CommandKey];
   if (handler) {
     // A re-run restarts an existing quest in place; its earlier terminal frame must not mark
-    // the new run's chunks stale. Image/video payloads carry no updatedAt to prove recency.
+    // the new run's chunks stale. Image payloads carry no updatedAt to prove recency.
     if (rest.questId) terminalQuests.forget(rest.questId);
     return await handler({ userId, params, ...rest });
   } else {
@@ -91,11 +94,6 @@ export const handleCommand = async (commandHandlers: CommandHandlers, args: Comm
 export function isImageModel(model: string): model is ImageModelName {
   const imageModel = IMAGE_MODELS.includes(model as ImageModelName);
   return imageModel;
-}
-
-export function isVideoModel(model: string): model is VideoModelName {
-  const videoModel = VIDEO_MODELS.includes(model as VideoModelName);
-  return videoModel;
 }
 
 export const extractCommandAndParams = (
@@ -117,7 +115,6 @@ export const extractCommandAndParams = (
     '/key',
     '/models',
     '/gen_image',
-    '/gen_video',
     '/edit_image',
     '/admin',
     '/more',
@@ -134,8 +131,6 @@ export const extractCommandAndParams = (
 
     if (isImageModel(model)) {
       modifiedChatInputValue = `/gen_image ${input}`;
-    } else if (isVideoModel(model)) {
-      modifiedChatInputValue = `/gen_video ${input}`;
     } else {
       modifiedChatInputValue = `/llm ${modifiedChatInputValue}`;
     }

@@ -1,32 +1,42 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore, type WizardTargetLake } from '@client/app/stores/useDataLakeWizardStore';
 import SourceSelectionStep from './SourceSelectionStep';
 
-const { lakes, selectedAccount, toastInfo } = vi.hoisted(() => ({
-  lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
-  selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
-  toastInfo: vi.fn(),
-}));
+const { lakes, selectedAccount, toastInfo, slugPreview, slugPreviewMock } = vi.hoisted(() => {
+  const slugPreview = { current: undefined as string | undefined };
+  return {
+    lakes: { current: [] as { id: string; name: string; organizationId?: string }[] },
+    selectedAccount: { current: { id: 'me', personal: true } as { id: string; personal: boolean } | null },
+    toastInfo: vi.fn(),
+    slugPreview,
+    slugPreviewMock: vi.fn((_name: string, _enabled: boolean) => ({
+      data: slugPreview.current === undefined ? undefined : { slug: slugPreview.current, tagPrefix: null },
+    })),
+  };
+});
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useGetDataLakes: () => ({ data: lakes.current }),
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: (name: string, _tagPrefix: string | undefined, enabled: boolean) =>
+    slugPreviewMock(name, enabled),
 }));
 vi.mock('@client/app/components/Credits/AccountSelector', () => ({
   useSelectedAccount: (selector: (s: { selectedAccount: unknown }) => unknown) =>
     selector({ selectedAccount: selectedAccount.current }),
 }));
 vi.mock('sonner', () => ({ toast: { info: toastInfo } }));
-// Both Drive actions pull in React Query (useConfig / lake-connection hooks); stub them so these
+// The source actions pull in React Query (useConfig / lake-connection hooks); stub them so these
 // step-order/name-validation tests need no QueryClientProvider. Their own behavior is covered by
-// DriveConnectAction.test.tsx and DrivePendingConnectAction.test.tsx.
+// LakeSourceConnectActions.test.tsx and DrivePendingConnectAction.test.tsx.
 // Rendered as markers rather than null: these tests assert WHICH of the two appears, which is the
 // gate this step owns. Their own behaviour stays covered by their own test files.
-vi.mock('@client/app/components/DataLakeWizard/steps/DriveConnectAction', () => ({
-  default: () => <div data-testid="drive-connect-action" />,
+vi.mock('@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions', () => ({
+  default: () => <div data-testid="lake-source-connect-actions" />,
 }));
 vi.mock('@client/app/components/DataLakeWizard/steps/DrivePendingConnectAction', () => ({
   default: () => <div data-testid="drive-pending-connect-action" />,
@@ -60,9 +70,12 @@ beforeEach(() => {
   lakes.current = [];
   selectedAccount.current = { id: 'me', personal: true };
   toastInfo.mockClear();
+  slugPreview.current = undefined;
+  slugPreviewMock.mockClear();
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   useDataLakeWizardStore.getState().resetWizard();
 });
 
@@ -73,6 +86,7 @@ afterEach(() => {
 describe('SourceSelectionStep - lake name', () => {
   const WARNING = 'source-name-duplicate-warning';
   const SLUG_ERROR = 'source-name-slug-error';
+  const SLUG = 'source-name-slug';
 
   it('warns when a personal lake already uses the name, ignoring case and padding', () => {
     lakes.current = [{ id: 'lake-1', name: 'Niche' }];
@@ -139,6 +153,69 @@ describe('SourceSelectionStep - lake name', () => {
     renderStep();
 
     expect(screen.queryByTestId(SLUG_ERROR)).toBeNull();
+  });
+
+  it('shows the server slug preview, matching the Config summary', () => {
+    // A lake (possibly deleted) already holds "niche", so create would mint "niche-1".
+    slugPreview.current = 'niche-1';
+    setName('Niche');
+
+    renderStep();
+
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('niche-1');
+  });
+
+  it('falls back to the local slug while the preview is loading or has failed', () => {
+    setName('Legal Contracts');
+
+    renderStep();
+
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('legal-contracts');
+  });
+
+  it('keeps the slug of the lake a same-prefix retry will restore, not the preview', () => {
+    slugPreview.current = 'legal-contracts-1';
+    useDataLakeWizardStore.setState(state => ({
+      config: { ...state.config, name: 'Legal Contracts', tagPrefix: 'legal:' },
+    }));
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByTestId(SLUG)).toHaveTextContent(/^legal-contracts$/);
+  });
+
+  it('queries the preview with the settled name, not on every keystroke', () => {
+    vi.useFakeTimers();
+    slugPreview.current = 'abc-1';
+    renderStep();
+    const input = screen.getByTestId('source-name-input').querySelector('input') as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: 'A' } });
+    fireEvent.change(input, { target: { value: 'Ab' } });
+    fireEvent.change(input, { target: { value: 'Abc' } });
+
+    // The preview of an older (empty) name is never shown in place of the typed one.
+    expect(screen.getByTestId(SLUG)).toHaveTextContent(/^abc$/);
+    expect(slugPreviewMock.mock.calls.filter(([, enabled]) => enabled)).toEqual([]);
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    const enabledNames = slugPreviewMock.mock.calls.filter(([, enabled]) => enabled).map(([name]) => name);
+    expect(enabledNames.length).toBeGreaterThan(0);
+    expect(enabledNames.every(name => name === 'Abc')).toBe(true);
+    expect(screen.getByTestId(SLUG)).toHaveTextContent('abc-1');
+  });
+
+  it('does not query the preview for a name that cannot form a slug', () => {
+    setName('!');
+
+    renderStep();
+
+    expect(slugPreviewMock.mock.calls.filter(([, enabled]) => enabled)).toEqual([]);
+    expect(screen.getByTestId('source-name-slug-error')).toBeInTheDocument();
   });
 
   it('offers no name field in append mode - the target lake owns its identity', () => {
@@ -267,7 +344,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       renderStep();
 
       expect(screen.getByTestId('drive-connect-personal-lake-btn')).toBeDisabled();
-      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('lake-source-connect-actions')).toBeNull();
       // And not the create-mode fallback either - there IS a target lake, it just cannot connect.
       expect(screen.queryByTestId('drive-pending-connect-action')).toBeNull();
     });
@@ -278,7 +355,7 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       appendTo({ canManage: false });
       renderStep();
 
-      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('lake-source-connect-actions')).toBeNull();
       expect(screen.queryByTestId('drive-connect-personal-lake-btn')).toBeNull();
     });
 
@@ -286,14 +363,14 @@ describe('SourceSelectionStep - optional step opt-ins', () => {
       appendTo({});
       renderStep();
 
-      expect(screen.getByTestId('drive-connect-action')).toBeInTheDocument();
+      expect(screen.getByTestId('lake-source-connect-actions')).toBeInTheDocument();
     });
 
     it('still parks the selection in create mode, where there is no lake to gate on yet', () => {
       renderStep();
 
       expect(screen.getByTestId('drive-pending-connect-action')).toBeInTheDocument();
-      expect(screen.queryByTestId('drive-connect-action')).toBeNull();
+      expect(screen.queryByTestId('lake-source-connect-actions')).toBeNull();
     });
   });
 });

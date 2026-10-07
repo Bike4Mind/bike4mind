@@ -1,9 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '../models';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
+import { VIDEO_MODEL_IDS } from '../video/catalog';
 import {
+  isVideoModel,
   isGPTImageModel,
   isGPTImage2Model,
+  isGPTImage25Model,
+  rejectsTransparentBackground,
+  supportsTransparentBackground,
+  clampImageQualityForModel,
   isKontextModel,
   requiresImageInput,
   isModelAccessible,
@@ -75,6 +81,8 @@ describe('isGPTImageModel', () => {
     expect(isGPTImageModel(ImageModels.GPT_IMAGE_1_MINI)).toBe(true);
     expect(isGPTImageModel(ImageModels.GPT_IMAGE_2)).toBe(true);
     expect(isGPTImageModel('gpt-image-2-2026-04-21')).toBe(true);
+    expect(isGPTImageModel(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(true);
+    expect(isGPTImageModel(ImageModels.GPT_IMAGE_2_5_FLARE)).toBe(true);
   });
 
   it('does not match non-GPT image models', () => {
@@ -85,12 +93,71 @@ describe('isGPTImageModel', () => {
 });
 
 describe('isGPTImage2Model', () => {
-  it('matches gpt-image-2 and its versioned snapshots only', () => {
+  it('matches the gpt-image-2 family (2, 2.5, and their versioned snapshots) only', () => {
     expect(isGPTImage2Model(ImageModels.GPT_IMAGE_2)).toBe(true);
     expect(isGPTImage2Model('gpt-image-2-2026-04-21')).toBe(true);
+    expect(isGPTImage2Model(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(true);
+    expect(isGPTImage2Model(ImageModels.GPT_IMAGE_2_5_FLARE)).toBe(true);
+    expect(isGPTImage2Model('gpt-image-2.5-flare-2026-09-08')).toBe(true);
     expect(isGPTImage2Model(ImageModels.GPT_IMAGE_1)).toBe(false);
     expect(isGPTImage2Model(ImageModels.GPT_IMAGE_1_5)).toBe(false);
     expect(isGPTImage2Model(null)).toBe(false);
+  });
+});
+
+describe('isGPTImage25Model', () => {
+  it('matches the 2.5 models and their snapshots, not gpt-image-2', () => {
+    expect(isGPTImage25Model(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(true);
+    expect(isGPTImage25Model('gpt-image-2.5-flare-2026-09-08')).toBe(true);
+    expect(isGPTImage25Model(ImageModels.GPT_IMAGE_2)).toBe(false);
+    expect(isGPTImage25Model('gpt-image-2-2026-04-21')).toBe(false);
+    expect(isGPTImage25Model(null)).toBe(false);
+  });
+});
+
+describe('rejectsTransparentBackground', () => {
+  it('is true for gpt-image-2 only, not the 2.5 models or older GPT-Image models', () => {
+    expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_2)).toBe(true);
+    expect(rejectsTransparentBackground('gpt-image-2-2026-04-21')).toBe(true);
+    expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(false);
+    expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_2_5_FLARE)).toBe(false);
+    expect(rejectsTransparentBackground(ImageModels.GPT_IMAGE_1_5)).toBe(false);
+  });
+});
+
+describe('supportsTransparentBackground', () => {
+  it('is true for gpt-image-1.x and the 2.5 models', () => {
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_1)).toBe(true);
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_1_MINI)).toBe(true);
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_1_5)).toBe(true);
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_2_5_SUNBURST)).toBe(true);
+    expect(supportsTransparentBackground('gpt-image-2.5-flare-2026-09-08')).toBe(true);
+  });
+
+  it('is false for gpt-image-2 and every non-OpenAI provider', () => {
+    expect(supportsTransparentBackground(ImageModels.GPT_IMAGE_2)).toBe(false);
+    expect(supportsTransparentBackground('gpt-image-2-2026-04-21')).toBe(false);
+    expect(supportsTransparentBackground(ImageModels.FLUX_PRO_1_1)).toBe(false);
+    expect(supportsTransparentBackground(ImageModels.GEMINI_3_PRO_IMAGE)).toBe(false);
+    expect(supportsTransparentBackground(null)).toBe(false);
+  });
+});
+
+describe('clampImageQualityForModel', () => {
+  it('keeps xhigh/max on the 2.5 models', () => {
+    expect(clampImageQualityForModel(ImageModels.GPT_IMAGE_2_5_SUNBURST, 'xhigh')).toBe('xhigh');
+    expect(clampImageQualityForModel('gpt-image-2.5-flare-2026-09-08', 'max')).toBe('max');
+  });
+
+  it('steps xhigh/max down to high on every other model', () => {
+    expect(clampImageQualityForModel(ImageModels.GPT_IMAGE_2, 'xhigh')).toBe('high');
+    expect(clampImageQualityForModel(ImageModels.GPT_IMAGE_1, 'max')).toBe('high');
+  });
+
+  it('leaves every other tier untouched', () => {
+    expect(clampImageQualityForModel(ImageModels.GPT_IMAGE_2, 'medium')).toBe('medium');
+    expect(clampImageQualityForModel(ImageModels.GPT_IMAGE_2, 'auto')).toBe('auto');
+    expect(clampImageQualityForModel(ImageModels.GPT_IMAGE_2, undefined)).toBeUndefined();
   });
 });
 
@@ -250,5 +317,14 @@ describe('supportsImageEdit', () => {
     expect(supportsImageEdit(null)).toBe(false);
     expect(supportsImageEdit(undefined)).toBe(false);
     expect(supportsImageEdit('')).toBe(false);
+  });
+});
+
+describe('isVideoModel', () => {
+  it('is true for every catalog video model and false for chat, image and retired Sora ids', () => {
+    expect(VIDEO_MODEL_IDS.every(id => isVideoModel(id))).toBe(true);
+    expect(isVideoModel('gpt-4o')).toBe(false);
+    expect(isVideoModel(ImageModels.GPT_IMAGE_1)).toBe(false);
+    expect(isVideoModel('sora-2')).toBe(false);
   });
 });

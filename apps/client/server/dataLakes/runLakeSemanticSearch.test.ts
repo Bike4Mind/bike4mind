@@ -6,10 +6,26 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
+import { BadRequestError, CreditHolderType } from '@bike4mind/common';
 
-const { mockSemanticSearch, mockGetEffectiveLLMApiKeys } = vi.hoisted(() => ({
+const {
+  mockSemanticSearch,
+  mockGetEffectiveLLMApiKeys,
+  mockUserFindById,
+  mockOrgFindById,
+  mockFindAccessibleById,
+  mockBillingEnabled,
+  mockRecordOperationalUsage,
+  mockIsCurrentOrgMember,
+} = vi.hoisted(() => ({
   mockSemanticSearch: vi.fn(),
   mockGetEffectiveLLMApiKeys: vi.fn(),
+  mockUserFindById: vi.fn(),
+  mockOrgFindById: vi.fn(),
+  mockFindAccessibleById: vi.fn(),
+  mockBillingEnabled: vi.fn(),
+  mockRecordOperationalUsage: vi.fn(),
+  mockIsCurrentOrgMember: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -18,17 +34,18 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   adminSettingsRepository: { getSettingsValue: async () => undefined },
   creditTransactionRepository: {},
-  organizationRepository: { shareable: { findAccessibleById: async () => null } },
+  organizationRepository: { findById: mockOrgFindById, shareable: { findAccessibleById: mockFindAccessibleById } },
   usageEventRepository: {},
-  userRepository: { findById: async () => null },
+  userRepository: { findById: mockUserFindById },
   lakeAccessEventRepository: {},
   scopedSettingsRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
   scopedSettingsService: { scopeForCaller: () => ({ userId: 'u1' }) },
-  isOperationalBillingEnabled: async () => false,
-  recordOperationalUsage: vi.fn(),
+  isOperationalBillingEnabled: mockBillingEnabled,
+  recordOperationalUsage: mockRecordOperationalUsage,
+  organizationService: { isCurrentOrgMember: mockIsCurrentOrgMember },
   creditService: { isMemberCreditCapExceeded: () => false },
   dataLakeService: {
     semanticDataLakeSearch: mockSemanticSearch,
@@ -56,7 +73,7 @@ import {
 } from './runLakeSemanticSearch';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-const req = { user: { id: 'u1', groups: [] }, logger } as unknown as Request;
+const req = { user: { id: 'u1', groups: [] }, headers: {}, logger } as unknown as Request;
 
 const SCOPE = {
   dataLakeTags: ['datalake:target'],
@@ -85,6 +102,11 @@ beforeEach(() => {
   resetSharedTokenizerForTests();
   mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'sk-test' });
   mockSemanticSearch.mockResolvedValue(SEARCH);
+  mockUserFindById.mockResolvedValue(null);
+  mockOrgFindById.mockResolvedValue(null);
+  mockFindAccessibleById.mockResolvedValue(null);
+  mockBillingEnabled.mockResolvedValue(false);
+  mockIsCurrentOrgMember.mockReturnValue(true);
 });
 
 describe('runLakeSemanticSearch', () => {
@@ -119,5 +141,140 @@ describe('runLakeSemanticSearch', () => {
   it('stops before searching once the caller has gone', async () => {
     await expect(runLakeSemanticSearch(req, input({ isAborted: () => true }))).resolves.toEqual({ kind: 'aborted' });
     expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+});
+
+describe('runLakeSemanticSearch billing owner and source', () => {
+  const SEAT_ORG = { id: 'seat-org', currentCredits: 1000 };
+  const KEY_ORG = { id: 'key-org', currentCredits: 1000 };
+  const USER = { id: 'u1', organizationId: 'seat-org', currentCredits: 1000, isAdmin: false };
+
+  const apiKeyReq = (apiKeyInfo: Record<string, unknown>, headers: Record<string, string> = {}) =>
+    ({ user: { id: 'u1', groups: [], organizationId: 'seat-org' }, apiKeyInfo, headers, logger }) as unknown as Request;
+  const jwtReq = {
+    user: { id: 'u1', groups: [], organizationId: 'seat-org' },
+    headers: {},
+    logger,
+  } as unknown as Request;
+  const recorded = () => mockRecordOperationalUsage.mock.calls[0][0];
+
+  beforeEach(() => {
+    mockUserFindById.mockResolvedValue(USER);
+    mockOrgFindById.mockResolvedValue(KEY_ORG);
+    mockFindAccessibleById.mockResolvedValue(SEAT_ORG);
+  });
+
+  it("bills an org-billed key's organization, not the caller's seat, and stamps cli for the CLI", async () => {
+    await runLakeSemanticSearch(
+      apiKeyReq(
+        { billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' },
+        { 'user-agent': 'b4m-cli/0.9.3' }
+      ),
+      input()
+    );
+
+    expect(mockOrgFindById).toHaveBeenCalledWith('key-org');
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(recorded()).toMatchObject({ organization: KEY_ORG, source: 'cli' });
+  });
+
+  it('bills the user for a user-billed key even when they hold an org seat', async () => {
+    await runLakeSemanticSearch(
+      apiKeyReq({ billingOwnerType: CreditHolderType.User, organizationId: 'seat-org' }),
+      input()
+    );
+
+    expect(mockFindAccessibleById).not.toHaveBeenCalled();
+    expect(recorded()).toMatchObject({ organization: null, source: 'api' });
+  });
+
+  it('bills the user for an org-billed key that carries no organization id', async () => {
+    await runLakeSemanticSearch(apiKeyReq({ billingOwnerType: CreditHolderType.Organization }), input());
+
+    expect(mockOrgFindById).not.toHaveBeenCalled();
+    expect(recorded()).toMatchObject({ organization: null });
+  });
+
+  it("bills a browser/JWT caller's org seat", async () => {
+    await runLakeSemanticSearch(jwtReq, input());
+
+    expect(mockFindAccessibleById).toHaveBeenCalledWith(jwtReq.user, 'seat-org');
+    expect(recorded()).toMatchObject({ organization: SEAT_ORG, source: 'api' });
+  });
+
+  it('refuses an org-billed key whose holder has left the org when billing is on', async () => {
+    mockBillingEnabled.mockResolvedValue(true);
+    mockIsCurrentOrgMember.mockReturnValue(false);
+
+    await expect(
+      runLakeSemanticSearch(
+        apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+        input()
+      )
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof BadRequestError && err.statusCode === 400 && /no longer a member/.test(err.message)
+    );
+    expect(mockIsCurrentOrgMember).toHaveBeenCalledWith(KEY_ORG, 'u1');
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('admits a platform admin holding an org-billed key for an org they are not on', async () => {
+    mockBillingEnabled.mockResolvedValue(true);
+    mockIsCurrentOrgMember.mockReturnValue(false);
+    mockUserFindById.mockResolvedValue({ ...USER, isAdmin: true });
+
+    await runLakeSemanticSearch(
+      apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+      input()
+    );
+
+    expect(mockSemanticSearch).toHaveBeenCalled();
+  });
+
+  it('refuses an org-billed key whose organization no longer exists when billing is on', async () => {
+    mockBillingEnabled.mockResolvedValue(true);
+    mockOrgFindById.mockResolvedValue(null);
+
+    await expect(
+      runLakeSemanticSearch(
+        apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+        input()
+      )
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        err instanceof BadRequestError && err.statusCode === 400 && /Billing organization not found/.test(err.message)
+    );
+    expect(mockSemanticSearch).not.toHaveBeenCalled();
+  });
+
+  it('searches without recording usage when billing is off and the key org no longer exists', async () => {
+    mockOrgFindById.mockResolvedValue(null);
+
+    await expect(
+      runLakeSemanticSearch(
+        apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+        input()
+      )
+    ).resolves.toMatchObject({ kind: 'ok' });
+    expect(mockSemanticSearch).toHaveBeenCalled();
+    expect(mockRecordOperationalUsage).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[semantic-search] failed to resolve user/organization for billing',
+      expect.any(BadRequestError)
+    );
+  });
+
+  it("does not refuse a departed holder's org-billed key when billing is off, and records against the key org", async () => {
+    mockIsCurrentOrgMember.mockReturnValue(false);
+
+    await expect(
+      runLakeSemanticSearch(
+        apiKeyReq({ billingOwnerType: CreditHolderType.Organization, organizationId: 'key-org' }),
+        input()
+      )
+    ).resolves.toMatchObject({ kind: 'ok' });
+    expect(mockSemanticSearch).toHaveBeenCalled();
+    expect(recorded().organization).toBe(KEY_ORG);
   });
 });

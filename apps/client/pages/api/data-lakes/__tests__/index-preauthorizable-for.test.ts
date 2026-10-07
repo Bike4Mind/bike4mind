@@ -56,9 +56,13 @@ vi.mock('@bike4mind/database', () => ({
   userRepository: REPO,
   adminSettingsRepository: REPO,
   fallbackLakeSettingsRepository: REPO,
+  orgGitHubLakeConnectionRepository: REPO,
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: mockToAccessContext }));
+vi.mock('@server/dataLakes/resolveLakeListRetrievalScope', () => ({ resolveLakeListRetrievalScope: vi.fn() }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
+vi.mock('@server/dataLakes/lakeConfigAuditDb', () => ({ lakeConfigAuditDb: {} }));
+vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPrincipal: vi.fn() }));
 
 import '@pages/api/data-lakes/index';
 

@@ -14,32 +14,30 @@ import {
   MenuButton,
   MenuItem,
   Skeleton,
-  Tooltip,
   Typography,
 } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import LayersOutlinedIcon from '@mui/icons-material/LayersOutlined';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import { menuItemListSx, menuSurfaceSx } from '@client/app/components/layouts/Notebook/Sidenav/menuSurfaceSx';
 import { useDataLakeSurface } from '@client/app/components/datalake/surfaceTokens';
-import {
-  isDraftLake,
-  lakeVisibilityLabelShort,
-  DRAFT_LAKE_TOOLTIP,
-} from '@client/app/components/datalake/lakeVisibility';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { isDraftLake, lakeVisibilityLabelShort } from '@client/app/components/datalake/lakeVisibility';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
+import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
+import { isUnsearchable, UnsearchableLakeIcon } from '@client/app/components/datalake/lakeRetrievability';
+import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
 /**
  * Which lakes the in-chat surface is scoped to: a trigger in the tree card's header opening the
  * full lake list (#1943). Replaces the standalone page's persistent rail - the chat already
  * spends its width on the conversation, so a third column is not available, but the list itself
  * (all-lakes row, per-lake scope + file count, foreign-owner marker, filter past a threshold)
- * survives intact one click away.
+ * survives intact one click away, grouped by owner so other users' lakes do not mix into the
+ * caller's own.
  *
  * The selection is a SET (#3042). It scopes the browse tree and, through the host, the session's
  * grounded retrieval, so this is the one control answering "which lakes am I talking to" - the
@@ -55,7 +53,7 @@ import type { ManageableDataLakeConfig } from '@bike4mind/common';
  * needs exactly one. Surfacing it per row wants a `driveConnected` flag on the list projection.
  */
 export interface DataLakeLakePickerProps {
-  lakes: ManageableDataLakeConfig[] | undefined;
+  lakes: RetrievabilityLabeledDataLake[] | undefined;
   isLoading: boolean;
   isError: boolean;
   onRetry: () => void;
@@ -112,6 +110,57 @@ const COUNT_SX = { fontFamily: 'monospace', color: 'text.tertiary', flexShrink: 
  */
 const TRIGGER_COUNT_SX = { fontFamily: 'monospace', flexShrink: 0 } as const;
 
+/**
+ * The picker prints two kinds of count - files per scope and lakes in the list - and bare numbers
+ * beside each other read as the same unit ("All data lakes 255" over a "43 lakes" footer looks
+ * like a disagreement). Every file count therefore names its unit, or sits under a column that does.
+ */
+const fileCountLabel = (n: number) => `${n} ${n === 1 ? 'file' : 'files'}`;
+
+interface LakeGroup {
+  key: string;
+  label: string;
+  lakes: RetrievabilityLabeledDataLake[];
+}
+
+/**
+ * Splits the list into the caller's own lakes, then one group per other owner. The manager list is
+ * "lakes I can reach", so for an admin it holds every tenant's lakes (test lakes included); a flat
+ * list leaves the per-row owner icon as the only thing separating them from the caller's own.
+ * Own first because that is what a user scopes to most; other owners alphabetical, with lakes whose
+ * owner is unresolved (built-in fallbacks, deleted accounts) last. List order is kept within a group.
+ * Owner groups key on `ownerUserId` (falling back to the name for payloads without it), so two
+ * owners sharing a display name get separate headers, told apart by username.
+ */
+const groupLakesByOwner = (lakes: RetrievabilityLabeledDataLake[]): LakeGroup[] => {
+  const own: RetrievabilityLabeledDataLake[] = [];
+  const byOwner = new Map<string, { name: string; username?: string; lakes: RetrievabilityLabeledDataLake[] }>();
+  const unknownOwner: RetrievabilityLabeledDataLake[] = [];
+  for (const lake of lakes) {
+    if (lake.isOwn !== false) own.push(lake);
+    else if (lake.ownerDisplayName) {
+      const key = lake.ownerUserId ?? lake.ownerDisplayName;
+      const bucket = byOwner.get(key);
+      if (bucket) bucket.lakes.push(lake);
+      else byOwner.set(key, { name: lake.ownerDisplayName, username: lake.ownerUsername, lakes: [lake] });
+    } else unknownOwner.push(lake);
+  }
+  const nameCounts = new Map<string, number>();
+  for (const { name } of byOwner.values()) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  const groups: LakeGroup[] = [];
+  if (own.length) groups.push({ key: 'own', label: 'Your lakes', lakes: own });
+  [...byOwner]
+    .map(([key, { name, username, lakes: ownerLakes }]) => ({
+      key: `owner:${key}`,
+      label: (nameCounts.get(name) ?? 0) > 1 && username ? `Owned by ${name} (${username})` : `Owned by ${name}`,
+      lakes: ownerLakes,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key))
+    .forEach(group => groups.push(group));
+  if (unknownOwner.length) groups.push({ key: 'unknown', label: 'Other lakes', lakes: unknownOwner });
+  return groups;
+};
+
 export default function DataLakeLakePicker({
   lakes,
   isLoading,
@@ -143,6 +192,8 @@ export default function DataLakeLakePicker({
     if (!q) return lakes;
     return lakes.filter(l => l.name.toLowerCase().includes(q) || l.fileTagPrefix.toLowerCase().includes(q));
   }, [lakes, query]);
+
+  const groups = useMemo(() => groupLakesByOwner(filtered), [filtered]);
 
   const showSearch = (lakes?.length ?? 0) >= SEARCH_THRESHOLD;
 
@@ -220,7 +271,7 @@ export default function DataLakeLakePicker({
               sx={TRIGGER_COUNT_SX}
               data-testid="datalake-lake-picker-count"
             >
-              {selectedCount}
+              {fileCountLabel(selectedCount)}
             </Typography>
           )}
         </MenuButton>
@@ -301,8 +352,8 @@ export default function DataLakeLakePicker({
                     {copy.allLakesLabel}
                   </Typography>
                 </ListItemContent>
-                <Typography level="body-xs" sx={COUNT_SX}>
-                  {typeof totalFileCount === 'number' ? totalFileCount : '-'}
+                <Typography level="body-xs" sx={COUNT_SX} data-testid="datalake-lake-picker-all-count">
+                  {typeof totalFileCount === 'number' ? fileCountLabel(totalFileCount) : '-'}
                 </Typography>
               </MenuItem>
 
@@ -315,78 +366,86 @@ export default function DataLakeLakePicker({
                   </Typography>
                 </ListItem>
               ) : (
-                filtered.map(lake => {
-                  const count = lakeFileCounts?.[lake.datalakeTag];
-                  const isSelected = selectedIdSet.has(lake.id);
-                  return (
-                    <MenuItem
-                      key={lake.id}
-                      selected={isSelected}
-                      // The row, not the box, owns the click: a Checkbox with its own handler
-                      // inside a clickable row toggles twice and lands back where it started.
-                      onClick={(e: MouseEvent & MenuDismissibleEvent) => {
-                        keepMenuOpen(e);
-                        toggleLake(lake.id);
-                      }}
-                      data-testid={`datalake-lake-picker-lake-${lake.id}`}
+                groups.map(group => [
+                  // A header, not a row: role="none" keeps it out of the menu's arrow-key order.
+                  // Its right edge labels the count column below it, so the per-lake numbers need
+                  // no unit of their own and still line up.
+                  <ListItem
+                    key={`group-${group.key}`}
+                    role="none"
+                    data-testid={`datalake-lake-picker-group-${group.key}`}
+                    sx={{ pt: '8px', pb: '2px', px: '8px', minBlockSize: 0, gap: '8px' }}
+                  >
+                    <Typography
+                      noWrap
+                      level="body-xs"
+                      sx={{ flex: 1, minWidth: 0, fontWeight: 600, color: 'text.tertiary' }}
                     >
-                      <ListItemDecorator>
-                        <Checkbox
-                          size="sm"
-                          checked={isSelected}
-                          readOnly
-                          tabIndex={-1}
-                          // aria-hidden + the row's own aria-selected: announcing a checkbox the
-                          // row already reports as selected reads the state twice.
-                          aria-hidden
-                          sx={{ pointerEvents: 'none' }}
-                          slotProps={{ input: { 'data-testid': `datalake-lake-picker-check-${lake.id}` } }}
-                        />
-                      </ListItemDecorator>
-                      <ListItemContent sx={{ minWidth: 0 }}>
-                        <Typography noWrap level="body-sm">
-                          {lake.name}
-                        </Typography>
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
-                          <Typography noWrap level="body-xs" sx={{ color: 'text.tertiary', minWidth: 0 }}>
-                            {lakeVisibilityLabelShort(lake)}
-                          </Typography>
-                          {isDraftLake(lake) && (
-                            <Tooltip size="sm" title={DRAFT_LAKE_TOOLTIP}>
-                              <Chip
-                                size="sm"
-                                variant="soft"
-                                color="warning"
-                                sx={{ fontSize: '11px', flexShrink: 0 }}
-                                data-testid={`datalake-lake-picker-draft-chip-${lake.id}`}
-                              >
-                                Draft
-                              </Chip>
-                            </Tooltip>
-                          )}
-                        </Box>
-                      </ListItemContent>
-                      {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
-                          so an unmarked row would read as their own. */}
-                      {lake.isOwn === false && (
-                        <Tooltip
-                          size="sm"
-                          title={lake.ownerDisplayName ? `Owned by ${lake.ownerDisplayName}` : 'Owned by another user'}
-                        >
-                          <PersonOutlineIcon
-                            data-testid={`datalake-lake-picker-owner-icon-${lake.id}`}
-                            sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
+                      {group.label}
+                    </Typography>
+                    <Typography level="body-xs" sx={{ color: 'text.tertiary', flexShrink: 0 }}>
+                      files
+                    </Typography>
+                  </ListItem>,
+                  ...group.lakes.map(lake => {
+                    const count = lakeFileCounts?.[lake.datalakeTag];
+                    const isSelected = selectedIdSet.has(lake.id);
+                    return (
+                      <MenuItem
+                        key={lake.id}
+                        selected={isSelected}
+                        // The row, not the box, owns the click: a Checkbox with its own handler
+                        // inside a clickable row toggles twice and lands back where it started.
+                        onClick={(e: MouseEvent & MenuDismissibleEvent) => {
+                          keepMenuOpen(e);
+                          toggleLake(lake.id);
+                        }}
+                        data-testid={`datalake-lake-picker-lake-${lake.id}`}
+                      >
+                        <ListItemDecorator>
+                          <Checkbox
+                            size="sm"
+                            checked={isSelected}
+                            readOnly
+                            tabIndex={-1}
+                            // aria-hidden + the row's own aria-selected: announcing a checkbox the
+                            // row already reports as selected reads the state twice.
+                            aria-hidden
+                            sx={{ pointerEvents: 'none' }}
+                            slotProps={{ input: { 'data-testid': `datalake-lake-picker-check-${lake.id}` } }}
                           />
-                        </Tooltip>
-                      )}
-                      {typeof count === 'number' && (
-                        <Typography level="body-xs" sx={COUNT_SX}>
-                          {count}
-                        </Typography>
-                      )}
-                    </MenuItem>
-                  );
-                })
+                        </ListItemDecorator>
+                        <ListItemContent sx={{ minWidth: 0 }}>
+                          <Typography noWrap level="body-sm">
+                            {lake.name}
+                          </Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                            <Typography noWrap level="body-xs" sx={{ color: 'text.tertiary', minWidth: 0 }}>
+                              {lakeVisibilityLabelShort(lake)}
+                            </Typography>
+                            {isDraftLake(lake) && (
+                              <LakeDraftChip testId={`datalake-lake-picker-draft-chip-${lake.id}`} />
+                            )}
+                          </Box>
+                        </ListItemContent>
+                        {/* Mirrors the manager list's marker: an admin sees every tenant's lakes,
+                          so an unmarked row would read as their own. */}
+                        {lake.isOwn === false && (
+                          <LakeOwnerIcon lake={lake} testId={`datalake-lake-picker-owner-icon-${lake.id}`} />
+                        )}
+                        {/* Marked, not disabled: selection also scopes the browse tree, which still works. */}
+                        {isUnsearchable(lake) && (
+                          <UnsearchableLakeIcon lake={lake} testId={`datalake-lake-picker-unsearchable-${lake.id}`} />
+                        )}
+                        {typeof count === 'number' && (
+                          <Typography level="body-xs" sx={COUNT_SX} aria-label={fileCountLabel(count)}>
+                            {count}
+                          </Typography>
+                        )}
+                      </MenuItem>
+                    );
+                  }),
+                ])
               )}
             </>
           )}

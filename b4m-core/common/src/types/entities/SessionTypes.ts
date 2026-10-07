@@ -10,6 +10,8 @@ import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
+import type { IQuestCallback } from '../../schemas/generationCallback';
+import type { SuggestedChoices } from '../../utils/replyChoices';
 
 /** Pending action for Slack/Web button-based confirmation flow */
 export interface IPendingAction {
@@ -209,6 +211,12 @@ export interface IChatHistoryItem {
   errorCode?: QuestErrorCode;
 
   /**
+   * Completion callback armed by an API caller's `callbackUrl` (generation jobs only). Never
+   * part of any client or poll payload: it names the caller's endpoint and signing key.
+   */
+  callback?: IQuestCallback;
+
+  /**
    * The ID of the QuestMaster plan that was created from this chat history item
    */
   questMasterPlanId?: string;
@@ -241,6 +249,14 @@ export interface IChatHistoryItem {
    * (previous answer, what the user said was wrong, corrected answer).
    */
   correctsQuestId?: string;
+
+  /**
+   * Ms from the client sending the prompt to rendering the first token, posted back by the client
+   * mid-stream (quests/[id]/client-timing). Top-level rather than under `promptMeta.performance`
+   * because the completion pipeline saves `promptMeta` whole from an in-memory copy that never has
+   * it, so the stream's final save would erase it. Older quests carry it at the promptMeta path.
+   */
+  clientFirstTokenTime?: number;
 
   /**
    * Provenance of the routing decision that produced this quest (M4).
@@ -303,7 +319,8 @@ export interface IChatHistoryItem {
   };
 
   /**
-   * Fallback model information when a fallback occurred during generation
+   * Fallback model information when a fallback occurred during generation. `null` clears a value
+   * persisted by an earlier attempt: repository updates are a `$set`, which drops `undefined`.
    */
   fallbackInfo?: {
     sessionId: string;
@@ -314,8 +331,9 @@ export interface IChatHistoryItem {
     /** Provider path of each side; see FallbackInfoSchema for why these are optional. */
     primaryModelBackend?: string;
     fallbackModelBackend?: string;
+    reason?: string;
     timestamp: number;
-  };
+  } | null;
 
   /**
    * Prompt enhancement information for image generation
@@ -392,6 +410,13 @@ export interface IChatHistoryItem {
     target: string;
     reason: string;
   }>;
+
+  /**
+   * Next-step options parsed from the reply's trailing choices block (see utils/replyChoices).
+   * Rendered with navigationIntents as one numbered button row; the block itself is stripped
+   * from the stored reply text.
+   */
+  suggestedChoices?: SuggestedChoices;
 
   /**
    * Attachment list for interactive download buttons (Slack and web UI)
@@ -561,6 +586,29 @@ export interface IConversationContext {
 }
 
 ////////
+
+/** Where a session was created. Absent on sessions that predate the field; render those as 'web'. */
+export const SESSION_ORIGIN_CHANNELS = ['web', 'api', 'slack', 'cli', 'agent'] as const;
+export type SessionOriginChannel = (typeof SESSION_ORIGIN_CHANNELS)[number];
+
+export interface ISessionOrigin {
+  channel: SessionOriginChannel;
+  /**
+   * The API key that created the session, set only for channel 'api'. Never serialized to a
+   * client (see redactSessionForClient), so a viewer the session is shared with cannot see it.
+   */
+  apiKeyId?: string;
+}
+
+/** List filters on top of the existing search/surface/pagination params (see searchOwnSessions). */
+export interface SessionListFilters {
+  /** Only sessions from this channel. 'web' also matches sessions with no recorded origin. */
+  origin?: SessionOriginChannel;
+  /** Exclude sessions from this channel. Excluding 'web' also excludes sessions with no origin. */
+  excludeOrigin?: SessionOriginChannel;
+  /** true: only sessions with generated images; false: only sessions without. */
+  hasImages?: boolean;
+}
 
 export interface ISession {
   id: string;
@@ -744,6 +792,13 @@ export interface ISession {
   curatedAt?: Date; // When the notebook was last curated
   curationContentHash?: string; // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
   messageCount?: number; // Lazy-loaded count of messages in this session - calculated on first read
+  /** Set once at creation (see ISessionOrigin); the schema marks it immutable. */
+  origin?: ISessionOrigin;
+  /**
+   * Running total of images generated into this session's quests. Monotonic: deleting a quest
+   * does not decrement it, so treat it as "has ever held generated images", not a live tally.
+   */
+  imageCount?: number;
   slackMetadata?: {
     channelId: string;
     threadTs?: string; // Optional - undefined for non-threaded DMs
@@ -924,8 +979,13 @@ export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   searchByUserId: (
     search: string | undefined,
     userId: string,
-    options: SearchOptions<ISessionDocument>
+    options: SearchOptions<ISessionDocument>,
+    surface?: string,
+    filters?: SessionListFilters
   ) => Promise<{ data: ISessionDocument[]; hasMore: boolean }>;
+
+  /** Atomically adds `count` generated images to the session's imageCount (one $inc). */
+  incrementImageCount: (sessionId: string, count: number) => Promise<void>;
 
   /**
    * Find the most recently updated session by user ID

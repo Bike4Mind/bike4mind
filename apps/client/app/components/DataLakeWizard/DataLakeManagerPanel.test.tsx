@@ -46,6 +46,12 @@ const useLakeDriveConnection = vi.fn(() => ({ data: null as unknown, isError: fa
 vi.mock('@client/app/hooks/data/googleDrive', () => ({
   useLakeDriveConnection: () => useLakeDriveConnection(),
 }));
+// The GitHub chip reads the flag cache and its own query; it has its own suite (LakeGitHubStatusChip.test.tsx).
+vi.mock('@client/app/components/datalake/LakeGitHubStatusChip', () => ({ default: () => null }));
+vi.mock('./manager/FinishSourceConnectBanner', () => ({ default: () => null }));
+// The repository picker has its own suite (GitHubRepositoryPickerModal.test.tsx) and reaches
+// react-query hooks this suite does not mock; here it is only mounted-once wiring, not behavior.
+vi.mock('./manager/GitHubRepositoryPickerModal', () => ({ default: () => null }));
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
@@ -496,11 +502,18 @@ describe('DataLakeManagerPanel - pending-proposal chip', () => {
   it('advertises the waiting review count on the lake row', () => {
     useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 4 }, theirsLake], isLoading: false });
     renderPanel();
-    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 to review');
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('4 sources to review');
+  });
+
+  it('names the noun in the singular for one waiting source', () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 1 }, theirsLake], isLoading: false });
+    renderPanel();
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).toHaveTextContent('1 source to review');
+    expect(screen.getByTestId('datalake-manager-pending-proposals-mine')).not.toHaveTextContent('1 sources');
   });
 
   it('omits the chip at zero, so a row with nothing waiting is unchanged', () => {
-    // The guard is truthiness, not presence: a `!== undefined` check would render "0 to review"
+    // The guard is truthiness, not presence: a `!== undefined` check would render "0 sources to review"
     // and invent a queue for every lake that has ever been reviewed clean.
     useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, pendingProposalCount: 0 }, theirsLake], isLoading: false });
     renderPanel();
@@ -704,6 +717,7 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
 
     await user.click(screen.getByTestId('datalake-manager-lake-mine'));
     await user.click(screen.getByTestId('datalake-delete-active-btn-mine'));
+    await user.click(screen.getByTestId('datalake-delete-confirm-btn'));
 
     // Same lifecycle action the archived row's Delete button calls - deleteDataLake has no
     // archived-status precondition, so this reaches the same recoverable soft-delete.
@@ -762,6 +776,28 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     // lakes tab"), so the owner cue must live on the row, before anything is opened.
     expect(screen.getByTestId('datalake-manager-owner-icon-theirs')).toBeInTheDocument();
     expect(screen.queryByTestId('datalake-manager-owner-icon-mine')).toBeNull();
+  });
+
+  it('names the owner in the sidebar icon label with no native title', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: 'Dana' }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(icon.querySelector('title')).toBeNull();
+  });
+
+  it('falls back to a generic sidebar icon label when the owner name is missing', () => {
+    useGetDataLakes.mockReturnValue({
+      data: [mineLake, { ...theirsLake, ownerDisplayName: undefined }],
+      isLoading: false,
+    });
+    renderPanel();
+
+    const icon = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(icon.querySelector('title')).toBeNull();
   });
 
   it('keeps the owner chip AND the management buttons on an admin-managed lake owned by someone else', async () => {

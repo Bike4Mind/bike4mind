@@ -66,3 +66,38 @@ export const isOrgMember = (
   user.isAdmin === true ||
   org.userId === user.id ||
   (org.users ?? []).some(member => member.userId === user.id && orgAclRowConfersMembership(member));
+
+/**
+ * Is `user` the org's billing owner, a CURRENT appointed org admin, or a platform admin? The one
+ * "owner or appointed admin" authority predicate: `assertCanManageOrgGroups`
+ * (services organizationService/groupMembership.ts), `canManageMemberCreditBudgets` below, and the
+ * client's `canManageGroups` (routes/organizations/$id.tsx) all derive from it.
+ *
+ * The `users[]` conjunct is defence in depth, not redundancy: if the purge of `adminUserIds` on
+ * removal ever misses (or a row predates it), a removed admin keeps no authority. It is a bare
+ * row match rather than `orgAclRowConfersMembership` because the appointment route could persist
+ * an admin whose row had no permissions.
+ */
+export const isOrgOwnerOrCurrentAdmin = (
+  user: { id: string; isAdmin?: boolean | null },
+  org: {
+    userId: string;
+    adminUserIds?: readonly string[] | null;
+    users?: ReadonlyArray<{ userId: string }> | null;
+  }
+): boolean =>
+  user.isAdmin === true ||
+  org.userId === user.id ||
+  ((org.adminUserIds ?? []).includes(user.id) && (org.users ?? []).some(member => member.userId === user.id));
+
+/**
+ * May this actor set the org's per-member credit budgets - the default `maxCreditsPerMember` and
+ * each member's `userDetails[].maxCredits` override?
+ *
+ * Exactly `isOrgOwnerOrCurrentAdmin`. Deliberately excludes a manager who is not also an appointed
+ * admin: a spending limit on the owner's pool is a billing decision, the same line
+ * `organizationService/update.ts` draws for `billingContact`. Appointed admins hold only a read row
+ * in `users[]` and so cannot pass `shareable.findUpdateAccessById` - server callers must fetch with
+ * `findById`. The budget routes enforce it; the client uses it only to decide which controls to show.
+ */
+export const canManageMemberCreditBudgets = isOrgOwnerOrCurrentAdmin;

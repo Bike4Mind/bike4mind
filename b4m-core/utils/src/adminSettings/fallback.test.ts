@@ -5,6 +5,7 @@ import {
   validateFallbackModel,
   getLlmWithFallback,
   findFallbackForMissingModel,
+  isSafetyRefusalError,
 } from './fallback';
 import { AxiosError } from 'axios';
 import { ModelInfo, ModelBackend } from '@bike4mind/common';
@@ -253,6 +254,22 @@ describe('shouldTriggerFallback', () => {
       expect(shouldTriggerFallback(error)).toBe(false);
     });
   });
+});
+
+describe('isSafetyRefusalError', () => {
+  it('matches the error the Anthropic backend throws on a safety-classifier refusal', () => {
+    const error = new Error(
+      'Anthropic safety classifier refusal for claude-fable-5 \u2014 falling back to an alternative model'
+    );
+    expect(isSafetyRefusalError(error)).toBe(true);
+  });
+
+  it.each(['Model overloaded, please try again later', 'Request timeout', 'Claude Fable 5 is not available'])(
+    'does not match other fallback triggers (%s)',
+    message => {
+      expect(isSafetyRefusalError(new Error(message))).toBe(false);
+    }
+  );
 });
 
 describe('isOverloadedError', () => {

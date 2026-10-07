@@ -5,7 +5,9 @@ import {
   useRevokeUserApiKey,
   useDeleteUserApiKey,
   useBillingOrganizations,
+  useRotateCallbackSigningSecret,
   CreateUserApiKeyRequest,
+  CreateUserApiKeyResponse,
 } from '@client/app/hooks/data/userApiKeys';
 import { useTheme } from '@mui/joy';
 import {
@@ -38,6 +40,7 @@ import {
   AccordionGroup,
   AccordionSummary,
   AccordionDetails,
+  Link,
 } from '@mui/joy';
 import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -51,9 +54,11 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
 import { toast } from 'sonner';
 import { useState } from 'react';
@@ -170,7 +175,7 @@ const sameScopeSet = (a: ApiKeyScope[], b: ApiKeyScope[]) => a.length === b.leng
 interface NewKeyModalProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: (key: string) => void;
+  onSuccess: (result: CreateUserApiKeyResponse) => void;
 }
 
 function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
@@ -189,7 +194,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
 
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
-      onSuccess(result.key);
+      onSuccess(result);
       onClose();
       resetForm();
     },
@@ -445,27 +450,72 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   );
 }
 
+interface OneTimeSecretFieldProps {
+  label: string;
+  value: string;
+  idPrefix: string;
+}
+
+/**
+ * Labeled masked-value field shared by every "shown only once" secret display
+ * (API key, callback signing secret): show/hide toggle plus copy button.
+ */
+function OneTimeSecretField({ label, value, idPrefix }: OneTimeSecretFieldProps) {
+  const { copied, handleCopyToClipboard } = useCopyToClipboard();
+  const [show, setShow] = useState(false);
+
+  return (
+    <FormControl sx={{ mb: 2 }} className={`${idPrefix}-form`}>
+      <FormLabel className={`${idPrefix}-label`}>{label}</FormLabel>
+      <Box sx={{ display: 'flex', gap: 1 }} className={`${idPrefix}-input-group`}>
+        <Input
+          value={show ? value : '\u2022'.repeat(value.length)}
+          readOnly
+          sx={{ flex: 1, fontFamily: 'monospace' }}
+          className={`${idPrefix}-input`}
+        />
+        <IconButton
+          variant="outlined"
+          onClick={() => setShow(!show)}
+          size="sm"
+          className={`${idPrefix}-visibility-button`}
+          data-testid={`${idPrefix}-visibility-btn`}
+        >
+          {show ? <VisibilityOffIcon /> : <VisibilityIcon />}
+        </IconButton>
+        <Button
+          startDecorator={<CopyIcon />}
+          onClick={() => handleCopyToClipboard(value)}
+          variant="outlined"
+          size="sm"
+          className={`${idPrefix}-copy-button`}
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </Button>
+      </Box>
+    </FormControl>
+  );
+}
+
 interface KeyCreatedModalProps {
   open: boolean;
   onClose: () => void;
   apiKey: string;
+  /** Present only for a fresh create response; absent for a rotated key or a pre-feature key. */
+  callbackSigningSecret?: string;
 }
 
-function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
-  const { copied, handleCopyToClipboard } = useCopyToClipboard();
-  const [showKey, setShowKey] = useState(false);
+function KeyCreatedModal({ open, onClose, apiKey, callbackSigningSecret }: KeyCreatedModalProps) {
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
 
-  const handleCopy = () => {
-    handleCopyToClipboard(apiKey);
-  };
-
-  const exampleCode = `curl -X POST \\
-  -H "X-API-Key: ${apiKey}" \\
+  // The key stays in its one-time copy field only; the snippet reads it from the shell.
+  const exampleCode = `export B4M_API_KEY="<paste your API key>"
+curl -X POST \\
+  -H "Authorization: Bearer $B4M_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"message": "Hello! Can you help me with my project?"}' \\
-  https://your-deployment.example.com/api/chat`;
+  ${window.location.origin}/api/chat`;
 
   return (
     <Modal open={open} onClose={onClose} className="project-api-keys-created-modal">
@@ -486,34 +536,26 @@ function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
           </Typography>
         </Alert>
 
-        <FormControl sx={{ mb: 2 }} className="project-api-keys-created-form">
-          <FormLabel className="project-api-keys-created-label">Your API Key</FormLabel>
-          <Box sx={{ display: 'flex', gap: 1 }} className="project-api-keys-created-input-group">
-            <Input
-              value={showKey ? apiKey : '•'.repeat(apiKey.length)}
-              readOnly
-              sx={{ flex: 1, fontFamily: 'monospace' }}
-              className="project-api-keys-created-input"
+        <OneTimeSecretField label="Your API Key" value={apiKey} idPrefix="project-api-keys-created" />
+
+        {callbackSigningSecret && (
+          <>
+            <OneTimeSecretField
+              label="Callback Signing Secret"
+              value={callbackSigningSecret}
+              idPrefix="project-api-keys-created-signing-secret"
             />
-            <IconButton
-              variant="outlined"
-              onClick={() => setShowKey(!showKey)}
-              size="sm"
-              className="project-api-keys-created-visibility-button"
+            <Typography
+              level="body-xs"
+              color="neutral"
+              sx={{ mb: 2 }}
+              className="project-api-keys-created-signing-secret-note"
             >
-              {showKey ? <VisibilityOffIcon /> : <VisibilityIcon />}
-            </IconButton>
-            <Button
-              startDecorator={<CopyIcon />}
-              onClick={handleCopy}
-              variant="outlined"
-              size="sm"
-              className="project-api-keys-created-copy-button"
-            >
-              {copied ? 'Copied!' : 'Copy'}
-            </Button>
-          </Box>
-        </FormControl>
+              Signs generation completion callbacks (the <code>X-Webhook-Signature-256</code> header) - also shown only
+              once.
+            </Typography>
+          </>
+        )}
 
         <Alert
           color="primary"
@@ -536,6 +578,7 @@ function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
                 fontFamily: 'monospace',
               }}
               className="project-api-keys-documentation-code"
+              data-testid="api-key-created-snippet"
             >
               {exampleCode}
             </Box>
@@ -555,6 +598,55 @@ function KeyCreatedModal({ open, onClose, apiKey }: KeyCreatedModalProps) {
   );
 }
 
+interface SigningSecretRevealModalProps {
+  open: boolean;
+  onClose: () => void;
+  keyName: string;
+  secret: string;
+}
+
+/** One-time reveal for a minted or rotated callback signing secret, same style as KeyCreatedModal. */
+function SigningSecretRevealModal({ open, onClose, keyName, secret }: SigningSecretRevealModalProps) {
+  return (
+    <Modal open={open} onClose={onClose} className="project-api-keys-signing-secret-modal">
+      <ModalDialog size="lg" className="project-api-keys-signing-secret-dialog">
+        <Typography level="h4" mb={2} color="success" className="project-api-keys-signing-secret-title">
+          Signing secret ready for {keyName}
+        </Typography>
+
+        <Alert
+          color="warning"
+          startDecorator={<WarningIcon />}
+          sx={{ mb: 2 }}
+          className="project-api-keys-signing-secret-warning"
+        >
+          <Typography level="body-sm">
+            <strong>Important:</strong> This is the only time you&apos;ll see this secret. Copy it now and store it
+            securely.
+          </Typography>
+        </Alert>
+
+        <OneTimeSecretField label="Callback Signing Secret" value={secret} idPrefix="project-api-keys-signing-secret" />
+
+        <Typography level="body-xs" color="neutral" sx={{ mb: 2 }} className="project-api-keys-signing-secret-note">
+          Signs generation completion callbacks (the <code>X-Webhook-Signature-256</code> header) for this key.
+        </Typography>
+
+        <Stack
+          direction="row"
+          spacing={1}
+          justifyContent="flex-end"
+          className="project-api-keys-signing-secret-actions"
+        >
+          <Button onClick={onClose} data-testid="api-key-signing-secret-done-btn">
+            Done
+          </Button>
+        </Stack>
+      </ModalDialog>
+    </Modal>
+  );
+}
+
 interface ApiDocumentationProps {
   sampleApiKey?: string;
 }
@@ -562,20 +654,21 @@ interface ApiDocumentationProps {
 function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDocumentationProps) {
   const { handleCopyToClipboard } = useCopyToClipboard();
   const [activeTab, setActiveTab] = useState(0);
+  const origin = window.location.origin;
 
   const codeExamples = {
     curl: {
       listSessions: `curl -X GET \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
-  https://your-deployment.example.com/api/sessions`,
+  ${origin}/api/sessions`,
       createSession: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{"name": "My API Session"}' \\
-  https://your-deployment.example.com/api/v1/sessions`,
+  ${origin}/api/v1/sessions`,
       aiChatSimple: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "message": "Hello! Can you help me with my project?",
@@ -583,21 +676,21 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
     "temperature": 0.7,
     "max_tokens": 500
   }' \\
-  https://your-deployment.example.com/api/chat`,
+  ${origin}/api/chat`,
       aiChatSync: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "message": "What is the capital of France?",
     "model": "gpt-4o-mini",
     "wait": true
   }' \\
-  https://your-deployment.example.com/api/chat`,
+  ${origin}/api/chat`,
       questStatus: `curl -X GET \\
-  -H "X-API-Key: ${sampleApiKey}" \\
-  https://your-deployment.example.com/api/v1/quests/quest_123`,
+  -H "Authorization: Bearer ${sampleApiKey}" \\
+  ${origin}/api/v1/quests/quest_123`,
       aiChat: `curl -X POST \\
-  -H "X-API-Key: ${sampleApiKey}" \\
+  -H "Authorization: Bearer ${sampleApiKey}" \\
   -H "Content-Type: application/json" \\
   -d '{
     "sessionId": "your_session_id_here",
@@ -618,21 +711,21 @@ function ApiDocumentation({ sampleApiKey = 'b4m_live_your_api_key_here' }: ApiDo
       }
     }
   }' \\
-  https://your-deployment.example.com/api/ai/llm`,
+  ${origin}/api/ai/llm`,
     },
     javascript: {
-      listSessions: `const response = await fetch('/api/sessions', {
+      listSessions: `const response = await fetch('${origin}/api/sessions', {
   method: 'GET',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   }
 });
 const sessions = await response.json();`,
-      createSession: `const response = await fetch('/api/v1/sessions', {
+      createSession: `const response = await fetch('${origin}/api/v1/sessions', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -640,10 +733,10 @@ const sessions = await response.json();`,
   })
 });
 const newSession = await response.json();`,
-      aiChatSimple: `const response = await fetch('/api/chat', {
+      aiChatSimple: `const response = await fetch('${origin}/api/chat', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -653,11 +746,13 @@ const newSession = await response.json();`,
     max_tokens: 1000
   })
 });
-const result = await response.json();`,
-      aiChatSync: `const response = await fetch('/api/chat', {
+const result = await response.json();
+// A fresh notebook was created; pass this back as sessionId to continue it.
+const sessionId = result.sessionId;`,
+      aiChatSync: `const response = await fetch('${origin}/api/chat', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -666,18 +761,20 @@ const result = await response.json();`,
     wait: true
   })
 });
-const result = await response.json();`,
-      questStatus: `const response = await fetch('/api/v1/quests/quest_123', {
+const result = await response.json();
+// A fresh notebook was created; pass this back as sessionId to continue it.
+const sessionId = result.sessionId;`,
+      questStatus: `const response = await fetch('${origin}/api/v1/quests/quest_123', {
   method: 'GET',
   headers: {
-    'X-API-Key': '${sampleApiKey}'
+    Authorization: 'Bearer ${sampleApiKey}'
   }
 });
 const quest = await response.json();`,
-      aiChat: `const response = await fetch('/api/ai/llm', {
+      aiChat: `const response = await fetch('${origin}/api/ai/llm', {
   method: 'POST',
   headers: {
-    'X-API-Key': '${sampleApiKey}',
+    Authorization: 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
   },
   body: JSON.stringify({
@@ -696,27 +793,27 @@ const aiResponse = await response.json();`,
       listSessions: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
-response = requests.get('/api/sessions', headers=headers)
+response = requests.get('${origin}/api/sessions', headers=headers)
 sessions = response.json()`,
       createSession: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
 data = {'name': 'My API Session'}
-response = requests.post('/api/v1/sessions', 
+response = requests.post('${origin}/api/v1/sessions', 
                         headers=headers, json=data)
 new_session = response.json()`,
       aiChatSimple: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -727,12 +824,14 @@ data = {
     'max_tokens': 1000
 }
 
-response = requests.post('/api/chat', headers=headers, json=data)
-result = response.json()`,
+response = requests.post('${origin}/api/chat', headers=headers, json=data)
+result = response.json()
+# A fresh notebook was created; pass this back as sessionId to continue it.
+session_id = result['sessionId']`,
       aiChatSync: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -742,20 +841,22 @@ data = {
     'wait': True
 }
 
-response = requests.post('/api/chat', headers=headers, json=data)
-result = response.json()`,
+response = requests.post('${origin}/api/chat', headers=headers, json=data)
+result = response.json()
+# A fresh notebook was created; pass this back as sessionId to continue it.
+session_id = result['sessionId']`,
       questStatus: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}'
+    'Authorization': 'Bearer ${sampleApiKey}'
 }
 
-response = requests.get('/api/v1/quests/quest_123', headers=headers)
+response = requests.get('${origin}/api/v1/quests/quest_123', headers=headers)
 quest = response.json()`,
       aiChat: `import requests
 
 headers = {
-    'X-API-Key': '${sampleApiKey}',
+    'Authorization': 'Bearer ${sampleApiKey}',
     'Content-Type': 'application/json'
 }
 
@@ -769,7 +870,7 @@ data = {
     }
 }
 
-response = requests.post('/api/ai/llm', headers=headers, json=data)
+response = requests.post('${origin}/api/ai/llm', headers=headers, json=data)
 ai_response = response.json()`,
     },
   };
@@ -785,6 +886,19 @@ ai_response = response.json()`,
 
   return (
     <Box className="project-api-keys-documentation-container">
+      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
+        These guides cover the essentials. For every endpoint with full request and response schemas, see the{' '}
+        <Link
+          href={ExternalLinks.apiDocs}
+          target="_blank"
+          rel="noopener noreferrer"
+          endDecorator={<OpenInNewIcon sx={{ fontSize: '14px' }} />}
+          data-testid="api-keys-docs-reference-link"
+        >
+          API reference
+        </Link>
+        .
+      </Typography>
       <Tabs
         value={activeTab}
         onChange={(_, value) => setActiveTab(value as number)}
@@ -812,10 +926,14 @@ ai_response = response.json()`,
               <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: '16px' }}>
                 <InfoOutlinedIcon sx={{ fontSize: '20px', color: 'text.primary', mt: 0.5, opacity: 0.5 }} />
                 <Typography level="body-sm" sx={{ color: 'text.primary' }}>
-                  Use your API key to authenticate requests by adding it to the <code>X-API-Key</code> header. The{' '}
-                  <code>/api/chat</code> endpoint supports both asynchronous (returns quest ID for tracking) and
-                  synchronous modes (add <code>&quot;wait&quot;: true</code> to get the response immediately). Sessions
-                  automatically use your most recent notebook if no <code>sessionId</code> is provided.
+                  Use your API key to authenticate requests by sending it as{' '}
+                  <code>Authorization: Bearer &lt;key&gt;</code>. The <code>/api/chat</code> endpoint supports both
+                  asynchronous (returns quest ID for tracking) and synchronous modes (add{' '}
+                  <code>&quot;wait&quot;: true</code> to get the response immediately). Pass <code>sessionId</code> to
+                  continue an existing notebook. An API key that omits it starts a new notebook (named{' '}
+                  <code>API chat - ...</code>) and returns its id as <code>sessionId</code> - pass that back to continue
+                  the conversation. Add <code>&quot;newConversation&quot;: true</code> to force a new notebook.
+                  (First-party browser requests still fall back to your most recent notebook.)
                 </Typography>
               </Box>
             </Alert>
@@ -1722,16 +1840,20 @@ export default function UserApiKeysTab() {
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
+  const [newlyCreatedSigningSecret, setNewlyCreatedSigningSecret] = useState<string | undefined>(undefined);
   const [mainTab, setMainTab] = useState(0);
   // Off by default: revoked rows accumulate forever (scopes are write-once, so
   // every scope change mints a replacement and leaves one behind) and their
   // audit value is served by the toggle, not by permanent screen space.
   const [showRevoked, setShowRevoked] = useState(false);
   const [keyPendingDelete, setKeyPendingDelete] = useState<IUserApiKeyDocument | null>(null);
+  const [signingSecretRotationPending, setSigningSecretRotationPending] = useState<IUserApiKeyDocument | null>(null);
+  const [revealedSigningSecret, setRevealedSigningSecret] = useState<{ keyName: string; secret: string } | null>(null);
 
   const rotateMutation = useRotateUserApiKey({
     onSuccess: result => {
       setNewlyCreatedKey(result.key);
+      setNewlyCreatedSigningSecret(undefined);
       setShowKeyCreatedModal(true);
     },
   });
@@ -1747,9 +1869,28 @@ export default function UserApiKeysTab() {
     },
   });
 
-  const handleNewKeySuccess = (key: string) => {
-    setNewlyCreatedKey(key);
+  const signingSecretMutation = useRotateCallbackSigningSecret({
+    onSuccess: result => {
+      setSigningSecretRotationPending(null);
+      setRevealedSigningSecret({ keyName: result.name, secret: result.callbackSigningSecret });
+    },
+  });
+
+  const handleNewKeySuccess = (result: CreateUserApiKeyResponse) => {
+    setNewlyCreatedKey(result.key);
+    setNewlyCreatedSigningSecret(result.callbackSigningSecret);
     setShowKeyCreatedModal(true);
+  };
+
+  // Creating a secret for the first time has nothing to break, so it mints immediately;
+  // replacing one invalidates callbacks already signed with the old secret, so that goes
+  // through the confirmation modal below.
+  const handleSigningSecretAction = (key: IUserApiKeyDocument) => {
+    if (key.callbackSigningSecretCreatedAt) {
+      setSigningSecretRotationPending(key);
+    } else {
+      signingSecretMutation.mutate(key.id);
+    }
   };
 
   const getStatusColor = (key: IUserApiKeyDocument) => {
@@ -1791,7 +1932,7 @@ export default function UserApiKeysTab() {
             <Typography level="title-md" sx={{ color: 'text.primary' }}>
               Manage Your API Keys
             </Typography>
-            <Box display="flex" gap={1} flexShrink={0} alignItems="center">
+            <Box display="flex" gap={1} flexWrap="wrap" alignItems="center">
               {revokedCount > 0 && (
                 <Checkbox
                   size="sm"
@@ -1802,6 +1943,18 @@ export default function UserApiKeysTab() {
                   sx={{ mr: 1, whiteSpace: 'nowrap' }}
                 />
               )}
+              <Button
+                component="a"
+                href={ExternalLinks.apiDocs}
+                target="_blank"
+                rel="noopener noreferrer"
+                variant="outlined"
+                color="neutral"
+                endDecorator={<OpenInNewIcon sx={{ fontSize: '16px' }} />}
+                data-testid="api-keys-open-docs-btn"
+              >
+                API Docs
+              </Button>
               <Tooltip title="Refresh">
                 <IconButton onClick={() => refetch()} variant="outlined">
                   <RefreshIcon />
@@ -1859,6 +2012,7 @@ export default function UserApiKeysTab() {
                     <th>Created</th>
                     <th>Last Used</th>
                     <th>Expires</th>
+                    <th>Signing Secret</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1928,6 +2082,30 @@ export default function UserApiKeysTab() {
                         </Typography>
                       </td>
                       <td>
+                        <Stack spacing={0.5} alignItems="flex-start">
+                          <Typography
+                            level="body-xs"
+                            color="neutral"
+                            data-testid={`api-key-signing-secret-status-${key.id}`}
+                          >
+                            {key.callbackSigningSecretCreatedAt
+                              ? `Signing secret: created ${dayjs(key.callbackSigningSecretCreatedAt).format('MMM D, YYYY')}`
+                              : 'No signing secret'}
+                          </Typography>
+                          {!isRevoked(key) && (
+                            <Button
+                              size="sm"
+                              variant="outlined"
+                              onClick={() => handleSigningSecretAction(key)}
+                              loading={signingSecretMutation.isPending && signingSecretMutation.variables === key.id}
+                              data-testid={`api-key-signing-secret-action-${key.id}`}
+                            >
+                              {key.callbackSigningSecretCreatedAt ? 'Rotate signing secret' : 'Create signing secret'}
+                            </Button>
+                          )}
+                        </Stack>
+                      </td>
+                      <td>
                         <Box display="flex" gap={1}>
                           <Tooltip title="Rotate key">
                             <IconButton
@@ -1994,6 +2172,7 @@ export default function UserApiKeysTab() {
         open={showKeyCreatedModal}
         onClose={() => setShowKeyCreatedModal(false)}
         apiKey={newlyCreatedKey}
+        callbackSigningSecret={newlyCreatedSigningSecret}
       />
 
       <ConfirmationModal
@@ -2008,6 +2187,27 @@ export default function UserApiKeysTab() {
         confirmText="Delete"
         confirmColor="danger"
         showWarningIcon
+      />
+
+      <ConfirmationModal
+        open={signingSecretRotationPending !== null}
+        onClose={() => setSigningSecretRotationPending(null)}
+        onConfirm={() => {
+          if (signingSecretRotationPending) signingSecretMutation.mutate(signingSecretRotationPending.id);
+        }}
+        loading={signingSecretMutation.isPending}
+        title="Rotate signing secret"
+        description={`Deliveries signed after rotation use the new secret for "${signingSecretRotationPending?.name}". Update the receiver with the new secret first, or it will start rejecting callbacks.`}
+        confirmText="Rotate"
+        confirmColor="danger"
+        showWarningIcon
+      />
+
+      <SigningSecretRevealModal
+        open={revealedSigningSecret !== null}
+        onClose={() => setRevealedSigningSecret(null)}
+        keyName={revealedSigningSecret?.keyName ?? ''}
+        secret={revealedSigningSecret?.secret ?? ''}
       />
     </Box>
   );
