@@ -400,6 +400,33 @@ describe('DiscoveryRunDetailModal', () => {
     expect(within(screen.getByTestId('discovery-run-price-rows-table')).queryByText('kimi-k3')).not.toBeInTheDocument();
   });
 
+  it('splits the rows it can see and says how many the run had when the list was cut', async () => {
+    const row = (modelId: string, source: string) => ({
+      modelId,
+      unit: 'per_token',
+      inputPerMTok: 3,
+      outputPerMTok: 15,
+      effectiveFrom: '2026-07-30T12:00:00.000Z',
+      sources: [source],
+      note: `discovery:${source}@2026-07-30`,
+    });
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          changes: { ...EMPTY_CHANGES, plannedPriceRows: 5, appendedPriceRows: 5 },
+          priceRows: [row('gpt-cheap', 'openrouter'), row('kimi-k3', 'adapter-literal')],
+          detailTotals: { priceRows: 5 },
+        }),
+      },
+    });
+    renderModal();
+
+    const modal = await screen.findByTestId('discovery-run-modal');
+    expect(modal).toHaveTextContent('Repriced (1 shown, 5 in the run)');
+    expect(modal).toHaveTextContent('Recorded from build (1 shown, 5 in the run)');
+    expect(within(screen.getByTestId('discovery-run-build-price-rows-table')).getByText('kimi-k3')).toBeInTheDocument();
+  });
+
   it('stays silent about the mode on a run document written before the field existed', async () => {
     mockGet.mockResolvedValue({
       data: {
