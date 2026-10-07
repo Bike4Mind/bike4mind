@@ -46,6 +46,7 @@ import { MediaStore } from './media/MediaStore';
 import { MessageQueue } from './MessageQueue';
 import { registerMediaProtocol } from './media/protocol';
 import { ModelCatalog } from './ModelCatalog';
+import { ModelPreference } from './ModelPreference';
 import { SessionActivity } from './SessionActivity';
 import { SessionStore } from './SessionStore';
 import { sessionScopeFor } from './sessionScope';
@@ -63,21 +64,17 @@ import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
 
-/** Overrides the preferred model for one launch. Unset or blank leaves the shipped default. */
-const MODEL_OVERRIDE = process.env.B4M_DESKTOP_DEFAULT_MODEL?.trim();
-
 /**
- * The model a new conversation prefers.
+ * The model a new conversation prefers until the user has picked one (see ModelPreference),
+ * and when the deployment does not offer the one they picked.
  *
  * A PREFERENCE, not a list: the real set comes from the server (see ModelCatalog), and a
  * deployment that does not offer this one gets the first model it does offer instead. It is
- * still the fallback for a session file written before the catalog could be read.
- *
- * The override exists for a launch nobody is driving - handed to someone else, or run for a
- * check - where reaching the in-app picker is not an option. It is a preference like any
- * other, so a value the deployment does not offer is replaced the same way.
+ * also the fixed fallback for a session file with no model saved on it - deliberately not the
+ * remembered pick, so an old conversation never changes model because of a choice made in
+ * another one.
  */
-const PREFERRED_MODEL: string = MODEL_OVERRIDE || ChatModels.CLAUDE_5_OPUS;
+const PREFERRED_MODEL: string = ChatModels.CLAUDE_5_OPUS;
 
 /**
  * The reasoning effort a conversation starts on, read per launch so a benchmark can compare
@@ -225,12 +222,19 @@ async function pickDirectory(sender: WebContents): Promise<string | null> {
 
 export function registerChat(auth: AuthService): RegisteredChat {
   const logger = createMainLogger(VERBOSE);
-  // Unconditional, unlike everything else at this level: an overridden launch has no other
-  // evidence the variable was read, short of a human opening the picker.
-  logger.warn(
-    `CHAT: preferred model for new conversations: ${PREFERRED_MODEL} (${MODEL_OVERRIDE ? 'B4M_DESKTOP_DEFAULT_MODEL' : 'built-in default'})`
-  );
   const userData = app.getPath('userData');
+  // Beside approval-mode.json and app-wide like it; see ModelPreference for why.
+  const modelPreference = new ModelPreference(join(userData, 'model-preference.json'));
+  // Unconditional, unlike everything else at this level: it is the one way to check which model
+  // a launch will start conversations on without opening the picker. The read also warms the
+  // cache, so the first new conversation does not wait on the file.
+  void modelPreference
+    .read()
+    .then(remembered =>
+      logger.warn(
+        `CHAT: preferred model for new conversations: ${remembered ?? PREFERRED_MODEL} (${remembered ? 'remembered pick' : 'built-in default'})`
+      )
+    );
   // Beside the sessions directory rather than inside it: everything in there is migrated into
   // a scope folder on first use, and this records how the user likes to work rather than
   // anything belonging to one conversation or one account.
@@ -327,6 +331,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     models,
     logger,
     preferredModel: PREFERRED_MODEL,
+    modelMemory: modelPreference,
     approvals,
     background,
     foreground,

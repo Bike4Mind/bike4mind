@@ -69,6 +69,7 @@ import { MediaApiClient } from './media/MediaApiClient';
 import type { MediaStore } from './media/MediaStore';
 import type { MessageQueue } from './MessageQueue';
 import { resolveDefaultModel, type ModelCatalog } from './ModelCatalog';
+import type { ModelMemory } from './ModelPreference';
 import { createThinkFilter, type ThinkSplit } from './thinkFilter';
 import { readableThinking } from './thinkingBlocks';
 import { COMPACT_MAX_TOKENS, compactRequestMessages, renderForSummary, sanitizeSummary } from './compaction';
@@ -264,8 +265,10 @@ export interface ChatServiceDeps {
    * leaves every session on whatever model it was created with.
    */
   models?: ModelCatalog;
-  /** This build's preferred model, used until the server's catalog says what it really offers. */
+  /** This build's default model: what a new conversation prefers when the user has picked nothing it can have. */
   preferredModel?: string;
+  /** The user's last pick in the model picker. Absent in tests that do not exercise it. */
+  modelMemory?: ModelMemory;
   /** Absent in tests that exercise tools needing no consent; a gated tool then never runs. */
   approvals?: ApprovalGate;
   /** Owns long-running commands. Absent in tests, which then have no background tools. */
@@ -540,7 +543,7 @@ export class ChatService {
    */
   async createSession(): Promise<ChatSessionSummary> {
     const catalog = await this.listModels();
-    return this.deps.store.create(this.pickModel(catalog.models) ?? undefined);
+    return this.deps.store.create((await this.pickModel(catalog.models)) ?? undefined);
   }
 
   /**
@@ -557,7 +560,7 @@ export class ChatService {
    */
   async createCodeSession(request: CreateCodeSessionRequest): Promise<CreateCodeSessionResult> {
     const catalog = await this.listModels();
-    const model = this.pickModel(catalog.models) ?? undefined;
+    const model = (await this.pickModel(catalog.models)) ?? undefined;
 
     if (!request.directory) {
       return { ok: true, session: await this.deps.store.create(model, { mode: 'code' }) };
@@ -777,9 +780,21 @@ export class ChatService {
     return repaired;
   }
 
-  /** Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`. */
-  setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
-    return this.deps.store.setModel(sessionId, model);
+  /**
+   * Pin this conversation to a model. Not validated against the catalog: see `reconcileModel`.
+   *
+   * Reached only from the model picker, which is what makes it the one place a pick is
+   * remembered for the next conversation. Nothing the app chooses by itself comes through here.
+   */
+  async setSessionModel(sessionId: string, model: string): Promise<ChatSessionSummary | null> {
+    const updated = await this.deps.store.setModel(sessionId, model);
+    if (updated) {
+      // The conversation already switched; failing to remember it must not undo that for the user.
+      await this.deps.modelMemory?.record(model).catch(err => {
+        this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
+      });
+    }
+    return updated;
   }
 
   /** How hard this conversation's model should think. Inert on a model outside the reasoning set. */
@@ -1406,7 +1421,7 @@ export class ChatService {
     if (!available || available.length === 0) return { session };
     if (available.some(model => model.id === session.model)) return { session };
 
-    const replacement = this.pickModel(available);
+    const replacement = await this.pickModel(available);
     if (!replacement) return { session };
 
     await this.deps.store.setModel(session.id, replacement);
@@ -2927,8 +2942,16 @@ export class ChatService {
     return (this.deps.approvals?.uncoveredDirectories(sessionId, directories) ?? directories).length === 0;
   }
 
-  private pickModel(models: readonly ChatModelOption[]): string | null {
-    return resolveDefaultModel(models, this.deps.preferredModel ?? '');
+  /**
+   * The user's last pick, then this build's default, then whatever the server lists first.
+   *
+   * Also what `reconcileModel` moves a conversation to when its saved model is gone: that
+   * conversation has to move somewhere, and the model the user last chose is the likeliest one
+   * they would pick for it themselves.
+   */
+  private async pickModel(models: readonly ChatModelOption[]): Promise<string | null> {
+    const remembered = await this.deps.modelMemory?.read();
+    return resolveDefaultModel(models, [remembered, this.deps.preferredModel]);
   }
 
   /**
