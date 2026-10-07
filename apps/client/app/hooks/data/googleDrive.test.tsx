@@ -107,9 +107,6 @@ describe('useLakeDriveConnection', () => {
   });
 });
 
-// The DELETE route purges every FabFile the connection ingested (see drive-connection.ts) - a
-// disconnect used to delete nothing, so before this fix the mutation only invalidated the
-// connection-status query, leaving the lake's own file list/counts stale until a full reload.
 // The query data is { connection, canManage } while consumers read only the connection, so the poll
 // cadence has to key off `data.connection` - reading the wrapper would silently stop polling.
 describe('useLakeDriveConnection polling', () => {
@@ -166,18 +163,22 @@ describe('useLakeDriveCanManage', () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it('reads true for a manager, and when the payload carries no flag', async () => {
+  it('reads true for a manager', async () => {
     get.mockResolvedValue({ data: { connection: null, canManage: true } });
-    const { result, unmount } = renderBoth('lake1');
+    const { result } = renderBoth('lake1');
     await waitFor(() => expect(result.current.canManage.data).toBe(true));
-    unmount();
+  });
 
+  it('fails closed (false) when the payload carries no flag', async () => {
     get.mockResolvedValue({ data: { connection: null } });
-    const second = renderBoth('lake2');
-    await waitFor(() => expect(second.result.current.canManage.data).toBe(true));
+    const { result } = renderBoth('lake2');
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
   });
 });
 
+// The DELETE route purges every FabFile the connection ingested (see drive-connection.ts) - a
+// disconnect used to delete nothing, so before this fix the mutation only invalidated the
+// connection-status query, leaving the lake's own file list/counts stale until a full reload.
 describe('useDisconnectLakeDrive', () => {
   it('invalidates the lake file list and tag counts alongside the connection status', async () => {
     del.mockResolvedValue({ data: undefined });
