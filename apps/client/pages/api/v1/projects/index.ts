@@ -5,9 +5,8 @@
  * Auth mode, scopes and validation come from `listProjectsContract` / `createProjectContract`; the
  * SPA routes under /api/projects are unchanged. Every response renders through toPublicProject.
  */
-import { accessibleBy } from '@casl/mongoose';
-import { createProjectContract, HTTPError, listProjectsContract, Permission, ProjectEvents } from '@bike4mind/common';
-import { fabFileRepository, Project, projectRepository, sessionRepository } from '@bike4mind/database';
+import { createProjectContract, HTTPError, listProjectsContract, ProjectEvents } from '@bike4mind/common';
+import { fabFileRepository, projectRepository, sessionRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
@@ -34,9 +33,8 @@ const listRoute = nextRouteForContract(listProjectsContract, {
     throw new UnprocessableEntityError('Invalid cursor');
   }
 
-  // Same access scope as GET /api/projects, so the two lists cannot disagree on reach.
-  const scope = req.ability ? accessibleBy(req.ability, Permission.read).ofType(Project) : { userId: req.user.id };
-  const page = await projectRepository.listAccessibleAfterId(req.user.id, { scope, afterId, limit });
+  // Same reach as GET /api/v1/projects/{id}, so every listed id can be fetched by id.
+  const page = await projectRepository.listAccessibleAfterId(req.user, { afterId, limit });
   const lastId = page.data.at(-1)?.id;
 
   return res.json({

@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { accessibleBy } from '@casl/mongoose';
-import { Permission, type IUserDocument } from '@bike4mind/common';
 import { createMongoServer } from '../../__test__/createMongoServer';
-import { defineAbilitiesFor } from '../../utils/ability';
 import { Project, projectRepository } from './ProjectModel';
 
 let server: Awaited<ReturnType<typeof createMongoServer>>;
@@ -23,6 +20,8 @@ beforeEach(async () => {
 
 const OWNER = 'user-owner';
 const OTHER = 'user-other';
+const GROUP = 'group-1';
+const ACTOR = { id: OWNER, groups: [GROUP] };
 
 const makeProject = (name: string, overrides: Record<string, unknown> = {}) =>
   Project.create({
@@ -39,16 +38,11 @@ const makeProject = (name: string, overrides: Record<string, unknown> = {}) =>
     ...overrides,
   });
 
-const caslScope = (userId: string) =>
-  accessibleBy(defineAbilitiesFor({ id: userId, groups: [] } as unknown as IUserDocument), Permission.read).ofType(
-    Project
-  );
-
-async function collectAllPages(userId: string, limit: number, scope?: Record<string, unknown>) {
+async function collectAllPages(limit: number) {
   const ids: string[] = [];
   let afterId: string | undefined;
   for (let guard = 0; guard < 20; guard++) {
-    const page = await projectRepository.listAccessibleAfterId(userId, { scope, afterId, limit });
+    const page = await projectRepository.listAccessibleAfterId(ACTOR, { afterId, limit });
     expect(page.data.length).toBeLessThanOrEqual(limit);
     ids.push(...page.data.map(project => String(project.id)));
     if (!page.hasMore) return ids;
@@ -63,48 +57,54 @@ describe('ProjectRepository.listAccessibleAfterId', () => {
     for (let index = 0; index < 5; index++) created.push(await makeProject(`p${index}`));
     const expected = created.map(project => String(project.id)).sort();
 
-    expect(await collectAllPages(OWNER, 2)).toEqual(expected);
+    expect(await collectAllPages(2)).toEqual(expected);
   });
 
   it('reports hasMore only while another page exists', async () => {
     await makeProject('a');
     await makeProject('b');
 
-    const exact = await projectRepository.listAccessibleAfterId(OWNER, { limit: 2 });
+    const exact = await projectRepository.listAccessibleAfterId(ACTOR, { limit: 2 });
     expect(exact.data).toHaveLength(2);
     expect(exact.hasMore).toBe(false);
 
-    const short = await projectRepository.listAccessibleAfterId(OWNER, { limit: 1 });
+    const short = await projectRepository.listAccessibleAfterId(ACTOR, { limit: 1 });
     expect(short.hasMore).toBe(true);
   });
 
-  it('keeps the access predicate on every page: foreign and soft-deleted projects never appear', async () => {
+  it('pages owner, user-share and group-share reach, and nothing get would refuse', async () => {
     const mine = await makeProject('mine');
-    const shared = await makeProject('shared', { userId: OTHER, users: [{ userId: OWNER, permissions: ['read'] }] });
+    const userShared = await makeProject('user-shared', {
+      userId: OTHER,
+      users: [{ userId: OWNER, permissions: ['read'] }],
+    });
+    const groupShared = await makeProject('group-shared', {
+      userId: OTHER,
+      groups: [{ groupId: GROUP, permissions: ['read'] }],
+    });
+    const globalRead = await makeProject('global-read', { userId: OTHER, isGlobalRead: true });
+    await makeProject('share-only', { userId: OTHER, users: [{ userId: OWNER, permissions: ['share'] }] });
     await makeProject('foreign', { userId: OTHER });
     const deleted = await makeProject('deleted');
     await Project.deleteOne({ _id: deleted._id });
 
-    const expected = [String(mine.id), String(shared.id)].sort();
-    expect(await collectAllPages(OWNER, 1)).toEqual(expected);
-    expect(await collectAllPages(OWNER, 1, caslScope(OWNER))).toEqual(expected);
+    const listed = await collectAllPages(1);
+
+    expect(listed).toEqual([String(mine.id), String(userShared.id), String(groupShared.id)].sort());
+    expect(listed).not.toContain(String(globalRead.id));
+    // Parity with the by-id read, both directions: every listed id resolves, and the rows the list
+    // leaves out are exactly the ones findAccessibleById also refuses.
+    for (const id of listed) expect(await projectRepository.shareable.findAccessibleById(ACTOR, id)).not.toBeNull();
+    expect(await projectRepository.shareable.findAccessibleById(ACTOR, String(globalRead.id))).toBeNull();
   });
 
-  it('applies a caller scope alongside the cursor rather than letting either replace the other', async () => {
-    const first = await makeProject('first');
-    await makeProject('foreign', { userId: OTHER });
-    const second = await makeProject('second');
-
-    const page = await projectRepository.listAccessibleAfterId(OWNER, {
-      scope: caslScope(OWNER),
-      afterId: String(first.id),
-      limit: 10,
-    });
-    expect(page.data.map(project => String(project.id))).toEqual([String(second.id)]);
+  it('still lists my own globally readable project', async () => {
+    const mine = await makeProject('mine-global', { isGlobalRead: true });
+    expect(await collectAllPages(5)).toEqual([String(mine.id)]);
   });
 
   it('rejects a non-ObjectId cursor id instead of sending it to Mongo', async () => {
-    await expect(projectRepository.listAccessibleAfterId(OWNER, { afterId: 'nope', limit: 1 })).rejects.toThrow(
+    await expect(projectRepository.listAccessibleAfterId(ACTOR, { afterId: 'nope', limit: 1 })).rejects.toThrow(
       /Invalid project cursor id/
     );
   });

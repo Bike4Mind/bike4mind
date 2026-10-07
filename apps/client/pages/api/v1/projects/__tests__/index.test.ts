@@ -136,14 +136,10 @@ describe('GET /api/v1/projects', () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it('defaults to 25 per page and scopes the read to the caller', async () => {
+  it('defaults to 25 per page and reads with the caller (id and groups)', async () => {
     mockListAccessibleAfterId.mockResolvedValue({ data: [], hasMore: false });
     await call({ method: 'GET' });
-    expect(mockListAccessibleAfterId).toHaveBeenCalledWith('u1', {
-      scope: { userId: 'u1' },
-      afterId: undefined,
-      limit: 25,
-    });
+    expect(mockListAccessibleAfterId).toHaveBeenCalledWith(USER, { afterId: undefined, limit: 25 });
   });
 
   it('mints an opaque cursor from the last id served and resumes after it', async () => {
@@ -159,7 +155,7 @@ describe('GET /api/v1/projects', () => {
     const second = (await call({ method: 'GET', query: { limit: '2', cursor: first.next_cursor } }))._getJSONData();
 
     expect(mockListAccessibleAfterId).toHaveBeenLastCalledWith(
-      'u1',
+      USER,
       expect.objectContaining({
         afterId: '65a000000000000000000002',
         limit: 2,

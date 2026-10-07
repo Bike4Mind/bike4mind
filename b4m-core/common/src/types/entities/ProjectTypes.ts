@@ -41,12 +41,13 @@ export interface IProjectRepository extends IBaseRepository<IProjectDocument> {
   ) => Promise<{ data: IProject[]; hasMore: boolean; total: number }>;
 
   /**
-   * One keyset page of accessible projects in ascending `_id` order, starting after `afterId`.
-   * Same access predicate as searchAccessible; reads at most `limit + 1` documents.
+   * One keyset page of readable projects in ascending `_id` order, starting after `afterId`. Same
+   * reach as `shareable.findAccessibleById` (owner, user or group read/write share; no global
+   * read), so every id it returns resolves by id. Reads at most `limit + 1` documents.
    */
   listAccessibleAfterId: (
-    userId: string,
-    options: { scope?: Record<string, unknown>; afterId?: string; limit: number }
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    options: { afterId?: string; limit: number }
   ) => Promise<{ data: IProject[]; hasMore: boolean }>;
 
   removeSession: (sessionId: string) => Promise<void>;
