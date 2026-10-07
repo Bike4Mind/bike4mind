@@ -17,10 +17,9 @@ export function useSessionReconnectProbe(sessionId: string | null | undefined): 
   const { reconnect } = useAgentExecutionDispatch();
 
   // The probe effect depends ONLY on `sessionId`. `reconnect` is read
-  // through a ref because the dispatcher's identity is stable today
-  // (memoised over `sendJsonMessage`) but a future upstream change could
-  // make it churn - putting `reconnect` in the deps would then fire
-  // reconnect on every render, each call enqueueing another
+  // through a ref because the dispatcher is memoised over `sendJsonMessage`,
+  // which churns whenever the access token refreshes - putting `reconnect`
+  // in the deps would re-probe on each refresh, each call enqueueing another
   // `pendingReconnects` entry and scrambling the FIFO matching with
   // `reconnect_result` events. The sync effect keeps the ref current
   // without writing during render.
