@@ -883,3 +883,9 @@ export function getDataLakeTags(
 ): string[] {
   return getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys).map(dl => dl.datalakeTag);
 }
+
+/**
+ * Name a lake created by the connector-first GitHub flow carries until a repository binds, when the
+ * bind renames it to the repository's owner/repo - but only if the name is still exactly this.
+ */
+export const GITHUB_LAKE_PLACEHOLDER_NAME = 'New GitHub data lake';
