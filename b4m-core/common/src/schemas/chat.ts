@@ -214,7 +214,8 @@ const ToolPayloadSchema = z.object({ type: z.string(), payload: z.unknown() });
  */
 export const ChatWaitResponseSchema = ChatAckSchema.extend({
   type: z.enum(CHAT_HISTORY_ITEM_TYPES),
-  response: z.string(),
+  // questReplyText() is null when the turn produced no visible reply.
+  response: z.string().nullable(),
   responses: z.array(z.string()),
   toolPayloads: z.array(ToolPayloadSchema),
   // ISO string on the wire; Date too because defineNextRoute's non-prod response check runs

@@ -169,6 +169,10 @@ describe('ChatWaitResponseSchema', () => {
     }
   );
 
+  it('accepts a null response (a turn with no visible reply)', () => {
+    expect(ChatWaitResponseSchema.safeParse({ ...waitBody, response: null }).success).toBe(true);
+  });
+
   it('rejects a non-array responses', () => {
     expect(ChatWaitResponseSchema.safeParse({ ...waitBody, responses: 'Hello' }).success).toBe(false);
   });
