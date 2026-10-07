@@ -89,7 +89,18 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: bash .github/scripts/generate-changeset.sh
+        run: |
+          # Run main's copies of the changeset scripts, never the PR head's: a branch cut before
+          # they existed has none, and PR-head code stays out of the gate. The head copy is only
+          # a bootstrap for a file main does not have yet. Keep in sync with semantic-pr-title.yml.
+          git rev-parse --verify -q origin/main >/dev/null
+          SCRIPTS="$RUNNER_TEMP/changeset-scripts"
+          mkdir -p "$SCRIPTS"
+          for f in generate-changeset.sh verify-changeset.sh resolve-changeset-packages.sh; do
+            git show "origin/main:.github/scripts/$f" >"$SCRIPTS/$f" 2>/dev/null ||
+              cp ".github/scripts/$f" "$SCRIPTS/$f"
+          done
+          bash "$SCRIPTS/generate-changeset.sh"
 
       # Failure/clear comments use the workflow token, not the App token, so the
       # report still posts when generating the App token is what failed. Best effort.

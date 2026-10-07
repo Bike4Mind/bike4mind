@@ -365,6 +365,30 @@ else
   fail "body-only edits do not share the generate run's concurrency group"
 fi
 
+# --- The generator finds the resolver next to itself, not in the checked-out head ---
+# CI runs copies staged from main; a head branched before the resolver existed has none.
+D="$WORK/case-head-without-scripts"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+rm "$D/work/.github/scripts/resolve-changeset-packages.sh"
+run_step "$D/work" "fix(auth): correct token refresh" 907
+if [ -f "$D/work/.changeset/pr-907.md" ]; then
+  ok "generator resolves sibling scripts from its own dir"
+else
+  fail "generator resolves sibling scripts from its own dir" "$(cat "$D/work/.step-output")"
+fi
+
+# --- Both workflows run main's staged scripts, never the PR head's ---
+for wf in auto-changeset.yml semantic-pr-title.yml; do
+  f="$REPO_ROOT/.github/workflows/$wf"
+  if grep -q 'git show "origin/main:.github/scripts/$f"' "$f" &&
+    grep -q 'bash "$SCRIPTS/' "$f" &&
+    ! grep -q 'bash .github/scripts/' "$f"; then
+    ok "$wf runs changeset scripts staged from main"
+  else
+    fail "$wf runs changeset scripts staged from main"
+  fi
+done
+
 echo
 echo "passed: $PASSED  failed: $FAILED"
 [ "$FAILED" -eq 0 ]
