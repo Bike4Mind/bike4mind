@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -371,6 +371,33 @@ describe('DiscoveryRunDetailModal', () => {
     const modal = screen.getByTestId('discovery-run-modal');
     expect(modal).toHaveTextContent('Price rows planned (1)');
     expect(modal).not.toHaveTextContent('Repriced (1)');
+  });
+
+  it('lists a row recorded from the build apart from a reprice', async () => {
+    const row = (modelId: string, source: string) => ({
+      modelId,
+      unit: 'per_token',
+      inputPerMTok: 3,
+      outputPerMTok: 15,
+      effectiveFrom: '2026-07-30T12:00:00.000Z',
+      sources: [source],
+      note: `discovery:${source}@2026-07-30`,
+    });
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          changes: { ...EMPTY_CHANGES, plannedPriceRows: 2, appendedPriceRows: 2 },
+          priceRows: [row('gpt-cheap', 'openrouter'), row('kimi-k3', 'adapter-literal')],
+        }),
+      },
+    });
+    renderModal();
+
+    const modal = await screen.findByTestId('discovery-run-modal');
+    expect(modal).toHaveTextContent('Repriced (1)');
+    expect(modal).toHaveTextContent('Recorded from build (1)');
+    expect(within(screen.getByTestId('discovery-run-build-price-rows-table')).getByText('kimi-k3')).toBeInTheDocument();
+    expect(within(screen.getByTestId('discovery-run-price-rows-table')).queryByText('kimi-k3')).not.toBeInTheDocument();
   });
 
   it('stays silent about the mode on a run document written before the field existed', async () => {
