@@ -169,6 +169,9 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.DeepSeek,
 ]);
 
+// Bounds a cold or fabricated cache at about 2.5x the floor (a write costs 1.25x against the 0.5x floor).
+const CACHED_INPUT_RESERVATION_FLOOR = 0.5;
+
 /**
  * Prices the input side of the pre-flight reservation. Every request in a tool loop re-sends
  * the whole conversation, but the part before the newest tool results / user text is served
@@ -187,6 +190,9 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
  * the rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
  * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
  * actual usage.
+ *
+ * The input side is floored at CACHED_INPUT_RESERVATION_FLOOR of the uncached input cost, so a
+ * client-claimed or lapsed cache cannot shrink the hold below it.
  *
  * The pricing tier comes from the total input, since a request's tier is set by its whole prompt
  * and not by the uncached remainder.
@@ -240,7 +246,10 @@ function estimateReservationUsd(
 
   const tieredModel =
     tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
-  return getTextModelCost(tieredModel, plainTokens, estimatedOutputTokens, readTokens, writeTokens);
+  const cachedInputUsd = getTextModelCost(tieredModel, plainTokens, 0, readTokens, writeTokens);
+  const uncachedInputUsd = getTextModelCost(tieredModel, estimatedInputTokens, 0);
+  const outputUsd = getTextModelCost(tieredModel, 0, estimatedOutputTokens);
+  return Math.max(cachedInputUsd, CACHED_INPUT_RESERVATION_FLOOR * uncachedInputUsd) + outputUsd;
 }
 
 /**

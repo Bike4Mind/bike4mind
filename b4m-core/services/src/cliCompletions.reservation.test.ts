@@ -414,6 +414,25 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
+    it('holds half the uncached input when a flagged cache has nothing behind it (cold-cache probe)', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'user' as const, content: text(180_000) },
+        { role: 'assistant' as const, content: 'x' },
+        { role: 'user' as const, content: 'go', cache: true },
+      ];
+      await executeCompletion({ ...baseParams, options: { maxTokens: 1 }, db, messages });
+
+      const output = reservationOutputTokens(1);
+      const segmented = usdToCredits(getTextModelCost(MODEL_INFO, 0, output, 180_000, 2));
+      const expected = usdToCredits(0.5 * 5e-6 * 180_002 + 25e-6 * output);
+      const uncached = usdToCredits(getTextModelCost(MODEL_INFO, 180_002, output));
+      expect(segmented).toBeLessThan(expected);
+      expect(expected).toBeGreaterThan(uncached / 2 - 1);
+      expect(expected).toBeLessThanOrEqual(Math.ceil(uncached / 2));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
     it('prices the 68k desktop shape (system + rolling breakpoint, reasoning model) far below the old uncached hold', async () => {
       const { db, users } = buildDb();
       const messages = [
