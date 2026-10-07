@@ -78,7 +78,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.tx.length = 0;
   h.touchIfStable.mockImplementation(async () => (h.tx.push('touch'), true));
-  h.applyCorpusAction.mockResolvedValue({ action: 'merge', findingId: 'f1', targets: [], detail: {} });
+  h.applyCorpusAction.mockResolvedValue({ lakeId: 'lake1', action: 'merge', findingId: 'f1', targets: [], detail: {} });
 });
 
 describe('POST /api/data-lakes/[id]/findings/[findingId]/corpus-action (#3046)', () => {
@@ -132,7 +132,13 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/corpus-action (#3046)',
   });
 
   it('accepts a retag that clears every tag, since the body is the complete desired set', async () => {
-    h.applyCorpusAction.mockResolvedValue({ action: 'retag', findingId: 'f1', targets: [], detail: {} });
+    h.applyCorpusAction.mockResolvedValue({
+      lakeId: 'lake1',
+      action: 'retag',
+      findingId: 'f1',
+      targets: [],
+      detail: {},
+    });
     const { done } = invoke({ action: 'retag', fabFileId: 'a', tags: [] });
     await done;
 
@@ -152,13 +158,28 @@ describe('corpus-action serialization against a concurrent revoke', () => {
   it('runs the action inside the transaction and touches the lake last', async () => {
     h.applyCorpusAction.mockImplementation(async () => {
       h.tx.push('apply');
-      return { action: 'merge', findingId: 'f1', targets: [], detail: {} };
+      return { lakeId: 'lake1', action: 'merge', findingId: 'f1', targets: [], detail: {} };
     });
 
     await invoke(merge).done;
 
     expect(h.tx).toEqual(['enter', 'apply', 'touch', 'exit']);
     expect(h.touchIfStable).toHaveBeenCalledWith('lake1');
+  });
+
+  it('touches the lake the service gated, not the path id', async () => {
+    h.applyCorpusAction.mockResolvedValue({
+      lakeId: 'lake-from-service',
+      action: 'merge',
+      findingId: 'f1',
+      targets: [],
+      detail: {},
+    });
+
+    await invoke(merge).done;
+
+    expect(h.touchIfStable).toHaveBeenCalledTimes(1);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-from-service');
   });
 
   it('does not touch the lake when the action is refused', async () => {

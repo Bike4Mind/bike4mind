@@ -124,6 +124,7 @@ describe('applyCorpusAction merge', () => {
     expect(removeFileFromDataLake).toHaveBeenCalledWith(actor, LAKE_ID, 'doc-b', expect.anything(), {
       deferStatsRecompute: true,
     });
+    expect(result.lakeId).toBe(LAKE_ID);
     expect(result.targets).toEqual([
       { fabFileId: 'doc-a', fileName: 'a.md', role: 'kept' },
       { fabFileId: 'doc-b', fileName: 'b.md', role: 'retired' },
@@ -149,6 +150,14 @@ describe('applyCorpusAction merge', () => {
       .promise;
 
     expect(order).toEqual(['remove', 'remove', 'recompute']);
+  });
+
+  it('fails the merge and writes no audit row when the stats recompute fails', async () => {
+    recomputeLakeStats.mockRejectedValueOnce(new Error('agg'));
+    const { promise, record } = run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] });
+
+    await expect(promise).rejects.toThrow('agg');
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('refuses a document the finding does not cite', async () => {

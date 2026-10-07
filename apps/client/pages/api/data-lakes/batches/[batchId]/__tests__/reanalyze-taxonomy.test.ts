@@ -154,9 +154,14 @@ describe('POST /api/data-lakes/batches/[batchId]/reanalyze-taxonomy', () => {
     h.claimBatchForAnalysis.mockResolvedValue(null);
     const { res } = makeRes();
 
-    await run('b1', res);
+    const thrown: unknown = await run('b1', res).catch((e: unknown) => e);
 
-    expect(res.status).toHaveBeenCalledWith(400);
+    expect(thrown).toMatchObject({
+      statusCode: 400,
+      message: 'This batch is not in a state that can be re-analyzed right now',
+    });
+    // Thrown inside the callback, so the transaction rolls back instead of committing a lake touch.
+    expect(h.tx).toEqual(['enter', 'exit']);
     expect(h.analyzeBatchTaxonomy).not.toHaveBeenCalled();
   });
 

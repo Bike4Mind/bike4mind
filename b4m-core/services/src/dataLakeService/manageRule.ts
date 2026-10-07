@@ -174,7 +174,8 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  * transaction a service's best-effort write (audit row, restore record, stats) is no longer
  * best-effort: its failure aborts the transaction and fails the request. Any lake-doc write outside
  * it (an ingestion worker's stats) also collides, so a manage write during a busy upload can exhaust
- * its retries.
+ * its retries. `touchIfStable` skips a transitional lake, so every door in this paragraph,
+ * `SerializeLakeClaim` included, is unserialized there.
  *
  * Every other manage-gated write is gated once per request, and a revoke committing after that gate
  * does not abort it:
@@ -183,9 +184,7 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  *     strand the lake mid-status;
  *   - the toggle-tags join door (`fabFileService.toggleTags`), deliberately: it reaches lakes from the
  *     file side, and one tag edit can reconcile against any number of matching lakes, so touching
- *     each would turn a tag click into an N-lake-doc write contending with every ingestion worker;
- *   - any of the above on a lake in a transitional status, which `touchIfStable` skips.
- *
+ *     each would turn a tag click into an N-lake-doc write contending with every ingestion worker.
  *
  * A departure lapse collides too when the lapsed grant could manage (`lapseDepartedMemberLakeAccess`
  * phase 1 touches the lake for an owner/curator grant, and like the writers skips a transitional

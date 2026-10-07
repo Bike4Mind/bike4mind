@@ -139,6 +139,15 @@ describe('applyAdmissionDecision', () => {
     expect(recomputeLakeStats).toHaveBeenCalledWith(LAKE, bag);
   });
 
+  it('fails the ruling when the stats recompute fails, so a transactional caller rolls back', async () => {
+    const { bag } = adapters();
+    recomputeLakeStats.mockRejectedValueOnce(new Error('agg'));
+
+    await expect(
+      applyAdmissionDecision(ACTOR, LAKE, { fileName: 'policy.md', decision: 'keep-newest' }, bag)
+    ).rejects.toThrow('agg');
+  });
+
   it('does not recompute for keep-both, which removes nothing', async () => {
     const { bag } = adapters();
 

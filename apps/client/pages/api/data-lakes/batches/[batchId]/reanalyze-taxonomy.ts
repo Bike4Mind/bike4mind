@@ -50,7 +50,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const ctx = await toAccessContext(req);
     // The gate and the claim serialize against a concurrent revoke; the inference call runs after
     // commit (see `serializeLakeClaim`), so a transaction retry never repeats it.
-    const { batch, claimed } = await serializeLakeClaim(async () => {
+    const { batch } = await serializeLakeClaim(async () => {
       const batch = await dataLakeBatchRepository.findById(batchId);
       if (!batch) throw new NotFoundError('Batch not found');
 
@@ -63,12 +63,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         throw new BadRequestError('You do not have permission to re-analyze this batch');
       }
       // Only re-runs from a state that already finished a prior attempt (successfully or
-      // not) - never while a first analysis is still queued/analyzing/applying.
-      return { batch, lake, claimed: !!(await claimBatchForAnalysis(batchId, ['ready', 'failed'])) };
+      // not) - never while a first analysis is still queued/analyzing/applying. A lost claim throws
+      // so the transaction rolls back rather than committing a touch for nothing, matching apply.
+      if (!(await claimBatchForAnalysis(batchId, ['ready', 'failed']))) {
+        throw new BadRequestError('This batch is not in a state that can be re-analyzed right now');
+      }
+      return { batch, lake };
     });
-    if (!claimed) {
-      return res.status(400).json({ error: 'This batch is not in a state that can be re-analyzed right now' });
-    }
 
     let result;
     try {

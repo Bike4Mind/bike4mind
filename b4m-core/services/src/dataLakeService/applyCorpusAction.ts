@@ -115,6 +115,8 @@ export interface ApplyCorpusActionAdapters {
 }
 
 export interface ApplyCorpusActionResult {
+  /** The lake the gate authorized - a transactional caller touches this one, not its own path id. */
+  lakeId: string;
   action: LakeCorpusAction;
   findingId: string;
   targets: LakeCorpusActionTarget[];
@@ -467,5 +469,5 @@ export const applyCorpusAction = async (
   // what keeps a failed audit from leaving the mutation standing without it.
   await audit(targets, detail);
 
-  return { action: request.action, findingId: finding.id, targets, detail };
+  return { lakeId: lake.id, action: request.action, findingId: finding.id, targets, detail };
 };

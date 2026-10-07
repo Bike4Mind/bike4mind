@@ -88,9 +88,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // the human, on that row and on this action's own.
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    // One transaction for the gate, the mutation and its audit row (see `applyCorpusAction`). The
-    // service resolved the lake by this id, so touching it last serializes the action against a
-    // concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+    // One transaction for the gate, the mutation and its audit row (see `applyCorpusAction`).
+    // Touching the lake the service gated, last, serializes the action against a concurrent grant
+    // revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
     const result = await withTransaction(async () => {
       const applied = await dataLakeService.applyCorpusAction(actor, id, findingId, body, {
         db: {
@@ -109,7 +109,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         },
         logger: req.logger,
       });
-      await dataLakeRepository.touchIfStable(id);
+      await dataLakeRepository.touchIfStable(applied.lakeId);
       return applied;
     });
 
