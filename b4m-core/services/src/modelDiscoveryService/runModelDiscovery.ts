@@ -772,9 +772,14 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   const priceRowsInForce = await db.prices.rowsInForce(effectiveAt);
   // A price the catalog already holds satisfies the promotion predicate, so a
   // model priced by an earlier run (or by an operator) is not re-blocked as
-  // unpriced on a run where no source happened to quote it.
+  // unpriced on a run where no source happened to quote it. A price the build
+  // ships in an adapter literal counts the same way: it has the seed's
+  // provenance but does not depend on a seed having been applied, and it is the
+  // only price a provider with no listing prices (Moonshot) can ever have.
+  const adapterTiers = await adapterPriceTiers();
   const knownPricedModelIds = new Set([
     ...priceRowsInForce.filter(row => row.unit === 'per_token').map(row => row.modelId),
+    ...adapterTiers.keys(),
     ...(options.knownPricedModelIds ?? []),
   ]);
 
@@ -803,7 +808,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     // The models this run adds are known too: a new model's first price row
     // lands in the same run as the catalog row that makes it a model at all.
     knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
-    adapterTiers: await adapterPriceTiers(),
+    adapterTiers,
     bandPct: ctx.bandPct,
     runStartedAt: effectiveAt,
   });
