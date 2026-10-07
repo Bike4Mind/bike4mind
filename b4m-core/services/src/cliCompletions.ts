@@ -61,6 +61,11 @@ export interface CompletionParams {
      * b4m-core/common/src/schemas/cliCompletions.ts.
      */
     response_format?: import('@bike4mind/common').ResponseFormat;
+    /**
+     * Forwarded to the adapter, which only the OpenAI (reasoning models), Kimi (K3
+     * only) and DeepSeek backends read. Every other backend (Anthropic, Gemini,
+     * Bedrock, xAI, Ollama) drops it, so it is a silent no-op there.
+     */
     reasoningEffort?: import('@bike4mind/common').ReasoningEffort;
   };
   /**
