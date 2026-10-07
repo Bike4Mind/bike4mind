@@ -26,6 +26,17 @@ const MODEL_INFO = {
 // Same pricing, but reasoning tokens bill inside the output budget, so this one must
 // hold the larger reasoning figure. 'adaptive' is what real reasonsWithinOutputBudget
 // keys off - it is deliberately NOT mocked here.
+const OPUS_MODEL_ID = 'reservation-test-opus';
+const OPUS_MODEL_INFO = { ...MODEL_INFO, id: OPUS_MODEL_ID, name: 'Reservation Test Opus' } as unknown as ModelInfo;
+
+const OPENAI_MODEL_ID = 'reservation-test-openai';
+const OPENAI_MODEL_INFO = {
+  ...MODEL_INFO,
+  id: OPENAI_MODEL_ID,
+  backend: ModelBackend.OpenAI,
+  pricing: { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 } },
+} as unknown as ModelInfo;
+
 const REASONING_MODEL_ID = 'reservation-test-reasoning-model';
 const REASONING_MODEL_INFO = {
   ...MODEL_INFO,
@@ -41,7 +52,7 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
-  getAvailableModels: vi.fn(async () => [MODEL_INFO, REASONING_MODEL_INFO]),
+  getAvailableModels: vi.fn(async () => [MODEL_INFO, REASONING_MODEL_INFO, OPUS_MODEL_INFO, OPENAI_MODEL_INFO]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
@@ -143,5 +154,71 @@ describe('executeCompletion - pre-flight reservation size', () => {
     expect(expectedReasoningHold).toBeGreaterThan(expectedHold);
     expect(expectedReasoningHold).toBeLessThan(ceilingCredits);
     expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expectedReasoningHold);
+  });
+
+  describe('cached conversation context', () => {
+    // A small explicit budget keeps the output hold from drowning the input side under test.
+    const ROUND_MAX_TOKENS = 1_024;
+    const OUTPUT = ROUND_MAX_TOKENS;
+    const roundParams = { ...baseParams, options: { maxTokens: ROUND_MAX_TOKENS } };
+    // 2.5 chars per estimated token
+    const text = (tokens: number) => 'x'.repeat(tokens * 2.5);
+    const reserved = (users: { incrementCredits: ReturnType<typeof vi.fn> }) =>
+      -(users.incrementCredits.mock.calls[0][1] as number);
+    const toolLoop = (cache: boolean) => [
+      { role: 'system' as const, content: text(10_000), cache },
+      { role: 'user' as const, content: text(20_000) },
+      { role: 'assistant' as const, content: text(30_000), cache },
+      { role: 'user' as const, content: text(8_000) },
+    ];
+
+    it('prices a flagged multi-round Anthropic conversation at the cache rates', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, db, messages: toolLoop(true) });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 60_000, 8_000));
+      const uncached = usdToCredits(getTextModelCost(MODEL_INFO, 68_000, OUTPUT));
+      expect(reserved(users)).toBe(expected);
+      expect(expected).toBeLessThan(uncached * 0.6);
+    });
+
+    it('prices the first round (no assistant message) fully uncached', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'system' as const, content: text(10_000), cache: true },
+        { role: 'user' as const, content: text(20_000) },
+      ];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      expect(reserved(users)).toBe(usdToCredits(getTextModelCost(MODEL_INFO, 30_000, OUTPUT)));
+    });
+
+    it('leaves a conversation the client did not flag for caching unchanged', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, db, messages: toolLoop(false) });
+
+      expect(reserved(users)).toBe(usdToCredits(getTextModelCost(MODEL_INFO, 68_000, OUTPUT)));
+    });
+
+    it('leaves a non-caching model unchanged', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, model: OPENAI_MODEL_ID, db, messages: toolLoop(true) });
+
+      expect(reserved(users)).toBe(usdToCredits(getTextModelCost(OPENAI_MODEL_INFO, 68_000, OUTPUT)));
+    });
+
+    it('no longer over-reserves the 68k-token opus tool-loop round that was refused at ~2518 credits', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'system' as const, content: text(8_000), cache: true },
+        { role: 'user' as const, content: text(10_000) },
+        { role: 'assistant' as const, content: text(40_000), cache: true },
+        { role: 'user' as const, content: text(10_000) },
+      ];
+      await executeCompletion({ ...roundParams, model: OPUS_MODEL_ID, db, messages });
+
+      expect(usdToCredits(getTextModelCost(OPUS_MODEL_INFO, 68_000, OUTPUT))).toBeGreaterThan(600);
+      expect(reserved(users)).toBeLessThan(400);
+    });
   });
 });

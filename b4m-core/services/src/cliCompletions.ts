@@ -1,6 +1,8 @@
 import {
   ChatModels,
   IMessage,
+  ModelBackend,
+  type ModelInfo,
   CompletionInfo,
   getTextModelCost,
   CreditHolderType,
@@ -149,6 +151,55 @@ function estimateInputTokens(messages: IMessage[]): number {
     return sum + contentLength;
   }, 0);
   return Math.ceil(totalChars / 2.5);
+}
+
+/**
+ * Prices the input side of the pre-flight reservation. Every request in a tool loop re-sends
+ * the whole conversation, but the part before the newest tool results / user text is served
+ * from the provider's prompt cache at a fraction of the input rate, so pricing it uncached
+ * over-reserves by an order of magnitude and refuses users who can afford many real rounds.
+ *
+ * The cached prefix is everything up to and including the last assistant message (plus any
+ * system messages); the tail after it is new every round. Only applied when the request can
+ * actually hit a cache: Anthropic/Bedrock cache only the messages the client flagged
+ * `cache: true`, and automatic-caching providers only when the catalog publishes an explicit
+ * cache_read rate (the default 0.1x multiplier is Anthropic's, not theirs). A conversation
+ * with no assistant message yet has nothing cached, so it stays priced fully uncached. If the
+ * provider misses (cache TTL lapsed) the real cost is higher; settlement charges actual usage.
+ */
+function estimateReservationUsd(
+  modelInfo: ModelInfo,
+  messages: IMessage[],
+  estimatedInputTokens: number,
+  estimatedOutputTokens: number
+): number {
+  const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+
+  const lastAssistantIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
+  if (lastAssistantIndex < 0) return uncachedUsd;
+
+  const explicitCacheBackend =
+    modelInfo.backend === ModelBackend.Anthropic || modelInfo.backend === ModelBackend.Bedrock;
+  const lowestTier = Object.keys(modelInfo.pricing)
+    .map(Number)
+    .sort((a, b) => a - b)[0];
+  const publishesCacheRead = lowestTier !== undefined && modelInfo.pricing[lowestTier]?.cache_read !== undefined;
+  const cacheCapable = explicitCacheBackend ? messages.some(m => m.cache === true) : publishesCacheRead;
+  if (!cacheCapable) return uncachedUsd;
+
+  let prefixTokens = 0;
+  let tailTokens = 0;
+  messages.forEach((m, i) => {
+    const tokens = estimateInputTokens([m]);
+    if (i <= lastAssistantIndex || m.role === 'system') prefixTokens += tokens;
+    else tailTokens += tokens;
+  });
+
+  // Anthropic bills the new tail as a cache write when the client flags it, which costs more
+  // than plain input, so price it that way to stay on the safe side.
+  return explicitCacheBackend
+    ? getTextModelCost(modelInfo, 0, estimatedOutputTokens, prefixTokens, tailTokens)
+    : getTextModelCost(modelInfo, tailTokens, estimatedOutputTokens, prefixTokens, 0);
 }
 
 /**
@@ -359,7 +410,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS,
       reservationOutputTokens(maxTokens, reasonsWithinOutputBudget(modelInfo))
     );
-    const estimatedUsdCost = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+    const estimatedUsdCost = estimateReservationUsd(modelInfo, messages, estimatedInputTokens, estimatedOutputTokens);
     reservedCredits = usdToCredits(estimatedUsdCost);
 
     // Rail the money path independently of whatever sized it. A non-finite estimate must
