@@ -1,7 +1,8 @@
 export const isPreviewStage = process.env.IS_PREVIEW === 'true' || /^pr\d+$/.test($app.stage);
 const isStagingStage = $app.stage === 'dev';
-/** Stages that run at full production scale (reserved concurrency, full memory, etc.) */
-export const PRODUCTION_STAGES: readonly string[] = ['production', 'dev'];
+/** Stages that run at full production scale (reserved concurrency, full memory, etc.).
+ * Declared in @bike4mind/infra so the admin System Secrets page reads the same roster. */
+export { PRODUCTION_STAGES } from '@bike4mind/infra';
 
 /**
  * Subscriber options for a single-record queue handler (one that reads only
