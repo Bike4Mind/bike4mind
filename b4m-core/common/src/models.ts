@@ -717,7 +717,9 @@ export const getTextModelCost = (
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number = 0,
-  cacheCreationTokens: number = 0
+  cacheCreationTokens: number = 0,
+  /** Selects the pricing tier from this many total input tokens instead of `inputTokens` (which may exclude cached parts). */
+  tierTokens?: number
 ): number => {
   // $0 for real usage on a model not marked freeToRun means a missing or
   // zero-rate pricing map: the call settles free (stochastic rounding has no
@@ -744,7 +746,7 @@ export const getTextModelCost = (
     return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
   };
 
-  const tier = tierForTokens(inputTokens);
+  const tier = tierForTokens(tierTokens ?? inputTokens);
   if (tier === null) return alarmIfUnpriced(0);
 
   // Guard against a malformed or non-tiered pricing map (e.g. a flat

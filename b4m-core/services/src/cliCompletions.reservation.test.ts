@@ -23,20 +23,31 @@ const MODEL_INFO = {
   supportsImageVariation: false,
 } as unknown as ModelInfo;
 
-// Same pricing, but reasoning tokens bill inside the output budget, so this one must
-// hold the larger reasoning figure. 'adaptive' is what real reasonsWithinOutputBudget
-// keys off - it is deliberately NOT mocked here.
-const OPUS_MODEL_ID = 'reservation-test-opus';
-const OPUS_MODEL_INFO = { ...MODEL_INFO, id: OPUS_MODEL_ID, name: 'Reservation Test Opus' } as unknown as ModelInfo;
-
 const OPENAI_MODEL_ID = 'reservation-test-openai';
 const OPENAI_MODEL_INFO = {
   ...MODEL_INFO,
   id: OPENAI_MODEL_ID,
   backend: ModelBackend.OpenAI,
-  pricing: { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 } },
 } as unknown as ModelInfo;
 
+// Publishes an explicit cache_read, so the auto-caching arm applies without any client flag.
+const OPENAI_CACHED_MODEL_ID = 'reservation-test-openai-cached';
+const OPENAI_CACHED_MODEL_INFO = {
+  ...OPENAI_MODEL_INFO,
+  id: OPENAI_CACHED_MODEL_ID,
+  pricing: { 200_000: { input: 2 / 1_000_000, output: 8 / 1_000_000, cache_read: 0.5 / 1_000_000 } },
+} as unknown as ModelInfo;
+
+const BEDROCK_MODEL_ID = 'reservation-test-bedrock';
+const BEDROCK_MODEL_INFO = {
+  ...MODEL_INFO,
+  id: BEDROCK_MODEL_ID,
+  backend: ModelBackend.Bedrock,
+} as unknown as ModelInfo;
+
+// Same pricing, but reasoning tokens bill inside the output budget, so this one must
+// hold the larger reasoning figure. 'adaptive' is what real reasonsWithinOutputBudget
+// keys off - it is deliberately NOT mocked here.
 const REASONING_MODEL_ID = 'reservation-test-reasoning-model';
 const REASONING_MODEL_INFO = {
   ...MODEL_INFO,
@@ -52,7 +63,13 @@ vi.mock('./creditService', async importOriginal => ({
 }));
 vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/llm-adapters')>()),
-  getAvailableModels: vi.fn(async () => [MODEL_INFO, REASONING_MODEL_INFO, OPUS_MODEL_INFO, OPENAI_MODEL_INFO]),
+  getAvailableModels: vi.fn(async () => [
+    MODEL_INFO,
+    REASONING_MODEL_INFO,
+    OPENAI_MODEL_INFO,
+    OPENAI_CACHED_MODEL_INFO,
+    BEDROCK_MODEL_INFO,
+  ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
     complete: vi.fn(async (_model, _messages, _options, onChunk) => {
@@ -163,8 +180,6 @@ describe('executeCompletion - pre-flight reservation size', () => {
     const roundParams = { ...baseParams, options: { maxTokens: ROUND_MAX_TOKENS } };
     // 2.5 chars per estimated token
     const text = (tokens: number) => 'x'.repeat(tokens * 2.5);
-    const reserved = (users: { incrementCredits: ReturnType<typeof vi.fn> }) =>
-      -(users.incrementCredits.mock.calls[0][1] as number);
     const toolLoop = (cache: boolean) => [
       { role: 'system' as const, content: text(10_000), cache },
       { role: 'user' as const, content: text(20_000) },
@@ -172,14 +187,47 @@ describe('executeCompletion - pre-flight reservation size', () => {
       { role: 'user' as const, content: text(8_000) },
     ];
 
-    it('prices a flagged multi-round Anthropic conversation at the cache rates', async () => {
+    it('prices a conversation flagged at the last assistant message at read for the prefix, plain for the tail', async () => {
       const { db, users } = buildDb();
       await executeCompletion({ ...roundParams, db, messages: toolLoop(true) });
 
-      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 60_000, 8_000));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 8_000, OUTPUT, 60_000, 0, 68_000));
       const uncached = usdToCredits(getTextModelCost(MODEL_INFO, 68_000, OUTPUT));
-      expect(reserved(users)).toBe(expected);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
       expect(expected).toBeLessThan(uncached * 0.6);
+    });
+
+    it('prices the flagged tail at cache_write when the rolling breakpoint rides the newest message', async () => {
+      const { db, users } = buildDb();
+      const messages = toolLoop(true);
+      messages[3] = { ...messages[3], cache: true } as (typeof messages)[number];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 60_000, 8_000, 68_000));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('prices the history at plain input when only the system message is flagged', async () => {
+      const { db, users } = buildDb();
+      const messages = toolLoop(false);
+      messages[0] = { ...messages[0], cache: true } as (typeof messages)[number];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 58_000, OUTPUT, 10_000, 0, 68_000));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('does not count a system message after the last assistant message as cached prefix', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'user' as const, content: text(20_000), cache: true },
+        { role: 'assistant' as const, content: text(30_000) },
+        { role: 'system' as const, content: text(8_000) },
+      ];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 38_000, OUTPUT, 20_000, 0, 58_000));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
     it('prices the first round (no assistant message) fully uncached', async () => {
@@ -190,35 +238,64 @@ describe('executeCompletion - pre-flight reservation size', () => {
       ];
       await executeCompletion({ ...roundParams, db, messages });
 
-      expect(reserved(users)).toBe(usdToCredits(getTextModelCost(MODEL_INFO, 30_000, OUTPUT)));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 30_000, OUTPUT));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
     it('leaves a conversation the client did not flag for caching unchanged', async () => {
       const { db, users } = buildDb();
       await executeCompletion({ ...roundParams, db, messages: toolLoop(false) });
 
-      expect(reserved(users)).toBe(usdToCredits(getTextModelCost(MODEL_INFO, 68_000, OUTPUT)));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 68_000, OUTPUT));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it('leaves a non-caching model unchanged', async () => {
+    it('leaves a flagged Bedrock conversation uncached: this path never enables Bedrock caching', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, model: BEDROCK_MODEL_ID, db, messages: toolLoop(true) });
+
+      const expected = usdToCredits(getTextModelCost(BEDROCK_MODEL_INFO, 68_000, OUTPUT));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('leaves a backend without a published cache_read rate unchanged', async () => {
       const { db, users } = buildDb();
       await executeCompletion({ ...roundParams, model: OPENAI_MODEL_ID, db, messages: toolLoop(true) });
 
-      expect(reserved(users)).toBe(usdToCredits(getTextModelCost(OPENAI_MODEL_INFO, 68_000, OUTPUT)));
+      const expected = usdToCredits(getTextModelCost(OPENAI_MODEL_INFO, 68_000, OUTPUT));
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it('no longer over-reserves the 68k-token opus tool-loop round that was refused at ~2518 credits', async () => {
+    it('prices an auto-caching backend with a published cache_read rate up to the last assistant message', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({
+        ...roundParams,
+        model: OPENAI_CACHED_MODEL_ID,
+        db,
+        messages: toolLoop(false),
+      });
+
+      const expected = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 8_000, OUTPUT, 60_000, 0, 68_000));
+      const uncached = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 68_000, OUTPUT));
+      expect(expected).toBeLessThan(uncached);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('prices the 68k desktop shape (system + rolling breakpoint, reasoning model) far below the old uncached hold', async () => {
       const { db, users } = buildDb();
       const messages = [
         { role: 'system' as const, content: text(8_000), cache: true },
         { role: 'user' as const, content: text(10_000) },
-        { role: 'assistant' as const, content: text(40_000), cache: true },
-        { role: 'user' as const, content: text(10_000) },
+        { role: 'assistant' as const, content: text(40_000) },
+        { role: 'user' as const, content: text(10_000), cache: true },
       ];
-      await executeCompletion({ ...roundParams, model: OPUS_MODEL_ID, db, messages });
+      await executeCompletion({ ...baseParams, model: REASONING_MODEL_ID, db, messages });
 
-      expect(usdToCredits(getTextModelCost(OPUS_MODEL_INFO, 68_000, OUTPUT))).toBeGreaterThan(600);
-      expect(reserved(users)).toBeLessThan(400);
+      const output = reservationOutputTokens(MAX_TOKENS, true);
+      const expected = usdToCredits(getTextModelCost(REASONING_MODEL_INFO, 0, output, 58_000, 10_000, 68_000));
+      const uncached = usdToCredits(getTextModelCost(REASONING_MODEL_INFO, 68_000, output));
+      expect(expected).toBeLessThan(uncached);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
   });
 });

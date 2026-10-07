@@ -154,18 +154,31 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
+ * Backends whose server caches prompt prefixes without a client flag and whose adapters report
+ * the hits; they only get the cache rate when the catalog publishes an explicit cache_read
+ * (the default 0.1x multiplier is Anthropic's). Gemini and Ollama publish none; Bedrock's
+ * cache_control is gated on options.cacheStrategy.enableCaching, which this path never sets.
+ */
+const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
+  ModelBackend.OpenAI,
+  ModelBackend.XAI,
+  ModelBackend.Kimi,
+  ModelBackend.DeepSeek,
+]);
+
+/**
  * Prices the input side of the pre-flight reservation. Every request in a tool loop re-sends
  * the whole conversation, but the part before the newest tool results / user text is served
  * from the provider's prompt cache at a fraction of the input rate, so pricing it uncached
  * over-reserves by an order of magnitude and refuses users who can afford many real rounds.
  *
- * The cached prefix is everything up to and including the last assistant message (plus any
- * system messages); the tail after it is new every round. Only applied when the request can
- * actually hit a cache: Anthropic/Bedrock cache only the messages the client flagged
- * `cache: true`, and automatic-caching providers only when the catalog publishes an explicit
- * cache_read rate (the default 0.1x multiplier is Anthropic's, not theirs). A conversation
- * with no assistant message yet has nothing cached, so it stays priced fully uncached. If the
- * provider misses (cache TTL lapsed) the real cost is higher; settlement charges actual usage.
+ * Billing rule: a cache read can only cover what an earlier round wrote, i.e. messages up to
+ * the last assistant message, and Anthropic reads only up to the last `cache: true` breakpoint.
+ * So messages [0, min(lastFlagged, lastAssistant)] bill at cache_read; messages after that up
+ * to the last flagged one bill at cache_write (the new breakpoint writes them); everything else
+ * is plain input. Auto-caching backends read everything up to the last assistant message.
+ * A conversation with no assistant message yet has nothing cached, so it stays fully uncached.
+ * If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges actual usage.
  */
 function estimateReservationUsd(
   modelInfo: ModelInfo,
@@ -178,28 +191,40 @@ function estimateReservationUsd(
   const lastAssistantIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
   if (lastAssistantIndex < 0) return uncachedUsd;
 
-  const explicitCacheBackend =
-    modelInfo.backend === ModelBackend.Anthropic || modelInfo.backend === ModelBackend.Bedrock;
-  const lowestTier = Object.keys(modelInfo.pricing)
-    .map(Number)
-    .sort((a, b) => a - b)[0];
-  const publishesCacheRead = lowestTier !== undefined && modelInfo.pricing[lowestTier]?.cache_read !== undefined;
-  const cacheCapable = explicitCacheBackend ? messages.some(m => m.cache === true) : publishesCacheRead;
-  if (!cacheCapable) return uncachedUsd;
+  let readEnd: number;
+  let writeEnd = -1;
+  if (modelInfo.backend === ModelBackend.Anthropic) {
+    const lastFlagged = messages.reduce((last, m, i) => (m.cache === true ? i : last), -1);
+    if (lastFlagged < 0) return uncachedUsd;
+    readEnd = Math.min(lastFlagged, lastAssistantIndex);
+    writeEnd = lastFlagged;
+  } else {
+    const lowestTier = Object.keys(modelInfo.pricing)
+      .map(Number)
+      .sort((a, b) => a - b)[0];
+    const publishesCacheRead = lowestTier !== undefined && modelInfo.pricing[lowestTier]?.cache_read !== undefined;
+    if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
+    readEnd = lastAssistantIndex;
+  }
 
-  let prefixTokens = 0;
-  let tailTokens = 0;
+  let readTokens = 0;
+  let writeTokens = 0;
+  let plainTokens = 0;
   messages.forEach((m, i) => {
     const tokens = estimateInputTokens([m]);
-    if (i <= lastAssistantIndex || m.role === 'system') prefixTokens += tokens;
-    else tailTokens += tokens;
+    if (i <= readEnd) readTokens += tokens;
+    else if (i <= writeEnd) writeTokens += tokens;
+    else plainTokens += tokens;
   });
 
-  // Anthropic bills the new tail as a cache write when the client flags it, which costs more
-  // than plain input, so price it that way to stay on the safe side.
-  return explicitCacheBackend
-    ? getTextModelCost(modelInfo, 0, estimatedOutputTokens, prefixTokens, tailTokens)
-    : getTextModelCost(modelInfo, tailTokens, estimatedOutputTokens, prefixTokens, 0);
+  return getTextModelCost(
+    modelInfo,
+    plainTokens,
+    estimatedOutputTokens,
+    readTokens,
+    writeTokens,
+    readTokens + writeTokens + plainTokens
+  );
 }
 
 /**
