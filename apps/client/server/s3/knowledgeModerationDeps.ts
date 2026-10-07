@@ -1,5 +1,5 @@
 import { FabFile, imageModerationIncidentRepository } from '@bike4mind/database';
-import { moderateImageOrThrow } from '@bike4mind/services/llm';
+import { moderateImageOrThrow } from '@bike4mind/services/llm/imageModerationGate';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage } from '@server/utils/storage';
