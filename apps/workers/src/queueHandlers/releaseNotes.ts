@@ -26,6 +26,8 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 const TOKENS_PER_MILLION = 1_000_000;
 // Under the 5-minute Lambda timeout in infra/queues.ts, so a slow LLM still fails here and emits the Failure metric.
 const GENERATION_BUDGET_MS = 4 * 60 * 1000;
+// Leaves the post inside the Lambda timeout after a full generation budget; a hang would retry and re-announce.
+const SLACK_TIMEOUT_MS = 15_000;
 
 // USD per 1M tokens. Unknown models price high on purpose so the EstimatedCost alarm notices them.
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
@@ -110,6 +112,7 @@ async function postToSlack(
         unfurl_links: false,
         unfurl_media: false,
       }),
+      signal: AbortSignal.timeout(SLACK_TIMEOUT_MS),
     });
     const result = (await response.json()) as { ok: boolean; error?: string };
     if (!result.ok) logger.warn('[releaseNotes] Slack announcement rejected', { error: result.error });

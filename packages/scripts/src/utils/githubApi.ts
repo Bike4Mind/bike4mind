@@ -124,13 +124,15 @@ export async function getCommitRange(base: string, head: string = 'HEAD'): Promi
     };
   }> = [];
 
-  // Unpaginated, compare returns at most 250 commits; paged, it returns them all.
+  // Unpaginated, compare returns at most 250 commits; paged, it returns them all. A short page ends the
+  // walk even when total_commits is missing.
+  const perPage = 100;
   for (let page = 1; ; page++) {
-    const comparison = await githubRequest<{ total_commits: number; commits: typeof commits }>(
-      `/repos/${owner}/${repo}/compare/${base}...${head}?per_page=100&page=${page}`
+    const comparison = await githubRequest<{ total_commits?: number; commits: typeof commits }>(
+      `/repos/${owner}/${repo}/compare/${base}...${head}?per_page=${perPage}&page=${page}`
     );
     commits.push(...comparison.commits);
-    if (comparison.commits.length === 0 || commits.length >= comparison.total_commits) break;
+    if (comparison.commits.length < perPage || commits.length >= (comparison.total_commits ?? Infinity)) break;
   }
 
   return commits.map(c => ({

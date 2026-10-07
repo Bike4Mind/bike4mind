@@ -45,6 +45,8 @@ describe('scrubCustomerText', () => {
     'Use read/write access, 24/7.',
     'Pick your #1 model.',
     'Try gpt-4o-mini.',
+    'Encrypted with AES-256 and sha-256.',
+    'Shows the top-10 results.',
   ])('leaves ordinary copy alone: %j', input => {
     expect(scrubCustomerText(input)).toBe(input);
   });

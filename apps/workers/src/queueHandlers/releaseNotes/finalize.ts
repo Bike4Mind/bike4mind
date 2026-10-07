@@ -12,6 +12,8 @@ const MS_PER_HOUR = 60 * 60 * 1000;
 // Two or more digits so ordinary copy such as "#1" and "GPT-4" survives.
 const PR_REF = /^#\d{2,}$/;
 const TICKET_KEY = /^[A-Za-z]{2,10}-\d{2,}$/;
+// Standards and everyday terms shaped like a ticket key (AES-256, utf-16, top-10).
+const NOT_A_TICKET = /^(?:aes|base|covid|ipv|iso|rsa|sha|top|utf)-\d+$/i;
 const CROSS_REPO_REF = /^[\w.-]+\/[\w.-]+#\d+$/;
 const ANY_URL = /^(?:[a-z][a-z\d+.-]*:\/\/|www\.)/i;
 const GITHUB_URL = /^github\.com\//i;
@@ -25,7 +27,7 @@ const SENTENCE_PUNCT = '.,;:!?';
 
 const isInternalReference = (core: string): boolean =>
   PR_REF.test(core) ||
-  TICKET_KEY.test(core) ||
+  (TICKET_KEY.test(core) && !NOT_A_TICKET.test(core)) ||
   CROSS_REPO_REF.test(core) ||
   ANY_URL.test(core) ||
   GITHUB_URL.test(core) ||
