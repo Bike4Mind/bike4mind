@@ -16,6 +16,7 @@ import {
   type IModelPriceInput,
 } from '@bike4mind/common';
 import {
+  adapterBuildPricedModelIds,
   adapterModelIds,
   adapterPriceLadders,
   adapterPriceTiers,
@@ -33,7 +34,13 @@ import {
   type LifecyclePlan,
   type ParserRowShift,
 } from './lifecyclePlan';
-import { describePriceRows, perTokenRatesInForce, planPriceWrites, type PricePlan } from './pricePlan';
+import {
+  describePriceRows,
+  isAdapterLiteralRow,
+  perTokenRatesInForce,
+  planPriceWrites,
+  type PricePlan,
+} from './pricePlan';
 import type {
   CatalogDiffEntry,
   DiscoveryAutoEnablePolicy,
@@ -399,7 +406,11 @@ async function executeRun(
         );
       }
 
-      if (ctx.mode !== 'write' || appended + pricesAppended === 0 || globalDeadline.signal.aborted) break;
+      // A literal row records what the build already trusted, so it cannot change
+      // what an aggregator join returns and is not worth another full re-fetch.
+      const literalPlanned = plan.prices.rows.filter(isAdapterLiteralRow).length;
+      const joinRelevantPrices = Math.max(0, pricesAppended - literalPlanned);
+      if (ctx.mode !== 'write' || appended + joinRelevantPrices === 0 || globalDeadline.signal.aborted) break;
       if (pass === MAX_DISCOVERY_PASSES) {
         logger.warn(
           `${LOG_PREFIX} convergence capped at ${MAX_DISCOVERY_PASSES} passes while pass ${pass} was still ` +
@@ -460,7 +471,8 @@ async function executeRun(
       promoted,
       deprecated,
       // The plan, not the writes, in both modes - same as `added`.
-      repriced: [...new Set(merged.priceRows.map(row => row.modelId))],
+      // A first row recorded from the build's own literal is not a reprice.
+      repriced: [...new Set(merged.priceRows.filter(row => !isAdapterLiteralRow(row)).map(row => row.modelId))],
       // Operator overlaps and price flags are one queue: both are "a human has
       // to look at this model", which is what report mode exists to surface.
       flagged: [...new Set([...summary.operatorConflicts, ...merged.priceFlags.map(flag => flag.modelId)])],
@@ -776,7 +788,8 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   // unpriced on a run where no source happened to quote it. A price the build
   // ships in an adapter literal counts the same way: it has the seed's
   // provenance but does not depend on a seed having been applied, and it is the
-  // only price a provider with no listing prices (Moonshot) can ever have.
+  // only trusted price a provider with no listing prices (Moonshot) has until two
+  // aggregators agree.
   const adapterTiers = await adapterPriceTiers();
   const knownPricedModelIds = new Set([
     ...priceRowsInForce.filter(row => row.unit === 'per_token').map(row => row.modelId),
@@ -797,6 +810,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     credentials,
     policy: ctx.autoEnable,
     knownPricedModelIds,
+    buildPricedModelIds: await adapterBuildPricedModelIds(),
     runStartedAt: effectiveAt,
     runId,
   });
