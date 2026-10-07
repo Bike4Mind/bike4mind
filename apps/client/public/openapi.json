@@ -1054,7 +1054,7 @@
             "items": {
               "type": "string"
             },
-            "description": "The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
+            "description": "The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
           },
           "includeLibraryFiles": {
             "type": "boolean",
@@ -4354,6 +4354,105 @@
           "name": "Quarterly analysis"
         }
       },
+      "listSessionsResponse200": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "userId": {
+                  "type": "string"
+                },
+                "knowledgeIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "artifactIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "strength": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "strength"
+                    ]
+                  }
+                },
+                "forceKnowledgeRetrieval": {
+                  "type": "boolean"
+                },
+                "retrievalTags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "lakeScopeExplicit": {
+                  "type": "boolean",
+                  "description": "True when `retrievalTags` is a deliberate choice, so an empty list means \"no lake\" rather than \"any\"."
+                },
+                "lastUsedModel": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "firstCreated": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "lastUpdated": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "userId",
+                "firstCreated",
+                "lastUpdated"
+              ]
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
       "listDataLakesResponse200": {
         "type": "object",
         "properties": {
@@ -4369,6 +4468,9 @@
                   "type": "string"
                 },
                 "slug": {
+                  "type": "string"
+                },
+                "datalake_tag": {
                   "type": "string"
                 },
                 "description": {
@@ -4434,6 +4536,7 @@
                 "id",
                 "name",
                 "slug",
+                "datalake_tag",
                 "description",
                 "organization_id",
                 "is_public",
@@ -4469,6 +4572,9 @@
             "type": "string"
           },
           "slug": {
+            "type": "string"
+          },
+          "datalake_tag": {
             "type": "string"
           },
           "description": {
@@ -4534,6 +4640,7 @@
           "id",
           "name",
           "slug",
+          "datalake_tag",
           "description",
           "organization_id",
           "is_public",
@@ -13708,6 +13815,365 @@
             "lang": "Python",
             "label": "requests",
             "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/v1/sessions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"name\": \"Quarterly analysis\"\n    },\n)"
+          }
+        ]
+      },
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List sessions",
+        "description": "Lists the sessions you own (called \"notebooks\" in the product UI), newest first. Sessions shared with you are not included; read one of those by id with `GET /api/sessions/{id}`. Each item has the same shape `GET /api/sessions/{id}` returns. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Changing `search`, `surface` or `origin` starts a new listing, so drop the cursor when you do. An API key needs `notebooks:read` or `notebooks:write`.",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "description": "Case-insensitive substring match on the session name, its summary, or a tag name."
+            },
+            "required": false,
+            "description": "Case-insensitive substring match on the session name, its summary, or a tag name.",
+            "name": "search",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Lists only sessions of this product surface. When omitted, only sessions with no surface are listed."
+            },
+            "required": false,
+            "description": "Lists only sessions of this product surface. When omitted, only sessions with no surface are listed.",
+            "name": "surface",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "web",
+                "api",
+                "slack",
+                "cli",
+                "agent"
+              ],
+              "description": "Lists only sessions created through this channel. `web` also matches sessions with no recorded origin."
+            },
+            "required": false,
+            "description": "Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.",
+            "name": "origin",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of sessions, newest first by `id`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/listSessionsResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key holds neither `notebooks:read` nor `notebooks:write`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The path does not serve this HTTP method.",
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Allow": {
+                "description": "The methods this path serves. GET implies HEAD.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`limit` is out of range, a filter is malformed, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "notebooks:read",
+          "notebooks:write"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/sessions\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/sessions\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/sessions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }

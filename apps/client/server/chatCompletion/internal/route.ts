@@ -4,6 +4,7 @@ import { Resource } from 'sst';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { stripChoicesFromReplies, visibleReplyText } from '@bike4mind/common';
 import { questRepository } from '@bike4mind/database';
+import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 import { categorizeToolError } from '@bike4mind/services';
 import { QuestStartBodySchema } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
@@ -42,13 +43,6 @@ export function processingFailureReply(streamed: string[] | undefined): { reply:
   const replies = [...visiblePartial, GENERIC_PROCESSING_FAILURE_REPLY];
   return { replies, reply: replies.join('') };
 }
-
-/**
- * Namespace for quest-lifecycle operational metrics; also used by the timeout sweep
- * (apps/workers/src/cron/questTimeoutSweep.ts). Keep the `ProcessingFailed` metric name and its
- * `Stage` dimension in sync with infra/alarms.ts.
- */
-const QUESTS_CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
 /**
  * Shared-secret bearer check. Both the frontend Lambda and this service link
@@ -123,18 +117,18 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       //
       // Two datums, same metric name: CloudWatch keys a custom metric by namespace + name + the
       // EXACT dimension set and never rolls one up into the other, so the Stage-only point is what
-      // the alarm below watches (a per-class dimension set would leave it permanently
-      // INSUFFICIENT_DATA) while the Stage+ErrorClass point drives the "which class is failing"
-      // dashboard breakdown. Neither double-counts the other since they are distinct series.
+      // the questProcessingFailures alarm in infra/alarms.ts watches (a per-class dimension set would
+      // leave it permanently INSUFFICIENT_DATA) while the Stage+ErrorClass point drives the "which
+      // class is failing" dashboard breakdown. Neither double-counts the other since they are distinct series.
       const stage = Resource.App.stage;
       const errorClass = categorizeToolError(errorMessage);
       // emitMetrics never rejects (it catches and console.error's internally), so track() only
       // registers this for the SIGTERM drain - it never delays the settle path below.
       track(
-        emitMetrics(QUESTS_CLOUDWATCH_NAMESPACE, [
-          { name: 'ProcessingFailed', value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
+        emitMetrics(QUESTS_NAMESPACE, [
+          { name: QUEST_METRICS.ProcessingFailed, value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
           {
-            name: 'ProcessingFailed',
+            name: QUEST_METRICS.ProcessingFailed,
             value: 1,
             dimensions: { Stage: stage, ErrorClass: errorClass },
             unit: StandardUnit.Count,

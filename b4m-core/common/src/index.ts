@@ -84,6 +84,7 @@ export * from './schemas/annotation';
 export * from './schemas/questmaster';
 export * from './schemas/curation';
 export * from './schemas/imageModerationIncident';
+export * from './schemas/releaseNotes';
 export * from './utils/artifactHelpers';
 export * from './utils/creditTransactionDisplay';
 export * from './utils/deepLinks';

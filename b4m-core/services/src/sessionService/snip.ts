@@ -9,10 +9,13 @@ import {
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { createSession, CreateSessionAdapters } from './create';
+import { resolveCopySurface, targetSurfaceSchema, type ResolveSurfaceAccess } from './surfaceTransition';
 
 const snipSessionSchema = z.object({
   sessionId: z.string(),
   messageId: z.string(),
+  // Absent: the snip inherits the source's surface. Present: checked by assertSurfaceTransition.
+  targetSurface: targetSurfaceSchema,
 });
 
 type SnipSessionParameters = z.infer<typeof snipSessionSchema>;
@@ -27,11 +30,13 @@ type SnipSessionAdapters = {
       'findBySessionIdAndId' | 'findAllBySessionIdAndGreaterThanOrEqualToTimestamp' | 'create'
     >;
   };
+  /** Required to honor `targetSurface`; without it a targeted snip is refused. */
+  resolveSurfaceAccess?: ResolveSurfaceAccess;
 } & CreateSessionAdapters;
 
 export const snipSession = async (userId: string, parameters: SnipSessionParameters, adapters: SnipSessionAdapters) => {
   const { db } = adapters;
-  const { sessionId, messageId } = secureParameters(parameters, snipSessionSchema);
+  const { sessionId, messageId, targetSurface } = secureParameters(parameters, snipSessionSchema);
 
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError('User not found');
@@ -41,6 +46,8 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
 
   const message = await db.chatHistories.findBySessionIdAndId(sessionId, messageId);
   if (!message) throw new NotFoundError('Message not found');
+
+  const surface = await resolveCopySurface(session.surface, targetSurface, adapters.resolveSurfaceAccess);
 
   const newSession = await createSession(
     user,
@@ -54,6 +61,8 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       // taggedAt is deliberately NOT carried: a snip keeps only the quests AFTER the snip point, so
       // the source tags may describe a quest the copy no longer holds. Leaving it unset lets the
       // groom re-derive tags from what the snip actually has.
+      // The session's home: without it a snip made inside a product surface lands in the main list.
+      surface,
 
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
       // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is

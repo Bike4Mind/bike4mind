@@ -126,7 +126,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'image-edit': imageEditDLQ.url,
     'generation-job': generationJobDLQ.url,
     'research-engine': researchEngineQueueDLQ.url,
-    'whats-new-generation': whatsNewGenerationQueueDLQ.url,
+    'release-notes': whatsNewGenerationQueueDLQ.url,
     'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
     'notebook-curation': notebookCurationQueueDLQ.url,
     'agent-proactive-message': agentProactiveMessageQueueDLQ.url,

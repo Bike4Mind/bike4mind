@@ -42,6 +42,7 @@ import {
 } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
+import { ReleaseNotesConfigSchema } from './releaseNotes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
 
 /**
@@ -476,6 +477,7 @@ export const SettingKeySchema = z.enum([
   'whatsNewAutomationEnabled',
   'whatsNewConfig',
   'whatsNewSyncConfig',
+  'releaseNotesConfig',
 
   // AGENT PROACTIVE MESSAGING SETTINGS
   'enableAgentProactiveMessages',
@@ -4361,6 +4363,16 @@ export const settingsMap = {
     category: 'Admin',
     order: 102,
     schema: WhatsNewSyncConfigSchema,
+  }),
+  releaseNotesConfig: makeObjectSetting({
+    key: 'releaseNotesConfig',
+    name: 'Release Notes Configuration',
+    defaultValue: ReleaseNotesConfigSchema.parse({}),
+    description:
+      'Customer-facing release notes generated from each production release. Disabled by default. Sets the model, the embargo before a note becomes visible, a denylist of terms that must never appear, and the Slack channel that gets the pre-publish preview.',
+    category: 'Admin',
+    order: 103,
+    schema: ReleaseNotesConfigSchema,
   }),
   enableAgentProactiveMessages: makeBooleanSetting({
     key: 'enableAgentProactiveMessages',

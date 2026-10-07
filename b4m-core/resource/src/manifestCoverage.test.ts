@@ -138,7 +138,6 @@ const PENDING_SCOPE_DECISION: Record<string, string> = {
 
   // User-facing, handler in open core, no AWS-only dependency. These are the strongest
   // candidates to wire next.
-  questExportQueue: 'reachable from /api/quest-plans/[id]/export - candidate to wire',
   slackExportQueue: 'reachable from /api/slack/export/async - candidate to wire',
   githubWebhookQueue: 'reachable from /api/webhooks/github/[token] - candidate to wire',
 

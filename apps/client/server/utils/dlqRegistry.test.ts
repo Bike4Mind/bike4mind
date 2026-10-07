@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // vi.hoisted runs before vi.mock hoisting, making mockDlqUrls available in the factory
 const mockDlqUrls = vi.hoisted(() => ({
@@ -9,7 +11,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'generation-callback': 'https://sqs.us-east-2.amazonaws.com/123456789/generationCallbackQueueDLQ',
   'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
-  'whats-new-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
+  'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
   'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',
@@ -176,5 +178,21 @@ describe('dlqRegistry', () => {
       // @ts-expect-error testing runtime behavior with invalid name
       expect(() => getSourceQueueUrl('nonExistentQueue')).toThrow('Missing source queue URL for: nonExistentQueue');
     });
+  });
+});
+
+describe('dlqUrls Linkable', () => {
+  // The mock above cannot catch a key renamed on one side only; read the real infra/web.ts instead.
+  it('exposes a URL under every registry label, and nothing else', () => {
+    const webTs = readFileSync(fileURLToPath(new URL('../../../../infra/web.ts', import.meta.url)), 'utf8');
+    const block = webTs.slice(webTs.indexOf("new sst.Linkable('dlqUrls'"));
+    const properties = block.slice(block.indexOf('{'), block.indexOf('\n});'));
+    const linkableKeys = [...properties.matchAll(/^\s+'([a-z0-9-]+)':/gm)].map(m => m[1]).sort();
+
+    expect(linkableKeys).toEqual(
+      getDlqRegistry()
+        .map(entry => entry.label)
+        .sort()
+    );
   });
 });

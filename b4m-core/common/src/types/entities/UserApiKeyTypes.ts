@@ -365,6 +365,19 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * `pool` selects which per-user cap the count feeds (see ApiKeyCapPool); defaults to 'standard'.
    */
   countActiveByUserId: (userId: string, pool?: ApiKeyCapPool) => Promise<number>;
+  /**
+   * Inserts the document then recounts active keys for the same (userId, pool).
+   * Returns the document when the count is within `cap`; revokes the just-inserted
+   * document and returns 'at_cap' when it would exceed `cap`. Deterministic
+   * tie-breaking (oldest `cap` keys survive by createdAt/id sort) prevents the
+   * both-rollback corner case that arises when two concurrent callers both insert
+   * and both naively undo their own key.
+   */
+  createIfUnderCap: (
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ) => Promise<IUserApiKeyDocument | 'at_cap'>;
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;
