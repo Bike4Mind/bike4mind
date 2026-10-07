@@ -13,4 +13,8 @@ describe('the credit-spending axis', () => {
     expect(spendsCredits('bash_execute')).toBe(false);
     expect(spendsCredits('file_write')).toBe(false);
   });
+
+  it('leaves session_send to the approval mode, because the relay bounds already cap the chain', () => {
+    expect(spendsCredits('session_send')).toBe(false);
+  });
 });

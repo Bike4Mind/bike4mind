@@ -15,10 +15,12 @@ import {
  * start and remove conversations inside the calling session's own project and can address
  * nothing outside it. A Chat session has no project, so the family is not declared for one.
  *
- * Three of them change what the user sees and are held at the approval gate. `session_spawn`
- * and `session_send` are gated on cost and autonomy together - each makes a conversation call
- * models and tools with nobody typing - and `session_delete` is gated as irreversible, which
- * additionally means no "always" answer can ever cover it.
+ * Three of them change what the user sees and declare an approval. `session_spawn` is gated on
+ * cost and autonomy together, asked in every mode including 'full' - starting a conversation
+ * that calls models and tools with nobody typing is its own decision - and `session_delete` is
+ * gated as irreversible, which additionally means no "always" answer can ever cover it.
+ * `session_send` rides the mode like an ordinary tool: its runaway case is bounded structurally
+ * by the relay hop and fan-out budgets, so 'ask' asks and the other modes do not.
  */
 
 /** Nothing here works without a Code session's project binding behind it. */
@@ -223,8 +225,8 @@ export const sessionSend: ToolDefinition = {
       'worked out. If it is mid-reply your message runs as its next turn instead. It does NOT ' +
       'reply to you in this turn: finish your answer without waiting for it, and use ' +
       'session_read on its id later if you need what it said. It spends the user credits in ' +
-      'that conversation and they approve every message, so send one message saying the whole ' +
-      'thing rather than several.',
+      'that conversation and one turn may only send a couple of messages, so send one message ' +
+      'saying the whole thing rather than several.',
     parameters: {
       type: 'object',
       properties: {
@@ -246,8 +248,9 @@ export const sessionSend: ToolDefinition = {
     const name = (await requireHost(context).describeSession(sessionId)) ?? sessionId;
     return {
       detail: [`Send this to "${name}", and let it run?`, '', message].join('\n'),
-      // Target and message together, for session_spawn's reason: approving one message must
-      // never cover the next, and the same words to a different conversation are a different act.
+      // Only 'ask' reaches this card, but the key still has to be exact there: approving one
+      // message must never cover the next, and the same words to a different conversation are a
+      // different act.
       key: `session_send:${sessionId}:${message}`,
     };
   },
