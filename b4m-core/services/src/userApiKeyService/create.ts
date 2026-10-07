@@ -10,6 +10,7 @@ import {
   IAgentRepository,
   IEmbedBranding,
   isAgentOwnedByEmbedKey,
+  IUserApiKeyDocument,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -264,28 +265,15 @@ export const createUserApiKey = async (
   // Skip only for the shared system user - keyed on userId === systemUserId (NOT on
   // scope) to prevent rogue-admin bypass.
   const isSystemUser = systemUserId && userId === systemUserId;
-  if (!isSystemUser) {
-    const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
-    const activeCount = await db.userApiKeys.countActiveByUserId(userId, pool);
-    if (isExchangeKey && activeCount >= MAX_ACTIVE_EXCHANGE_KEYS_PER_USER) {
-      throw new BadRequestError(
-        `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`,
-        { errorCode: API_KEY_USER_CAP_ERROR_CODE }
-      );
-    }
-    if (!isExchangeKey && activeCount >= MAX_ACTIVE_KEYS_PER_USER) {
-      throw new BadRequestError(`Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`, {
-        errorCode: API_KEY_USER_CAP_ERROR_CODE,
-      });
-    }
-  }
+  const pool = isExchangeKey ? 'oauth-exchange' : 'standard';
+  const cap = isExchangeKey ? MAX_ACTIVE_EXCHANGE_KEYS_PER_USER : MAX_ACTIVE_KEYS_PER_USER;
 
   const { key, keyPrefix, keyHash, keyDigest } = generateApiKey();
   const callbackSigningSecret = generateCallbackSigningSecret();
 
   const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
 
-  const apiKeyDocument = await db.userApiKeys.create({
+  const docToCreate = {
     userId,
     name: params.name,
     keyHash,
@@ -306,14 +294,29 @@ export const createUserApiKey = async (
     metadata: params.metadata,
     productId: params.productId,
     productName: params.productName,
-    billingOwnerType: params.billingOwnerType ?? CreditHolderType.User,
+    // cast: Agent is rejected above; only User/Organization reach here
+    billingOwnerType: (params.billingOwnerType ?? CreditHolderType.User) as ApiKeyBillingOwnerType,
     organizationId: params.organizationId,
     agentId: params.agentId,
     allowedOrigins: params.allowedOrigins,
     branding: params.branding,
     spendCap: params.spendCap,
     preauthorizedLakeIds: params.preauthorizedLakeIds,
-  });
+  };
+
+  let apiKeyDocument: IUserApiKeyDocument;
+  if (isSystemUser) {
+    apiKeyDocument = await db.userApiKeys.create(docToCreate);
+  } else {
+    const result = await db.userApiKeys.createIfUnderCap(docToCreate, cap, pool);
+    if (result === 'at_cap') {
+      const message = isExchangeKey
+        ? `Maximum ${MAX_ACTIVE_EXCHANGE_KEYS_PER_USER} concurrently authorized federated apps allowed per user`
+        : `Maximum ${MAX_ACTIVE_KEYS_PER_USER} active API keys allowed per user`;
+      throw new BadRequestError(message, { errorCode: API_KEY_USER_CAP_ERROR_CODE });
+    }
+    apiKeyDocument = result;
+  }
 
   return {
     id: apiKeyDocument.id,

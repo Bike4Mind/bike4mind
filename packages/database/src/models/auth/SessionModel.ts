@@ -12,6 +12,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   IUserDocument,
+  ListSessionsByUserQuery,
   SearchOptions,
   SESSION_ORIGIN_CHANNELS,
   SessionListFilters,
@@ -74,6 +75,31 @@ export function sessionListFilterQuery(filters: SessionListFilters = {}): Record
   }
   if (filters.hasImages === true) q.imageCount = { $gt: 0 };
   if (filters.hasImages === false) q.imageCount = { $not: { $gt: 0 } };
+  return q;
+}
+
+/** The own-list filter shared by searchByUserId (offset, SPA) and listByUserId (cursor, public API). */
+function ownSessionListQuery(
+  userId: string,
+  search: string | undefined,
+  surface: string | undefined,
+  filters: SessionListFilters = {}
+): Record<string, unknown> {
+  // Surface scoping: a specific surface returns only that product's sessions; otherwise the main
+  // list excludes product-surface sessions ({ surface: null } matches null OR absent).
+  const q: Record<string, unknown> = { userId, surface: surface ? surface : null };
+
+  Object.assign(q, sessionListFilterQuery(filters));
+
+  if (search) {
+    // Search name, summary, and tags via $or for better discovery.
+    const escapedSearch = escapeRegex(search);
+    q['$or'] = [
+      { name: { $regex: escapedSearch, $options: 'si' } },
+      { summary: { $regex: escapedSearch, $options: 'si' } },
+      { 'tags.name': { $regex: escapedSearch, $options: 'si' } },
+    ];
+  }
   return q;
 }
 
@@ -426,26 +452,7 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     surface?: string,
     filters: SessionListFilters = {}
   ) {
-    const q: Record<string, unknown> = {
-      userId: userId,
-    };
-
-    // Surface scoping: a specific surface returns only that product's sessions;
-    // otherwise the main list excludes product-surface sessions ({ surface: null }
-    // matches docs where the field is null OR absent).
-    q.surface = surface ? surface : null;
-
-    Object.assign(q, sessionListFilterQuery(filters));
-
-    if (search) {
-      // Search name, summary, and tags via $or for better discovery.
-      const escapedSearch = escapeRegex(search);
-      q['$or'] = [
-        { name: { $regex: escapedSearch, $options: 'si' } },
-        { summary: { $regex: escapedSearch, $options: 'si' } },
-        { 'tags.name': { $regex: escapedSearch, $options: 'si' } },
-      ];
-    }
+    const q = ownSessionListQuery(userId, search, surface, filters);
 
     const { pagination, orderBy } = options || {};
 
@@ -465,6 +472,14 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       data: sessionsWithCounts,
       hasMore,
     };
+  }
+  async listByUserId({ userId, search, surface, filters, beforeId, limit }: ListSessionsByUserQuery) {
+    // A non-ObjectId cursor id can never bound a page; callers validate it first (422), so this
+    // only keeps a stray one from surfacing as a BSON cast 500.
+    if (beforeId !== undefined && !mongoose.isObjectIdOrHexString(beforeId)) return [];
+    const q = ownSessionListQuery(userId, search, surface, filters);
+    if (beforeId !== undefined) q._id = { $lt: new mongoose.Types.ObjectId(beforeId) };
+    return this.sessionModel.find(q).sort({ _id: -1 }).limit(limit);
   }
   async findAllWithKnowledgeId(knowledgeId: string) {
     return this.sessionModel.find({ knowledgeIds: { $in: [knowledgeId] } });
@@ -736,6 +751,10 @@ SessionSchema.index({ deletedAt: 1, userId: 1, lastUpdated: -1 });
 
 // Session list filtered by origin (sidebar "Only API" / "Hide API"); see sessionListFilterQuery.
 SessionSchema.index({ deletedAt: 1, userId: 1, 'origin.channel': 1, lastUpdated: -1 });
+
+// Keyset pagination for GET /api/v1/sessions (listByUserId): equality on deletedAt/userId, then an
+// index-ordered walk of _id, so a page reads limit+1 rows instead of sorting every session the user has.
+SessionSchema.index({ deletedAt: 1, userId: 1, _id: -1 });
 
 // Optimize permission and sharing queries
 SessionSchema.index({ deletedAt: 1, 'users.permissions': 1, 'users.userId': 1 });

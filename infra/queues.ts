@@ -1,10 +1,4 @@
-import {
-  appFilesBucket,
-  fabFileBucket,
-  generatedImagesBucket,
-  slackExportBucket,
-  whatsNewDistributionBucket,
-} from './buckets';
+import { appFilesBucket, fabFileBucket, generatedImagesBucket, slackExportBucket } from './buckets';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   PRODUCTION_STAGES,
@@ -17,7 +11,7 @@ import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
 import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
@@ -484,7 +478,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
-// What's New Modal Generation Queue
+// Release notes generation queue (keeps the retired What's New generator's resource names)
 const whatsNewGenerationQueueDLQ = new sst.aws.Queue('whatsNewGenerationQueueDLQ', {
   transform: {
     queue: {
@@ -507,15 +501,10 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/whatsNewGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/releaseNotes.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
-    link: [
-      ...allSecrets,
-      websocketApi,
-      ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
-      ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
-    ],
+    link: [...allSecrets, websocketApi],
     logging: {
       retention: '3 days',
     },
@@ -536,13 +525,6 @@ const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
       {
         actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
-      },
-      {
-        // CloudFront cache invalidation for What's New modal distribution
-        actions: ['cloudfront:CreateInvalidation'],
-        resources: [
-          $interpolate`arn:aws:cloudfront::${aws.getCallerIdentityOutput().accountId}:distribution/${router.distributionID}`,
-        ],
       },
     ],
     copyFiles: [

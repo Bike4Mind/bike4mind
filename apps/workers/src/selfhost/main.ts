@@ -23,6 +23,7 @@ import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerNotebookCurationQueue } from './notebookCurationQueue';
+import { registerQuestExportQueue } from './questExportQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
 import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
@@ -194,6 +195,7 @@ async function main() {
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
   registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
   await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
+  await registerQuestExportQueue(worker, Resource.questExportQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses

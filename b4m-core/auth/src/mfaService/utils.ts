@@ -136,7 +136,7 @@ export function userHasMFAConfigured(user: IUserDocument): boolean {
  * Server-side attempt tracking to prevent bypass via refresh/cancel
  * Constants for lockout policy
  */
-const MAX_FAILED_ATTEMPTS = 3;
+export const MAX_FAILED_ATTEMPTS = 3;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 const ATTEMPT_RESET_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 

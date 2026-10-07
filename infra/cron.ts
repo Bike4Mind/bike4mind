@@ -7,7 +7,6 @@ import { allSecrets } from './secrets';
 import {
   researchEngineQueue,
   agentProactiveMessageQueue,
-  whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   liveOpsTriageQueue,
   deepAgentWakeQueue,
@@ -165,10 +164,10 @@ const emailCampaignSchedulerCron = new sst.aws.Cron('emailCampaignScheduler', {
  * Fetches latest What's New modal from production S3 and imports to local DB.
  *
  * CRITICAL: Only enabled for non-production environments (dev, staging, forks)
- * - production: DISABLED - production GENERATES modals, doesn't import them
+ * - production: DISABLED - production is the source the others import from
  * - dev/staging/forks: ENABLED - imports modals from production
  *
- * Schedule: Daily at 9am UTC (3am CST) - 2 hours after production generates at 7am UTC (1am CST)
+ * Schedule: Daily at 9am UTC (3am CST)
  * Checks autoSyncEnabled config before importing.
  */
 const whatsNewSyncCron = new sst.aws.Cron('whatsNewSyncCron', {
@@ -237,49 +236,11 @@ const liveopsTriageDispatcherCron = new sst.aws.Cron('liveopsTriageDispatcherCro
 });
 
 /**
- * What's New Daily Modal Generation Cron
- * Collects merged PRs/commits from GitHub and dispatches to the generation queue.
- * Replaces the GitHub Actions workflow (generate-whats-new-modal-production.yml).
- *
- * Schedule: Daily at 7am UTC (1am CST)
- * Only runs in production environment.
- */
-const whatsNewGenerationCron = new sst.aws.Cron('whatsNewGenerationCron', {
-  schedule: 'cron(0 7 * * ? *)', // 7am UTC daily (1am CST)
-  function: {
-    handler: 'apps/workers/src/cron/whatsNewGeneration.handler',
-    vpc: lambdaVpc,
-    link: [...allSecrets, whatsNewGenerationQueue],
-    timeout: '2 minutes',
-    runtime: 'nodejs24.x',
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    logging: {
-      retention: '1 week',
-    },
-    permissions: [
-      {
-        actions: ['cloudwatch:PutMetricData'],
-        resources: ['*'],
-      },
-      {
-        actions: ['sqs:SendMessage'],
-        resources: [whatsNewGenerationQueue.arn],
-      },
-    ],
-  },
-  // Only enabled in production - replaces GitHub Actions workflow
-  enabled: $app.stage === 'production',
-});
-
-/**
  * What's New Weekly Highlights Cron
  * Generates a weekly summary of What's New modals and posts to Slack.
  *
  * Schedule: Weekly on Saturday at 2am CST (8:00 UTC)
- * Runs 1 hour after the daily What's New modal generation (7am UTC)
- * Only runs in production environment.
+ * Disabled; see `enabled` below.
  *
  * Workflow:
  * 1. Fetches What's New modals from the past 7 days
@@ -287,7 +248,7 @@ const whatsNewGenerationCron = new sst.aws.Cron('whatsNewGenerationCron', {
  * 3. Posts formatted highlights to configured Slack channel
  */
 const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
-  schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday (1hr after modal generation)
+  schedule: 'cron(0 8 ? * SAT *)', // 2am CST / 8am UTC every Saturday
   function: {
     handler: 'apps/workers/src/cron/whatsNewHighlights.handler',
     vpc: lambdaVpc,
@@ -307,8 +268,9 @@ const whatsNewHighlightsCron = new sst.aws.Cron('whatsNewHighlightsCron', {
       },
     ],
   },
-  // Only enabled in production - fork environments should not generate highlights
-  enabled: $app.stage === 'production',
+  // Disabled: its only input was the generated What's New modals, which release notes replaced, so it
+  // would post a "no modals" warning every week.
+  enabled: false,
 });
 
 // Telemetry TTL Cleanup — GDPR Article 5(1)(e) storage limitation
@@ -1042,7 +1004,6 @@ export {
   emailCampaignSchedulerCron,
   whatsNewSyncCron,
   liveopsTriageDispatcherCron,
-  whatsNewGenerationCron,
   whatsNewHighlightsCron,
   cloudSecurityScanCron,
   integrationHealthCheckCron,

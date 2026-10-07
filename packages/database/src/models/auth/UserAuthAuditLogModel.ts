@@ -23,6 +23,8 @@ export type UserAuthAuditEvent =
   | 'password_reset'
   | 'mfa_enrolled'
   | 'mfa_disabled'
+  | 'passkey_registered'
+  | 'passkey_removed'
   | 'oauth_link'
   | 'oauth_unlink'
   | 'session_revoked'
@@ -41,6 +43,8 @@ export const USER_AUTH_AUDIT_EVENTS: UserAuthAuditEvent[] = [
   'password_reset',
   'mfa_enrolled',
   'mfa_disabled',
+  'passkey_registered',
+  'passkey_removed',
   'oauth_link',
   'oauth_unlink',
   'session_revoked',
