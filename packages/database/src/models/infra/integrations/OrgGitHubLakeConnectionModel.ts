@@ -75,6 +75,8 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     ingestClaimToken: { type: String },
     disconnectRequestedAt: { type: Date },
     reconcileCheckedAt: { type: Date },
+    reconcileEnqueuedSha: { type: String },
+    reconcileEnqueuedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -98,7 +100,7 @@ OrgGitHubLakeConnectionSchema.index({ installationId: 1 }, { name: 'org_gh_lake_
 OrgGitHubLakeConnectionSchema.index({ organizationId: 1 }, { name: 'org_gh_lake_conn_org_id' });
 
 // The scheduled reconcile's oldest-checked-first scan.
-OrgGitHubLakeConnectionSchema.index({ reconcileCheckedAt: 1 }, { name: 'org_gh_lake_conn_reconcile_checked' });
+OrgGitHubLakeConnectionSchema.index({ reconcileCheckedAt: 1, _id: 1 }, { name: 'org_gh_lake_conn_reconcile_checked' });
 
 export interface IOrgGitHubLakeConnectionModel extends Model<IOrgGitHubLakeConnectionDocument & IMongoDocument> {}
 
@@ -316,6 +318,14 @@ class OrgGitHubLakeConnectionRepository
     await this.model.updateMany(
       { _id: { $in: [...ids] } },
       { $set: { reconcileCheckedAt: at } },
+      { timestamps: false }
+    );
+  }
+
+  async markReconcileEnqueued(id: string, sha: string | null, at: Date): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      { $set: { reconcileEnqueuedSha: sha, reconcileEnqueuedAt: at } },
       { timestamps: false }
     );
   }

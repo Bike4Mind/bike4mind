@@ -53,6 +53,10 @@ export interface IOrgGitHubLakeConnection {
   disconnectRequestedAt?: Date;
   /** When the scheduled reconcile last compared this repo's HEAD; drives its oldest-checked-first order. */
   reconcileCheckedAt?: Date;
+  /** HEAD the reconcile last enqueued a sync for (null: access was lost before HEAD could be read). */
+  reconcileEnqueuedSha?: string | null;
+  /** When that enqueue happened; the reconcile's retry cooldown runs from here. */
+  reconcileEnqueuedAt?: Date;
 }
 
 /**
@@ -228,4 +232,6 @@ export interface IOrgGitHubLakeConnectionRepository extends IBaseRepository<IOrg
   findDueForReconcile(limit: number): Promise<IOrgGitHubLakeConnectionDocument[]>;
   /** Stamps reconcileCheckedAt without touching updatedAt. */
   markReconcileChecked(ids: readonly string[], at: Date): Promise<void>;
+  /** Records the reconcile's enqueue target for its retry cooldown, without touching updatedAt. */
+  markReconcileEnqueued(id: string, sha: string | null, at: Date): Promise<void>;
 }

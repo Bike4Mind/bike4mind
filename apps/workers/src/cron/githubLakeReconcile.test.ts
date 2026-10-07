@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
   findDueForReconcile: vi.fn(),
   markReconcileChecked: vi.fn(),
+  markReconcileEnqueued: vi.fn(),
   sendToQueue: vi.fn(),
   connectDB: vi.fn(),
   getGitHubLakeAppConfig: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   orgGitHubLakeConnectionRepository: {
     findDueForReconcile: h.findDueForReconcile,
     markReconcileChecked: h.markReconcileChecked,
+    markReconcileEnqueued: h.markReconcileEnqueued,
   },
 }));
 vi.mock('@bike4mind/observability', () => ({
@@ -44,19 +46,27 @@ vi.mock('@server/integrations/github/dataLake/lakeAppClient', async importOrigin
   };
 });
 
-import { runGitHubLakeReconcile, MAX_CHECKS_PER_RUN } from './githubLakeReconcile';
+import { runGitHubLakeReconcile, MAX_CHECKS_PER_RUN, RETRY_COOLDOWN_MS } from './githubLakeReconcile';
 
 const NOW = Date.parse('2026-10-07T12:00:00Z');
 const FLAGS = ['EnableDataLakes', 'EnableDataLakeGitHub', 'EnableDataLakeGitHubReconcile'];
 const flagsOn = (except?: string) =>
   h.getSettingsValue.mockImplementation(async (key: string) => FLAGS.includes(key) && key !== except);
 
-const conn = (id: string, fields: Partial<{ installationId: number; lastSyncedCommitSha: string }> = {}) => ({
+type ConnFields = {
+  installationId: number;
+  lastSyncedCommitSha: string;
+  status: string;
+  reconcileEnqueuedSha: string | null;
+  reconcileEnqueuedAt: Date;
+};
+const conn = (id: string, fields: Partial<ConnFields> = {}) => ({
   id,
   installationId: 1,
   repositoryId: Number(id.replace(/\D/g, '')) || 9,
   repositoryFullName: `acme/${id}`,
   lastSyncedCommitSha: 'old',
+  status: 'connected',
   ...fields,
 });
 
@@ -65,7 +75,7 @@ const httpError = (status: number, headers: Record<string, string> = {}) =>
 const rateLimited = () =>
   httpError(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(NOW / 1000) + 600) });
 
-const stamped = () => h.markReconcileChecked.mock.calls.at(-1)?.[0] as string[];
+const stamped = () => h.markReconcileChecked.mock.calls.flatMap(c => c[0] as string[]);
 const enqueuedIds = () => h.sendToQueue.mock.calls.map(c => (c[1] as { connectionId: string }).connectionId);
 
 describe('githubLakeReconcile cron', () => {
@@ -81,6 +91,7 @@ describe('githubLakeReconcile cron', () => {
     h.getBranchHeadSha.mockResolvedValue('new');
     h.sendToQueue.mockResolvedValue(undefined);
     h.markReconcileChecked.mockResolvedValue(undefined);
+    h.markReconcileEnqueued.mockResolvedValue(undefined);
     h.findDueForReconcile.mockResolvedValue([]);
   });
 
@@ -126,13 +137,16 @@ describe('githubLakeReconcile cron', () => {
 
   it.each([
     ['token mint 422', () => h.getInstallationOctokit.mockRejectedValue(httpError(422))],
+    ['token mint 404', () => h.getInstallationOctokit.mockRejectedValue(httpError(404))],
     ['repository 404', () => h.getRepository.mockRejectedValue(httpError(404))],
+    ['repository 422', () => h.getRepository.mockRejectedValue(httpError(422))],
   ])('enqueues once on lost access (%s) so the ingest records it', async (_label, arrange) => {
     h.findDueForReconcile.mockResolvedValue([conn('c1')]);
     arrange();
     const result = await runGitHubLakeReconcile({ now: NOW });
     expect(enqueuedIds()).toEqual(['c1']);
     expect(result).toMatchObject({ enqueued: 1, failed: 0 });
+    expect(h.markReconcileEnqueued).toHaveBeenCalledWith('c1', null, new Date(NOW));
   });
 
   it('isolates one failing connection from its siblings', async () => {
@@ -147,7 +161,7 @@ describe('githubLakeReconcile cron', () => {
     expect(stamped()).toEqual(['c1', 'c2', 'c3']);
   });
 
-  it('a rate limit skips the rest of that installation only, leaving them unstamped', async () => {
+  it('a rate limit skips the rest of that installation only, but still stamps them so others rotate in', async () => {
     // 11 connections so the second window starts after the throttle was recorded.
     const sameInstall = Array.from({ length: 11 }, (_, i) => conn(`a${i + 1}`, { installationId: 1 }));
     const otherInstall = conn('b1', { installationId: 2 });
@@ -158,12 +172,64 @@ describe('githubLakeReconcile cron', () => {
     });
     const result = await runGitHubLakeReconcile({ now: NOW });
     expect(result.throttledInstallations).toBe(1);
-    expect(stamped()).not.toContain('a1');
-    expect(stamped()).not.toContain('a11');
-    expect(stamped()).toContain('b1');
+    expect(result.checked).toBe(10);
+    expect(stamped()).toEqual(expect.arrayContaining(['a1', 'a11', 'b1']));
     expect(enqueuedIds()).toContain('b1');
     expect(enqueuedIds()).not.toContain('a11');
     expect(h.getInstallationOctokit).toHaveBeenCalledTimes(11);
+  });
+
+  it('does not re-enqueue the same HEAD on a second pass within the cooldown, but does after it', async () => {
+    // A row store the mocked repository reads and writes, so pass 2 sees what pass 1 recorded.
+    const row = conn('c1');
+    h.findDueForReconcile.mockImplementation(async () => [{ ...row }]);
+    h.markReconcileEnqueued.mockImplementation(async (_id: string, sha: string | null, at: Date) => {
+      Object.assign(row, { reconcileEnqueuedSha: sha, reconcileEnqueuedAt: at });
+    });
+
+    expect((await runGitHubLakeReconcile({ now: NOW })).enqueued).toBe(1);
+    // The ingest released without recording the commit, so lastSyncedCommitSha is still 'old'.
+    const second = await runGitHubLakeReconcile({ now: NOW + 15 * 60_000 });
+    expect(second).toMatchObject({ enqueued: 0, backoff: 1, checked: 1 });
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+
+    expect((await runGitHubLakeReconcile({ now: NOW + RETRY_COOLDOWN_MS })).enqueued).toBe(1);
+    expect(h.sendToQueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('enqueues a new HEAD even inside the cooldown of an earlier one', async () => {
+    h.findDueForReconcile.mockResolvedValue([
+      conn('c1', { reconcileEnqueuedSha: 'older', reconcileEnqueuedAt: new Date(NOW - 60_000) }),
+    ]);
+    expect((await runGitHubLakeReconcile({ now: NOW })).enqueued).toBe(1);
+    expect(h.markReconcileEnqueued).toHaveBeenCalledWith('c1', 'new', new Date(NOW));
+  });
+
+  it('backs off a lost-access re-enqueue the same way', async () => {
+    h.findDueForReconcile.mockResolvedValue([
+      conn('c1', { reconcileEnqueuedSha: null, reconcileEnqueuedAt: new Date(NOW - 60_000) }),
+    ]);
+    h.getRepository.mockRejectedValue(httpError(404));
+    expect(await runGitHubLakeReconcile({ now: NOW })).toMatchObject({ enqueued: 0, backoff: 1 });
+  });
+
+  it('enqueues a stale syncing claim even when HEAD is unchanged, so the ingest releases it', async () => {
+    h.findDueForReconcile.mockResolvedValue([conn('c1', { status: 'syncing', lastSyncedCommitSha: 'new' })]);
+    expect(await runGitHubLakeReconcile({ now: NOW })).toMatchObject({ enqueued: 1, unchanged: 0 });
+  });
+
+  it('stamps each window as it finishes and stops starting windows once the run budget is spent', async () => {
+    h.findDueForReconcile.mockResolvedValue(Array.from({ length: 15 }, (_, i) => conn(`c${i + 1}`)));
+    const result = await runGitHubLakeReconcile({ now: NOW, budgetMs: 0 });
+    expect(result).toMatchObject({ checked: 10, notReached: 5 });
+    expect(h.markReconcileChecked).toHaveBeenCalledTimes(1);
+    expect(stamped()).toHaveLength(10);
+    expect(stamped()).not.toContain('c11');
+
+    vi.clearAllMocks();
+    await runGitHubLakeReconcile({ now: NOW });
+    expect(h.markReconcileChecked).toHaveBeenCalledTimes(2);
+    expect(stamped()).toHaveLength(15);
   });
 
   it('counts an enqueue failure and still stamps the connection', async () => {

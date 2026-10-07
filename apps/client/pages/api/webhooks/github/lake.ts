@@ -7,8 +7,10 @@
  *   no-ops when HEAD already matches the last synced commit (so a redelivery is harmless), and defers
  *   behind a sync that is already in flight for up to ~18 min (its MAX_GITHUB_LAKE_REDRIVES redrives
  *   at REDRIVE_DELAY_SECONDS apart) before dropping the message. A push missed that way, or never
- *   delivered at all, is caught by the scheduled reconcile when its flag is on
- *   (apps/workers/src/cron/githubLakeReconcile.ts); otherwise the next push or a manual Sync picks it up.
+ *   delivered at all, is caught by the scheduled reconcile
+ *   (apps/workers/src/cron/githubLakeReconcile.ts) where it runs: scheduled on the production and dev
+ *   stages and in self-host, and only while its admin flag is on. Elsewhere the next push or a manual
+ *   Sync picks it up.
  * - `installation.deleted` / `installation_repositories.removed`: the App lost access, so each
  *   affected connection is queued on githubLakeRevokeQueue for purge (queueHandlers/githubLakeRevoke.ts).
  *   It only enqueues: GitHub never redelivers on its own and a live sync makes the purge 409, so the

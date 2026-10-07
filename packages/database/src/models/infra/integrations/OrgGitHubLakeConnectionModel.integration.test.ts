@@ -476,6 +476,20 @@ describe('OrgGitHubLakeConnectionModel - reconcile selection', () => {
     await expect(repo.markReconcileChecked([], at)).resolves.toBeUndefined();
     expect(await dueIds()).toEqual([b, a]);
   });
+
+  it('markReconcileEnqueued records the target (including null) and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileEnqueued(a, 'abc123', at);
+    let after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBe('abc123');
+    expect(after?.reconcileEnqueuedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    await repo.markReconcileEnqueued(a, null, at);
+    after = await repo.findById(a);
+    expect(after?.reconcileEnqueuedSha).toBeNull();
+  });
 });
 
 describe('isGitHubLakeSyncClaimLive', () => {
