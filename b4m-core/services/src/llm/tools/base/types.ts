@@ -300,6 +300,12 @@ export interface ToolContext {
    */
   sessionIncludeLibraryFiles?: boolean;
   /**
+   * Every file the user attached to this turn or session (session knowledge, session files,
+   * message files), inlined or not. With the library off it is the only way a non-lake file is
+   * still retrievable by id - see knowledgeBaseRetrieve.
+   */
+  attachedFileIds?: string[];
+  /**
    * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
    * lake they can manage but are not a member of - see canManageLake, checked once at
    * pages/api/v1/sessions/index.ts, never re-derived here). Unioned into the resolved lake access

@@ -114,6 +114,8 @@ export interface ToolBuilderConfig {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -828,6 +830,7 @@ export class ToolBuilder {
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        attachedFileIds: this.deps.attachedFileIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,

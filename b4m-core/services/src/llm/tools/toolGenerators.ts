@@ -37,6 +37,7 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
@@ -53,6 +54,7 @@ export const generateTools = (
     retrievalFilter?: ToolContext['retrievalFilter'];
     kbScope?: ToolContext['kbScope'];
     inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+    attachedFileIds?: ToolContext['attachedFileIds'];
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
     suppressLakeArms?: ToolContext['suppressLakeArms'];
     sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
@@ -107,6 +109,7 @@ export const generateTools = (
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,

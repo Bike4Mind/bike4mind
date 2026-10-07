@@ -56,6 +56,8 @@ export interface ToolBuilderDeps {
   kbScope?: ToolContext['kbScope'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -330,6 +332,7 @@ export function buildSharedTools(
     retrievalFilter,
     kbScope,
     inlinedAttachmentIds,
+    attachedFileIds,
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
@@ -353,6 +356,7 @@ export function buildSharedTools(
       retrievalFilter,
       kbScope,
       inlinedAttachmentIds,
+      attachedFileIds,
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,

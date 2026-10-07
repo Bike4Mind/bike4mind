@@ -1623,6 +1623,7 @@ async function processExecution(
       // passthrough. Until then an agent delegated from a personal-corpus session searches the
       // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       inlinedAttachmentIds,
+      attachedFileIds: session.knowledgeIds ?? [],
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {

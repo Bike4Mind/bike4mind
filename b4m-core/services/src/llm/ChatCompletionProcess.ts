@@ -2945,6 +2945,7 @@ export class ChatCompletionProcess {
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
         retrievalFilter: toRetrievalFilter(session),
         inlinedAttachmentIds: actuallyInlinedKnowledgeIds,
+        attachedFileIds: [...new Set([...(session.knowledgeIds ?? []), ...sessionFabFileIds, ...messageFileIds])],
         fullyInlinedAttachmentIds,
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.

@@ -5,7 +5,11 @@ import {
   normalizeExclusionMarkers,
   type RetrievalExclusionOptions,
 } from '@bike4mind/utils/retrievalExclusion';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import type { ResolvedLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 /**
@@ -156,6 +160,7 @@ export const knowledgeBaseCountTool: ToolDefinition = {
         const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
+          if (sessionExcludesLibrary(context)) return LIBRARY_OFF_NO_LAKE_MESSAGE;
           // No curated library, but the caller's own and shared files are still what
           // search_knowledge_base reads, so counting nothing here would misreport the corpus.
           const own = await countScope(context, {
