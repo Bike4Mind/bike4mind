@@ -229,6 +229,39 @@ describe('ConversationContext', () => {
     it('uses a sane default replay budget', () => {
       expect(DEFAULT_TOOL_TRACE_REPLAY_TOKENS).toBeGreaterThan(0);
     });
+
+    it('calibrates the replay budget to the model, so a Claude turn omits more', () => {
+      const ctx = ConversationContext.fromSession(session([]));
+      ctx.recordTurn({
+        userInput: 'run tools',
+        result: result('all done', [
+          { name: 'a', input: {}, result: 'y'.repeat(400) },
+          { name: 'b', input: {}, result: 'y'.repeat(400) },
+          { name: 'c', input: {}, result: 'y'.repeat(400) },
+          { name: 'd', input: {}, result: 'y'.repeat(400) },
+        ]),
+      });
+
+      // Budget every raw line fits but the x1.5 Claude estimate does not: measure the
+      // full raw trace first, then reuse its cost as the per-line budget.
+      const unbounded = ctx.buildTurnMessages('next', {
+        model: 'm',
+        contextWindow: 200_000,
+        toolTraceReplayTokens: 1_000_000,
+      });
+      const rawTrace = (unbounded.find(m => m.role === 'assistant')!.content as string).split('<tool-trace>')[1] ?? '';
+      const budget = counter.countTokens(rawTrace) + 5;
+
+      const raw = ctx.buildTurnMessages('next', { model: 'm', contextWindow: 200_000, toolTraceReplayTokens: budget });
+      const claude = ctx.buildTurnMessages('next', {
+        model: 'claude-sonnet-5',
+        contextWindow: 200_000,
+        toolTraceReplayTokens: budget,
+      });
+
+      expect(raw.find(m => m.role === 'assistant')!.content as string).not.toContain('omitted');
+      expect(claude.find(m => m.role === 'assistant')!.content as string).toContain('omitted');
+    });
   });
 
   describe('multimodal user input', () => {

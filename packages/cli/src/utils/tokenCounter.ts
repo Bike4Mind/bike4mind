@@ -2,7 +2,9 @@ import { get_encoding, Tiktoken } from 'tiktoken';
 import type { Session } from '../storage/types.js';
 import { tokenEstimateMultiplier } from '@bike4mind/common';
 import type { ModelInfo, MessageContent } from '@bike4mind/common';
-import { scaleTokenEstimate } from '@bike4mind/utils';
+// Subpath, not the utils barrel: the barrel re-exports llm-adapters and fab-pipeline, which
+// rolldown would then pull into the CLI bundle. Same pattern as @bike4mind/utils/globMatches.
+import { scaleTokenEstimate } from '@bike4mind/utils/calibratedTokenizer';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
