@@ -5,9 +5,8 @@ import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import { updateAttention, updateSummary } from '@shared/update';
 import { EnvironmentPicker } from '../auth/EnvironmentPicker';
-import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
-import { CloseIcon, DownloadIcon, GearIcon, ServerIcon } from './icons';
-import { NavItem } from './SessionList';
+import { EntrySection, type ConfigEntry } from './ConfigEntry';
+import { CloseIcon, DownloadIcon, ServerIcon } from './icons';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { UpdateSettings } from './UpdateSettings';
 import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
@@ -57,13 +56,13 @@ function updatesEntry(controller: AppUpdateController): ConfigEntry {
 }
 
 /**
- * Both Settings entries, built once and read by the nav row as well as the screen.
+ * Both Settings entries, built when the screen is open and not before.
  *
  * What the app talks to comes before how it maintains itself: the server is the setting a user
  * arrives here to change, and an update is the one that arrives on its own.
  *
- * `useAppUpdate` only subscribes - main pushes, nothing here polls - so the nav row holding this
- * open while the screen is shut costs one listener and no traffic.
+ * Nothing stays mounted while the screen is shut. What an unopened Settings still has to report
+ * is one string, which the account strip reads for itself - see `useSettingsAttention`.
  */
 function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
   const update = useAppUpdate();
@@ -72,32 +71,15 @@ function useSettingsEntries(auth: AuthState | null): ConfigEntry[] {
 }
 
 /**
- * The Settings row in the nav, which opens the screen.
- *
- * It carries its own attention badge for the same reason Customize carries one: an update that
- * is ready to install is the only way the user learns about it, and it would go unseen if the
- * badge stayed with the screen the entry used to live on.
- */
-export function SettingsNavItem({ auth, onOpen }: { auth: AuthState | null; onOpen: () => void }) {
-  const entries = useSettingsEntries(auth);
-
-  return (
-    <NavItem
-      icon={<GearIcon />}
-      label="Settings"
-      onClick={onOpen}
-      end={entryAttentionChip(entries, 'settings-attention-chip')}
-      testId="chat-settings-btn"
-    />
-  );
-}
-
-/**
  * "Settings": what the app connects to and how it is maintained, as a screen beside Customize.
  *
  * The split with Customize is by subject, not by importance: nothing here changes how the app
  * looks or what it can reach, and nothing in Customize changes which deployment a reply came
  * from. Each screen says which half it owns under its title, so neither has to be searched.
+ *
+ * Customize is a nav row and this is not. Two config rows stacked in the nav list read as one
+ * thing split in half; Settings is reached from the account menu, where the server it owns used
+ * to live, and the strip above that menu carries whatever it needs to say meanwhile.
  */
 export function SettingsScreen({ auth, onClose }: { auth: AuthState | null; onClose: () => void }) {
   const entries = useSettingsEntries(auth);

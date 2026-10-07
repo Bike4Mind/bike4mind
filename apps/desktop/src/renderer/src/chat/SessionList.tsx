@@ -421,7 +421,6 @@ export function SessionList({
   onTogglePin,
   onToggleArchived,
   customize,
-  settings,
   footer,
 }: {
   sessions: ChatSessionSummary[];
@@ -442,8 +441,6 @@ export function SessionList({
   onToggleArchived: (session: ChatSessionSummary) => void;
   /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
-  /** The Settings nav row, likewise. */
-  settings?: ReactNode;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
@@ -580,7 +577,6 @@ export function SessionList({
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
         {customize}
-        {settings}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"
