@@ -1,4 +1,10 @@
-import { THINK_CLOSE_TAG, THINK_OPEN_TAG, stripChoicesFromReplies, visibleReplyText } from '@bike4mind/common';
+import {
+  THINK_CLOSE_TAG,
+  THINK_OPEN_TAG,
+  joinReplySlots,
+  stripChoicesFromReplies,
+  visibleReplyText,
+} from '@bike4mind/common';
 
 type ReplyBearingMessage = { reply?: string | null; replies?: string[] | undefined };
 
@@ -34,7 +40,7 @@ export function extractReplies(messageData: ReplyBearingMessage) {
     processedParts.push(cleaned);
   }
 
-  const combined = processedParts.join('');
+  const combined = joinReplySlots(processedParts);
   return combined ? [combined] : [];
 }
 
