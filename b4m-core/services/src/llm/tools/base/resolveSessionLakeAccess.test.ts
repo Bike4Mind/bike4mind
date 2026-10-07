@@ -5,7 +5,7 @@ vi.mock('../../../dataLakeService/getDynamicDataLakeTags', () => ({
   getDynamicDataLakeAccess: (...args: unknown[]) => getDynamicDataLakeAccessMock(...args),
 }));
 
-import { resolveSessionLakeAccess } from './resolveSessionLakeAccess';
+import { resolveSessionLakeAccess, sessionExcludesLibrary } from './resolveSessionLakeAccess';
 import type { ToolContext } from './types';
 import type { ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
 
@@ -147,5 +147,25 @@ describe('resolveSessionLakeAccess', () => {
     const out = await resolveSessionLakeAccess(makeContext({ sessionRetrievalTags: undefined }));
 
     expect(out.lakes.map(l => l.id)).toEqual(['alpha']);
+  });
+});
+
+describe('sessionExcludesLibrary', () => {
+  const ctx = (o: Partial<ToolContext>) => o as ToolContext;
+
+  it.each([
+    ['plain chat', {}, false],
+    ['derived lake tag without the sidecar', { sessionRetrievalTags: ['datalake:a'] }, false],
+    ['explicit named lake, unset', { sessionRetrievalTags: ['datalake:a'], sessionLakeScopeExplicit: true }, true],
+    ['explicit content tag, unset', { sessionRetrievalTags: ['legal:x'], sessionLakeScopeExplicit: true }, false],
+    [
+      'explicit named lake, on',
+      { sessionRetrievalTags: ['datalake:a'], sessionLakeScopeExplicit: true, sessionIncludeLibraryFiles: true },
+      false,
+    ],
+    ['all lakes, off', { sessionRetrievalTags: [], sessionIncludeLibraryFiles: false }, true],
+    ['agent kbScope, off', { kbScope: { fileIds: ['f'] }, sessionIncludeLibraryFiles: false }, false],
+  ])('%s -> %s', (_, overrides, expected) => {
+    expect(sessionExcludesLibrary(ctx(overrides as Partial<ToolContext>))).toBe(expected);
   });
 });

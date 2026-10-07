@@ -1,3 +1,5 @@
+import { effectiveIncludeLibraryFiles } from '@bike4mind/common';
+import { datalakeTagsFrom } from '../../../dataLakeService/getDataLakePrompts';
 import { getDynamicDataLakeAccess } from '../../../dataLakeService/getDynamicDataLakeTags';
 import { sessionGroundsOnNoLake, type ResolvedLakeAccessSet } from '../../../dataLakeService/narrowLakeAccessToSession';
 import { admitSessionLakes, noSessionLakes, searchedSessionLakes } from '../../../dataLakeService/sessionLakeAdmission';
@@ -39,3 +41,21 @@ export async function resolveOwnerLakeAccess(context: ToolContext): Promise<Reso
   // user, and the identity-substituting worker paths never reach that call at all.
   return admitSessionLakes(resolved, context.sessionPreauthorizedLakeIds, context.userId, context.db);
 }
+
+/**
+ * Whether the knowledge tools must leave the caller's own/shared library out of this session's
+ * corpus (the "+ My files" chip off). An explicit flag wins; unset excludes only in a session
+ * deliberately scoped to a named lake, so derived-tag plain chats and content-tag API sessions keep
+ * their library. Forced retrieval decides the same flag in KnowledgeRetrievalFeature. An agent
+ * kbScope is already its own fail-closed corpus and is never narrowed here.
+ */
+export function sessionExcludesLibrary(context: ToolContext): boolean {
+  if (context.kbScope) return false;
+  const namesALake =
+    context.sessionLakeScopeExplicit === true && datalakeTagsFrom(context.sessionRetrievalTags ?? []).length > 0;
+  return !effectiveIncludeLibraryFiles(context.sessionIncludeLibraryFiles, namesALake);
+}
+
+/** What a knowledge tool says when the library is off and no lake is left to search. */
+export const LIBRARY_OFF_NO_LAKE_MESSAGE =
+  "No data lake is in this chat's scope and your files are turned off for this chat, so there is nothing to search.";

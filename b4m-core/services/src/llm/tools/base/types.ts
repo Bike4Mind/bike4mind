@@ -295,6 +295,11 @@ export interface ToolContext {
    */
   sessionLakeScopeExplicit?: boolean;
   /**
+   * `session.includeLibraryFiles` (the "+ My files" chip). Read only through sessionExcludesLibrary
+   * (resolveSessionLakeAccess.ts), never raw: unset has a per-session default there.
+   */
+  sessionIncludeLibraryFiles?: boolean;
+  /**
    * Lake ids this session was pre-authorized for at session-create time (a manager admitted to a
    * lake they can manage but are not a member of - see canManageLake, checked once at
    * pages/api/v1/sessions/index.ts, never re-derived here). Unioned into the resolved lake access

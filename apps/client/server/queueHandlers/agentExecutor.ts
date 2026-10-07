@@ -1611,6 +1611,7 @@ async function processExecution(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
+      sessionIncludeLibraryFiles: session.includeLibraryFiles,
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -3436,6 +3437,7 @@ async function processSubagentDispatch(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
+      sessionIncludeLibraryFiles: session.includeLibraryFiles,
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

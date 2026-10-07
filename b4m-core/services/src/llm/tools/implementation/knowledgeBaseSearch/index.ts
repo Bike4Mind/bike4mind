@@ -18,7 +18,11 @@ import {
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { Logger } from '@bike4mind/observability';
-import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
+import {
+  LIBRARY_OFF_NO_LAKE_MESSAGE,
+  resolveSessionLakeAccess,
+  sessionExcludesLibrary,
+} from '../../base/resolveSessionLakeAccess';
 import {
   lakeMembershipsFrom,
   warnIfManyLakeMemberships,
@@ -661,6 +665,9 @@ async function trySemanticKbSearch(
     // files), and falling through to the metadata-only keyword arm would lose content search over
     // it entirely. Left intact for the genuinely lake-less caller so their behaviour is unchanged.
     if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
+    // Library off: only lake arms may match. With none, the keyword arm reports the empty corpus
+    // (an ownership query with zero arms would throw on restrictToDataLake).
+    const excludesLibrary = sessionExcludesLibrary(context);
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -671,6 +678,9 @@ async function trySemanticKbSearch(
     const topK = Math.max(ceiling, adaptive ? KB_SEARCH_MAX_RESULTS : 0, KB_SEARCH_CANDIDATE_FLOOR);
 
     const lakeMemberships = lakeMembershipsFrom(lakes);
+    if (excludesLibrary && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+      return NO_SEMANTIC_RESULT;
+    }
     warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:semantic');
     const search = await semanticDataLakeSearch(
       {
@@ -687,7 +697,8 @@ async function trySemanticKbSearch(
         lakeMemberships,
         // Without this the arm below returns empty for a suppressed session and the turn silently
         // falls to metadata-only keyword search - see ownFilesOnly.
-        ownFilesOnly: context.suppressLakeArms === true,
+        ownFilesOnly: context.suppressLakeArms === true && !excludesLibrary,
+        restrictToDataLake: excludesLibrary,
         budgets,
         vectorSearchEnabled,
         // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never a
@@ -1397,6 +1408,20 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             // Same degraded-read rule as the semantic arm's origin lakes.
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
+            const excludesLibrary = sessionExcludesLibrary(context);
+            if (excludesLibrary && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+              await context.statusUpdate({
+                promptMeta: {
+                  retrieval: {
+                    attempted: true,
+                    outcome: 'no_lakes',
+                    surfaces: ['knowledgeBaseSearch'],
+                    dataLakeTags: [],
+                  },
+                },
+              } as any);
+              return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            }
             warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:keyword-fallback');
             searchResults = await context.db.fabfiles.search(
               context.userId,
@@ -1427,6 +1452,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 dataLakeTags,
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                 lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
+                restrictToDataLake: excludesLibrary,
                 excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
                 // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                 ...(context.retrievalFilter ?? {}),
