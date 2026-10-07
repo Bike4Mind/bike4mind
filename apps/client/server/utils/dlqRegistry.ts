@@ -115,6 +115,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'videoGenerationQueue',
   },
   {
+    label: 'generation-job',
+    displayName: 'Generation Job',
+    application: 'GenerationJob',
+    sourceQueue: 'generationJobQueue',
+  },
+  {
     label: 'liveops-triage',
     displayName: 'LiveOps Triage',
     application: 'LiveOpsTriage',

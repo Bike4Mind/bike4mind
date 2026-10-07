@@ -35,6 +35,12 @@ export const dataLakeKeys = {
    * `data-lakes` prefix on purpose, so a rename or visibility change still refreshes it.
    */
   preauthorizableFor: (userId: string) => ['data-lakes', 'preauthorizable-for', userId] as const,
+  /**
+   * The slug a create with `name` would get in `orgId`'s scope (GET /api/data-lakes/slug-preview).
+   * Under the `data-lakes` prefix so a create or delete invalidating `list` refreshes it.
+   */
+  slugPreview: (name: string, orgId: string | undefined, tagPrefix?: string) =>
+    ['data-lakes', 'slug-preview', name, orgId, tagPrefix ?? null] as const,
   /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
   access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,
   /**

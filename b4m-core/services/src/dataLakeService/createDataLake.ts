@@ -10,6 +10,7 @@ import {
   DATA_LAKES,
   MAX_DATA_LAKE_SLUG_LENGTH,
   normalizeEntitlementKey,
+  slugifyDataLakeName,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import {
@@ -106,7 +107,7 @@ function withDisambiguatingSuffix(baseSlug: string, attempt: number): string {
  * tenant's files in that registry lake.
  */
 async function disambiguateSlug(
-  db: CreateDataLakeAdapters['db'],
+  db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
   baseSlug: string,
   organizationId?: string
 ): Promise<string> {
@@ -121,6 +122,19 @@ async function disambiguateSlug(
   throw new BadRequestError(
     `Could not find an available slug for "${baseSlug}" after 50 attempts — choose another name`
   );
+}
+
+/**
+ * The slug `createDataLake` would mint for `name` right now, `-N` suffix included, so the wizard
+ * can show it before create. Advisory only: a concurrent create can still take it first. Lakes in
+ * any status count as taken, including deleted ones (they keep their slug for restore).
+ */
+export async function previewDataLakeSlug(
+  db: { dataLakes: Pick<IDataLakeRepository, 'find'> },
+  name: string,
+  organizationId?: string
+): Promise<string> {
+  return disambiguateSlug(db, slugifyDataLakeName(name), organizationId);
 }
 
 /**

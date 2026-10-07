@@ -1,6 +1,11 @@
 import { create } from 'zustand';
-import { deriveTagPrefixFromLakeName, isReservedTagPrefix } from '@bike4mind/common';
-import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
+import {
+  deriveTagPrefixFromLakeName,
+  isReservedTagPrefix,
+  MAX_TAG_PREFIX_SUFFIX_ATTEMPTS,
+  withTagPrefixSuffix,
+} from '@bike4mind/common';
+import type { DataLakeOrigin, DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import {
   parseFilesToTree,
@@ -101,6 +106,12 @@ export interface UploadProgress {
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
+const isSuffixedTagPrefixOf = (prefix: string, base: string): boolean =>
+  !!base &&
+  Array.from({ length: MAX_TAG_PREFIX_SUFFIX_ATTEMPTS - 1 }, (_, i) => withTagPrefixSuffix(base, i + 1)).includes(
+    prefix
+  );
+
 const DEFAULT_OPTIONAL_STEPS: OptionalSteps = {
   preview: false,
   taxonomy: false,
@@ -187,6 +198,8 @@ export interface WizardTargetLake {
    * is: a built-in fallback lake has no document and always serves.
    */
   status?: DataLakeStatus;
+  /** Lets the GitHub connect control offer the switch to connector-fed before it starts. */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -208,6 +221,7 @@ export const toWizardTargetLake = (lake: {
   canManage?: boolean;
   isCreator: boolean;
   status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -219,6 +233,7 @@ export const toWizardTargetLake = (lake: {
   canManage: lake.canManage ?? false,
   isCreator: lake.isCreator,
   status: lake.status,
+  origin: lake.origin,
 });
 
 /**
@@ -231,6 +246,11 @@ export const toWizardTargetLake = (lake: {
 export interface RecoverableLake {
   id: string;
   tagPrefix: string;
+  /**
+   * The slug the lake was created with. A reuse keeps it, so ConfigStep shows it instead of the
+   * server preview, which counts this archived lake as taken and would say "-1".
+   */
+  slug: string;
   /**
    * The account scope the lake was created under (undefined = personal), since the account
    * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner
@@ -258,7 +278,8 @@ interface DataLakeWizardStore {
   config: DataLakeFormValues;
   /**
    * The last prefix deriveTagPrefixFromName produced, so a rename can re-derive over it while a
-   * hand-edited prefix stays untouched. Never read outside that action.
+   * hand-edited prefix stays untouched. Also tells useWizardIdentityPreview whether the prefix
+   * is still the wizard's to change (adoptAutoTagPrefix).
    */
   autoDerivedTagPrefix: string;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
@@ -308,6 +329,7 @@ interface DataLakeWizardStore {
   // Tag prefix (owned by the Config step; the taxonomy step's competing home was removed)
   setTagPrefix: (prefix: string) => void;
   deriveTagPrefixFromName: () => void;
+  adoptAutoTagPrefix: (prefix: string) => void;
 
   // Config step
   setConfig: (config: Partial<DataLakeFormValues>) => void;
@@ -445,6 +467,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       // used to derive a prefix the create endpoint refuses, which is the one value in this
       // form the user never chose.
       const prefix = deriveTagPrefixFromLakeName(state.config.name);
+      // Same name, and the current value is the free `-N` the server picked for it (see
+      // adoptAutoTagPrefix): keep it. Re-deriving would drop back to the held base, and a retry
+      // would then miss the lake its failed attempt archived under that `-N` (canReuseRecoverableLake).
+      if (current && isSuffixedTagPrefixOf(current, prefix)) return state;
       // A lake named "Datalake" derives the reserved membership namespace, which the server
       // rejects and Start Upload gates on - leaving the user blocked over a value they never
       // typed. Leave the field for them to fill instead of seeding one that cannot be used.
@@ -457,6 +483,19 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
         config: { ...state.config, tagPrefix: prefix },
       };
     }),
+
+  /**
+   * Take the server's free prefix (useWizardIdentityPreview) in place of an auto-derived one the
+   * preview found held, keeping it marked auto-derived so a rename still re-derives. A no-op once
+   * the user has typed a prefix, which also covers a keystroke landing while the preview was in
+   * flight.
+   */
+  adoptAutoTagPrefix: prefix =>
+    set(state =>
+      state.autoDerivedTagPrefix && state.config.tagPrefix === state.autoDerivedTagPrefix
+        ? { autoDerivedTagPrefix: prefix, config: { ...state.config, tagPrefix: prefix } }
+        : state
+    ),
 
   // ── Config Step ─────────────────────────────────────────────────────────
 

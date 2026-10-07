@@ -31,6 +31,8 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  DATA_LAKE_STABLE_STATUSES,
+  DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
   DATA_LAKE_PENDING_CONNECTORS,
@@ -362,6 +364,8 @@ const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string
 
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
+// `$nin` also matches legacy lakes with no `status`, which must keep resolving.
+const SLUG_RESOLVABLE = { $nin: [...DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES] };
 
 /** Keyset position in a staleness-ordered health-check scan: the sort key, then the `_id` tiebreak. */
 export type HealthCheckScanCursor = { lastHealthCheckedAt: Date | null; id: string };
@@ -610,7 +614,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // matches resolve deterministically rather than by document order.
     if (organizationIds && organizationIds.length > 0) {
       const own = await this.dataLakeModel
-        .findOne({ slug, organizationId: { $in: organizationIds } })
+        .findOne({ slug, organizationId: { $in: organizationIds }, status: SLUG_RESOLVABLE })
         .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
@@ -618,7 +622,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // as "org-less" but are distinct index keys, so two org-less lakes CAN share a slug. Without
     // this, which one wins would depend on document order rather than being merely unspecified.
     const orgless = await this.dataLakeModel
-      .findOne({ slug, organizationId: { $in: [null, ''] } })
+      .findOne({ slug, organizationId: { $in: [null, ''] }, status: SLUG_RESOLVABLE })
       .sort({ organizationId: 1 });
     return (orgless?.toJSON() as IDataLakeDocument) ?? null;
   }
@@ -638,7 +642,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
     // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
     // wins would be nondeterministic rather than merely unspecified-but-stable.
-    const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: usable } }).sort({ _id: 1 });
+    const granted = await this.dataLakeModel
+      .findOne({ slug, _id: { $in: usable }, status: SLUG_RESOLVABLE })
+      .sort({ _id: 1 });
     return (granted?.toJSON() as IDataLakeDocument) ?? null;
   }
 
@@ -1227,6 +1233,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   /** Admin remedy for a poisoned meter (see resetEmbeddingSpend on the repository interface). */
   async resetEmbeddingSpend(id: string): Promise<boolean> {
     const res = await this.dataLakeModel.updateOne({ _id: id }, { $set: { embeddingSpendMicroUsd: 0 } });
+    return res.matchedCount === 1;
+  }
+
+  async touchIfStable(id: string): Promise<boolean> {
+    // `null` matches a lake written before `status` existed, which is at rest (see activateIfDraft).
+    // The explicit `updatedAt` makes this a real write whatever the timestamps plugin does with it.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: [...DATA_LAKE_STABLE_STATUSES, null] } },
+      { $set: { updatedAt: new Date() } }
+    );
     return res.matchedCount === 1;
   }
 

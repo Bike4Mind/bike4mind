@@ -9,7 +9,7 @@ import {
   uploadCompleteFunction,
   notebookImportFunction,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_VIDEO_PROVIDER_ENVIRONMENT } from './constants';
 import { attackSimulationFunction, modelDiscoveryFunction } from './cron';
 // web -> agentExecutor -> websocket is acyclic: websocket.ts deliberately does
 // not import agentExecutor (the agent_execute route is declared the other way
@@ -32,6 +32,7 @@ import {
   imageEditQueue,
   imageGenerationQueue,
   videoGenerationQueue,
+  generationJobQueue,
   researchEngineQueue,
   agentProactiveMessageQueue,
   slackExportQueue,
@@ -67,6 +68,7 @@ import {
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
+  generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -125,6 +127,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'image-generation': imageGenerationDLQ.url,
     'image-edit': imageEditDLQ.url,
     'video-generation': videoGenerationDLQ.url,
+    'generation-job': generationJobDLQ.url,
     'research-engine': researchEngineQueueDLQ.url,
     'whats-new-generation': whatsNewGenerationQueueDLQ.url,
     'whats-new-highlights': whatsNewHighlightsQueueDLQ.url,
@@ -188,6 +191,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     imageGenerationQueue: imageGenerationQueue.url,
     imageEditQueue: imageEditQueue.url,
     videoGenerationQueue: videoGenerationQueue.url,
+    generationJobQueue: generationJobQueue.url,
     researchEngineQueue: researchEngineQueue.url,
     agentProactiveMessageQueue: agentProactiveMessageQueue.url,
     slackExportQueue: slackExportQueue.url,
@@ -423,6 +427,7 @@ export const web = new sst.aws.Nextjs(
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
       // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the

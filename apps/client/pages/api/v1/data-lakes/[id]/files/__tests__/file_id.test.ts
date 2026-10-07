@@ -23,6 +23,8 @@ const {
   mockFeatureEnabled,
   mockRateLimitOptions,
   mockMethodNotAllowed,
+  mockTouchIfStable,
+  txLog,
 } = vi.hoisted(() => ({
   mockAssertLakeAccess: vi.fn(),
   mockAssertLakeAccessWithGrants: vi.fn(),
@@ -33,6 +35,8 @@ const {
   mockFeatureEnabled: { value: true },
   mockRateLimitOptions: vi.fn(),
   mockMethodNotAllowed: vi.fn(),
+  mockTouchIfStable: vi.fn(),
+  txLog: [] as string[],
 }));
 
 // Keeps next-connect's registrar shape and runs `.use()` middleware ahead of each handler, so the
@@ -91,10 +95,16 @@ vi.mock('@server/dataLakes/lakeConfigAuditPrincipal', () => ({ lakeConfigAuditPr
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   dataLakeAccessGrantRepository: {},
-  dataLakeRepository: {},
+  dataLakeRepository: { touchIfStable: mockTouchIfStable },
   fabFileRepository: { findById: mockFindFile },
   lakeMembershipRemovalRepository: {},
   scopedSettingsRepository: {},
+  withTransaction: async (fn: () => Promise<unknown>) => {
+    txLog.push('enter');
+    const out = await fn();
+    txLog.push('exit');
+    return out;
+  },
 }));
 // Membership scope resolution, the membership predicate and the ingestion classifier stay real:
 // they decide the 404-versus-200 and the status this route reports.
@@ -149,7 +159,12 @@ async function run(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', fileId: string =
 
 beforeEach(() => {
   vi.clearAllMocks();
+  txLog.length = 0;
   mockFeatureEnabled.value = true;
+  mockTouchIfStable.mockImplementation(async () => {
+    txLog.push('touch');
+    return true;
+  });
   mockAssertLakeAccess.mockResolvedValue(LAKE);
   mockAssertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: [] });
   mockCanManageLake.mockReturnValue(true);
@@ -277,6 +292,38 @@ describe('DELETE /api/v1/data-lakes/{id}/files/{file_id}', () => {
     await expect(run('DELETE')).rejects.toMatchObject({ statusCode: 404 });
     mockCanManageLake.mockReturnValue(false);
     await expect(run('DELETE')).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+// Gate, write and lake touch share one transaction, so a grant revoke committing mid-request
+// collides on the lake doc (WRITE-TIME RESIDUAL on `canManageLake`).
+describe.each([
+  ['POST', mockAddFile],
+  ['DELETE', mockRemoveFile],
+] as const)('%s serialization against a concurrent revoke', (method, mockWrite) => {
+  it('runs the gate and the write inside the transaction, then touches the resolved lake last', async () => {
+    mockAssertLakeAccessWithGrants.mockImplementation(async () => {
+      txLog.push('gate');
+      return { lake: LAKE, grants: [] };
+    });
+    mockWrite.mockImplementation(async () => {
+      txLog.push('write');
+      return { success: true, fileCount: 1, totalSizeBytes: 1 };
+    });
+
+    await run(method);
+
+    expect(txLog).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(mockTouchIfStable).toHaveBeenCalledWith(LAKE.id);
+  });
+
+  it('neither writes nor touches when the manage gate refuses', async () => {
+    mockCanManageLake.mockReturnValue(false);
+
+    await expect(run(method)).rejects.toMatchObject({ statusCode: 403 });
+
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockTouchIfStable).not.toHaveBeenCalled();
   });
 });
 
