@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useTheme } from '@mui/joy/styles';
 import type { ChatArtifact, ChatArtifactView } from '@shared/chat';
+import { ArtifactPublishControl } from './ArtifactPublishControl';
 import { HtmlArtifactFrame } from './HtmlArtifactFrame';
 import { ChevronIcon } from './icons';
 import { type MermaidFailure, renderMermaidDiagram } from './mermaidDiagram';
@@ -311,6 +312,13 @@ export function ArtifactCard({ artifact }: { artifact: ChatArtifactView }) {
 
         <Box sx={{ mt: 0.5 }}>
           <SaveStatus artifact={artifact} />
+        </Box>
+
+        {/* Sharing sits below saving and reads as a separate act, because it is one: the row
+            above happened on its own as the turn finished, and nothing below here happens
+            until the user asks for it. */}
+        <Box sx={{ mt: 0.5 }}>
+          <ArtifactPublishControl artifact={artifact} />
         </Box>
       </Box>
     </Sheet>

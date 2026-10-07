@@ -3,6 +3,8 @@ import type { AccountPage, AuthState, EnvironmentSelection } from '@shared/auth'
 import type {
   ChatApprovalAnswer,
   ChatApprovalMode,
+  ChatArtifactPublishProgress,
+  ChatArtifactPublishRequest,
   ChatAttachmentInput,
   ChatQueueEvent,
   ChatSessionStatusEvent,
@@ -121,6 +123,15 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC_CHANNELS.chatRespondToApproval, approvalId, answer),
     listArtifacts: () => ipcRenderer.invoke(IPC_CHANNELS.chatListArtifacts),
     readArtifact: (artifactId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatReadArtifact, artifactId),
+    publishArtifact: (request: ChatArtifactPublishRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatPublishArtifact, request),
+    readArtifactPublishState: (artifactId: string) =>
+      ipcRenderer.invoke(IPC_CHANNELS.chatReadArtifactPublishState, artifactId),
+    onArtifactPublishProgress: listener => {
+      const handler = (_event: unknown, progress: ChatArtifactPublishProgress) => listener(progress);
+      ipcRenderer.on(IPC_CHANNELS.chatArtifactPublishProgress, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.chatArtifactPublishProgress, handler);
+    },
     listBackgroundProcesses: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.chatListBackground, sessionId),
     readBackgroundOutput: (sessionId: string, processId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.chatReadBackground, sessionId, processId),
