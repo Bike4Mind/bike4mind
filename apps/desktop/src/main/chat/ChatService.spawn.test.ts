@@ -6,6 +6,7 @@ import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
+import type { ModelMemory } from './ModelPreference';
 import { SessionStore } from './SessionStore';
 import type { AccessStore } from './tools/AccessStore';
 
@@ -34,6 +35,7 @@ describe('ChatService spawn caps', () => {
   let post: ReturnType<typeof vi.fn>;
   let streams: PassThrough[];
   let project: string;
+  let modelMemory: ModelMemory & { record: ReturnType<typeof vi.fn<ModelMemory['record']>> };
 
   beforeEach(async () => {
     project = await realpath(await mkdtemp(join(tmpdir(), 'b4m-spawn-')));
@@ -46,9 +48,12 @@ describe('ChatService spawn caps', () => {
       return Promise.resolve({ data: stream, status: 200 });
     });
 
+    modelMemory = { read: async () => null, record: vi.fn<ModelMemory['record']>(async () => {}) };
+
     service = new ChatService({
       store,
       access: { list: async () => [] } as unknown as AccessStore,
+      modelMemory,
       logger: { debug: vi.fn(), warn: vi.fn() },
       getApiClient: () =>
         ({
@@ -205,6 +210,20 @@ describe('ChatService spawn caps', () => {
     // is bounded by what was created, not merely by what was reported back.
     const depths = (await store.list()).map(session => session.origin?.depth ?? 0);
     expect(Math.max(...depths)).toBe(2);
+  });
+
+  it("starts a spawned session on its parent's model without recording it as the user's pick", async () => {
+    const parent = await codeSession();
+    await store.setModel(parent.id, 'parent-model');
+    await service.send(parent.id, 'go');
+    await awaitStream(0);
+    requestSpawns(streams[0], 1, 'model');
+
+    await vi.waitUntil(() => settledCalls('session_spawn').length === 1, { timeout: 5000, interval: 5 });
+
+    const child = (await store.list()).find(session => session.origin);
+    expect(child?.model).toBe('parent-model');
+    expect(modelMemory.record).not.toHaveBeenCalled();
   });
 
   it('gives a spawned session exactly its parent grants, with no way to name others', async () => {

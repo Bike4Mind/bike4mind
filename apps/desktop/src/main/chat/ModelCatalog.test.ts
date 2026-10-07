@@ -45,18 +45,26 @@ describe('selectUsableModels', () => {
 });
 
 describe('resolveDefaultModel', () => {
-  it('prefers the requested model when the deployment offers it', () => {
-    const models = selectUsableModels([wireModel({ id: 'a' }), wireModel({ id: 'b' })]);
-    expect(resolveDefaultModel(models, 'b')).toBe('b');
+  const models = selectUsableModels([wireModel({ id: 'a' }), wireModel({ id: 'b' }), wireModel({ id: 'c' })]);
+
+  it('takes the first preference the deployment offers, in order', () => {
+    expect(resolveDefaultModel(models, ['c', 'b'])).toBe('c');
   });
 
-  it('falls back to the first model the server listed, never to a second hardcoded guess', () => {
-    const models = selectUsableModels([wireModel({ id: 'a' }), wireModel({ id: 'b' })]);
-    expect(resolveDefaultModel(models, 'not-here')).toBe('a');
+  it('skips a preference the deployment does not offer and tries the next', () => {
+    expect(resolveDefaultModel(models, ['not-here', 'b'])).toBe('b');
+  });
+
+  it('skips an absent preference, so a user who never picked lands on the built-in default', () => {
+    expect(resolveDefaultModel(models, [null, 'b'])).toBe('b');
+  });
+
+  it('falls back to the first model the server listed, never to another hardcoded guess', () => {
+    expect(resolveDefaultModel(models, ['not-here', 'nor-this'])).toBe('a');
   });
 
   it('answers null when the deployment offers nothing', () => {
-    expect(resolveDefaultModel([], 'anything')).toBeNull();
+    expect(resolveDefaultModel([], ['anything'])).toBeNull();
   });
 });
 

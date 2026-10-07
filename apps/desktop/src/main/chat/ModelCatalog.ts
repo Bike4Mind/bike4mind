@@ -175,10 +175,15 @@ export function selectUsableModels(wire: unknown): ChatModelOption[] {
  * Which model a new conversation starts on, and which one a conversation falls back to when
  * its saved model is gone.
  *
- * When this deployment does not offer `preferred`, the first model the server listed wins
- * rather than a second hardcoded guess - only the server knows what it has.
+ * The first of `preferred` this deployment offers wins - in practice the user's remembered pick,
+ * then the built-in default (see ChatService.pickModel). When it offers none of them, the first
+ * model the server listed wins rather than another hardcoded guess - only the server knows what
+ * it has.
  */
-export function resolveDefaultModel(models: readonly ChatModelOption[], preferred: string): string | null {
-  if (models.some(model => model.id === preferred)) return preferred;
-  return models[0]?.id ?? null;
+export function resolveDefaultModel(
+  models: readonly ChatModelOption[],
+  preferred: readonly (string | null | undefined)[]
+): string | null {
+  const offered = preferred.find(candidate => candidate && models.some(model => model.id === candidate));
+  return offered ?? models[0]?.id ?? null;
 }
