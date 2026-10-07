@@ -1,6 +1,6 @@
 import { ChatModels } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { adapterModelIds, adapterPriceTiers, staticPriceBackends } from './adapterPriceLiterals';
+import { adapterModelIds, adapterPriceLadders, adapterPriceTiers, staticPriceBackends } from './adapterPriceLiterals';
 
 describe('adapterPriceTiers', () => {
   it('carries the cache rate a feed never publishes, which is the whole reason it exists', async () => {
@@ -83,5 +83,39 @@ describe('adapterModelIds', () => {
 
     expect(ids.has(ChatModels.GPT5_2)).toBe(true);
     expect(ids.size).toBe(new Set(tables.flat().map(model => String(model.id))).size);
+  });
+});
+
+describe('adapterPriceLadders', () => {
+  it('covers exactly the models adapterPriceTiers covers, and starts each ladder at that tier', async () => {
+    const tiers = await adapterPriceTiers();
+    const ladders = await adapterPriceLadders();
+
+    expect([...ladders.keys()].sort()).toEqual([...tiers.keys()].sort());
+    for (const [id, tier] of tiers) {
+      const lowest = Object.keys(ladders.get(id) ?? {})
+        .map(Number)
+        .sort((a, b) => a - b)[0];
+      expect(ladders.get(id)?.[String(lowest)], `${id} ladder does not start at its lowest tier`).toEqual(tier);
+    }
+  });
+
+  it('keys every tier by a numeric threshold, which getTextModelCost needs to select one', async () => {
+    for (const [id, ladder] of await adapterPriceLadders()) {
+      for (const threshold of Object.keys(ladder)) {
+        expect(Number.isFinite(Number(threshold)), `${id} has key ${threshold}`).toBe(true);
+      }
+    }
+  });
+
+  it('carries the kimi-k3 rates the issue names, which is the case that motivated it', async () => {
+    const [tier] = Object.values((await adapterPriceLadders()).get(ChatModels.KIMI_K3) ?? {});
+
+    expect(tier.input).toBeCloseTo(3 / 1_000_000, 12);
+    expect(tier.output).toBeCloseTo(15 / 1_000_000, 12);
+  });
+
+  it('memoizes', async () => {
+    expect(await adapterPriceLadders()).toBe(await adapterPriceLadders());
   });
 });
