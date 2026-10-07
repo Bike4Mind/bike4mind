@@ -28,7 +28,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const listOrganizationGroups = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/database', () => ({ organizationRepository: {} }));
+vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: {} }));
 vi.mock('@bike4mind/database/social', () => ({ groupRepository: {} }));
 vi.mock('@bike4mind/database/auth', () => ({ userRepository: {} }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { listOrganizationGroups } }));
