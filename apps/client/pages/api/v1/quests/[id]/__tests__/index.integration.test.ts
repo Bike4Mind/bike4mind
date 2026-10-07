@@ -567,6 +567,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
         questId: 'quest-1',
         via: 'v1-poll',
       });
+      const recoveryLogs = loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+      expect(recoveryLogs).toHaveLength(1);
     });
 
     it('dispatches the generation callback once a recovery write is actually applied', async () => {
@@ -670,6 +672,8 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData().status).toBe('running');
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
+      // A failed write recovered nothing, so it must not alert either.
+      expect(loggerError).not.toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, expect.anything());
     });
 
     it('does not let a sharee read write a terminal status onto the owner quest', async () => {

@@ -133,6 +133,8 @@ describe('questTimeoutSweep cron', () => {
       questId: 'q-1',
       via: 'sweep',
     });
+    const recoveryLogs = mockLogger.error.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+    expect(recoveryLogs).toHaveLength(1);
   });
 
   it('recovers a stuck quest with content by flipping status only (no error clobber)', async () => {
@@ -198,6 +200,11 @@ describe('questTimeoutSweep cron', () => {
 
     expect(result).toEqual({ status: 'OK', recovered: 1 });
     expect(metricValue(QUEST_METRICS.TimeoutSweepRecovered)).toBe(1);
+    // The lost race must not alert: the settle site that actually won logs for itself. Only the
+    // recovered quest is reported, exactly once.
+    const recoveryLogs = mockLogger.error.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+    expect(recoveryLogs).toHaveLength(1);
+    expect(recoveryLogs[0][1]).toEqual({ questId: 'q-stuck', via: 'sweep' });
   });
 
   it('reports candidate depth separately from recovered count', async () => {
