@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { B4mApiClient } from './b4mApiClient';
+import { B4mApiClient, mapApiError } from './b4mApiClient';
 import { NotAuthenticatedError } from '../auth/ApiClient';
 import {
   TOOL_NAMES,
@@ -12,6 +12,9 @@ import {
   listFiles,
   listLakes,
   createNotebook,
+  renameNotebook,
+  cloneNotebook,
+  deleteNotebook,
   sendMessage,
   searchKnowledgeBase,
   generateSoundEffect,
@@ -27,6 +30,9 @@ describe('TOOL_NAMES', () => {
       'list_notebooks',
       'get_notebook',
       'create_notebook',
+      'rename_notebook',
+      'clone_notebook',
+      'delete_notebook',
       'send_message',
       'search_knowledge_base',
       'list_lakes',
@@ -39,6 +45,38 @@ describe('TOOL_NAMES', () => {
 });
 
 describe('tool handlers', () => {
+  const raw = { id: 'n2', name: 'NB', lastUsedModel: 'gpt', createdAt: 'c', updatedAt: 'u', extra: 'x' };
+  const summary = { id: 'n2', name: 'NB', model: 'gpt', createdAt: 'c', updatedAt: 'u' };
+
+  it('rename_notebook renames and returns the summary', async () => {
+    const rename = vi.fn().mockResolvedValue(raw);
+    const result = await renameNotebook(mockClient({ renameNotebook: rename }), { notebookId: 'n1', name: 'NB' });
+    expect(rename).toHaveBeenCalledWith('n1', 'NB');
+    expect(result).toEqual(summary);
+  });
+
+  it('clone_notebook returns the summary of the new notebook', async () => {
+    const clone = vi.fn().mockResolvedValue(raw);
+    const result = await cloneNotebook(mockClient({ cloneNotebook: clone }), { notebookId: 'n1' });
+    expect(clone).toHaveBeenCalledWith('n1');
+    expect(result).toEqual(summary);
+  });
+
+  it('delete_notebook deletes with confirm: true', async () => {
+    const del = vi.fn().mockResolvedValue({ newLastNotebookId: 'n9' });
+    const result = await deleteNotebook(mockClient({ deleteNotebook: del }), { notebookId: 'n1', confirm: true });
+    expect(del).toHaveBeenCalledWith('n1');
+    expect(result).toEqual({ deleted: true, notebookId: 'n1', newLastNotebookId: 'n9' });
+  });
+
+  it.each([false, undefined])('delete_notebook refuses confirm: %s without calling the API', async confirm => {
+    const del = vi.fn();
+    await expect(deleteNotebook(mockClient({ deleteNotebook: del }), { notebookId: 'n1', confirm })).rejects.toThrow(
+      'confirm: true'
+    );
+    expect(del).not.toHaveBeenCalled();
+  });
+
   it('list_notebooks projects each notebook to a summary shape', async () => {
     const client = mockClient({
       listNotebooks: vi.fn().mockResolvedValue({
@@ -534,6 +572,56 @@ describe('registerTools', () => {
   it('create_notebook input schema keeps dataLakeId', () => {
     const shape = collectTools(mockClient({})).schemas.get('create_notebook')!;
     expect(z.object(shape).parse({ name: 'n', dataLakeId: 'l1' })).toEqual({ name: 'n', dataLakeId: 'l1' });
+  });
+
+  it('delete_notebook input schema rejects a missing or false confirm', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('delete_notebook')!);
+    expect(schema.safeParse({ notebookId: 'n1' }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: 'n1', confirm: false }).success).toBe(false);
+    expect(schema.safeParse({ notebookId: 'n1', confirm: true }).success).toBe(true);
+  });
+
+  it('rename_notebook input schema rejects an empty name', () => {
+    const schema = z.object(collectTools(mockClient({})).schemas.get('rename_notebook')!);
+    expect(schema.safeParse({ notebookId: 'n1', name: '' }).success).toBe(false);
+  });
+
+  it.each([
+    ['rename_notebook', 'renameNotebook', { notebookId: 'n1', name: 'x' }],
+    ['clone_notebook', 'cloneNotebook', { notebookId: 'n1' }],
+    ['delete_notebook', 'deleteNotebook', { notebookId: 'n1', confirm: true }],
+  ] as const)('%s maps a 403 to an isError naming notebooks:write', async (tool, method, args) => {
+    const forbidden = new AxiosError('forbidden', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status: 403,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ [method]: vi.fn().mockRejectedValue(forbidden) }));
+
+    const result = await tools.get(tool)!(args);
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toContain('recommended scope: notebooks:write');
+  });
+
+  it.each([404, 409])('delete_notebook passes a %s through mapApiError', async status => {
+    const err = new AxiosError('failed', undefined, {} as InternalAxiosRequestConfig, {}, {
+      status,
+      statusText: '',
+      data: {},
+      headers: {},
+      config: {} as InternalAxiosRequestConfig,
+    } as AxiosResponse);
+    const tools = collectTools(mockClient({ deleteNotebook: vi.fn().mockRejectedValue(err) }));
+
+    const result = await tools.get('delete_notebook')!({ notebookId: 'n1', confirm: true });
+
+    expect(result.isError).toBe(true);
+    expect((result.content[0] as { text: string }).text).toBe(
+      mapApiError(err, 'http://localhost:3000', 'notebooks:write')
+    );
   });
 
   it('list_lakes input schema keeps cursor and defaults limit to 25', () => {

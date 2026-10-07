@@ -193,6 +193,19 @@ export class B4mApiClient {
     });
   }
 
+  async renameNotebook(notebookId: string, name: string): Promise<RawNotebook> {
+    return this.client.put<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}`, { name });
+  }
+
+  /** Returns the new (cloned) notebook. */
+  async cloneNotebook(notebookId: string): Promise<RawNotebook> {
+    return this.client.post<RawNotebook>(`/api/sessions/${encodeURIComponent(notebookId)}/clone`, {});
+  }
+
+  async deleteNotebook(notebookId: string): Promise<{ newLastNotebookId: string | null }> {
+    return this.client.delete<{ newLastNotebookId: string | null }>(`/api/sessions/${encodeURIComponent(notebookId)}`);
+  }
+
   /**
    * GET /api/v1/data-lakes is cursor-paginated (flat `limit`/`cursor` params,
    * `{ data, next_cursor }` body), so `toList` does not apply.

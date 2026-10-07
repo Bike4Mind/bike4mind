@@ -3,11 +3,15 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 
 const mockGet = vi.fn();
 const mockPost = vi.fn();
+const mockPut = vi.fn();
+const mockDelete = vi.fn();
 const mockAxiosPost = vi.fn();
 vi.mock('../auth/ApiClient', () => ({
   ApiClient: class {
     get = mockGet;
     post = mockPost;
+    put = mockPut;
+    delete = mockDelete;
     getAxiosInstance = () => ({ post: mockAxiosPost });
   },
   // Mirrors the real class identity mapApiError keys on: the mocked module and the
@@ -85,6 +89,24 @@ describe('B4mApiClient', () => {
     mockPost.mockResolvedValue({ id: 'n1' });
     await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });
     expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB', dataLakeId: 'lake-1' });
+  });
+
+  it('renames a notebook via PUT with only the name (url-encoded id)', async () => {
+    mockPut.mockResolvedValue({ id: 'n 1' });
+    await client.renameNotebook('n 1', 'Renamed');
+    expect(mockPut).toHaveBeenCalledWith('/api/sessions/n%201', { name: 'Renamed' });
+  });
+
+  it('clones a notebook via POST .../clone (url-encoded id)', async () => {
+    mockPost.mockResolvedValue({ id: 'n2' });
+    await client.cloneNotebook('n 1');
+    expect(mockPost).toHaveBeenCalledWith('/api/sessions/n%201/clone', {});
+  });
+
+  it('deletes a notebook via DELETE (url-encoded id)', async () => {
+    mockDelete.mockResolvedValue({ newLastNotebookId: null });
+    await expect(client.deleteNotebook('n 1')).resolves.toEqual({ newLastNotebookId: null });
+    expect(mockDelete).toHaveBeenCalledWith('/api/sessions/n%201');
   });
 
   it('lists data lakes with flat limit/cursor params and maps next_cursor', async () => {
