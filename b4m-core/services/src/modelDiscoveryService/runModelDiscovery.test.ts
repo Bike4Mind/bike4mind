@@ -1157,6 +1157,41 @@ describe('runModelDiscovery', () => {
       expect(second.passes).toBe(1);
     });
 
+    it('does not let a literal row that lost a unique-index race hide a price row that landed', async () => {
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const mixed = harness([
+        openaiSource([gpt6]),
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+      await runModelDiscovery(mixed.adapters, mixed.options);
+      mixed.prices.rows.splice(0);
+      mixed.advance(2 * 60 * 60 * 1000);
+      const append = mixed.prices.append.bind(mixed.prices);
+      vi.spyOn(mixed.prices, 'append').mockImplementation(async row => {
+        if (row.note?.startsWith('discovery:adapter-literal')) {
+          throw Object.assign(new Error('E11000 duplicate key'), { code: 11000 });
+        }
+        return append(row);
+      });
+
+      const second = await runModelDiscovery(mixed.adapters, mixed.options);
+
+      // Planned: one source-priced row and one literal row; only the source-priced one landed. Netting
+      // the planned literal against the appended total would read that as zero and stop converging.
+      expect(mixed.prices.rows.map(row => row.modelId)).toEqual(['gpt-6']);
+      expect(second.passes).toBeGreaterThanOrEqual(2);
+    });
+
     it('words a per-image literal as priced in this build, which no trusted source quotes', async () => {
       const image: DiscoveredModel = {
         modelId: 'gpt-image-1',
