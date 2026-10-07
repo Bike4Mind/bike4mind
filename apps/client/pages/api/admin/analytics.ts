@@ -50,6 +50,10 @@ interface AnalyticsMetricResponse {
   status: string;
 }
 
+function getClientFirstTokenTime(quest: IChatHistoryItemDocument): number | undefined {
+  return quest.clientFirstTokenTime ?? quest.promptMeta?.performance?.clientFirstTokenTime;
+}
+
 function getProcessPickupTime(quest: IChatHistoryItemDocument): number | undefined {
   const processingTimeLog = (quest.promptMeta?.statusLog || []).find(
     log => log.status === 'Processing your request...'
@@ -88,7 +92,7 @@ function mapQuestToAnalyticsMetric(quest: IChatHistoryItemDocument): AnalyticsMe
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
       firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
-      clientFirstTokenTime: quest.clientFirstTokenTime ?? quest.promptMeta?.performance?.clientFirstTokenTime,
+      clientFirstTokenTime: getClientFirstTokenTime(quest),
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {

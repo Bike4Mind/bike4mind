@@ -256,7 +256,8 @@ const PromptMetaPerformanceSchema = z.object({
   firstTokenTime: z.number().optional(),
   /** Elapsed ms until the first chunk of any kind, including a hidden thinking block. */
   firstChunkTime: z.number().optional(),
-  clientFirstTokenTime: z.number().optional(), // Legacy location; new writes go to the quest-level clientFirstTokenTime
+  /** @deprecated Read/write the quest-level clientFirstTokenTime instead. */
+  clientFirstTokenTime: z.number().optional(),
   streamingPerformance: z
     .object({
       chunkCount: z.number().optional(),
