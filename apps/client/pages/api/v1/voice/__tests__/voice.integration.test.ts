@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   incrementCredits: vi.fn(),
   getSession: vi.fn(),
   createSession: vi.fn(),
+  signVoiceSessionToken: vi.fn(),
 }));
 
 const RESERVED_CREDITS = 100;
@@ -48,7 +49,9 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async orig => ({
   checkApiKeyRateLimit: (...a: unknown[]) => mocks.rateLimit(...a),
 }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/voice/voiceSessionToken', () => ({ signVoiceSessionToken: () => 'signed-session-token' }));
+vi.mock('@server/voice/voiceSessionToken', () => ({
+  signVoiceSessionToken: (...a: unknown[]) => mocks.signVoiceSessionToken(...a),
+}));
 
 vi.mock('@bike4mind/utils', async orig => ({
   ...(await orig<Record<string, unknown>>()),
@@ -204,6 +207,7 @@ beforeEach(() => {
   mocks.incrementCredits.mockResolvedValue(undefined);
   mocks.findByIdAndUserId.mockResolvedValue({ id: SESSION_ID, name: 'My notebook' });
   mocks.createSession.mockResolvedValue({ id: SESSION_ID, name: 'Voice' });
+  mocks.signVoiceSessionToken.mockReturnValue('signed-session-token');
 });
 
 describe('legacy /api/voice/v2 aliases', () => {
@@ -307,6 +311,17 @@ describe('POST /api/v1/voice/sessions', () => {
     expect(mocks.incrementCredits).toHaveBeenCalledWith('user-1', -RESERVED_CREDITS);
   });
 
+  // The proxy forwards this claim to the turn's tools; without it a key-minted call reads as a session.
+  it('binds the minting key id into the session token', async () => {
+    const { res, run } = fireSessions();
+    await run();
+    expect(res._getStatusCode()).toBe(200);
+    expect(mocks.signVoiceSessionToken).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKeyId: 'k1' }),
+      expect.any(Number)
+    );
+  });
+
   it('leaves JWT/browser callers (the SPA payload) unaffected', async () => {
     const { res, run } = fireSessions({
       apiKey: null,
@@ -315,6 +330,7 @@ describe('POST /api/v1/voice/sessions', () => {
     await run();
     expect(res._getStatusCode()).toBe(200);
     expect(mocks.validate).not.toHaveBeenCalled();
+    expect((mocks.signVoiceSessionToken.mock.calls[0][0] as { apiKeyId?: string }).apiKeyId).toBeUndefined();
   });
 
   it('rejects a body that fails the contract schema (422)', async () => {
