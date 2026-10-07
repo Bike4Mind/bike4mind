@@ -853,6 +853,20 @@ describe('useAgentExecutionStore — clears stale pendingPermission on terminal 
     const exec = useAgentExecutionStore.getState().executions['exec-recon-active'];
     expect(exec.pendingPermission).toEqual(PENDING);
   });
+
+  it('hydrateFromReconnect keeps isAborting for a still-ACTIVE run', () => {
+    const { startExecution, markAborting, hydrateFromReconnect } = useAgentExecutionStore.getState();
+    startExecution('exec-recon-aborting', 'session-A');
+    markAborting('exec-recon-aborting');
+    hydrateFromReconnect({
+      executionId: 'exec-recon-aborting',
+      sessionId: 'session-A',
+      status: 'running',
+      totalCreditsUsed: 1,
+      iterationCount: 1,
+    });
+    expect(useAgentExecutionStore.getState().executions['exec-recon-aborting'].isAborting).toBe(true);
+  });
 });
 
 // --- findChildAnyDepth ---
