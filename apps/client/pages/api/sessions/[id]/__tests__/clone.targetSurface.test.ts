@@ -8,14 +8,15 @@ type RouteHandler = (req: unknown, res: unknown) => unknown;
 const h = vi.hoisted(() => ({
   postHandler: null as null | RouteHandler,
   baseApiOptions: undefined as unknown,
+  rateLimitOptions: undefined as unknown,
   cloneSession: vi.fn(),
   getRequestEntitlements: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
   const chain = {
-    post: (fn: RouteHandler) => {
-      h.postHandler = fn;
+    post: (...fns: RouteHandler[]) => {
+      h.postHandler = fns[fns.length - 1];
       return chain;
     },
   };
@@ -26,6 +27,12 @@ vi.mock('@server/middlewares/baseApi', () => {
     },
   };
 });
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: (options: unknown) => {
+    h.rateLimitOptions = options;
+    return () => undefined;
+  },
+}));
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
 vi.mock('@bike4mind/services', () => ({ sessionService: { cloneSession: h.cloneSession } }));
@@ -58,6 +65,10 @@ describe('POST /api/sessions/[id]/clone - targetSurface', () => {
   // Only API-key callers are scope-gated; JWT/browser callers (no req.apiKey, as below) clone as before.
   it('requires notebooks:write from an API key', () => {
     expect(h.baseApiOptions).toEqual({ requiredScopes: ['notebooks:write'] });
+  });
+
+  it('rate-limits clones per caller on a route-wide bucket', () => {
+    expect(h.rateLimitOptions).toEqual({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' });
   });
 
   it('inherits when the body names no target', async () => {

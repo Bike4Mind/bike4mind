@@ -1,5 +1,6 @@
 import { sessionService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import {
   agentRepository,
   fabFileRepository,
@@ -17,7 +18,11 @@ import { Request } from 'express';
 import { surfaceAccessForRequest } from '@server/entitlements/surfaceAccess';
 import { parseTargetSurface } from '@server/utils/parseTargetSurface';
 
+// A clone copies every message, so bound how fast one caller (e.g. an agent over `b4m mcp serve`) can fan them out.
+const cloneRateLimit = rateLimit({ limit: 10, windowMs: 60_000, bucket: 'sessions/clone' });
+
 const handler = baseApi({ requiredScopes: [ApiKeyScope.WRITE_NOTEBOOKS] }).post(
+  cloneRateLimit,
   async (req: Request<{}, {}, { targetSurface?: unknown }, { id?: string }>, res) => {
     const { id } = req.user;
     const { id: sessionId } = req.query;
