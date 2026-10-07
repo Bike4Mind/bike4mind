@@ -69,6 +69,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
+          set -o pipefail
           for i in 1 2 3; do
             git fetch --no-tags --depth=1 origin "$BASE_SHA" && break
             if [ "$i" = 3 ]; then
@@ -78,7 +79,8 @@ jobs:
             sleep 10
           done
           mkdir -p "$RUNNER_TEMP/audit-base"
-          git archive "$BASE_SHA" package.json pnpm-lock.yaml pnpm-workspace.yaml | tar -x -C "$RUNNER_TEMP/audit-base"
+          git archive "$BASE_SHA" package.json pnpm-lock.yaml pnpm-workspace.yaml | tar -x -C "$RUNNER_TEMP/audit-base" ||
+            { echo "::error::could not extract the base manifest and lockfile from $BASE_SHA"; exit 1; }
           bash scripts/audit-report.sh "$RUNNER_TEMP/audit-base" "$RUNNER_TEMP/audit-base.json"
 
       - name: Run audit regression gate
