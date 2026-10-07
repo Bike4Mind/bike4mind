@@ -589,6 +589,8 @@ export interface ChatMessage {
  */
 export interface ChatContextBoundary {
   kind: 'clear' | 'compact';
+  /** Set when the conversation compacted itself at its context limit rather than on `/compact`. */
+  automatic?: boolean;
 }
 
 /** Index of the most recent boundary marker, or -1 when the conversation has none. */
@@ -976,7 +978,13 @@ export type ChatStreamEvent =
    * It exists because the thread is otherwise built entirely from a reply being streamed, so a
    * parent sitting open would not show the report until it was reloaded.
    */
-  | { type: 'message'; sessionId: string; message: ChatMessage };
+  | { type: 'message'; sessionId: string; message: ChatMessage }
+  /**
+   * A turn is summarising the conversation before it goes out, because the context passed its
+   * limit (ChatService.autoCompact). `running: false` ends it either way; `error` says the
+   * summary failed, so the turn went out with the conversation as it was.
+   */
+  | { type: 'auto-compact'; sessionId: string; running: boolean; error?: string };
 
 /**
  * What a session is doing, as the sidebar draws it.

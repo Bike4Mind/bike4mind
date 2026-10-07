@@ -168,7 +168,7 @@ export function Composer({
   const shownUsage = !disabled && !notReady ? (usage ?? null) : null;
   const usageText = shownUsage && usageLabel(shownUsage);
   const usageDetail = shownUsage && usageText ? describeUsage(shownUsage) : null;
-  const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextWindow) : null;
+  const occupancy = shownUsage ? contextPercent(shownUsage.contextTokens, shownUsage.contextLimit) : null;
 
   // See composerInput.ts for what wins here and why.
   const shown = shownSuggestion({ disabled, text, suggestion });

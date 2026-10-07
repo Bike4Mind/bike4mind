@@ -33,6 +33,7 @@ import type {
   UpdateProjectResult,
 } from '@shared/chat';
 import { isTurnBudgetStop, messagesSinceBoundary } from '@shared/chat';
+import { shouldAutoCompact } from '@shared/contextLimit';
 import { applyLiveEvent, startReply } from '@shared/liveReply';
 import { NO_SKILLS, type SkillsState } from '@shared/skills';
 import { ASK_USER_TOOL_NAME, parseQuestions, sanitizeAnswers, type ChatQuestionOutcome } from '@shared/questions';
@@ -376,6 +377,13 @@ export class ChatService {
   private readonly active = new Map<string, AbortController>();
 
   /**
+   * Sessions summarising themselves ahead of a turn - see autoCompact. Held apart from `active`
+   * because no reply exists yet, but read alongside it (isBusy): a second message arriving now
+   * has to queue behind the turn about to start, not race it to the store.
+   */
+  private readonly compacting = new Set<string>();
+
+  /**
    * A queued message the user promoted past the live turn with "send now", held between the
    * interrupt and the moment the interrupted reply settles.
    *
@@ -595,7 +603,7 @@ export class ChatService {
     const session = await this.deps.store.get(request.sessionId);
     if (session?.mode !== 'code') return { ok: false, error: 'Only a Code session is grounded in a project.' };
 
-    if (this.active.has(request.sessionId)) {
+    if (this.isBusy(request.sessionId)) {
       return { ok: false, busy: true, error: 'Wait for this reply to finish before changing where it runs.' };
     }
     const running = (this.deps.background?.list(request.sessionId) ?? []).filter(
@@ -1029,7 +1037,7 @@ export class ChatService {
      * against the server's catalog at the moment the turn actually goes out. A queued message
      * refused then comes back to the composer - see flushQueue.
      */
-    if (this.active.has(sessionId)) {
+    if (this.isBusy(sessionId)) {
       if (!this.deps.queue || released) return { ok: false, error: 'This conversation is still replying.' };
       // A card the model is parked on would hold this message behind the turn forever; the new
       // message is the user moving on, so it closes the question rather than waiting on it.
@@ -1078,6 +1086,11 @@ export class ChatService {
         ...(invocation.args ? { args: invocation.args } : {}),
       };
     }
+
+    // Last before the prompt is stored, so the boundary lands above it and the summary covers
+    // everything the prompt follows on from. Every refusal above has already had its say: a
+    // turn that will not go out must not cost a summary.
+    await this.autoCompact(reconciled);
 
     // A relay carries `role: 'user'` because that is the only role out-of-band text can reach a
     // stateless completions endpoint under - the same compromise the spawned-session report
@@ -1143,7 +1156,7 @@ export class ChatService {
    * this can never be the thing that makes a finished conversation spend another turn.
    */
   async continueReply(sessionId: string): Promise<SendMessageResult> {
-    if (this.active.has(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
+    if (this.isBusy(sessionId)) return { ok: false, error: 'This conversation is still replying.' };
 
     const api = this.deps.getApiClient();
     if (!api) return { ok: false, error: 'Sign in to continue this reply.' };
@@ -1205,15 +1218,53 @@ export class ChatService {
    */
   async compactContext(sessionId: string, focus = ''): Promise<ContextBoundaryResult> {
     if (!isValidSessionId(sessionId)) return { ok: false, error: 'That conversation no longer exists.' };
-    if (this.active.has(sessionId)) {
+    if (this.isBusy(sessionId)) {
       return { ok: false, error: 'This conversation is still replying. Wait for the turn to finish, then compact it.' };
     }
 
-    const api = this.deps.getApiClient();
-    if (!api) return { ok: false, error: 'Sign in to compact this conversation.' };
-
     const session = await this.deps.store.get(sessionId);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
+    return this.compact(session, focus, false);
+  }
+
+  /**
+   * Compact a conversation that has outgrown its limit before the turn about to start.
+   *
+   * At the START of a turn because that is the one point where nothing is growing the
+   * transcript; compactContext refuses mid-turn for the same reason. A turn whose own tool loop
+   * carries it past the threshold runs on, bounded by the model's real window, and the next
+   * one compacts first - see shouldAutoCompact.
+   *
+   * Never a refusal. The user's message goes out whether or not this worked: a failure changes
+   * nothing (compact is all or nothing), and is pushed to the window rather than returned so a
+   * message released from the queue, which has no caller to read a result, still reports it.
+   */
+  private async autoCompact(session: ChatSession): Promise<void> {
+    const window = this.deps.models?.cached()?.find(model => model.id === session.model)?.contextWindow;
+    if (!shouldAutoCompact(session.messages, window)) return;
+
+    const sessionId = session.id;
+    this.compacting.add(sessionId);
+    this.emit({ type: 'auto-compact', sessionId, running: true });
+    let error: string | undefined;
+    try {
+      const result = await this.compact(session, '', true);
+      if (!result.ok) error = result.error;
+    } finally {
+      this.compacting.delete(sessionId);
+      this.emit({ type: 'auto-compact', sessionId, running: false, ...(error ? { error } : {}) });
+    }
+  }
+
+  private isBusy(sessionId: string): boolean {
+    return this.active.has(sessionId) || this.compacting.has(sessionId);
+  }
+
+  /** The summary round trip behind both compactions; see compactContext for its contract. */
+  private async compact(session: ChatSession, focus: string, automatic: boolean): Promise<ContextBoundaryResult> {
+    const sessionId = session.id;
+    const api = this.deps.getApiClient();
+    if (!api) return { ok: false, error: 'Sign in to compact this conversation.' };
 
     if (!hasClearableHistory(session.messages)) {
       return { ok: false, error: 'There is nothing in this conversation to compact yet.' };
@@ -1255,7 +1306,7 @@ export class ChatService {
     if (!summary) {
       return { ok: false, error: 'The summary came back empty, so nothing was changed. Try again.' };
     }
-    return this.applyBoundary(sessionId, 'compact', summary);
+    return this.applyBoundary(sessionId, 'compact', summary, automatic);
   }
 
   /**
@@ -1268,7 +1319,8 @@ export class ChatService {
   private async applyBoundary(
     sessionId: string,
     kind: 'clear' | 'compact',
-    content: string
+    content: string,
+    automatic = false
   ): Promise<ContextBoundaryResult> {
     const marker: ChatMessage = {
       id: randomUUID(),
@@ -1279,7 +1331,7 @@ export class ChatService {
       content,
       createdAt: new Date().toISOString(),
       system: true,
-      boundary: { kind },
+      boundary: { kind, ...(automatic ? { automatic: true } : {}) },
     };
     const session = await this.deps.store.appendMessage(sessionId, marker);
     if (!session) return { ok: false, error: 'That conversation no longer exists.' };
@@ -1955,7 +2007,7 @@ export class ChatService {
     const queue = this.deps.queue;
     // A newer turn is already running (the user sent one by hand in the gap): its own ending
     // flushes this, so taking a message out now would only put it behind that turn again.
-    if (!queue || this.active.has(sessionId)) return;
+    if (!queue || this.isBusy(sessionId)) return;
 
     const next = queue.takeNext(sessionId);
     if (!next) return;
@@ -1970,7 +2022,7 @@ export class ChatService {
     // the idle composer before this ran. The promotion has lost its race, so the message goes
     // back to the HEAD of the queue to be the turn after that one, rather than being merged
     // into whatever else is waiting there and losing its identity.
-    if (this.active.has(sessionId)) {
+    if (this.isBusy(sessionId)) {
       queue.restore(sessionId, promoted);
       return;
     }
@@ -2319,7 +2371,7 @@ export class ChatService {
     // the turn when nothing is running and no-ops when something is, so there is no second path
     // racing T20's - and an idle target that starts replying in this gap simply runs the
     // message when that reply ends.
-    const queued = this.active.has(targetId);
+    const queued = this.isBusy(targetId);
     this.flushQueue(targetId);
 
     this.deps.logger.debug(`CHAT: relayed a message from ${from.id} to ${targetId} at hop ${budget.hops + 1}`);
@@ -2585,7 +2637,7 @@ export class ChatService {
     const queued = this.childReports.get(parentSessionId) ?? [];
     queued.push(report);
     this.childReports.set(parentSessionId, queued);
-    if (!this.active.has(parentSessionId)) await this.flushChildReports(parentSessionId);
+    if (!this.isBusy(parentSessionId)) await this.flushChildReports(parentSessionId);
   }
 
   private async flushChildReports(sessionId: string): Promise<void> {
@@ -2956,7 +3008,7 @@ export class ChatService {
     if (!isValidSessionId(sessionId)) return null;
     // A turn is in flight, so the exchange this would be guessing from is not the last one yet.
     // The renderer calls on 'done', but a queued message starts the next reply immediately.
-    if (this.active.has(sessionId)) return null;
+    if (this.isBusy(sessionId)) return null;
 
     this.cancelSuggestion(sessionId);
 

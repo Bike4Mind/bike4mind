@@ -381,15 +381,23 @@ function RelayTurn({ message }: { message: ChatMessage }) {
  */
 function BoundaryRow({ message }: { message: ChatMessage }) {
   const compacted = message.boundary?.kind === 'compact';
+  const automatic = compacted && message.boundary?.automatic === true;
 
   return (
-    <Stack spacing={1} data-testid="chat-boundary" data-boundary-kind={message.boundary?.kind}>
+    <Stack
+      spacing={1}
+      data-testid="chat-boundary"
+      data-boundary-kind={message.boundary?.kind}
+      data-boundary-automatic={automatic ? 'true' : undefined}
+    >
       <Stack direction="row" spacing={1} alignItems="center">
         <Box sx={{ flex: 1, borderTop: '1px solid', borderColor: 'divider' }} />
         <Typography level="body-xs" textColor="text.tertiary" noWrap>
-          {compacted
-            ? 'Compacted - the model reads the summary below, not what is above'
-            : 'Cleared - the model reads nothing above this line'}
+          {automatic
+            ? 'Compacted automatically at the context limit - the model reads the summary below'
+            : compacted
+              ? 'Compacted - the model reads the summary below, not what is above'
+              : 'Cleared - the model reads nothing above this line'}
         </Typography>
         <Box sx={{ flex: 1, borderTop: '1px solid', borderColor: 'divider' }} />
       </Stack>

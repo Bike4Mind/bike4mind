@@ -9,6 +9,7 @@ import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
+import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
 import { BackgroundTaskChip, BackgroundTaskPanel } from './BackgroundTaskPanel';
@@ -237,8 +238,9 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * What the composer's usage indicator reports: how full the window is, and what is left.
    *
    * The context figure comes from the last reply's LAST request, never from the turn's summed
-   * usage - see contextTokens. `contextWindow` falls back to null rather than to a default,
-   * because a percentage of a made-up window is a number the user cannot tell is wrong.
+   * usage - see contextTokens. It is measured against the capped limit (effectiveContextLimit)
+   * rather than the raw window, and that limit is real even for a model that states no window:
+   * the cap applies either way.
    *
    * `turnOpen` is handed on so the figure survives the turn it is shown during: the reply being
    * streamed has measured nothing yet, and without it the indicator would read as unknown from
@@ -248,7 +250,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     const reply = latestReply(conversation.messages, turnOpen);
     return {
       contextTokens: contextTokens(reply),
-      contextWindow: modelOption?.contextWindow ?? null,
+      contextLimit: effectiveContextLimit(modelOption?.contextWindow),
+      modelWindow: modelOption?.contextWindow ?? null,
       credits: credits.balance,
       ...(credits.error ? { creditsError: credits.error } : {}),
       lastTurn: reply?.usage ?? null,
