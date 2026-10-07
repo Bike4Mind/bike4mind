@@ -54,6 +54,13 @@ export const ResearchModeParamsSchema = z.object({
 export const PromptIntentSchema = z.enum(['fresh', 'continuation']);
 export type PromptIntent = z.infer<typeof PromptIntentSchema>;
 
+/**
+ * How the image route treats the caller's prompt. `auto` runs the session-history resolver
+ * (pages/api/v1/image-generations.ts); `literal` sends it unchanged apart from truncation to the model's prompt limit.
+ */
+export const ImagePromptResolutionSchema = z.enum(['auto', 'literal']);
+export type ImagePromptResolution = z.infer<typeof ImagePromptResolutionSchema>;
+
 export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
   questId: z.string().optional(),
@@ -67,8 +74,9 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
    * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
    * OpenAI receives them in this order - which matters, because a mask always applies to the
    * first image in the array. fabFile ids rather than URLs so the existing access +
-   * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
-   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
+   * moderation gates (findAccessibleInIds, isImageServeable) still apply. gpt-image only: the
+   * public endpoints reject them for any other model (assertReferenceImagesSupported) and the
+   * services drop them as a backstop. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
    * why the cap is 4 and not OpenAI's 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
@@ -101,6 +109,15 @@ export const GenerateImageRequestBodySchema = GenerateImageIvokeParamsSchema.omi
   sessionName: z.string().optional(),
   callbackUrl: GenerationCallbackUrlSchema.optional(),
   projectId: z.string().optional(),
+  prompt_resolution: ImagePromptResolutionSchema.optional().describe(
+    'How the prompt is treated before it reaches the image model. `"auto"` (the default) resolves it ' +
+      'against the session history, so a follow-up such as "make it darker" is rewritten to carry the ' +
+      'previous subject and the prior image is fed back as input. `"literal"` skips that step: the ' +
+      "prompt is sent unchanged (apart from truncation to the model's prompt limit), `intent` is " +
+      '`"fresh"`, `promptWasEnhanced` is `false`, and a prior session image is carried forward only ' +
+      'for models that cannot run without an input image. Use `"literal"` when the prompt is already ' +
+      'self-contained, for example when an agent or pipeline builds it.'
+  ),
 });
 export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
 
@@ -156,7 +173,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
    * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
    * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
+   * apply. gpt-image only: the public endpoint rejects them for BFL and Gemini
+   * (assertReferenceImagesSupported). Repeated ids collapse to one anchor. See
    * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
@@ -364,6 +382,12 @@ export const LLMApiRequestBodySchema = ChatCompletionInvokeParamsSchema.extend({
   sessionId: z.string().optional(),
   /** Notebook session name */
   sessionName: z.string().optional(),
+  /**
+   * Agents to stamp on a session this request creates (the composer's Agents panel on `/new`).
+   * Session-creation input, not a completion parameter, so it is applied only when `sessionId`
+   * is absent; ignored when an existing session is resolved.
+   */
+  agentIds: z.array(z.string()).optional(),
 });
 export type LLMApiRequestBody = z.infer<typeof LLMApiRequestBodySchema>;
 

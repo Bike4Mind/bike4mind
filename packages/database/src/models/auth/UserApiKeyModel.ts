@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
+  ApiKeyCapPool,
   ApiKeyStatus,
   ApiKeyScope,
   CreditHolderType,
@@ -89,6 +90,19 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     );
   }
 
+  // Both lazy heals below run after a slow bcrypt compare, so they are conditioned on the keyHash
+  // that compare read: if a rotation committed in between, the filter misses and nothing is written.
+  async setKeyDigest(id: string, keyDigest: string, expectedKeyHash: string) {
+    await this.model.updateOne(
+      { _id: id, keyHash: expectedKeyHash, keyDigest: { $in: [null, ''] } },
+      { $set: { keyDigest } }
+    );
+  }
+
+  async healKeyPrefix(id: string, keyPrefix: string, expectedKeyHash: string) {
+    await this.model.updateOne({ _id: id, keyHash: expectedKeyHash }, { $set: { keyPrefix } });
+  }
+
   findActiveByKeyPrefix(keyPrefix: string) {
     return this.model
       .findOne({
@@ -136,13 +150,15 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
-  async countActiveByUserId(userId: string): Promise<number> {
+  async countActiveByUserId(userId: string, pool: ApiKeyCapPool = 'standard'): Promise<number> {
     // Mirror findActiveByKeyPrefix: an expired key cannot authenticate, so it must
     // not consume a per-user slot. `expiresAt: null` also matches rows with no expiry.
+    // `$ne` (not `$nin` on a list) so a legacy row with no metadata stays in the standard pool.
     return this.model.countDocuments({
       userId,
       status: ApiKeyStatus.ACTIVE,
       $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
     });
   }
 
@@ -222,6 +238,7 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     userId: { type: String, required: true },
     name: { type: String, required: true },
     keyHash: { type: String, required: true },
+    keyDigest: { type: String },
     keyPrefix: { type: String, required: true, unique: true },
     scopes: [{ type: String, enum: Object.values(ApiKeyScope), required: true }],
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
@@ -323,8 +340,9 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     toJSON: {
       virtuals: true,
       transform: function (doc, ret: any) {
-        // Never expose the keyHash in JSON responses
+        // Never expose the keyHash or keyDigest in JSON responses
         delete ret.keyHash;
+        delete ret.keyDigest;
         delete ret.callbackSigningSecret;
         return ret;
       },

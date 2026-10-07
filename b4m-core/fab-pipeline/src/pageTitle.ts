@@ -52,3 +52,20 @@ export function readPageTitle($: CheerioAPI, url: string): string {
   const siteName = $('meta[property="og:site_name"]').attr('content') ?? '';
   return cleanPageTitle(raw, { siteName, url });
 }
+
+/** Last path segment, used only as a display-name fallback when a page has no `<title>`. */
+export function lastPathSegment(url: string): string {
+  try {
+    return new URL(url).pathname.split('/').filter(Boolean).pop() ?? url;
+  } catch {
+    return url.split('/')?.pop() ?? url;
+  }
+}
+
+/** Whether a fetched title is a stand-in: empty, the url's domain label (ignoring case and punctuation), or exactly the url's last path segment. */
+export function isPlaceholderTitle(title: string, url: string): boolean {
+  const trimmed = title.trim();
+  const core = letters(trimmed);
+  if (!core || core === domainLabel(url)) return true;
+  return trimmed === lastPathSegment(url);
+}

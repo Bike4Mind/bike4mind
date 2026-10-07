@@ -3,6 +3,7 @@ import { DATA_LAKE_WRITE_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
+  withTransaction,
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   fabFileRepository,
@@ -39,29 +40,36 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const { id, fabFileId } = req.query;
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
-
     // The removal recomputes stats, which can flip a draft lake active and emit a config-change
     // row; `auditPrincipal` is what keeps a key-driven removal from being recorded as the human.
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    const result = await dataLakeService.removeFileFromDataLake(actor, lake.id, fabFileId, {
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        fabFiles: fabFileRepository,
-        lakeMembershipRemovals: lakeMembershipRemovalRepository,
-        // Without these, `recordLakeConfigChange` returns at its `if (!events) return` guard, so the
-        // draft -> active flip a removal can trigger records nothing AND the threaded logger below
-        // has nothing to report. Every other audited lake-write route spreads this; omitting it fails
-        // silently, which is why it lives in one shared helper.
-        ...lakeConfigAuditDb,
-        ...lakeMembershipAuditDb,
-      },
-      logger: req.logger,
+    // The gate runs inside the transaction so a grant revoke committing mid-request collides on the
+    // lake doc and the retry re-reads live grants.
+    const result = await withTransaction(async () => {
+      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
+
+      const removal = await dataLakeService.removeFileFromDataLake(actor, lake.id, fabFileId, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          fabFiles: fabFileRepository,
+          lakeMembershipRemovals: lakeMembershipRemovalRepository,
+          // Without these, `recordLakeConfigChange` returns at its `if (!events) return` guard, so the
+          // draft -> active flip a removal can trigger records nothing AND the threaded logger below
+          // has nothing to report. Every other audited lake-write route spreads this; omitting it fails
+          // silently, which is why it lives in one shared helper.
+          ...lakeConfigAuditDb,
+          ...lakeMembershipAuditDb,
+        },
+        logger: req.logger,
+      });
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return removal;
     });
 
     return res.json(result);
@@ -70,24 +78,28 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     const { id, fabFileId } = req.query;
     const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
-
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    const result = await dataLakeService.addFileToDataLake(actor, lake.id, fabFileId, {
-      db: {
-        dataLakes: dataLakeRepository,
-        dataLakeAccessGrants: dataLakeAccessGrantRepository,
-        fabFiles: fabFileRepository,
-        lakeMembershipRemovals: lakeMembershipRemovalRepository,
-        scopedSettings: scopedSettingsRepository,
-        ...lakeConfigAuditDb,
-        ...lakeMembershipAuditDb,
-      },
-      logger: req.logger,
+    const result = await withTransaction(async () => {
+      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
+
+      const addition = await dataLakeService.addFileToDataLake(actor, lake.id, fabFileId, {
+        db: {
+          dataLakes: dataLakeRepository,
+          dataLakeAccessGrants: dataLakeAccessGrantRepository,
+          fabFiles: fabFileRepository,
+          lakeMembershipRemovals: lakeMembershipRemovalRepository,
+          scopedSettings: scopedSettingsRepository,
+          ...lakeConfigAuditDb,
+          ...lakeMembershipAuditDb,
+        },
+        logger: req.logger,
+      });
+      await dataLakeRepository.touchIfStable(lake.id);
+      return addition;
     });
 
     return res.json(result);

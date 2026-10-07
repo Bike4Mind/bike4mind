@@ -171,7 +171,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           });
         } else {
           logger.info('[CLI_LLM] Authenticated via JWT', { userId });
-          await checkRateLimit(userId, source);
+          await checkRateLimit(userId, source, { client: headers['user-agent'] ?? headers['x-b4m-client'] });
         }
       } catch (rateLimitError) {
         write(

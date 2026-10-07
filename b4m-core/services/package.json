@@ -1,7 +1,7 @@
 {
   "name": "@bike4mind/services",
   "description": "This packages contains all the core business logic",
-  "version": "14.1.0",
+  "version": "15.1.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -58,6 +58,26 @@
       "require": {
         "types": "./dist/creditService/index.d.cts",
         "default": "./dist/creditService/index.cjs"
+      }
+    },
+    "./generationJobs": {
+      "import": {
+        "types": "./dist/generationJobs/index.d.mts",
+        "default": "./dist/generationJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/generationJobs/index.d.cts",
+        "default": "./dist/generationJobs/index.cjs"
+      }
+    },
+    "./videoJobs": {
+      "import": {
+        "types": "./dist/videoJobs/index.d.mts",
+        "default": "./dist/videoJobs/index.mjs"
+      },
+      "require": {
+        "types": "./dist/videoJobs/index.d.cts",
+        "default": "./dist/videoJobs/index.cjs"
       }
     },
     "./agentProactiveMessagingService": {

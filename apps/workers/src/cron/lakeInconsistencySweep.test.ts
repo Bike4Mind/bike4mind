@@ -50,7 +50,9 @@ vi.mock('@server/utils/cloudwatch', () => ({
 
 vi.mock('@aws-sdk/client-cloudwatch', () => ({ StandardUnit: { Count: 'Count' } }));
 
-import { handler } from './lakeInconsistencySweep';
+import { connectDB } from '@bike4mind/database';
+
+import { handler, runLakeInconsistencySweep } from './lakeInconsistencySweep';
 
 const lake = (overrides: Record<string, unknown> = {}) => ({
   id: 'lake-1',
@@ -102,6 +104,38 @@ describe('lakeInconsistencySweep cron', () => {
     mockRecordFindings.mockResolvedValue({ recorded: 1, failed: 0 });
     mockUpdateLake.mockResolvedValue(undefined);
     mockMarkScanned.mockResolvedValue(undefined);
+  });
+
+  it('preserves all five hosted metric names, values, order, dimensions and units', async () => {
+    mockFindDue.mockResolvedValueOnce([lake(), lake({ id: 'lake-2' })]).mockResolvedValueOnce([]);
+    mockRecordFindings
+      .mockResolvedValueOnce({ recorded: 4, failed: 0 })
+      .mockResolvedValueOnce({ recorded: 2, failed: 3 });
+    await handler();
+    expect(mockEmitMetric.mock.calls).toEqual([
+      ['Lumina5/DataLakes', 'LakeInconsistencySweepRuns', 1, { Stage: 'dev' }, 'Count'],
+      ['Lumina5/DataLakes', 'LakeInconsistencySweepLakesScanned', 2, { Stage: 'dev' }, 'Count'],
+      ['Lumina5/DataLakes', 'LakeInconsistencySweepFailures', 1, { Stage: 'dev' }, 'Count'],
+      ['Lumina5/DataLakes', 'LakeInconsistencySweepFindingsRecorded', 6, { Stage: 'dev' }, 'Count'],
+      ['Lumina5/DataLakes', 'LakeInconsistencySweepFindingsFailed', 3, { Stage: 'dev' }, 'Count'],
+    ]);
+  });
+
+  it('reports the run before a rejected database connection and emits no outcome metrics', async () => {
+    vi.mocked(connectDB).mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(handler()).rejects.toThrow('database unavailable');
+    expect(mockEmitMetric.mock.calls).toEqual([
+      ['Lumina5/DataLakes', 'LakeInconsistencySweepRuns', 1, { Stage: 'dev' }, 'Count'],
+    ]);
+    expect(mockEmitMetric.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(connectDB).mock.invocationCallOrder[0]!);
+    expect(mockFindDue).not.toHaveBeenCalled();
+  });
+
+  it('runs locally without emitting hosted metrics or reconnecting', async () => {
+    const { connectDB } = await import('@bike4mind/database');
+    await runLakeInconsistencySweep();
+    expect(mockEmitMetric).not.toHaveBeenCalled();
+    expect(connectDB).not.toHaveBeenCalled();
   });
 
   it('reports zero scanned when there are no active lakes', async () => {

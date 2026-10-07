@@ -4,9 +4,11 @@ import {
   IOrgGitHubLakeConnectionRepository,
   IMongoDocument,
   GITHUB_DISCONNECT_STALL_MS,
+  type GitHubLakeTreeCounts,
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { releaseLakeClaimBestEffort } from './LakeConnectorClaimModel';
 import { randomUUID } from 'crypto';
 import { redactLastError } from './OrgGoogleDriveConnectionModel';
 
@@ -66,6 +68,8 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     defaultBranch: { type: String },
     lastSyncedCommitSha: { type: String },
     lastSyncedAt: { type: Date },
+    treeCandidateCount: { type: Number },
+    treeSkippedCount: { type: Number },
     syncClaimedAt: { type: Date },
     activeIngestBatchId: { type: String },
     ingestClaimToken: { type: String },
@@ -122,7 +126,9 @@ class OrgGitHubLakeConnectionRepository
   /** Hard delete: a soft-deleted row would keep the unique repositoryId / targetDataLakeId claims. */
   async release(id: string, organizationId: string): Promise<boolean> {
     const res = await this.model.deleteMany({ _id: id, organizationId }, { hardDelete: true });
-    return (res?.deletedCount ?? 0) > 0;
+    const deleted = (res?.deletedCount ?? 0) > 0;
+    if (deleted) await releaseLakeClaimBestEffort(id);
+    return deleted;
   }
 
   async claimForSync(id: string): Promise<string | null> {
@@ -220,6 +226,18 @@ class OrgGitHubLakeConnectionRepository
       { $set: { syncClaimedAt: new Date(), activeIngestBatchId, ingestClaimToken: rotatedToken } }
     );
     return renewed !== null ? rotatedToken : null;
+  }
+
+  async recordTreeCounts(
+    id: string,
+    expectedToken: string,
+    { candidateCount, skippedCount }: GitHubLakeTreeCounts
+  ): Promise<boolean> {
+    const res = await this.model.updateOne(
+      { _id: id, status: 'syncing', ingestClaimToken: expectedToken },
+      { $set: { treeCandidateCount: candidateCount, treeSkippedCount: skippedCount } }
+    );
+    return res.matchedCount > 0;
   }
 
   async releaseSyncClaim(

@@ -4,28 +4,34 @@ import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
 import { Config } from '@server/utils/config';
-import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
-import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
-import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
-import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@server/queueHandlers/dataLakeTaxonomyAnalysis';
-import { dispatch as dataLakeResearchRunDispatch } from '@server/queueHandlers/dataLakeResearchRun';
+import { dispatch as researchEngineDispatch } from '@workers/queueHandlers/researchEngineQueue';
+import { dispatch as fabFileChunkDispatch } from '@workers/queueHandlers/fabFileChunk';
+import { dispatch as fabFileVectorizeDispatch } from '@workers/queueHandlers/fabFileVectorize';
+import { dispatch as dataLakeTaxonomyAnalysisDispatch } from '@workers/queueHandlers/dataLakeTaxonomyAnalysis';
+import { dispatch as dataLakeResearchRunDispatch } from '@workers/queueHandlers/dataLakeResearchRun';
 import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/driveDisconnectPurge';
+import { dispatch as driveLakeIngestDispatch } from '@server/queueHandlers/driveLakeIngest';
 import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
 import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
 import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
 import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
-import { dispatch as generationCallbackDispatch } from '@server/queueHandlers/generationCallback';
+import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
+import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@workers/cron/dataLakeBatchReconcile';
 import { runResearchScheduleTick } from '@workers/cron/dataLakeResearchSchedule';
 import { SelfHostWorker } from './selfHostWorker';
+import { registerNotebookCurationQueue } from './notebookCurationQueue';
 import { registerTaskScheduler } from './taskScheduler';
 import { registerLakeMemoryQueue } from './lakeMemoryQueue';
+import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
+import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { registerQuestTimeoutSweep } from './questTimeoutSweep';
+import { registerGenerationJobSweep } from './generationJobSweep';
 import { registerLakeHealthSweep } from './lakeHealthSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from '@server/s3/chunkRescueSweep';
@@ -35,6 +41,9 @@ import {
   FAB_FILE_CHUNK_MAX_RECEIVE_COUNT,
   FAB_FILE_VECTORIZE_MAX_RECEIVE_COUNT,
   GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
+  GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
+  GENERATION_JOB_MAX_RECEIVE_COUNT,
+  GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
 } from '@server/queueHandlers/sqsDelivery';
 
 /**
@@ -65,9 +74,9 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const IMAGE_VISIBILITY_TIMEOUT_SEC = 660;
 /** Matches hosted's 12-minute visibility over the purge handler's 10-minute timeout (infra/queues.ts). */
 const DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC = 720;
-/** Both GitHub lake queues mirror hosted: 12-minute visibility over a 10-minute handler timeout (infra/queues.ts). */
-const GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC = 720;
-const GITHUB_LAKE_RUN_BUDGET_MS = 10 * 60_000;
+/** The Drive and GitHub lake queues mirror hosted: 12-minute visibility over a 10-minute handler timeout (infra/queues.ts). */
+const SOURCE_LAKE_VISIBILITY_TIMEOUT_SEC = 720;
+const SOURCE_LAKE_RUN_BUDGET_MS = 10 * 60_000;
 /** Research schedule tick, matching the hosted dataLakeResearchScheduleCron's rate. */
 const RESEARCH_SCHEDULE_INTERVAL_MS = 15 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
@@ -89,9 +98,11 @@ async function main() {
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);
   registerQuestTimeoutSweep(worker);
+  registerGenerationJobSweep(worker);
   registerLakeHealthSweep(worker);
   registerTelemetryCleanup(worker);
   registerApiKeyBaselineCalculation(worker);
+  registerLakeInconsistencySweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
@@ -147,13 +158,20 @@ async function main() {
   const generationCallbackQueueUrl = Resource.generationCallbackQueue?.url;
   if (generationCallbackQueueUrl) {
     worker.registerQueueHandler('generationCallbackQueue', generationCallbackQueueUrl, generationCallbackDispatch, {
-      // Matches hosted's 2-minute visibilityTimeout (infra/queues.ts).
-      visibilityTimeoutSec: 120,
+      visibilityTimeoutSec: GENERATION_CALLBACK_VISIBILITY_TIMEOUT_SEC,
       maxReceiveCount: GENERATION_CALLBACK_MAX_RECEIVE_COUNT,
     });
   } else {
     bootLogger.warn('generationCallbackQueue not configured; generation completion callbacks will not be delivered');
   }
+
+  // Required in the manifest (unlike the callback queue above): a video job accepted with no consumer
+  // would hold credits until the sweeper fails it. Unlike Lambda there is no hard timeout here, so the
+  // lease/visibility ordering in infra/queues.ts relies on provider and storage call timeouts.
+  worker.registerQueueHandler('generationJobQueue', Resource.generationJobQueue.url, generationJobDispatch, {
+    visibilityTimeoutSec: GENERATION_JOB_VISIBILITY_TIMEOUT_SEC,
+    maxReceiveCount: GENERATION_JOB_MAX_RECEIVE_COUNT,
+  });
 
   // Background AI-tag suggestion, opted into per-batch on the create wizard. Optional
   // in the self-host manifest - a basic install that never set the env var simply never runs
@@ -172,6 +190,8 @@ async function main() {
   }
 
   registerLakeMemoryQueue(worker, Resource.lakeMemoryQueue?.url, bootLogger);
+  registerDataLakeCleanupQueue(worker, Resource.dataLakeCleanupQueue?.url, bootLogger);
+  await registerNotebookCurationQueue(worker, Resource.notebookCurationQueue?.url, bootLogger);
 
   // User-triggered research runs (#1682). Optional in the self-host manifest for the same reason as
   // taxonomy: an install that never set the env var simply cannot start a run, and the API refuses
@@ -197,26 +217,33 @@ async function main() {
       {
         visibilityTimeoutSec: DRIVE_DISCONNECT_PURGE_VISIBILITY_TIMEOUT_SEC,
         maxReceiveCount: 3,
+        // One purge at a time, like hosted's SINGLE_RECORD_BATCH: a batch shares one visibility
+        // window, so a second slow purge would be redelivered while the first still runs.
+        batchSize: 1,
       }
     );
   } else {
     bootLogger.warn('driveDisconnectPurgeQueue not configured; Google Drive disconnects will be refused');
   }
 
-  // One message per dispatch and a hosted-length deadline, like the Lambda: the ingest slices by
-  // getRemainingTimeInMillis and re-enqueues, so without a budget a large repo would outlive its
+  // One message per dispatch and a hosted-length deadline, like the Lambda: the ingests slice by
+  // getRemainingTimeInMillis and re-enqueue, so without a budget a large source would outlive its
   // visibility and be redelivered mid-run. maxReceiveCount matches each queue's hosted dlq.retry.
-  const githubLakeQueueOpts = {
-    visibilityTimeoutSec: GITHUB_LAKE_VISIBILITY_TIMEOUT_SEC,
-    runBudgetMs: GITHUB_LAKE_RUN_BUDGET_MS,
+  const sourceLakeQueueOpts = {
+    visibilityTimeoutSec: SOURCE_LAKE_VISIBILITY_TIMEOUT_SEC,
+    runBudgetMs: SOURCE_LAKE_RUN_BUDGET_MS,
     batchSize: 1,
   };
+  worker.registerQueueHandler('driveLakeIngestQueue', Resource.driveLakeIngestQueue.url, driveLakeIngestDispatch, {
+    ...sourceLakeQueueOpts,
+    maxReceiveCount: 2,
+  });
   worker.registerQueueHandler('githubLakeIngestQueue', Resource.githubLakeIngestQueue.url, githubLakeIngestDispatch, {
-    ...githubLakeQueueOpts,
+    ...sourceLakeQueueOpts,
     maxReceiveCount: 2,
   });
   worker.registerQueueHandler('githubLakeRevokeQueue', Resource.githubLakeRevokeQueue.url, githubLakeRevokeDispatch, {
-    ...githubLakeQueueOpts,
+    ...sourceLakeQueueOpts,
     maxReceiveCount: 7,
   });
 

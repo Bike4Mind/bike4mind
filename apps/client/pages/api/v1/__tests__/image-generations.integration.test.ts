@@ -204,6 +204,44 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  describe('referenceImageFabFileIds', () => {
+    const REFS = ['ref-1', 'ref-2'];
+
+    it('accepts reference images for a gpt-image model (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'gpt-image-1', referenceImageFabFileIds: REFS },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ referenceImageFabFileIds: REFS }) })
+      );
+    });
+
+    it('rejects reference images for a non-gpt-image model (400) before creating a session or enqueuing', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-pro-1.1', referenceImageFabFileIds: REFS },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(400);
+      expect(res._getJSONData().error).toMatch(/referenceImageFabFileIds.*flux-pro-1\.1/);
+      expect(mockGetOrCreateSession).not.toHaveBeenCalled();
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('accepts a non-gpt-image model with no reference images (200)', async () => {
+      validateWithScopes([ApiKeyScope.AI_GENERATE]);
+      const { req, res } = fire({
+        body: { prompt: 'a red bicycle', model: 'flux-pro-1.1', referenceImageFabFileIds: [] },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('rejects a body that fails the contract schema (422) before enqueuing generation', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire({ body: { prompt: 'a red bicycle' } });
@@ -233,6 +271,62 @@ describe('POST /api/v1/image-generations (integration - contract auth + validati
         }),
       })
     );
+  });
+
+  describe('prompt_resolution', () => {
+    const LITERAL_PROMPT = 'a different variant';
+    const REWRITTEN_PROMPT = 'a red bicycle on a white background, different variant';
+
+    beforeEach(() => {
+      mockGetRecentHistory.mockResolvedValue([{ id: 'prior-quest', images: ['prior.png'] }]);
+      mockResolveImagePrompt.mockResolvedValue({ rewrittenPrompt: REWRITTEN_PROMPT, intent: 'continuation' });
+    });
+
+    it.each([undefined, 'auto'] as const)('rewrites a continuation when prompt_resolution is %s', async mode => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', ...(mode ? { prompt_resolution: mode } : {}) },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ promptWasEnhanced: true, intent: 'continuation' });
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ prompt: REWRITTEN_PROMPT }) })
+      );
+    });
+
+    it('sends a literal prompt unchanged and skips the history resolver', async () => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'literal' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({
+        enhancedPrompt: LITERAL_PROMPT,
+        promptWasEnhanced: false,
+        intent: 'fresh',
+      });
+      expect(mockGetRecentHistory).not.toHaveBeenCalled();
+      expect(mockResolveImagePrompt).not.toHaveBeenCalled();
+      const invokedBody = mockInvoke.mock.calls[0][0].body;
+      expect(invokedBody).toMatchObject({
+        prompt: LITERAL_PROMPT,
+        intent: 'fresh',
+        promptEnhancement: { originalPrompt: LITERAL_PROMPT, enhancedPrompt: LITERAL_PROMPT, promptWasEnhanced: false },
+      });
+      expect(invokedBody).not.toHaveProperty('prompt_resolution');
+    });
+
+    it('rejects an unknown prompt_resolution (422) before enqueuing generation', async () => {
+      const { req, res } = fire({
+        apiKey: null,
+        body: { prompt: LITERAL_PROMPT, model: 'gpt-image-1', prompt_resolution: 'verbatim' },
+      });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
   });
 
   it('serves the legacy /api/ai/generate-image path with the same handler', () => {

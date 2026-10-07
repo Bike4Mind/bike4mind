@@ -1,4 +1,4 @@
-import { IFabFileDocument, InviteType, isAudioMimeType, KnowledgeType } from '@bike4mind/common';
+import { IFabFileDocument, InviteType, isMediaOnlyMimeType, KnowledgeType } from '@bike4mind/common';
 import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -255,17 +255,16 @@ const FileBrowserContent = () => {
 
     const requestedFiles = selectedFiles.filter(f => !workBenchFiles.some(w => w.id === f.id));
 
-    // Audio (generated TTS / sound effects) can be browsed and replayed but is
-    // never attachable to a chat: no model accepts audio input. Filter it out of
-    // the workbench add with a toast. (The backend chokepoint in
+    // Generated audio/video can be browsed and replayed but is never attachable to a chat: no model
+    // accepts it as input. Filter it out of the workbench add with a toast. (The backend chokepoint in
     // processFileInParallel is the authoritative guard; this is UX-level.)
-    const audioFiles = requestedFiles.filter(f => isAudioMimeType(f.mimeType));
-    const applicableFiles = requestedFiles.filter(f => !isAudioMimeType(f.mimeType));
-    if (audioFiles.length) {
+    const mediaFiles = requestedFiles.filter(f => isMediaOnlyMimeType(f.mimeType));
+    const applicableFiles = requestedFiles.filter(f => !isMediaOnlyMimeType(f.mimeType));
+    if (mediaFiles.length) {
       toast.error(
-        audioFiles.length === 1
-          ? `"${audioFiles[0].fileName}" is audio and can't be added to a chat.`
-          : `${audioFiles.length} audio files can't be added to a chat.`
+        mediaFiles.length === 1
+          ? `"${mediaFiles[0].fileName}" is a media file and can't be added to a chat.`
+          : `${mediaFiles.length} media files can't be added to a chat.`
       );
     }
     if (applicableFiles.length === 0) {

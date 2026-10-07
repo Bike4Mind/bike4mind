@@ -144,6 +144,24 @@ describe('matchArtifactBlocks', () => {
     expect(matchArtifactBlocks(text).map(b => b.body)).toEqual(['one', 'two']);
   });
 
+  it('returns a descended block and then the blocks inside it, including one sharing its closer', () => {
+    const text = '<artifact o>a<artifact i>b</artifact> c</artifact>';
+    expect(matchArtifactBlocks(text).map(b => b.body)).toEqual(['a<artifact i>b']);
+    const descended = matchArtifactBlocks(text, b => b.attrs === 'o');
+    expect(descended.map(b => [b.index, b.body])).toEqual([
+      [0, 'a<artifact i>b'],
+      [13, 'b'],
+    ]);
+  });
+
+  it('runs in linear time when descending into every block', () => {
+    expectLinearGrowth(
+      n => '<artifact a>x</artifact>'.repeat(n),
+      text => matchArtifactBlocks(text, () => true),
+      GROWTH_SMALL_N
+    );
+  });
+
   it.each([
     ['repeated unclosed opener', (n: number) => '<artifact a '.repeat(n)],
     ['repeated closed opener', (n: number) => '<artifact a>'.repeat(n)],

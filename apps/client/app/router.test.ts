@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { feedbackRollupRoute, dataLakesRoute, newRoute } from './router';
+import { feedbackRollupRoute, dataLakesRoute, newRoute, router } from './router';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // validateSearch is what makes a bare /feedback/rollup URL load at all (see the route's own
@@ -61,5 +61,19 @@ describe('Data Lake article deep link keeps ?passage=', () => {
       thrown = e;
     }
     expect(thrown).toMatchObject({ options: { to: '/new', search: { article: 'f1' } } });
+  });
+});
+
+describe('QA status routes', () => {
+  const chain = (path: string) => router.matchRoutes(path, {}).map(m => m.routeId);
+
+  it.each(['/status', '/status/runs/abc', '/status/tests/a%2Fb'])('%s renders outside the notebook layout', path => {
+    const ids = chain(path);
+    expect(ids).toContain('/qa-status-layout');
+    expect(ids).not.toContain('/layout');
+  });
+
+  it('keeps regular app pages inside the notebook layout', () => {
+    expect(chain('/new')).toContain('/layout');
   });
 });

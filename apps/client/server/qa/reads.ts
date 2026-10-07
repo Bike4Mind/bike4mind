@@ -15,11 +15,12 @@ import {
   type QaTestStatus,
 } from '@bike4mind/common';
 import type { QaFilters } from './filters';
+import { diffTests, median, type QaDiffTest, type QaRunDiff } from './runInsights';
 import type { QaMediaStorage } from './storage';
 import { leadingNonPassing, stateKeyFilter } from './streak';
 
 /** Read models for the admin /status page (app/hooks/data/qaStatus.ts imports these types). */
-export type { QaFilters };
+export type { QaFilters, QaDiffTest, QaRunDiff };
 
 const DAY_MS = 86_400_000;
 const STREAK_LOOKBACK = 50;
@@ -27,6 +28,12 @@ export const QA_SERIES_MAX_RUNS = 2000;
 const FLAKY_ROWS = 10;
 const HISTORY_LIMIT = 50;
 export const QA_RUNS_PAGE_SIZE = 50;
+const BASELINE_DAYS = 7;
+const BASELINE_MAX_RUNS = 200;
+/** Earlier runs findPreviousRun inspects for test rows before giving up. */
+const PREVIOUS_RUN_CANDIDATES = 5;
+/** Slowest tests of a run that get a per-test median. */
+export const QA_TEST_MEDIAN_LIMIT = 50;
 
 type LeanRun = IQaRun & { _id: unknown };
 
@@ -124,10 +131,21 @@ export interface QaTestView {
   retries: number;
   error?: string;
   media: QaMediaView[];
+  /** Median duration over the baseline runs; only on `QaRunDetail.tests`, for the slowest few. */
+  medianMs?: number;
 }
 
 export interface QaRunDetail {
   run: QaRunSummary & { suiteSummary: QaSuiteSummary[]; metrics: QaMetric[] };
+  /** Median duration of the same state's runs in the 7 days before this one; null without a baseline. */
+  medianDurationMs: number | null;
+  /** Every test, without error bodies or media (those are on failedTests/flakyTests). */
+  tests: QaTestView[];
+  /**
+   * Null for an imported run, a run where nothing ran or that has no test rows, and when none of the
+   * newest qualifying earlier runs (see findPreviousRun) has test rows.
+   */
+  diff: QaRunDiff | null;
   failedTests: QaTestView[];
   flakyTests: QaTestView[];
   report: { state: 'ok' | 'expired' | 'unavailable' | 'none'; url?: string };
@@ -306,26 +324,123 @@ async function mediaView(
   return { kind, state: 'ok', url: await storage.signedGetUrl(key) };
 }
 
+type PreviousRun = { id: string; startedAt: Date; tests: Pick<IQaTestResult, 'testKey' | 'title' | 'status'>[] };
+
+/**
+ * Newest earlier run of the same state with test rows. Skips imports, infra-errors, and any run with
+ * notStarted rows: an aborted run, even one with failures, stores never-run tests as notStarted, which
+ * would hide a passed -> failed change. A qualifying run with no rows (pruned or never stored) is
+ * stepped over, up to PREVIOUS_RUN_CANDIDATES.
+ */
+async function findPreviousRun(run: LeanRun): Promise<PreviousRun | null> {
+  const candidates = await QaRun.find({
+    ...stateKeyFilter(run),
+    source: { $ne: 'slack-backfill' },
+    status: { $ne: 'infra-error' },
+    'counts.ran': { $gt: 0 },
+    'counts.notStarted': { $not: { $gt: 0 } },
+    startedAt: { $lt: run.startedAt },
+  })
+    .sort({ startedAt: -1 })
+    .limit(PREVIOUS_RUN_CANDIDATES)
+    .select('startedAt')
+    .lean<{ _id: unknown; startedAt: Date }[]>();
+  for (const candidate of candidates) {
+    const id = String(candidate._id);
+    const tests = await QaTestResult.find({ runId: id }).select('testKey title status').lean<PreviousRun['tests']>();
+    if (tests.length > 0) return { id, startedAt: candidate.startedAt, tests };
+  }
+  return null;
+}
+
+/**
+ * Same-state runs in the 7 days before `run`, so `run` is never its own baseline. Zero-duration,
+ * infra-error and other aborted (notStarted) runs carry no signal: an aborted run is short and would
+ * drag the median down.
+ */
+function findBaselineRuns(run: LeanRun) {
+  return QaRun.find({
+    ...stateKeyFilter(run),
+    startedAt: { $gte: new Date(run.startedAt.getTime() - BASELINE_DAYS * DAY_MS), $lt: run.startedAt },
+    durationMs: { $gt: 0 },
+    status: { $ne: 'infra-error' },
+    'counts.ran': { $gt: 0 },
+    'counts.notStarted': { $not: { $gt: 0 } },
+  })
+    .sort({ startedAt: -1 })
+    .limit(BASELINE_MAX_RUNS)
+    .select('durationMs')
+    .lean<{ _id: unknown; durationMs: number }[]>();
+}
+
+/** One aggregation over { runId, testKey }; passed results only, since a failure's duration includes its timeouts. */
+async function testMedians(runIds: string[], testKeys: string[]): Promise<Map<string, number>> {
+  if (runIds.length === 0 || testKeys.length === 0) return new Map();
+  const grouped = await QaTestResult.aggregate<{ _id: string; durations: number[] }>([
+    { $match: { runId: { $in: runIds }, testKey: { $in: testKeys }, status: 'passed', durationMs: { $gt: 0 } } },
+    { $group: { _id: '$testKey', durations: { $push: '$durationMs' } } },
+  ]);
+  const medians = new Map<string, number>();
+  for (const g of grouped) {
+    const m = median(g.durations);
+    if (m !== null) medians.set(g._id, m);
+  }
+  return medians;
+}
+
 export async function getQaRunDetail(id: string, deps: QaRunDetailDeps): Promise<QaRunDetail | null> {
   const run = await QaRun.findById(id).lean<LeanRun>();
   if (!run) return null;
   const runId = String(run._id);
   const expired = (deps.now ?? new Date()).getTime() - run.startedAt.getTime() > QA_MEDIA_RETENTION_DAYS * DAY_MS;
+  // Imports hold counts only: no tests to diff or time.
+  const imported = run.source === 'slack-backfill';
+  // A run where nothing ran has no rows to compare; diffing it would list every earlier test as removed.
+  const diffable = !imported && run.counts.ran > 0;
 
-  const tests = await QaTestResult.find({ runId, status: { $in: ['failed', 'flaky'] } })
-    .sort({ _id: 1 })
-    .lean<IQaTestResult[]>();
+  const [results, baseline, previous] = await Promise.all([
+    QaTestResult.find({ runId }).sort({ _id: 1 }).lean<IQaTestResult[]>(),
+    findBaselineRuns(run),
+    diffable ? findPreviousRun(run) : null,
+  ]);
+
   const views = await Promise.all(
-    tests.map(async (t): Promise<QaTestView> => ({
+    results
+      .filter(t => t.status === 'failed' || t.status === 'flaky')
+      .map(async (t): Promise<QaTestView> => ({
+        testKey: t.testKey,
+        title: t.title,
+        status: t.status,
+        durationMs: t.durationMs,
+        retries: t.retries,
+        ...(t.error ? { error: t.error } : {}),
+        media: await Promise.all((t.artifacts ?? []).map(a => mediaView(a.kind, a.key, expired, deps.storage))),
+      }))
+  );
+
+  const slowestKeys = imported
+    ? []
+    : results
+        .filter(t => t.durationMs > 0)
+        .sort((a, b) => b.durationMs - a.durationMs)
+        .slice(0, QA_TEST_MEDIAN_LIMIT)
+        .map(t => t.testKey);
+  const medians = await testMedians(
+    baseline.map(r => String(r._id)),
+    slowestKeys
+  );
+  const tests = results.map((t): QaTestView => {
+    const medianMs = medians.get(t.testKey);
+    return {
       testKey: t.testKey,
       title: t.title,
       status: t.status,
       durationMs: t.durationMs,
       retries: t.retries,
-      ...(t.error ? { error: t.error } : {}),
-      media: await Promise.all((t.artifacts ?? []).map(a => mediaView(a.kind, a.key, expired, deps.storage))),
-    }))
-  );
+      media: [],
+      ...(medianMs !== undefined ? { medianMs } : {}),
+    };
+  });
 
   let report: QaRunDetail['report'] = { state: 'none' };
   if (run.reportPrefix) {
@@ -340,6 +455,16 @@ export async function getQaRunDetail(id: string, deps: QaRunDetailDeps): Promise
 
   return {
     run: { ...toSummary(run), suiteSummary: run.suiteSummary ?? [], metrics: run.metrics ?? [] },
+    medianDurationMs: median(baseline.map(r => r.durationMs)),
+    tests,
+    diff:
+      previous && results.length > 0
+        ? {
+            previousRunId: previous.id,
+            previousStartedAt: previous.startedAt.toISOString(),
+            ...diffTests(results, previous.tests),
+          }
+        : null,
     failedTests: views.filter(v => v.status === 'failed'),
     flakyTests: views.filter(v => v.status === 'flaky'),
     report,

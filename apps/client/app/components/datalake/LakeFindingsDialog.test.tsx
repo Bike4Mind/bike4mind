@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import type { IDataLakeFindingDocument, LakeHealthApiResponse } from '@bike4mind/common';
+import type { ILakeFindingListItem, LakeHealthApiResponse } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   findings: vi.fn(),
@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   rulePending: { value: false },
   access: vi.fn(),
   applyCorpus: vi.fn(),
+  applyPending: { value: false },
+  applyVariables: { value: undefined as unknown },
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -27,7 +29,11 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useLakeAccessView: (lakeId: string | null, enabled?: boolean) => h.access(lakeId, enabled),
   // The detail view's corpus controls (#3612) reach these; stubbed so this file tests the dialog's
   // wiring, not the mutation or the retag seed (FindingCorpusActions.test.tsx covers those).
-  useApplyCorpusAction: () => ({ mutate: h.applyCorpus, isPending: false }),
+  useApplyCorpusAction: () => ({
+    mutate: h.applyCorpus,
+    isPending: h.applyPending.value,
+    variables: h.applyVariables.value,
+  }),
   useLakeFileTags: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
@@ -41,8 +47,22 @@ vi.mock('@client/app/contexts/UserContext', () => ({
 // The panes fetch their own document; stubbed so this file tests the review surface rather than the
 // file-read stack (FindingSourcePane.test.tsx covers that side).
 vi.mock('./FindingSourcePane', () => ({
-  default: ({ source }: { source: { fabFileId: string } }) => (
-    <div data-testid={`finding-source-pane-${source.fabFileId}`} />
+  default: ({
+    source,
+    superseded,
+    returning,
+    onReturnToRanking,
+  }: {
+    source: { fabFileId: string };
+    superseded?: boolean;
+    returning?: boolean;
+    onReturnToRanking?: () => void;
+  }) => (
+    <div data-testid={`finding-source-pane-${source.fabFileId}`} data-returning={String(!!returning)}>
+      {superseded && onReturnToRanking && (
+        <button data-testid={`return-to-ranking-${source.fabFileId}`} onClick={onReturnToRanking} />
+      )}
+    </div>
   ),
 }));
 
@@ -54,7 +74,7 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const finding = (over: Partial<IDataLakeFindingDocument> = {}): IDataLakeFindingDocument =>
+const finding = (over: Partial<ILakeFindingListItem> = {}): ILakeFindingListItem =>
   ({
     id: 'finding-1',
     lakeId: 'lake-1',
@@ -63,6 +83,7 @@ const finding = (over: Partial<IDataLakeFindingDocument> = {}): IDataLakeFinding
     detector: 'lexical',
     documentCount: 2,
     status: 'open',
+    supersededFabFileIds: [],
     firstSeenAt: new Date('2026-03-01T00:00:00Z'),
     lastSeenAt: new Date('2026-03-08T00:00:00Z'),
     createdAt: new Date('2026-03-01T00:00:00Z'),
@@ -72,9 +93,9 @@ const finding = (over: Partial<IDataLakeFindingDocument> = {}): IDataLakeFinding
       { fabFileId: 'file-b', fileName: 'board-deck.md', excerpt: 'ARR reached $3.7M in Q1.' },
     ],
     ...over,
-  }) as IDataLakeFindingDocument;
+  }) as ILakeFindingListItem;
 
-const listing = (rows: IDataLakeFindingDocument[], over: Record<string, unknown> = {}) => ({
+const listing = (rows: ILakeFindingListItem[], over: Record<string, unknown> = {}) => ({
   data: rows,
   isLoading: false,
   error: null,
@@ -104,6 +125,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.scanPending.value = false;
   h.rulePending.value = false;
+  h.applyPending.value = false;
+  h.applyVariables.value = undefined;
   h.findings.mockReturnValue(listing([finding()]));
   h.health.mockReturnValue({ data: undefined });
   // No access view by default: the assignee picker stays hidden and the self-assign controls stand
@@ -182,6 +205,58 @@ describe('LakeFindingsDialog', () => {
     expect(screen.getByTestId('finding-corpus-merge-btn')).toBeInTheDocument();
     expect(screen.getByTestId('finding-corpus-supersede-btn')).toBeInTheDocument();
     expect(screen.getByTestId('finding-corpus-retag-btn')).toBeInTheDocument();
+  });
+
+  it('returns a superseded cited file to ranking from the detail view', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-b'] })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.queryByTestId('return-to-ranking-file-a')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('return-to-ranking-file-b'));
+
+    expect(h.applyCorpus).toHaveBeenCalledWith({
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'unsupersede', fabFileId: 'file-b' },
+    });
+  });
+
+  it('spins only the file whose unsupersede is in flight', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-a', 'file-b'] })]));
+    h.applyPending.value = true;
+    h.applyVariables.value = {
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'unsupersede', fabFileId: 'file-b' },
+    };
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('finding-source-pane-file-b')).toHaveAttribute('data-returning', 'true');
+    expect(screen.getByTestId('finding-source-pane-file-a')).toHaveAttribute('data-returning', 'false');
+  });
+
+  it('does not spin a pane for a different corpus action in flight', () => {
+    h.findings.mockReturnValue(listing([finding({ supersededFabFileIds: ['file-b'] })]));
+    h.applyPending.value = true;
+    h.applyVariables.value = {
+      dataLakeId: 'lake-1',
+      findingId: 'finding-1',
+      body: { action: 'retag', fabFileId: 'file-b', tags: [] },
+    };
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.getByTestId('finding-source-pane-file-b')).toHaveAttribute('data-returning', 'false');
+  });
+
+  it('offers no return-to-ranking on a closed finding', () => {
+    h.findings.mockReturnValue(listing([finding({ status: 'resolved', supersededFabFileIds: ['file-b'] })]));
+    renderDialog();
+    fireEvent.click(screen.getByTestId('lake-finding-row-finding-1'));
+
+    expect(screen.queryByTestId('return-to-ranking-file-b')).not.toBeInTheDocument();
   });
 
   it('rules an open finding resolved with the note the curator typed', () => {
@@ -589,14 +664,14 @@ describe('LakeFindingsDialog', () => {
   });
 
   it('withholds Scan now when the findings read was refused', () => {
-    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[], { isForbidden: true }));
+    h.findings.mockReturnValue(listing(undefined as unknown as ILakeFindingListItem[], { isForbidden: true }));
     renderDialog();
 
     expect(screen.queryByTestId('lake-findings-scan-btn')).not.toBeInTheDocument();
   });
 
   it('explains a permission refusal rather than painting an error', () => {
-    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[], { isForbidden: true }));
+    h.findings.mockReturnValue(listing(undefined as unknown as ILakeFindingListItem[], { isForbidden: true }));
     renderDialog();
 
     expect(screen.getByTestId('lake-findings-forbidden')).toBeInTheDocument();
@@ -683,7 +758,7 @@ describe('LakeFindingsChip', () => {
   // The open-findings query resolving to undefined (loading, or errored under `retry: false`) must
   // not read as an empty list - that would claim a lake with unknown open work is clean.
   it('stays on the bare label while the open-findings query has not resolved', () => {
-    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[]));
+    h.findings.mockReturnValue(listing(undefined as unknown as ILakeFindingListItem[]));
     h.health.mockReturnValue(scanned());
     renderChip();
 

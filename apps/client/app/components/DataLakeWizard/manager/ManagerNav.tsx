@@ -29,10 +29,10 @@ import RestoreIcon from '@mui/icons-material/Restore';
 import ReplayIcon from '@mui/icons-material/Replay';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { HUES, inkFor } from '@client/app/components/datalake/deckChrome';
 import TreeRowLabel from '@client/app/components/datalake/TreeRowLabel';
+import LakeOwnerIcon from '@client/app/components/datalake/LakeOwnerIcon';
 import LakeDraftChip from '@client/app/components/datalake/LakeDraftChip';
 import { isDraftLake } from '@client/app/components/datalake/lakeVisibility';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
@@ -418,8 +418,10 @@ export default function ManagerNav({
                             <ListItemButton
                               onClick={() => selectLake(lake)}
                               data-testid={`datalake-manager-lake-${lake.id}`}
-                              // pr aligns the count chip with the section headers' chevrons.
-                              sx={{ ...treeRowSx(hoverBg), pr: '12px' }}
+                              // pr aligns the count chip with the section headers' chevrons. The
+                              // chips are flexShrink: 0, so they wrap onto a second line instead of
+                              // squeezing the name down to a few characters.
+                              sx={{ ...treeRowSx(hoverBg), pr: '12px', flexWrap: 'wrap', rowGap: '2px', py: '2px' }}
                             >
                               <FolderOutlinedIcon
                                 sx={{
@@ -428,10 +430,20 @@ export default function ManagerNav({
                                   flexShrink: 0,
                                 }}
                               />
-                              <ListItemContent>
-                                <Typography noWrap sx={rowTypographySx}>
-                                  {lake.name}
-                                </Typography>
+                              <ListItemContent
+                                // 24px = the 16px folder icon + the 8px treeRowSx gap; keep in sync with both, or a
+                                // long name fills the line and wraps the icon above it.
+                                sx={{ flex: '1 1 auto', maxWidth: 'calc(100% - 24px)' }}
+                              >
+                                <Tooltip title={lake.name} size="sm" placement="top-start">
+                                  <Typography
+                                    noWrap
+                                    sx={rowTypographySx}
+                                    data-testid={`datalake-manager-lake-name-${lake.id}`}
+                                  >
+                                    {lake.name}
+                                  </Typography>
+                                </Tooltip>
                               </ListItemContent>
                               {isDraftLake(lake) && <LakeDraftChip testId={`datalake-manager-draft-chip-${lake.id}`} />}
                               {/* Owner marker in the LIST itself, not just the detail pane: the
@@ -440,19 +452,7 @@ export default function ManagerNav({
                                   opening each one. The owner name is already on the row, so this
                                   costs no extra request. */}
                               {lake.isOwn === false && (
-                                <Tooltip
-                                  title={
-                                    lake.ownerDisplayName
-                                      ? `Owned by ${lake.ownerDisplayName}`
-                                      : 'Owned by another user'
-                                  }
-                                  size="sm"
-                                >
-                                  <PersonOutlineIcon
-                                    data-testid={`datalake-manager-owner-icon-${lake.id}`}
-                                    sx={{ fontSize: 14, color: 'warning.400', flexShrink: 0 }}
-                                  />
-                                </Tooltip>
+                                <LakeOwnerIcon lake={lake} testId={`datalake-manager-owner-icon-${lake.id}`} />
                               )}
                               {/* Background AI-tag suggestion gates (progress, review, failed) -
                                   an independent clock from ingest, so these can appear well

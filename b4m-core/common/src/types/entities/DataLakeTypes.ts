@@ -51,6 +51,18 @@ export const DATA_LAKE_STATUSES = [
 export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /**
+ * Statuses a slug lookup (`findBySlug` / `findBySlugAmongIds`) never resolves. The lake keeps
+ * reserving its slug (create still disambiguates past it, and restore needs it back), but reaching
+ * it by slug would let writes land on a lake the user deleted. By-id lookups are unaffected.
+ * `deleting` stays resolvable: the lifecycle route re-runs a stuck delete by id OR slug (API keys
+ * included), and hiding it would not 404 but fall through to the next same-slug lake the caller
+ * manages. Slug status does not keep writes off a `deleting` lake. The ingest doors gate on
+ * `isLakeIngestable`; the tag-write doors (tag toggle, createFabFile, file PATCH, presigned upload)
+ * and the PDF ingest script do not check status.
+ */
+export const DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES = ['deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
+
+/**
  * Stable (non-transitional) lake statuses - a lake sitting in one of these is at rest, not
  * mid-operation. Load-bearing as the INPUT to `DATA_LAKE_TRANSITIONAL_STATUSES` below, which is
  * what drives the needs-attention list; it is not itself a filter any list path applies.
@@ -80,6 +92,11 @@ export const DATA_LAKE_ORIGINS = ['curated', 'connector-fed'] as const;
  * constant, so a value added here reaches the schema by construction.
  */
 export type DataLakeOrigin = (typeof DATA_LAKE_ORIGINS)[number];
+
+/** The connectors a lake can be created for (see IDataLake.pendingConnector). */
+export const DATA_LAKE_PENDING_CONNECTORS = ['github', 'googleDrive'] as const;
+
+export type DataLakePendingConnector = (typeof DATA_LAKE_PENDING_CONNECTORS)[number];
 
 export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
 
@@ -562,9 +579,11 @@ export interface IDataLake {
   filesArchivedAt?: Date | null;
   /**
    * Which accept request holds the `purging` claim - see `claimPurging`. Set with the claim and
-   * unset on release; meaningless on any other status.
+   * retained on failed enqueue; restore rotates it to fence delayed messages.
    */
   purgeClaimId?: string;
+  /** Durable fence: started cleanup cannot be released for restore. */
+  purgeStartedAt?: Date;
   /**
    * Per-lake opt-in to lake memory: gates BOTH extraction-on-ingest and recall injection for
    * this lake specifically. `EnableLakeMemory` (the platform setting) gates whether the option is
@@ -614,6 +633,13 @@ export interface IDataLake {
    */
   origin: DataLakeOrigin;
   /**
+   * The connector this lake was created to be fed by, recorded at create time and cleared when a
+   * connection of either kind binds. Lets recovery UI name the right source for an abandoned
+   * connect. Server-set only, never request input. Absent on lakes that predate the field or were
+   * never created for a connector - both read as "unknown", so no migration is needed.
+   */
+  pendingConnector?: DataLakePendingConnector;
+  /**
    * Model-driven inconsistency detection (#3057) bookkeeping - server-managed, never client input.
    *
    * A concurrency LEASE with exactly the semantics of `lakeMemoryExtractionAt`, and held for the same
@@ -636,7 +662,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
    * preferred, falling back to an org-less lake with that slug. Without a set, only
-   * org-less lakes match.
+   * org-less lakes match. Never returns a lake in `DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES`.
    */
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /**
@@ -647,7 +673,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * it here - keeping the decision of WHEN to pay for that extra grants lookup in the service
    * layer, not hidden inside this repository method. Sorted by `_id` so two candidates sharing a
    * slug (e.g. two independent `transferLakeOwnership` calls into different non-member orgs)
-   * resolve to the same winner every time.
+   * resolve to the same winner every time. Excludes `DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES` like
+   * `findBySlug`.
    */
   findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
@@ -833,6 +860,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
   ): Promise<IDataLakeDocument | null>;
   /**
+   * Bumps `updatedAt` and nothing else, so a manage write that would otherwise never write the lake
+   * document collides with a concurrent grant revoke (see the WRITE-TIME RESIDUAL note on
+   * `canManageLake`). Only meaningful inside `withTransaction`, after the gate.
+   *
+   * Skips a lake in a transitional status: `updatedAt` is that lake's stranded clock
+   * (`strandedCutoffMsFor`), and a data-plane write must not make a stuck lifecycle look busy.
+   * Returns whether the lake was touched.
+   */
+  touchIfStable(id: string): Promise<boolean>;
+  /**
    * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
    * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller
    * must NOT make the provider call. Call BEFORE spending, so a crash can only overcount.
@@ -879,6 +916,11 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * sequence between a claim and a settle here, unlike archive/unarchive.
    */
   activateIfDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
+  /**
+   * Drops `pendingConnector` once a connection binds - either kind, since any bound source answers
+   * the lake's intent. Idempotent; a no-op on a lake without the field.
+   */
+  clearPendingConnector(id: string): Promise<void>;
   /**
    * The reverse of `activateIfDraft`: active -> draft, guarded the same way (conditional in the
    * query, so a stale caller cannot demote a lake some other transition already moved on). The
@@ -980,6 +1022,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Without it, only a claim that has no id (taken before ids were stored), for queue messages enqueued before the id rode along.
    */
   releasePurgingToDeleted(id: string, claimId?: string): Promise<boolean>;
+  /** Admit only the queued lifecycle generation; same-generation replay remains valid. */
+  beginPurgeExecution(id: string, claimId?: string): Promise<boolean>;
   /**
    * Per-lake concurrency claim for the memory producer (#1440): stamp `lakeMemoryExtractionAt = at` only
    * if no run currently holds the lease - the field is unset, OR its stamp is older than `staleBefore`
@@ -1614,9 +1658,9 @@ export interface IDataLakeSpendResponse {
    * Lifetime research spend attributed to this lake, in USD, summed from UsageEvent rows
    * carrying { dataLakeId, feature: 'operations' } across all time. Separate from the
    * ingestion-only lifetime meter above (which is reserve-first and stored on the lake).
-   * Included in the UI's displayed lifetime total and per-lake budget percentage, so a
-   * research run's cost is visible alongside ingestion spend. Not enforced by the ingestion
-   * spend gate, which reads only the embedding meter.
+   * Included in the UI's displayed lifetime total, and shown on its own line beside the
+   * per-lake budget bar because that budget caps INGESTION only. Not enforced by the
+   * ingestion spend gate, which reads only the embedding meter.
    */
   researchLifetimeUsd: number;
   spendEnabled: boolean;

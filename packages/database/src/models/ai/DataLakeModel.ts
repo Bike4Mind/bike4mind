@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { randomUUID } from 'crypto';
 import BaseRepository from '@bike4mind/db-core';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 // Grant-held ids arrive as plain Strings (DataLakeAccessGrantModel.dataLakeId has no ObjectId
@@ -30,8 +31,11 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  DATA_LAKE_STABLE_STATUSES,
+  DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   LAKE_ATTACHABLE_STATUSES,
   DATA_LAKE_ORIGINS,
+  DATA_LAKE_PENDING_CONNECTORS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
   LAKE_MANAGE_RUNGS,
 } from '@bike4mind/common';
@@ -120,6 +124,9 @@ const DataLakeSchema = new mongoose.Schema(
     auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
     origin: { type: String, enum: [...DATA_LAKE_ORIGINS], default: 'curated', required: true },
+    // See IDataLake.pendingConnector. No default: absent is the "unknown intent" state that lakes
+    // predating the field already carry. Cleared with $unset, never a null write.
+    pendingConnector: { type: String, enum: [...DATA_LAKE_PENDING_CONNECTORS] },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
@@ -144,8 +151,9 @@ const DataLakeSchema = new mongoose.Schema(
     filesArchivedAt: { type: Date },
     // Identifies which request's claimPurging put the lake in 'purging'. It also rides on the cleanup
     // queue message, so the accepting request and the consumer each release only that claim, never a
-    // concurrent one. Unset on release.
+    // concurrent one. Retained on release until a new lifecycle generation replaces it.
     purgeClaimId: { type: String },
+    purgeStartedAt: { type: Date },
     // Per-lake opt-in to lake memory (see IDataLake.lakeMemoryEnabled). Gates both extraction-on-ingest
     // and recall injection for this lake; `EnableLakeMemory` gates availability of the option at all. No
     // dedicated index - same rationale as isPublic/auditQueryTextEnabled (tiny collection).
@@ -356,6 +364,8 @@ const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string
 
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
+// `$nin` also matches legacy lakes with no `status`, which must keep resolving.
+const SLUG_RESOLVABLE = { $nin: [...DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES] };
 
 /** Keyset position in a staleness-ordered health-check scan: the sort key, then the `_id` tiebreak. */
 export type HealthCheckScanCursor = { lastHealthCheckedAt: Date | null; id: string };
@@ -604,7 +614,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // matches resolve deterministically rather than by document order.
     if (organizationIds && organizationIds.length > 0) {
       const own = await this.dataLakeModel
-        .findOne({ slug, organizationId: { $in: organizationIds } })
+        .findOne({ slug, organizationId: { $in: organizationIds }, status: SLUG_RESOLVABLE })
         .sort({ organizationId: 1 });
       if (own) return own.toJSON() as IDataLakeDocument;
     }
@@ -612,7 +622,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // as "org-less" but are distinct index keys, so two org-less lakes CAN share a slug. Without
     // this, which one wins would depend on document order rather than being merely unspecified.
     const orgless = await this.dataLakeModel
-      .findOne({ slug, organizationId: { $in: [null, ''] } })
+      .findOne({ slug, organizationId: { $in: [null, ''] }, status: SLUG_RESOLVABLE })
       .sort({ organizationId: 1 });
     return (orgless?.toJSON() as IDataLakeDocument) ?? null;
   }
@@ -632,7 +642,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // across two different non-member orgs (e.g. two independent transferLakeOwnership calls),
     // and an unsorted `$in` match has no ordering guarantee - without a tie-break, which lake
     // wins would be nondeterministic rather than merely unspecified-but-stable.
-    const granted = await this.dataLakeModel.findOne({ slug, _id: { $in: usable } }).sort({ _id: 1 });
+    const granted = await this.dataLakeModel
+      .findOne({ slug, _id: { $in: usable }, status: SLUG_RESOLVABLE })
+      .sort({ _id: 1 });
     return (granted?.toJSON() as IDataLakeDocument) ?? null;
   }
 
@@ -1059,10 +1071,22 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // would reintroduce #1744 - the restore's terminal 'active' write would clobber 'purging', the
     // sweep would fail its guard, and the consumer would swallow the purge with a WARN.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: 'deleted' },
+      { _id: id, status: 'deleted', purgeStartedAt: { $exists: false } },
       { $set: { status: 'purging', purgeClaimId: claimId } }
     );
     return res.modifiedCount === 1;
+  }
+
+  async beginPurgeExecution(id: string, claimId?: string): Promise<boolean> {
+    const result = await this.dataLakeModel.updateOne(
+      {
+        _id: id,
+        status: { $in: ['deleted', 'purging'] },
+        purgeClaimId: claimId !== undefined ? claimId : { $exists: false },
+      },
+      { $set: { status: 'purging', purgeStartedAt: new Date() } }
+    );
+    return result.matchedCount === 1;
   }
 
   async claimRestoring(id: string): Promise<boolean> {
@@ -1071,8 +1095,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // 'purging' after the caller read it is no longer restorable, and this is where that is
     // enforced atomically rather than against a stale copy of the document.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: { $in: ['deleted', 'restoring'] } },
-      { $set: { status: 'restoring' } }
+      { _id: id, status: { $in: ['deleted', 'restoring'] }, purgeStartedAt: { $exists: false } },
+      // Rotate instead of clearing: delayed legacy messages must not regain admission after restore.
+      { $set: { status: 'restoring', purgeClaimId: randomUUID() } }
     );
     // matchedCount, not modifiedCount: re-entering from 'restoring' is a legitimate retry that
     // changes nothing, and reporting it as a loss would refuse a restore the guard allows.
@@ -1143,8 +1168,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // With a claimId, only that claim. Without one, only a claim stored with no id (taken before ids
     // were stored), so a legacy message can never release a keyed claim.
     const res = await this.dataLakeModel.updateOne(
-      { _id: id, status: 'purging', purgeClaimId: claimId !== undefined ? claimId : { $exists: false } },
-      { $set: { status: 'deleted' }, $unset: { purgeClaimId: 1 } }
+      {
+        _id: id,
+        status: 'purging',
+        purgeClaimId: claimId !== undefined ? claimId : { $exists: false },
+        purgeStartedAt: { $exists: false },
+      },
+      { $set: { status: 'deleted' } }
     );
     return res.modifiedCount === 1;
   }
@@ -1206,6 +1236,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
+  async touchIfStable(id: string): Promise<boolean> {
+    // `null` matches a lake written before `status` existed, which is at rest (see activateIfDraft).
+    // The explicit `updatedAt` makes this a real write whatever the timestamps plugin does with it.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: { $in: [...DATA_LAKE_STABLE_STATUSES, null] } },
+      { $set: { updatedAt: new Date() } }
+    );
+    return res.matchedCount === 1;
+  }
+
   async activateIfDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
     // The status guard lives in the FILTER, not in a prior read: `promoteDataLake` hands over a
     // lake document it fetched a round trip earlier (the grant load runs in between), so testing
@@ -1217,6 +1257,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       { $set: { status: 'active', ...extra } }
     );
     return res.modifiedCount === 1;
+  }
+
+  async clearPendingConnector(id: string): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $unset: { pendingConnector: 1 } });
   }
 
   async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {

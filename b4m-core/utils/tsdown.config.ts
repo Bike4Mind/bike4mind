@@ -30,6 +30,9 @@ export default defineConfig({
     // database repositories, migration scripts) import it without dragging the whole utils
     // barrel - which reaches artifactParser and other modules - into their graph or tests.
     'src/security/index.ts',
+    // Provider interface, registry and TestVideoProvider for the video job engine. Own entry so the barrel
+    // stays light; conformance.ts (imports vitest) is not reachable from it and so never ships.
+    'src/videoProviders/index.ts',
   ],
   format: ['esm', 'cjs'],
   dts: true,
