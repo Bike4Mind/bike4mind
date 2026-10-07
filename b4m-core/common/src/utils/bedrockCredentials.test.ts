@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bedrockClientCredentials } from './bedrockCredentials';
+import { bedrockClientConfig, bedrockClientCredentials } from './bedrockCredentials';
 
 // AWS's documented example key pair; must not trip the placeholder check.
 const KEY = 'AKIAIOSFODNN7EXAMPLE';
@@ -44,6 +44,34 @@ describe('bedrockClientCredentials', () => {
     ).toEqual({ credentials: { accessKeyId: KEY, secretAccessKey: SECRET, sessionToken: 'tok' } });
   });
 
+  it('trims the secret too', () => {
+    expect(
+      bedrockClientCredentials({
+        B4M_SELF_HOST: 'true',
+        BEDROCK_AWS_ACCESS_KEY_ID: KEY,
+        BEDROCK_AWS_SECRET_ACCESS_KEY: `\n${SECRET} `,
+      })
+    ).toEqual({ credentials: { accessKeyId: KEY, secretAccessKey: SECRET } });
+  });
+
+  it.each([
+    ['blank', '   '],
+    ['placeholder', 'CHANGE_ME'],
+  ])('omits a %s session token', (_label, token) => {
+    expect(
+      bedrockClientCredentials({
+        B4M_SELF_HOST: 'true',
+        BEDROCK_AWS_ACCESS_KEY_ID: KEY,
+        BEDROCK_AWS_SECRET_ACCESS_KEY: SECRET,
+        BEDROCK_AWS_SESSION_TOKEN: token,
+      })
+    ).toEqual({ credentials: { accessKeyId: KEY, secretAccessKey: SECRET } });
+  });
+
+  it.each(['1', 'TRUE', 'yes'])('treats B4M_SELF_HOST=%s as hosted', value => {
+    expect(bedrockClientCredentials({ B4M_SELF_HOST: value, ...MINIO })).toEqual({});
+  });
+
   it.each([
     ['blank key', '  ', SECRET],
     ['blank secret', KEY, ''],
@@ -57,5 +85,27 @@ describe('bedrockClientCredentials', () => {
         BEDROCK_AWS_SECRET_ACCESS_KEY: secret,
       })
     ).toBeNull();
+  });
+});
+
+describe('bedrockClientConfig', () => {
+  it('hosted leaves the default chain', () => {
+    expect(bedrockClientConfig({})).toEqual({});
+  });
+
+  it('self-host with the BEDROCK pair signs with it', () => {
+    expect(
+      bedrockClientConfig({
+        B4M_SELF_HOST: 'true',
+        BEDROCK_AWS_ACCESS_KEY_ID: KEY,
+        BEDROCK_AWS_SECRET_ACCESS_KEY: SECRET,
+      })
+    ).toEqual({ credentials: { accessKeyId: KEY, secretAccessKey: SECRET } });
+  });
+
+  it('self-host without the pair gets a provider that rejects, never the default chain', async () => {
+    const { credentials } = bedrockClientConfig({ B4M_SELF_HOST: 'true', ...MINIO });
+    expect(credentials).toBeTypeOf('function');
+    await expect((credentials as () => Promise<unknown>)()).rejects.toThrow(/BEDROCK_AWS_ACCESS_KEY_ID/);
   });
 });

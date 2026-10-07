@@ -28,3 +28,25 @@ export function bedrockClientCredentials(
   const sessionToken = usable(env.BEDROCK_AWS_SESSION_TOKEN);
   return { credentials: { accessKeyId, secretAccessKey, ...(sessionToken && { sessionToken }) } };
 }
+
+// The default chain on self-host would sign with the MinIO AWS_* pair. Rejecting per request (not at
+// construction) keeps eager client construction safe on installs that never call Bedrock.
+const BEDROCK_UNCONFIGURED = {
+  credentials: (): Promise<BedrockStaticCredentials> =>
+    Promise.reject(
+      new Error(
+        'Bedrock is not configured on this self-host install: set BEDROCK_AWS_ACCESS_KEY_ID and BEDROCK_AWS_SECRET_ACCESS_KEY'
+      )
+    ),
+};
+
+/**
+ * The credential part of every Bedrock SDK client config: `{}` on hosted, the BEDROCK_AWS_* pair on
+ * self-host, or a provider that rejects when self-host has no pair. Spread it into each
+ * `new Bedrock*Client(...)`; never spread `bedrockClientCredentials() ?? {}`, which fails open.
+ */
+export function bedrockClientConfig(env: Readonly<Record<string, string | undefined>> = process.env): {
+  credentials?: BedrockStaticCredentials | (() => Promise<BedrockStaticCredentials>);
+} {
+  return bedrockClientCredentials(env) ?? BEDROCK_UNCONFIGURED;
+}
