@@ -7,9 +7,9 @@ name: Dependency Audit Gate
 #   not in scripts/audit-allowlist.json. Advisories already on base are warnings,
 #   so a new advisory against an existing dependency doesn't turn every PR red.
 # - Schedule and manual runs on main (audit-main): full mode. Opens or updates
-#   one tracking issue on new findings, opens or updates one auto-fix PR
-#   (scripts/audit-autofix.mjs) for a human to merge, and closes both once main
-#   is clean.
+#   one tracking issue on new findings (comments only when the finding set
+#   changes), opens or updates one auto-fix PR (scripts/audit-autofix.mjs) for a
+#   human to merge, and closes both once main is clean.
 # The existing packages-audit.yml sends a full report to the Security Dashboard
 # and remains workflow_dispatch-only; this workflow is independent of it.
 
@@ -141,15 +141,20 @@ jobs:
         continue-on-error: true
         env:
           PACKAGES_JSON_REPORT_PATH: audit-report.json
+        # Exit 2 means advisories; any other failure (bad allowlist, unexpected
+        # error) still fails the run but must not touch the tracking issue.
         run: |
-          set -o pipefail
+          set +e
           node scripts/audit-gate.mjs 2>&1 | tee gate-output.txt
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
       # Auto-fix steps are continue-on-error so a registry, App token or API
       # failure still leaves the tracking issue and Slack ping below.
       - name: Raise overrides past the failing advisories
         id: autofix
-        if: steps.gate.outcome == 'failure'
+        if: steps.gate.outputs.exit_code == '2'
         continue-on-error: true
         timeout-minutes: 5
         env:
@@ -233,10 +238,12 @@ jobs:
 
       - name: Open, update or close tracking issue
         id: issue
-        if: always() && steps.audit.outcome == 'success'
+        if: >-
+          always() && steps.audit.outcome == 'success' &&
+          (steps.gate.outputs.exit_code == '0' || steps.gate.outputs.exit_code == '2')
         uses: actions/github-script@v8
         env:
-          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          GATE_EXIT_CODE: ${{ steps.gate.outputs.exit_code }}
           AUTOFIX_OUTCOME: ${{ steps.autofix.outcome }}
           AUTOFIX_CHANGED: ${{ steps.autofix.outputs.changed }}
           AUTOFIX_FIXED: ${{ steps.recheck.outputs.fixed }}
@@ -247,9 +254,15 @@ jobs:
             const { owner, repo } = context.repo;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
             const playbookUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/blob/main/CONTRIBUTING.md#fixing-a-dependency-advisory`;
+            const crypto = require('crypto');
             const marker = '<!-- dependency-audit-main -->';
-            const failed = process.env.GATE_OUTCOME === 'failure';
+            const failed = process.env.GATE_EXIT_CODE === '2';
             const output = fs.existsSync('gate-output.txt') ? fs.readFileSync('gate-output.txt', 'utf8').trim() : '';
+            // Hash only the "[SEVERITY] pkg: GHSA" lines so a reworded message doesn't count as a change.
+            const advisoryLines = output.split('\n').filter(l => /^\s*\[[A-Z]+\] /.test(l)).map(l => l.trim()).sort();
+            const findingsHash = crypto.createHash('sha256').update(advisoryLines.join('\n')).digest('hex').slice(0, 16);
+            const hashMarker = `<!-- dependency-audit-findings:${findingsHash} -->`;
+            const hashMarkerRe = /<!-- dependency-audit-findings:[0-9a-f]+ -->/;
 
             const existing = await github.rest.issues.listForRepo({
               owner,
@@ -273,12 +286,18 @@ jobs:
             if (failed) {
               const findings = ['```', output, '```'].join('\n');
               if (found) {
+                // Comment only when the finding set changed, so a red main doesn't notify every run.
+                if (found.body.includes(hashMarker)) return;
                 await github.rest.issues.createComment({
                   owner,
                   repo,
                   issue_number: found.number,
-                  body: [`Still failing as of ${runUrl}`, '', findings, '', autofix].join('\n'),
+                  body: [`Still failing as of ${runUrl}, with a changed set of advisories:`, '', findings, '', autofix].join('\n'),
                 });
+                const body = hashMarkerRe.test(found.body)
+                  ? found.body.replace(hashMarkerRe, hashMarker)
+                  : found.body.replace(marker, `${marker}\n${hashMarker}`);
+                await github.rest.issues.update({ owner, repo, issue_number: found.number, body });
               } else {
                 const created = await github.rest.issues.create({
                   owner,
@@ -287,6 +306,7 @@ jobs:
                   labels: ['security', 'dependencies'],
                   body: [
                     marker,
+                    hashMarker,
                     '',
                     'The scheduled dependency audit found high/critical advisories on `main` that are not in `scripts/audit-allowlist.json`.',
                     '',

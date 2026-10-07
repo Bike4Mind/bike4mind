@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { extractNewAdvisories, classifyAgainstBase, BLOCKED_SEVERITIES } from '../audit-gate.mjs';
+import { extractNewAdvisories, classifyAgainstBase, BLOCKED_SEVERITIES, ADVISORY_EXIT_CODE } from '../audit-gate.mjs';
 
 const ALLOWLIST = new Set(['GHSA-known-1111-1111', 'GHSA-known-2222-2222']);
 
@@ -262,13 +262,21 @@ describe('main (CLI)', () => {
     const head = write('head.json', report('GHSA-test-bbbb-bbbb'));
     const base = write('base.json', report());
     const res = run({ PACKAGES_JSON_REPORT_PATH: head, BASE_JSON_REPORT_PATH: base });
-    expect(res.status).toBe(1);
+    expect(res.status).toBe(ADVISORY_EXIT_CODE);
     expect(res.output).toMatch(/introduced by this PR/);
     expect(res.output).toMatch(/CONTRIBUTING\.md#fixing-a-dependency-advisory/);
   });
 
   it('keeps full-mode behavior when no base report is set', () => {
-    expect(run({ PACKAGES_JSON_REPORT_PATH: write('bad.json', report('GHSA-test-cccc-cccc')) }).status).toBe(1);
+    expect(run({ PACKAGES_JSON_REPORT_PATH: write('bad.json', report('GHSA-test-cccc-cccc')) }).status).toBe(
+      ADVISORY_EXIT_CODE
+    );
     expect(run({ PACKAGES_JSON_REPORT_PATH: write('clean.json', report()) }).status).toBe(0);
+  });
+
+  it('exits 1, not the advisory code, when the head report is unreadable', () => {
+    const res = run({ PACKAGES_JSON_REPORT_PATH: write('head.json', '{not json') });
+    expect(res.status).toBe(1);
+    expect(res.status).not.toBe(ADVISORY_EXIT_CODE);
   });
 });
