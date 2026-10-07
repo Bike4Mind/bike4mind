@@ -4,6 +4,8 @@ import type { DiscoveryAutoEnablePolicy, DiscoveryCredentials, PromotionBlocker 
 
 /** Set on a record discovery will not promote, so pickers stay closed until it can. */
 export const AWAITING_PRICE_REASON = 'discovered, awaiting price';
+/** An aggregator quoted a price but it is not corroborated: a lone quote, or quotes that disagree. */
+export const UNCORROBORATED_PRICE_REASON = 'discovered, awaiting price (aggregator quote not corroborated)';
 export const AWAITING_APPROVAL_REASON = 'discovered, awaiting admin approval';
 export const NOT_INVOCABLE_REASON = 'discovered, not invocable by this build';
 
@@ -40,6 +42,8 @@ export interface PromotionInput {
   credentials: DiscoveryCredentials;
   /** A price from a trusted tier: a provider API, two aggregators that agree, or one the catalog already holds. */
   hasTrustedPrice: boolean;
+  /** Only changes the admin-queue wording of a no-trusted-price denial, never the verdict. */
+  aggregatorPriceUncorroborated?: boolean;
   /**
    * The reason a source gave for disabling this model THIS run, if it did. Blocks promotion: the
    * source has already answered "can this be called", and promoting would flip its verdict back on.
@@ -87,6 +91,7 @@ export function evaluatePromotion({
   policy,
   credentials,
   hasTrustedPrice,
+  aggregatorPriceUncorroborated,
   sourceDisabledReason,
 }: PromotionInput): PromotionDecision {
   const blockedBy: PromotionBlocker[] = [];
@@ -108,7 +113,11 @@ export function evaluatePromotion({
   if (!hasCredential) blockedBy.push('no-credential-for-backend');
 
   if (blockedBy.length === 0) return { promote: true, blockedBy };
-  return { promote: false, blockedBy, autoDisabledReason: sourceDisabledReason ?? reasonFor(blockedBy) };
+  return {
+    promote: false,
+    blockedBy,
+    autoDisabledReason: sourceDisabledReason ?? reasonFor(blockedBy, aggregatorPriceUncorroborated === true),
+  };
 }
 
 /** The dispatch clauses; a denial by any of them is a work item, not a data gap. */
@@ -122,9 +131,11 @@ const DISPATCH_BLOCKERS: readonly PromotionBlocker[] = [
 export const isDispatchBlocked = (blockedBy: readonly PromotionBlocker[]): boolean =>
   blockedBy.some(blocker => DISPATCH_BLOCKERS.includes(blocker));
 
-function reasonFor(blockedBy: readonly PromotionBlocker[]): string {
+function reasonFor(blockedBy: readonly PromotionBlocker[], aggregatorPriceUncorroborated: boolean): string {
   if (isDispatchBlocked(blockedBy)) return NOT_INVOCABLE_REASON;
   if (blockedBy.includes('manual-approval-required')) return AWAITING_APPROVAL_REASON;
-  if (blockedBy.includes('no-trusted-price')) return AWAITING_PRICE_REASON;
+  if (blockedBy.includes('no-trusted-price')) {
+    return aggregatorPriceUncorroborated ? UNCORROBORATED_PRICE_REASON : AWAITING_PRICE_REASON;
+  }
   return `discovered, ${blockedBy.join(', ')}`;
 }
