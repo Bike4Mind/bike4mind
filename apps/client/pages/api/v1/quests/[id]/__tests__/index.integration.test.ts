@@ -615,7 +615,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
-      expect(loggerError).not.toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, expect.anything());
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('does not re-recover an already-terminal quest', async () => {
@@ -628,7 +628,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('done');
       expect(mockQuestSettle).not.toHaveBeenCalled();
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
-      expect(loggerError).not.toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, expect.anything());
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('works for API-key callers (the actual bug: headless API clients never got recovery)', async () => {
@@ -657,7 +657,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
       // A lost race means another settle site won and logs for itself - logging here would
       // double every recovery.
-      expect(loggerError).not.toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, expect.anything());
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('still answers with the quest when the recovery write throws', async () => {
@@ -673,7 +673,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('running');
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
       // A failed write recovered nothing, so it must not alert either.
-      expect(loggerError).not.toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, expect.anything());
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
 
     it('does not let a sharee read write a terminal status onto the owner quest', async () => {
@@ -688,7 +688,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       expect(res._getJSONData().status).toBe('running');
       expect(mockQuestSettle).not.toHaveBeenCalled();
       expect(mockDispatchQuestCallback).not.toHaveBeenCalled();
-      expect(loggerError).not.toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, expect.anything());
+      expect(loggerError.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG)).toHaveLength(0);
     });
   });
 

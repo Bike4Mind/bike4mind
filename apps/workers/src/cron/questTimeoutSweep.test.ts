@@ -189,6 +189,10 @@ describe('questTimeoutSweep cron', () => {
 
     expect(result).toEqual({ status: 'OK', recovered: 1 });
     expect(mockSettleIfUnfinished).toHaveBeenCalledTimes(2);
+    // The failed write must not alert: only q-ok was actually recovered, exactly once.
+    const recoveryLogs = mockLogger.error.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+    expect(recoveryLogs).toHaveLength(1);
+    expect(recoveryLogs[0][1]).toEqual({ questId: 'q-ok', via: 'sweep' });
   });
 
   it('does not count a quest that finished between the read and the write', async () => {
