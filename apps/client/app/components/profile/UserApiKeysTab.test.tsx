@@ -250,3 +250,29 @@ describe('UserApiKeysTab - callback signing secret', () => {
     expect(h.signingSecretMutate).toHaveBeenCalledWith('key-3');
   });
 });
+
+describe('UserApiKeysTab - API docs links', () => {
+  // Relative on purpose: each deployment (preview, self-host) serves its own spec.
+  const expectSameOriginDocsLink = (element: HTMLElement) => {
+    expect(element).toHaveAttribute('href', '/api/v1/docs');
+    expect(element).toHaveAttribute('target', '_blank');
+    expect(element.getAttribute('rel')).toContain('noopener');
+  };
+
+  beforeEach(() => {
+    h.keys = [activeKey];
+  });
+
+  it('links the header API Docs button to the same-origin docs', () => {
+    renderTab();
+
+    expectSameOriginDocsLink(screen.getByTestId('api-keys-open-docs-btn'));
+  });
+
+  it('links the API Documentation tab to the same-origin docs', () => {
+    renderTab();
+    fireEvent.click(screen.getByText('API Documentation'));
+
+    expectSameOriginDocsLink(screen.getByTestId('api-keys-docs-reference-link'));
+  });
+});

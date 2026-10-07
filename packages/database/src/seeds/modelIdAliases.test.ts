@@ -20,7 +20,7 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
 
 /**
  * Measured against the checked-in seed on 2026-10-07, with the fixture fully
- * re-captured that day: models.dev 73/122 (59.8%), litellm 94/122 (77.0%). The
+ * re-captured that day: models.dev 73/120 (60.8%), litellm 92/120 (76.7%). The
  * thresholds sit about five points under those, which tolerates an aggregator
  * retiring a handful of entries while still failing a normalizer regression -
  * dropping any single normalization step costs 10 points or more (the
@@ -31,7 +31,7 @@ const INDEXES: Record<AggregatorName, ReturnType<typeof buildAggregatorKeyIndex>
  * 2/3, Claude 3.x, o1-preview, first-gen Bedrock) and the aggregators drop what
  * providers retire. litellm main dropped 116 such keys that the older v1.93.0
  * capture still held, which is what moved its rate from 86.9% (87.7% after a
- * three-key top-up from main) to 77.0%; that capture was keeping the rate up with
+ * three-key top-up from main) to 76.7%; that capture was keeping the rate up with
  * keys the live source no longer serves. The grok-3-fast alias went the same way:
  * main keeps only reseller keys for it, which the alias file forbids targeting.
  *

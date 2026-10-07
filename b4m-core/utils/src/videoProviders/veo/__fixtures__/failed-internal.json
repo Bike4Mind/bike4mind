@@ -1,0 +1,71 @@
+{
+  "scenario": "text-to-video",
+  "recordedAt": "2026-10-06T15:39:40.472Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking."
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "16:9",
+            "resolution": "720p"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/8lakp0rou7fc"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/8lakp0rou7fc"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/8lakp0rou7fc"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview/operations/8lakp0rou7fc"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "name": "models/veo-3.1-fast-generate-preview/operations/8lakp0rou7fc",
+          "done": true,
+          "error": {
+            "code": 13,
+            "message": "Video generation failed due to an internal server issue. Please try again in a few minutes. If the problem persists, please contact Gemini API support."
+          }
+        }
+      }
+    }
+  ]
+}

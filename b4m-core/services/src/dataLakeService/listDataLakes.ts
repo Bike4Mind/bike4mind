@@ -149,11 +149,18 @@ interface ListDataLakesAdapters {
      * and Slack, which render no queue and must not pay for the read.
      */
     dataLakeProposals?: { countPendingByLakes: (ids: string[]) => Promise<Record<string, number>> };
+    /**
+     * Optional GitHub lake-connection lookup. When present, each manageable lake that carries
+     * `pendingConnector` also carries `hasGitHubConnection`, read flag-free from the same rows
+     * apps/client/server/dataLakes/assertLakeConnectorFree.ts treats as a GitHub binding. One batched
+     * read for the page, never per lake.
+     */
+    gitHubLakeConnections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> };
   };
   /**
-   * Optional, and only `listAllDataLakes` reads it: the fallback-overlay batch degrades silently on
-   * a transient failure, and without a logger that degrade is indistinguishable from "no overlay
-   * set" - see resolveFallbackSettings for why silence there is not harmless.
+   * Optional. The fallback-overlay batch (`listAllDataLakes` only) and the GitHub-binding batch
+   * (both lists) degrade silently on a transient failure, and without a logger that degrade is
+   * indistinguishable from "nothing set" - see resolveFallbackSettings and gitHubBindingsFor.
    */
   logger?: LakeAccessLogger;
 }
@@ -316,6 +323,27 @@ const pendingCountsFor = async (
 };
 
 /**
+ * `hasGitHubConnection` per lake for the lakes that carry `pendingConnector` to a manager. Absent
+ * (field omitted) for every other lake, when no lookup is wired, or when the read fails - the client
+ * reads absent as "cannot rule a binding out", which hides the flag-off Drive banner, so a failed
+ * read is logged rather than vanishing the banner without a trace.
+ */
+const gitHubBindingsFor = async (
+  lakes: Pick<IDataLakeDocument, 'id'>[],
+  connections?: { findBoundDataLakeIds: (ids: string[]) => Promise<string[]> },
+  logger?: LakeAccessLogger
+): Promise<Map<string, boolean>> => {
+  if (!connections || lakes.length === 0) return new Map();
+  try {
+    const bound = new Set(await connections.findBoundDataLakeIds(lakes.map(l => l.id)));
+    return new Map(lakes.map(l => [l.id, bound.has(l.id)]));
+  } catch (err) {
+    logger?.warn?.('[dataLakes] GitHub binding read failed; listing without hasGitHubConnection', err);
+    return new Map();
+  }
+};
+
+/**
  * The one place a list response may carry an editor-only field: the shared config, the caller's
  * manage flag, and `systemPrompt` ONLY when that flag holds. `toDataLakeConfig` has no actor and
  * so cannot carry it (see ManageableDataLakeConfig); the raw-document exits use the sibling
@@ -331,7 +359,8 @@ const toManageableConfig = (
   isCreator: boolean,
   canPreauthorize: boolean,
   owner?: { id: string } & ResolvedOwner,
-  pendingProposalCount?: number
+  pendingProposalCount?: number,
+  hasGitHubConnection?: boolean
 ): ManageableDataLakeConfig => ({
   ...toConfig(dl),
   canManage: manageable,
@@ -373,6 +402,9 @@ const toManageableConfig = (
   ...(manageable && dl.groundingMode ? { groundingMode: dl.groundingMode } : {}),
   // Editor-only, same gate: it drives the finish-connect banner, which only a manager can act on.
   ...(manageable && dl.pendingConnector ? { pendingConnector: dl.pendingConnector } : {}),
+  // Rides with pendingConnector: the banner it drives needs to know whether a GitHub row already owns
+  // the lake even when EnableDataLakeGitHub is off and the client cannot read that row itself.
+  ...(manageable && dl.pendingConnector && typeof hasGitHubConnection === 'boolean' ? { hasGitHubConnection } : {}),
   // Editor-only, same gate. Absent when the lake declares no target, which is exactly the state the
   // settings field renders as blank - and the state in which the lake never converges (#1681).
   ...(manageable && typeof dl.requiredPassageTokenTarget === 'number'
@@ -471,7 +503,7 @@ const toFallbackConfig = (
  */
 export const listDataLakes = async (
   ctx: AccessContext,
-  { db, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
+  { db, logger, grantedLakeIds: precomputedGrantedLakeIds }: ListDataLakesOptions
 ): Promise<ManageableDataLakeConfig[]> => {
   // The precomputed set is only valid under includeReaders=false (see the field's doc comment) -
   // a caller that also threads `settings` could get includeReaders=true below, silently
@@ -535,6 +567,11 @@ export const listDataLakes = async (
     dynamicLakes.filter(dl => manageableById.get(dl.id)),
     db.dataLakeProposals
   );
+  const gitHubBindings = await gitHubBindingsFor(
+    dynamicLakes.filter(dl => manageableById.get(dl.id) && dl.pendingConnector),
+    db.gitHubLakeConnections,
+    logger
+  );
   const dynamicConfigs = dynamicLakes.map(dl =>
     toManageableConfig(
       dl,
@@ -544,7 +581,8 @@ export const listDataLakes = async (
       String(dl.createdByUserId) === String(ctx.userId),
       canPreauthorizeById.get(dl.id) ?? false,
       ownerFor(dl, grantsByLake, ownerById),
-      pendingCounts[dl.id]
+      pendingCounts[dl.id],
+      gitHubBindings.get(dl.id)
     )
   );
 
@@ -586,6 +624,11 @@ export const listAllDataLakes = async (
   const grantsByLake = await grantsByLakeIdFor(dynamicLakes, db.dataLakeAccessGrants);
   const ownerById = await resolveOwners(dynamicLakes, grantsByLake, ctx.userId, db.users);
   const pendingCounts = await pendingCountsFor(dynamicLakes, db.dataLakeProposals);
+  const gitHubBindings = await gitHubBindingsFor(
+    dynamicLakes.filter(dl => dl.pendingConnector),
+    db.gitHubLakeConnections,
+    logger
+  );
   // This is the branch where canManage and canPreauthorize genuinely diverge: the admin manages every
   // DB lake, but may only ADMIT the ones they hold a real rung on (owner/curator/org-admin/org-grant).
   // Blank-as-absent, and `||` rather than `??` deliberately: preauthorizeOrgIdsFor falls through on a
@@ -610,7 +653,8 @@ export const listAllDataLakes = async (
       String(dl.createdByUserId) === String(ctx.userId),
       canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
       ownerFor(dl, grantsByLake, ownerById),
-      pendingCounts[dl.id]
+      pendingCounts[dl.id],
+      gitHubBindings.get(dl.id)
     )
   );
   const dynamicIds = new Set(dynamicLakes.map(d => d.slug));

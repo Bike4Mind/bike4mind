@@ -644,6 +644,12 @@ Multi-tenant organization management with roles and integrations.
 | POST | /api/auth/mfa/regenerate-backup-codes | Generate new backup codes |
 | POST | /api/auth/mfa/cancel-setup | Cancel in-progress setup |
 | POST | /api/auth/mfa/force-reset | Admin force-reset user MFA |
+| POST | /api/auth/mfa/passkey/register-options | Begin passkey enrollment (WebAuthn creation options) |
+| POST | /api/auth/mfa/passkey/register | Verify and store a new passkey |
+| GET | /api/auth/mfa/passkey | List enrolled passkeys |
+| DELETE | /api/auth/mfa/passkey/:id | Remove a passkey |
+| POST | /api/auth/mfa/passkey/authenticate-options | Begin passkey MFA verification during login |
+| POST | /api/auth/mfa/passkey/authenticate | Verify a passkey during login |
 
 #### User Management
 
@@ -701,12 +707,11 @@ POST /api/ai/llm
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
 
-#### Image Generation, Editing, and Video Generation (async)
+#### Image Generation and Editing (async)
 
 \`\`\`
 POST /api/v1/image-generations
 POST /api/v1/image-edits
-POST /api/v1/video-generations
 \`\`\`
 
 **Required API-key scope:** \`ai:generate\`.
@@ -714,19 +719,41 @@ POST /api/v1/video-generations
 > **These endpoints are generated from their contracts.** The full request/response
 > reference - every field, its type, defaults, and validation rules, including the
 > \`referenceImageFabFileIds\` style anchors and the optional \`callbackUrl\` - lives in the
-> [generated API docs](/api/v1/docs) under \`generateImage\`, \`editImage\`, and
-> \`generateVideo\`, derived from the same objects the handlers validate with.
+> [generated API docs](/api/v1/docs) under \`generateImage\` and \`editImage\`, derived from the
+> same objects the handlers validate with.
 >
-> All three are asynchronous: the call queues the render and returns a quest with no
-> image/video yet, so it never blocks on generation. Poll \`GET /api/v1/quests/{id}\`
-> until \`status\` is \`done\` (see [Poll Quest Status](#poll-quest-status)); a render that failed
-> arrives there as \`type: "error"\`, not as a 4xx. Pass \`callbackUrl\` (an https URL) to
-> receive a signed \`POST\` instead of polling (at-least-once: dedupe on
-> \`X-Webhook-Event-ID\`) - see the \`generateVideo\` contract
-> description in the [generated API docs](/api/v1/docs) for the header/retry/signing
-> details, which apply the same way to all three endpoints. \`POST /api/ai/generate-image\`,
-> \`POST /api/ai/edit-image\`, and \`POST /api/ai/generate-video\` are legacy aliases of the
-> same handlers and keep working.
+> Both are asynchronous: the call queues the render and returns a quest with no image yet.
+> Poll \`GET /api/v1/quests/{id}\` until \`status\` is \`done\` (see [Poll Quest Status](#poll-quest-status));
+> a render that failed arrives there as \`type: "error"\`, not as a 4xx. Pass \`callbackUrl\` (an https URL)
+> to receive a signed \`POST\` instead of polling (at-least-once: dedupe on \`X-Webhook-Event-ID\`).
+> \`POST /api/ai/generate-image\` and \`POST /api/ai/edit-image\` are legacy aliases of the same handlers.
+
+#### Video Generation (jobs)
+
+\`\`\`
+GET  /api/v1/video-models
+POST /api/v1/video-generations
+GET  /api/v1/video-generations
+GET  /api/v1/video-generations/{id}
+POST /api/v1/video-generations/{id}/cancel
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+Models: \`gemini-omni-1.1-flash\` (Google), \`grok-imagine-video-1.5\` (xAI) and \`veo-3.1-fast-generate-preview\` (Google Veo). \`GET /api/v1/video-models\`
+lists the ones enabled and usable on this deployment, with their durations, aspect ratios and resolutions.
+
+> Generated from their contracts: see \`listVideoModels\`, \`createVideoGeneration\`,
+> \`getVideoGeneration\`, \`listVideoGenerations\` and \`cancelVideoGeneration\` in the
+> [generated API docs](/api/v1/docs). Create returns \`202\` with a job; poll the job until \`state\` is
+> terminal. On success, check \`output.availability\`: \`ready\` means download \`output.url\` (signed, valid
+> 15 minutes; re-read the job for a fresh URL); \`pending_scan\` means the saved file is still being scanned,
+> so keep re-reading the job (self-hosted installs can stay there for up to ~30 minutes); \`unavailable\`
+> means the file was blocked or deleted and \`output.url\` stays \`null\`, so stop polling.
+> Credits for the requested duration are held up front. A \`failed\` or \`cancelled\` job is not charged, and
+> neither is a \`blocked\` one unless the provider generated the clip before rejecting it (and billed for it):
+> that job is charged for the requested duration, shown in \`credits.settled\`.
+> Send \`Idempotency-Key\` to make retries safe. \`POST /api/ai/generate-video\` was removed and answers \`410\`.
 
 #### Voice Sessions
 
@@ -748,7 +775,7 @@ POST /api/v1/voice/sessions/{id}/end
 
 #### OpenAPI 3.1 documented endpoints
 
-A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
+A growing set of endpoints publishes a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code. Currently: \`/api/chat\`, \`/api/ai/v1/completions\`, \`/api/ai/v1/tools\`, the audio generation endpoints (\`/api/ai/tts\`, \`/api/ai/music\`, \`/api/ai/sound-effects\`), the image/video endpoints (\`/api/v1/image-generations\`, \`/api/v1/image-edits\`, \`/api/v1/video-generations\` (and \`/{id}\`, \`/{id}/cancel\`), \`/api/v1/video-models\`), the voice endpoints (\`/api/v1/voice/voices\`, \`/api/v1/voice/sessions\`, \`/api/v1/voice/sessions/{id}/end\`), and \`/api/v1/embeddings\`. Everything documented there is omitted from the summary tables below - the spec is the source of truth for those.
 
 | Resource | Path | Description |
 |----------|------|-------------|

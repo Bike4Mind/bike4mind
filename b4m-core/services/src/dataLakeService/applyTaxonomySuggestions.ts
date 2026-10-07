@@ -6,7 +6,7 @@ import type {
   TaxonomyTag,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, folderTagForFile, tagsForFile } from '@bike4mind/common';
-import { type ManageActor } from './manageRule';
+import { type ManageActor, type SerializeLakeClaim } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
 import { decideStampPrefix, stampRefusalMessage, UNVERIFIED_PREFIX_OVERLAP_REFUSAL } from './fallbackLakeTags';
 
@@ -21,6 +21,8 @@ interface ApplyTaxonomySuggestionsAdapters {
   };
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
   metrics?: { recordTagsApplySkipped: (count: number) => Promise<void> };
+  /** Wraps the gate and the claim; the batch-wide tag write runs after it returns. REQUIRED, as on approve. */
+  serializeClaim: SerializeLakeClaim;
 }
 
 /**
@@ -56,59 +58,62 @@ export const applyTaxonomySuggestions = async (
   actor: ManageActor,
   batchId: string,
   acceptedTags: TaxonomyTag[],
-  { db, logger, metrics }: ApplyTaxonomySuggestionsAdapters
+  { db, logger, metrics, serializeClaim }: ApplyTaxonomySuggestionsAdapters
 ): Promise<{ success: true; filesUpdated: number; unchanged: number; skipped: number }> => {
-  const batch = await db.batches.findById(batchId);
-  if (!batch) throw new NotFoundError('Batch not found');
+  const { batch, prefix } = await serializeClaim(async () => {
+    const batch = await db.batches.findById(batchId);
+    if (!batch) throw new NotFoundError('Batch not found');
 
-  const lake = await db.dataLakes.findById(batch.dataLakeId);
-  if (!lake) throw new NotFoundError('Data lake not found');
-  if (!(await resolveCanManageLake(lake, actor, { db }))) {
-    throw new BadRequestError('You do not have permission to apply tag suggestions for this data lake');
-  }
-  // The FULL prefix gate, the same one `setDataLakeFileTags` runs, from the same shared messages:
-  // this door writes caller-authored names under `lake.fileTagPrefix` across a whole batch, so
-  // every reason that makes a prefix unusable for one file makes it unusable for thousands. It
-  // previously checked only the static-registry collision and wrote anyway for the other three,
-  // which meant the same lake could accept a batch apply while refusing a single-file tag edit
-  // (#2398). Ahead of the claim below, so a refusal cannot strand the batch in 'applying'.
-  //
-  // FAILS CLOSED on `overlapCheckFailed` for the reason that door does: an unverified overlap must
-  // not let a curator mint prefix-arm membership - and therefore read access - in a lake they may
-  // hold no rights over. The live reconciler and the backfill migration each make their own call
-  // on that flag; see `LakeStampDecision`.
-  //
-  // No admin remedy exists today - there is no path to change a lake's fileTagPrefix after
-  // creation - so these refusals are not pointing anyone at a fix that doesn't exist. Create
-  // already rejects a colliding prefix (see createDataLake.ts), so only rows predating that check
-  // reach them.
-  const prefixDecision = await decideStampPrefix(lake, { dataLakes: db.dataLakes, logger });
-  if (!prefixDecision.stamp) {
-    throw new BadRequestError(stampRefusalMessage(prefixDecision));
-  }
-  if (prefixDecision.overlapCheckFailed) {
-    throw new BadRequestError(UNVERIFIED_PREFIX_OVERLAP_REFUSAL);
-  }
-  // The gate's NORMALIZED prefix, never `lake.fileTagPrefix` - same as the sibling door
-  // (`setDataLakeFileTags`, step 5) and the backfill migration. Writing under the raw stored value
-  // for a row that predates the create schema's trim would mint ` acme:legal`, which the read arms
-  // and the tag-count aggregates normalize straight past (#2467). The tag builders below normalize
-  // too, so this is belt-and-braces rather than the only guard - but it is what makes the door's
-  // intent readable, and it keeps every write door quoting one value.
-  const prefix = prefixDecision.prefix;
+    const lake = await db.dataLakes.findById(batch.dataLakeId);
+    if (!lake) throw new NotFoundError('Data lake not found');
+    if (!(await resolveCanManageLake(lake, actor, { db }))) {
+      throw new BadRequestError('You do not have permission to apply tag suggestions for this data lake');
+    }
+    // The FULL prefix gate, the same one `setDataLakeFileTags` runs, from the same shared messages:
+    // this door writes caller-authored names under `lake.fileTagPrefix` across a whole batch, so
+    // every reason that makes a prefix unusable for one file makes it unusable for thousands. It
+    // previously checked only the static-registry collision and wrote anyway for the other three,
+    // which meant the same lake could accept a batch apply while refusing a single-file tag edit
+    // (#2398). Ahead of the claim below, so a refusal cannot strand the batch in 'applying'.
+    //
+    // FAILS CLOSED on `overlapCheckFailed` for the reason that door does: an unverified overlap must
+    // not let a curator mint prefix-arm membership - and therefore read access - in a lake they may
+    // hold no rights over. The live reconciler and the backfill migration each make their own call
+    // on that flag; see `LakeStampDecision`.
+    //
+    // No admin remedy exists today - there is no path to change a lake's fileTagPrefix after
+    // creation - so these refusals are not pointing anyone at a fix that doesn't exist. Create
+    // already rejects a colliding prefix (see createDataLake.ts), so only rows predating that check
+    // reach them.
+    const prefixDecision = await decideStampPrefix(lake, { dataLakes: db.dataLakes, logger });
+    if (!prefixDecision.stamp) {
+      throw new BadRequestError(stampRefusalMessage(prefixDecision));
+    }
+    if (prefixDecision.overlapCheckFailed) {
+      throw new BadRequestError(UNVERIFIED_PREFIX_OVERLAP_REFUSAL);
+    }
+    // The gate's NORMALIZED prefix, never `lake.fileTagPrefix` - same as the sibling door
+    // (`setDataLakeFileTags`, step 5) and the backfill migration. Writing under the raw stored value
+    // for a row that predates the create schema's trim would mint ` acme:legal`, which the read arms
+    // and the tag-count aggregates normalize straight past (#2467). The tag builders below normalize
+    // too, so this is belt-and-braces rather than the only guard - but it is what makes the door's
+    // intent readable, and it keeps every write door quoting one value.
+    const prefix = prefixDecision.prefix;
 
-  // Guarded claim: only a batch whose suggestions are 'ready' (and not already being applied
-  // by a concurrent request) proceeds. Also blocks re-applying an already-'applied' batch
-  // through this endpoint - re-analyze is the intended path for a second pass. Refreshes
-  // taxonomyStartedAt so the stuck-job reconciler's clock starts from this transition, not
-  // the original queue time - otherwise a batch applied well after analysis finished would
-  // look instantly stuck and could get force-failed mid-write.
-  const claimed = await db.batches.setTaxonomyStatusIfActive(batchId, ['ready'], 'applying', {
-    taxonomyStartedAt: new Date(),
+    // Guarded claim: only a batch whose suggestions are 'ready' (and not already being applied
+    // by a concurrent request) proceeds. Also blocks re-applying an already-'applied' batch
+    // through this endpoint - re-analyze is the intended path for a second pass. Refreshes
+    // taxonomyStartedAt so the stuck-job reconciler's clock starts from this transition, not
+    // the original queue time - otherwise a batch applied well after analysis finished would
+    // look instantly stuck and could get force-failed mid-write.
+    const claimed = await db.batches.setTaxonomyStatusIfActive(batchId, ['ready'], 'applying', {
+      taxonomyStartedAt: new Date(),
+    });
+    if (!claimed) {
+      throw new BadRequestError('Tag suggestions are not ready to apply for this batch');
+    }
+    return { batch, lake, prefix };
   });
-  if (!claimed) {
-    throw new BadRequestError('Tag suggestions are not ready to apply for this batch');
-  }
 
   // Cross-check against what was actually suggested: the request schema bounds size/length
   // but does not (and cannot) verify content, and this function otherwise trusts acceptedTags

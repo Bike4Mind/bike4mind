@@ -14,6 +14,7 @@ import {
   dataLakeTaxonomyQueue,
   fabFileChunkQueue,
   driveLakeIngestQueue,
+  githubLakeIngestQueue,
   dataLakeResearchQueue,
   generationCallbackQueue,
   generationJobQueue,
@@ -846,6 +847,36 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
 });
 
 /**
+ * GitHub-as-Lake Reconcile
+ * Compares each connected repository's default-branch HEAD with its last synced commit and
+ * enqueues the ingest handler on a mismatch, so a missed push webhook is still picked up. Dark
+ * until the EnableDataLakes, EnableDataLakeGitHub and EnableDataLakeGitHubReconcile admin flags
+ * are all on (the handler enforces the gate).
+ *
+ * Schedule: every 15 minutes (a bounded batch of connections per run; see MAX_CHECKS_PER_RUN in the handler)
+ * Enabled: production + dev
+ */
+const githubLakeReconcileCron = new sst.aws.Cron('githubLakeReconcile', {
+  schedule: 'rate(15 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/githubLakeReconcile.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    // githubLakeIngestQueue: a changed HEAD is enqueued onto the shared ingest handler, so the
+    // cron needs Resource.githubLakeIngestQueue.url and the sqs:SendMessage grant the link provides.
+    link: [...allSecrets, githubLakeIngestQueue],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '3 days',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
+/**
  * system-help data-lake re-sync
  * Mirrors the public help corpus into the `system-help` lake - the corpus behind in-chat
  * `search_knowledge_base`. Previously this only ever ran when someone remembered to invoke
@@ -1032,6 +1063,7 @@ export {
   dataLakeBatchReconcileCron,
   spendReconciliationCron,
   driveLakeResyncPollCron,
+  githubLakeReconcileCron,
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
   lakeInconsistencySweepCron,

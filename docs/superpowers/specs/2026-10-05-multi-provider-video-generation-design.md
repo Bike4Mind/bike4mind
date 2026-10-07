@@ -142,7 +142,7 @@ type ProviderOutput =
 type ProviderPollResult =
   | { status: 'running'; progress?: number }
   | { status: 'succeeded'; output: ProviderOutput; reportedDurationSeconds?: number }
-  | { status: 'blocked'; reason?: string; raw: unknown }
+  | { status: 'blocked'; reason?: string; billed?: boolean; raw: unknown }
   | { status: 'failed'; retryable: boolean; message: string; raw: unknown };
 
 type VideoProviderContext = { apiKey: string; logger: Logger; signal?: AbortSignal };
@@ -159,6 +159,7 @@ interface VideoProvider {
 
 - `ResolvedInputs` carries the input image bytes/URL already fetched from the user's library and access-checked; adapters never touch our database.
 - `fetchOutput` returns the clip as a `Buffer`, bounded by `MAX_VIDEO_OUTPUT_BYTES` (256MB; a 10s 4k clip is well under it) and rejected above it. Buffering is deliberate: `S3Storage.upload` and `createFabFile` both take a `Buffer`, and streaming would mean reworking FabFile creation for no gain at 3-10s clip sizes. The Lambda is sized for it.
+- `blocked.billed` is set only when the provider is known to have charged for a clip it generated and then withheld (xAI reads it from the moderated response's `usage.cost_in_usd_ticks`). A billed block settles the hold at the requested duration; a submit-time or unbilled block releases it in full.
 - Adapters map provider statuses into `ProviderPollResult` and classify errors (`retryable`). They never throw for an expected provider outcome; they throw only for programmer errors and transport failures, which the engine treats as retryable.
 - A provider registry (`getVideoProvider(id)`) replaces the `aiVideoService` vendor switch. API keys resolve through the existing `getEffectiveLLMApiKeys` (user key -> admin demo key -> env), keyed by provider.
 
@@ -189,7 +190,7 @@ Indexes declared together at the bottom of the schema: `{ ownerType, ownerId, cr
 ```
 pending --submit--> running --poll: succeeded--> storing --> succeeded
                      |  \--poll: running--> re-enqueue with delay
-                     |--poll: blocked--> blocked    (reservation released)
+                     |--poll: blocked--> blocked    (released; settled at the requested duration if the provider billed it)
                      \--poll: failed (non-retryable)--> failed (reservation released)
 any non-terminal --cancel--> cancelled (provider.cancel if supported; reservation released)
 ```
@@ -331,6 +332,8 @@ Delete: `OpenAISoraVideoService`, the `aiVideoService` factory, `VideoModels` / 
 3. Veo 3.1 and xAI adapters.
 4. Studio UI.
 5. Agent tool and chat `VideoJobCard`.
+
+Phase 2 ships xAI Grok Imagine 1.5 and Veo 3.1 Fast; Omni stays disabled pending the upstream auth-key bug.
 
 ## 18. Open items
 
