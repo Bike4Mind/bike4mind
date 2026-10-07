@@ -127,7 +127,8 @@ export function consumeDriveConnectHandoff({
 /**
  * Moves the handoff saved for a failed OAuth attempt (`fromState`) onto the retry's authorize URL,
  * because the server mints a fresh state per connect and the failed one can never complete. Only the
- * state and TTL clock change; any other or foreign handoff is dropped. Never throws.
+ * state changes: `savedAt` is kept, so retries cannot stretch a draft past its original TTL. Any
+ * other or foreign handoff is dropped. Never throws.
  */
 export function rebindDriveConnectHandoff({
   fromState,
@@ -137,8 +138,8 @@ export function rebindDriveConnectHandoff({
   try {
     const handoff = parseOwnedHandoff(readHandoff(), owner);
     if (!handoff || handoff.oauthState !== fromState) return;
-    const { v: _v, oauthState: _oauthState, savedAt: _savedAt, ...input } = handoff;
-    saveDriveConnectHandoff(input, authUrl, owner.now);
+    const { v: _v, oauthState: _oauthState, savedAt, ...input } = handoff;
+    saveDriveConnectHandoff(input, authUrl, savedAt);
   } catch {
     // storage blocked: the retry still redirects, the user just is not returned to the wizard
   }

@@ -145,7 +145,7 @@ describe('driveConnectHandoff', () => {
     const owner = { userId: 'user-1', organizationId: 'org-1' };
     const RETRY_URL = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x&state=st-2';
 
-    it("moves the failed attempt's draft onto the retry state and restarts its TTL", () => {
+    it("moves the failed attempt's draft onto the retry state, keeping its original TTL", () => {
       saveDriveConnectHandoff(wizardDraft, AUTH_URL, T0);
       rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL, now: T0 + 5000 });
 
@@ -153,8 +153,16 @@ describe('driveConnectHandoff', () => {
       saveDriveConnectHandoff(wizardDraft, AUTH_URL, T0);
       rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL, now: T0 + 5000 });
       expect(
-        consumeDriveConnectHandoff({ ...owner, oauthState: 'st-2', now: T0 + 5000 + DRIVE_CONNECT_HANDOFF_TTL_MS })
-      ).toEqual({ ...wizardDraft, v: 1, oauthState: 'st-2', savedAt: T0 + 5000 });
+        consumeDriveConnectHandoff({ ...owner, oauthState: 'st-2', now: T0 + DRIVE_CONNECT_HANDOFF_TTL_MS })
+      ).toEqual({ ...wizardDraft, v: 1, oauthState: 'st-2', savedAt: T0 });
+    });
+
+    it('cannot extend a draft past its original TTL by retrying', () => {
+      saveDriveConnectHandoff(wizardDraft, AUTH_URL, T0);
+      rebindDriveConnectHandoff({ ...owner, fromState: 'st-1', authUrl: RETRY_URL, now: T0 + 5000 });
+      expect(
+        consumeDriveConnectHandoff({ ...owner, oauthState: 'st-2', now: T0 + DRIVE_CONNECT_HANDOFF_TTL_MS + 1 })
+      ).toBeNull();
     });
 
     it.each([

@@ -7,9 +7,12 @@ const h = vi.hoisted(() => ({
   post: vi.fn(),
   toastError: vi.fn(),
   clientId: 'gcid' as string | undefined,
+  configLoaded: true,
 }));
 
-vi.mock('@client/app/hooks/data/settings', () => ({ useConfig: () => ({ data: { googleClientId: h.clientId } }) }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: h.configLoaded ? { googleClientId: h.clientId } : undefined }),
+}));
 vi.mock('react-google-drive-picker', () => ({ default: () => [h.openPicker] }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.get, post: h.post } }));
 vi.mock('sonner', () => ({ toast: { error: h.toastError } }));
@@ -22,6 +25,7 @@ const realLocation = window.location;
 beforeEach(() => {
   vi.clearAllMocks();
   h.clientId = 'gcid';
+  h.configLoaded = true;
   Object.defineProperty(window, 'location', { configurable: true, value: { href: '' } });
 });
 
@@ -128,5 +132,40 @@ describe('useDriveFolderPicker', () => {
 
     expect(h.toastError).not.toHaveBeenCalled();
     expect(h.openPicker).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'gcid' }));
+  });
+
+  it('waits for server config that is still loading after the token returns', async () => {
+    vi.useFakeTimers();
+    h.configLoaded = false;
+    h.get.mockResolvedValue({ data: { accessToken: 'tok' } });
+    vi.stubGlobal('google', { picker: {} });
+    const { result, rerender } = render();
+
+    let done: Promise<void> | undefined;
+    act(() => {
+      done = result.current.openFolderPicker();
+    });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(h.openPicker).not.toHaveBeenCalled();
+
+    h.configLoaded = true;
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(300));
+    await act(() => done);
+
+    expect(h.toastError).not.toHaveBeenCalled();
+    expect(h.openPicker).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'gcid' }));
+  });
+
+  it('fails fast without polling when loaded config has no client id', async () => {
+    h.clientId = undefined;
+    h.get.mockResolvedValue({ data: { accessToken: 'tok' } });
+    const { result } = render();
+
+    await act(() => result.current.openFolderPicker());
+
+    expect(h.openPicker).not.toHaveBeenCalled();
+    expect(h.toastError).toHaveBeenCalledWith('Google Drive is unavailable right now. Please try again.');
+    expect(result.current.isPicking).toBe(false);
   });
 });

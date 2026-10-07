@@ -14,17 +14,22 @@ const isPickerApiLoaded = () => !!(window as { google?: { picker?: unknown } }).
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+/** Resolves true once `ready()` holds, or false after the timeout. */
+async function waitUntil(ready: () => boolean): Promise<boolean> {
+  if (ready()) return true;
+  for (let waited = 0; waited < PICKER_READY_TIMEOUT_MS; waited += PICKER_READY_POLL_MS) {
+    await sleep(PICKER_READY_POLL_MS);
+    if (ready()) return true;
+  }
+  return false;
+}
+
 /** Resolves true once the Google Picker API has loaded, or false after the timeout. */
 async function waitForPickerApi(): Promise<boolean> {
   if (isPickerApiLoaded()) return true;
-  for (let waited = 0; waited < PICKER_READY_TIMEOUT_MS; waited += PICKER_READY_POLL_MS) {
-    await sleep(PICKER_READY_POLL_MS);
-    if (isPickerApiLoaded()) {
-      await sleep(PICKER_READY_POLL_MS); // let the library's own loaded state render before calling it
-      return true;
-    }
-  }
-  return false;
+  if (!(await waitUntil(isPickerApiLoaded))) return false;
+  await sleep(PICKER_READY_POLL_MS); // let the library's own loaded state render before calling it
+  return true;
 }
 
 function httpStatus(e: unknown): number | undefined {
@@ -57,16 +62,16 @@ export function useDriveFolderPicker({
   onBeforeRedirect?: (authUrl: string) => void;
 }): { openFolderPicker: () => Promise<void>; isPicking: boolean } {
   const { data: config } = useConfig();
-  // Read after the token await: a picker opened on mount (the post-OAuth resume) can start before
-  // server config has loaded, and this closure would otherwise keep that render's undefined.
-  const googleClientIdRef = useRef(config?.googleClientId);
+  // Read through a ref after the token await: a picker opened on mount (the post-OAuth resume) can
+  // start before server config has loaded, and this closure would otherwise keep that render's value.
+  const configRef = useRef(config);
   const [openPicker] = useDrivePicker();
   // The library's openPicker silently no-ops until its own picker-loaded state flips, so after
   // waiting for the API the call must go through the latest render's openPicker, not this closure's.
   const openPickerRef = useRef(openPicker);
   useEffect(() => {
     openPickerRef.current = openPicker;
-    googleClientIdRef.current = config?.googleClientId;
+    configRef.current = config;
   });
   const [isPicking, setIsPicking] = useState(false);
 
@@ -104,7 +109,8 @@ export function useDriveFolderPicker({
         redirectToConsent(token.authUrl);
         return;
       }
-      const googleClientId = googleClientIdRef.current;
+      const configLoaded = token.accessToken ? await waitUntil(() => configRef.current !== undefined) : false;
+      const googleClientId = configLoaded ? configRef.current?.googleClientId : undefined;
       if (!token.accessToken || !googleClientId) {
         toast.error('Google Drive is unavailable right now. Please try again.');
         setIsPicking(false);
