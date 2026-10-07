@@ -220,6 +220,39 @@ describe('proxy security blocking', () => {
   });
 });
 
+describe('proxy CSP for the pdf.js worker', () => {
+  it("allows wasm compilation via 'wasm-unsafe-eval' on the worker script, without JS eval", () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/pdf.worker-6.3.289.min.mjs')).headers.get(
+      'Content-Security-Policy'
+    );
+    const scriptSrc = (csp ?? '').split(';').find(d => d.trim().startsWith('script-src')) ?? '';
+    expect(scriptSrc).toContain("'wasm-unsafe-eval'");
+    expect(scriptSrc).not.toContain(" 'unsafe-eval'");
+  });
+
+  it("allows 'wasm-unsafe-eval' on the legacy unversioned worker path", () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/pdf.worker.min.mjs')).headers.get(
+      'Content-Security-Policy'
+    );
+    expect(csp).toContain("'wasm-unsafe-eval'");
+  });
+
+  it.each([
+    '/foo/pdf.worker-6.3.289.min.mjs',
+    '/pdf.worker-6.3.289.min.mjs.map',
+    '/pdf.worker-x.mjs',
+    '/pdf.worker.min.mjs/x',
+  ])("keeps 'wasm-unsafe-eval' off near-miss path %s", path => {
+    const csp = proxy(makeRequest(`https://app.bike4mind.com${path}`)).headers.get('Content-Security-Policy');
+    expect(csp).not.toContain("'wasm-unsafe-eval'");
+  });
+
+  it("keeps 'wasm-unsafe-eval' off app pages", () => {
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy');
+    expect(csp).not.toContain("'wasm-unsafe-eval'");
+  });
+});
+
 describe('proxy CSP script-src — dev-only unsafe-eval boundary', () => {
   // #8512 deliberately removed 'unsafe-eval' from the deployed CSP; it is re-added ONLY in
   // development (Turbopack/React dev needs eval()). These cases lock the env boundary so a

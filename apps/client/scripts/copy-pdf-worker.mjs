@@ -20,10 +20,26 @@
  * worker. The legacy name only serves tabs loaded before the versioned URL shipped and can be
  * dropped in a later release.
  *
+ * The worker also fetches data files at runtime: wasm image decoders and color management
+ * (`wasmUrl`), glyphs for the 14 standard fonts (`standardFontDataUrl`), CJK character maps
+ * (`cMapUrl`) and the CMYK ICC profile (`iccUrl`). Without them pdf.js only warns and renders with
+ * gaps. They are copied into `pdfjs-assets-${version}/`, versioned like the worker so the data
+ * always matches it, and any other `pdfjs-assets-*` directory is removed.
+ *
  * Runs via pnpm postinstall / predev / prebuild so the asset is always present before a build.
  */
 
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'fs';
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+} from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -38,18 +54,27 @@ const SOURCE_WORKER_FILE = 'pdf.worker.min.mjs';
 // in the legacy worker.
 const BUILD_DIR = path.join('legacy', 'build');
 
+// Top-level pdfjs-dist directories (the legacy build has no copies of its own). Each is served as
+// `/pdfjs-assets-${version}/<dir>/`, the URLs PdfViewer passes to getDocument.
+const ASSET_DIRS = ['wasm', 'standard_fonts', 'cmaps', 'iccs'];
+const ASSETS_DIR_PREFIX = 'pdfjs-assets-';
+// pdf.js's scripting sandbox (a JS interpreter), which PdfViewer never enables; not worth serving.
+const UNUSED_WASM_PREFIX = 'quickjs-';
+const TEMP_SUFFIX = '.tmp';
+
 function main() {
   // Resolve the worker from the installed package (works with pnpm's nested node_modules).
-  const pdfjsPkg = require.resolve('pdfjs-dist/package.json');
-  const pdfjsDir = path.dirname(pdfjsPkg);
+  // An optional pdfjs-dist root (process.argv[3]) lets tests point at a package missing a directory.
+  const pdfjsDir = process.argv[3]
+    ? path.resolve(process.argv[3])
+    : path.dirname(require.resolve('pdfjs-dist/package.json'));
+  const pdfjsPkg = path.join(pdfjsDir, 'package.json');
   const { version } = JSON.parse(readFileSync(pdfjsPkg, 'utf8'));
   const source = path.join(pdfjsDir, BUILD_DIR, SOURCE_WORKER_FILE);
 
   // Accepts an optional destination directory (process.argv[2]) so the copy can be tested
   // against a scratch directory instead of the real public/ folder.
-  const destinationDir = process.argv[2]
-    ? path.resolve(process.argv[2])
-    : path.resolve(__dirname, '../public');
+  const destinationDir = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(__dirname, '../public');
   const versionedFile = `pdf.worker-${version}.min.mjs`;
   const keptFiles = new Set([versionedFile, SOURCE_WORKER_FILE]);
 
@@ -69,6 +94,37 @@ function main() {
   // file header).
   copyFileSync(source, path.join(destinationDir, SOURCE_WORKER_FILE));
   console.log(`[copy-pdf-worker] Copied ${SOURCE_WORKER_FILE} -> public/${SOURCE_WORKER_FILE}`);
+
+  const assetsDir = `${ASSETS_DIR_PREFIX}${version}`;
+  for (const entry of readdirSync(destinationDir)) {
+    if (entry.startsWith(ASSETS_DIR_PREFIX) && entry !== assetsDir && !entry.endsWith(TEMP_SUFFIX)) {
+      rmSync(path.join(destinationDir, entry), { recursive: true, force: true });
+      console.log(`[copy-pdf-worker] Removed stale public/${entry}`);
+    }
+  }
+  // Build in a private sibling and rename into place, so overlapping runs (postinstall vs
+  // predev/prebuild) never delete each other's half-copied directory or expose a partial one.
+  const tempDir = path.join(destinationDir, `${assetsDir}.${process.pid}${TEMP_SUFFIX}`);
+  try {
+    for (const dir of ASSET_DIRS) {
+      cpSync(path.join(pdfjsDir, dir), path.join(tempDir, dir), {
+        recursive: true,
+        filter: source => !path.basename(source).startsWith(UNUSED_WASM_PREFIX),
+      });
+    }
+  } catch (error) {
+    rmSync(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+  rmSync(path.join(destinationDir, assetsDir), { recursive: true, force: true });
+  try {
+    renameSync(tempDir, path.join(destinationDir, assetsDir));
+  } catch (error) {
+    rmSync(tempDir, { recursive: true, force: true });
+    // Lost the race to a concurrent run that already put the same version in place.
+    if (!existsSync(path.join(destinationDir, assetsDir))) throw error;
+  }
+  console.log(`[copy-pdf-worker] Copied ${ASSET_DIRS.join(', ')} -> public/${assetsDir}/`);
 }
 
 try {
