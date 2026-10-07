@@ -73,6 +73,17 @@ describe('VideoJobCard states', () => {
     expect(screen.getByTestId('video-job-card-progress')).toBeInTheDocument();
   });
 
+  // Joy sizes the indeterminate sweep from `value`; a finished job's 100 makes it overflow the card.
+  it('keeps the default sweep width on an indeterminate bar after progress reached 100%', () => {
+    showJob({
+      ...succeeded(readyOutput({ availability: 'pending_scan', url: null, expires_at: null })),
+      progress: 1,
+    });
+    render(card());
+    const progress = screen.getByTestId('video-job-card-progress');
+    expect(progress.style.getPropertyValue('--LinearProgress-percent')).toBe('25');
+  });
+
   it('labels a playable clip Ready', () => {
     showJob(succeeded(readyOutput()));
     render(card());

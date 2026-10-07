@@ -128,6 +128,7 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
   const output: VideoGeneration['output'] = job.state === 'succeeded' ? job.output : null;
   const failureMessage = job.error?.message ?? FAILURE_FALLBACK[job.state];
   const isSettling = job.state === 'succeeded' && (!job.output || job.output.availability === 'pending_scan');
+  const progressPercent = job.state === 'running' && job.progress !== null ? Math.round(job.progress * 100) : null;
   const statusLabel = (() => {
     if (cancel.isSuccess && !terminal) return 'Cancelling';
     if (isSettling) return job.output ? 'Checking' : 'Finishing';
@@ -152,14 +153,16 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
 
       {(!terminal || isSettling) && (
         <Stack gap={0.5}>
+          {/* Only a determinate bar gets `value`: Joy sizes the indeterminate sweep from it, so a
+              finished job's 100 would push the sweep past the card edge. */}
           <LinearProgress
             data-testid="video-job-card-progress"
-            determinate={job.state === 'running' && job.progress !== null}
-            value={job.progress !== null ? Math.round(job.progress * 100) : undefined}
+            determinate={progressPercent !== null}
+            value={progressPercent ?? undefined}
           />
-          {job.state === 'running' && job.progress !== null && (
+          {progressPercent !== null && (
             <Typography level="body-xs" data-testid="video-job-card-progress-label">
-              {Math.round(job.progress * 100)}%
+              {progressPercent}%
             </Typography>
           )}
         </Stack>
