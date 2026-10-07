@@ -582,6 +582,7 @@ function planOne(
       policy: input.policy,
       credentials: input.credentials,
       hasTrustedPrice: hasTrustedPrice(candidate, input.knownPricedModelIds),
+      aggregatorPriceUncorroborated: candidate.pricesByKind.some(entry => entry.kind === 'aggregator'),
       sourceDisabledReason: sourceDisabledReasonOf(contributed),
     });
     // autoDisabledReason is omitted rather than set to undefined so a promotion
@@ -829,7 +830,7 @@ export function claimedGroups(
  * Trusted per sec 5.9: a provider's own API, two aggregators inside the
  * agreement band, or a price the catalog already holds (a row in force or an
  * adapter price literal, both arriving as `knownPricedModelIds`). A lone
- * aggregator is a flag, not a price.
+ * aggregator is a flag, not a price; promotion words that denial separately.
  */
 export function hasTrustedPrice(
   candidate: Pick<Candidate, 'modelId' | 'pricesByKind'>,
