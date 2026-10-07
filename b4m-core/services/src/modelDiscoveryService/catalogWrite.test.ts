@@ -933,6 +933,60 @@ describe('planCatalogWrites', () => {
     });
   });
 
+  it('says the build holds a price for a per-image literal no trusted source quotes', () => {
+    // Text literals arrive as a trusted price; the per-image and per-minute ones do not, which is
+    // the only way a build-priced model is still blocked on price.
+    const image = gpt6({ id: 'gpt-image-1', name: 'GPT Image 1' });
+    const contributions = [
+      { name: 'openai', kind: 'provider' as const, records: [{ ...image, modelId: 'gpt-image-1' }] },
+    ];
+
+    const priced = plan({
+      resolveDispatch: dispatchable,
+      contributions,
+      buildPricedModelIds: new Set(['gpt-image-1']),
+    });
+    const unpriced = plan({ resolveDispatch: dispatchable, contributions, buildPricedModelIds: new Set(['other']) });
+
+    expect(priced.diff[0].blockedBy).toEqual(['no-trusted-price']);
+    expect(priced.rows[0].patch).toMatchObject({
+      autoDisabledReason: 'discovered, priced in this build per image or minute, no trusted per-token price',
+    });
+    expect(unpriced.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+  });
+
+  describe('uncorroborated wording across runs', () => {
+    const lone = {
+      name: 'models.dev',
+      kind: 'aggregator' as const,
+      records: [{ modelId: 'gpt-6', patch: {}, pricing: { inputPerMTok: 2, outputPerMTok: 8 } }],
+    };
+    const provider = { name: 'openai', kind: 'provider' as const, records: [gpt6()] };
+
+    const afterLoneQuote = () => plan({ resolveDispatch: dispatchable, contributions: [provider, lone] });
+
+    it('keeps the wording in force when no aggregator ran, so the wording alone appends nothing', () => {
+      const first = afterLoneQuote();
+      expect(first.rows[0].patch).toMatchObject({
+        autoDisabledReason: 'discovered, awaiting price (aggregator quote not corroborated)',
+      });
+
+      const second = plan({ resolveDispatch: dispatchable, contributions: [provider], base: asBase(first.rows) });
+
+      expect(second.rows).toEqual([]);
+    });
+
+    it('drops the wording once an aggregator ran and still quoted nothing', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider, { ...lone, records: [] }],
+        base: asBase(afterLoneQuote().rows),
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting price' });
+    });
+  });
+
   // A text row whose output reserve eats its whole context window makes safeInputWindow
   // non-positive, and the chat path then refuses to build a prompt at all. The static tables are
   // held to that by modelCatalogInputBudget.test.ts; these cover the feed, which outranks them.
