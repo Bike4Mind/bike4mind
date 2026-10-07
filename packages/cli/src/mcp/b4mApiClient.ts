@@ -109,6 +109,7 @@ export interface RawDataLake {
   id: string;
   name: string;
   slug: string;
+  datalake_tag?: string;
   description?: string | null;
   built_in?: boolean;
   status?: string;
