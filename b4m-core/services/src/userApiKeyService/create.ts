@@ -294,7 +294,8 @@ export const createUserApiKey = async (
     metadata: params.metadata,
     productId: params.productId,
     productName: params.productName,
-    billingOwnerType: params.billingOwnerType ?? CreditHolderType.User,
+    // cast: Agent is rejected above; only User/Organization reach here
+    billingOwnerType: (params.billingOwnerType ?? CreditHolderType.User) as ApiKeyBillingOwnerType,
     organizationId: params.organizationId,
     agentId: params.agentId,
     allowedOrigins: params.allowedOrigins,
