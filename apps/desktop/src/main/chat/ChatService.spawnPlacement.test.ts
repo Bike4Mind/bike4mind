@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
 import { git, listWorktrees } from './project/git';
+import { appWorktreeRoot } from './project/workspace';
 import type { AccessStore } from './tools/AccessStore';
 import { ApprovalGate } from './tools/ApprovalGate';
 
@@ -170,12 +171,12 @@ describe('ChatService spawn placement', () => {
     expect((await child())?.project).toMatchObject({
       branch: 'agent/the-thing',
       workspace: true,
-      workingDirectory: join(container, 'agent+the-thing'),
+      workingDirectory: join(appWorktreeRoot(container), 'agent+the-thing'),
     });
 
     // A real checkout, not just a field: the point of the option is that the child has files of
     // its own, and the parent's are still where they were.
-    expect((await stat(join(container, 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
+    expect((await stat(join(appWorktreeRoot(container), 'agent+the-thing', 'README.md'))).isFile()).toBe(true);
     expect((await store.get(parent.id))?.project?.workingDirectory).toBe(main);
     expect(settled()[0]?.status).toBe('done');
   });
@@ -186,7 +187,7 @@ describe('ChatService spawn placement', () => {
     // shell works in the wrong checkout. Observed, not hypothetical.
     await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/told-where' });
 
-    const worktree = join(container, 'agent+told-where');
+    const worktree = join(appWorktreeRoot(container), 'agent+told-where');
     const body = await vi.waitUntil(
       () => post.mock.calls.map(call => call[1]?.messages?.[1]?.content).find(text => /told-where/.test(String(text))),
       { timeout: 5000, interval: 5 }
@@ -295,15 +296,15 @@ describe('ChatService spawn placement', () => {
   it('leaves no half-made session when the worktree cannot be created', async () => {
     // Something already at the path that git does not know as a worktree: resolveWorkspace refuses
     // it rather than clobbering it, and that refusal has to land BEFORE a session exists.
-    await mkdir(join(container, 'agent+blocked'), { recursive: true });
-    await writeFile(join(container, 'agent+blocked', 'stray.txt'), 'not mine\n', 'utf8');
+    await mkdir(join(appWorktreeRoot(container), 'agent+blocked'), { recursive: true });
+    await writeFile(join(appWorktreeRoot(container), 'agent+blocked', 'stray.txt'), 'not mine\n', 'utf8');
 
     await spawnWith({ decision: 'once', optionId: 'worktree', value: 'agent/blocked' });
 
     expect(await child()).toBeUndefined();
     expect(settled()[0]?.error).toMatch(/could not be created/);
     // Untouched, which is the other half of refusing rather than adopting.
-    expect(await readFile(join(container, 'agent+blocked', 'stray.txt'), 'utf8')).toBe('not mine\n');
+    expect(await readFile(join(appWorktreeRoot(container), 'agent+blocked', 'stray.txt'), 'utf8')).toBe('not mine\n');
   });
 
   it('keeps the approval-mode ceiling and the depth count on a child in its own worktree', async () => {

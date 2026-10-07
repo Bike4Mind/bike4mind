@@ -69,13 +69,16 @@ export function ModelPicker({
     const menu = node?.closest('[role="menu"]');
     if (!node || !menu) return;
     holdFilter.current = true;
-    node.focus();
+    node.focus({ preventScroll: true });
     const restore = (event: Event) => {
       if (event.target === node) {
         holdFilter.current = true; // clicked back into the box after arrowing away
         return;
       }
-      if (holdFilter.current) node.focus();
+      // `preventScroll` or the menu scrolls back to the top on every wheel tick: scrolling moves
+      // rows under a stationary pointer, Joy focuses the row it thinks is hovered, and bringing
+      // focus back here would scroll this box - the menu's first child - into view.
+      if (holdFilter.current) node.focus({ preventScroll: true });
     };
     menu.addEventListener('focusin', restore);
     return () => menu.removeEventListener('focusin', restore);

@@ -17,7 +17,8 @@ const PREFIX = 'agent/';
 /** Long enough to stay readable as a folder name, short enough not to swamp the card. */
 const MAX_SLUG = 40;
 
-function slugify(text: string): string {
+/** Shared with project/workspace.ts, which names a session's own branch the same way. */
+export function slugify(text: string): string {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')

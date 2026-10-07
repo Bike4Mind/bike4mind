@@ -1,11 +1,24 @@
 import { describe, it, expect } from 'vitest';
 import {
   ADAPTIVE_THINKING_MAX_TOKENS_FLOOR,
+  ANTHROPIC_EFFORT_LEVELS,
   buildThinkingParams,
+  DEFAULT_ANTHROPIC_EFFORT,
+  DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT,
   reasonsWithinOutputBudget,
+  resolveAnthropicEffort,
   resolveOutputMaxTokens,
+  supportsAnthropicEffort,
+  toAnthropicEffort,
+  type AnthropicEffort,
 } from './thinkingParams';
-import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import {
+  ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS,
+  ChatModels,
+  ModelBackend,
+  type ModelInfo,
+  type ReasoningEffort,
+} from '@bike4mind/common';
 
 const baseModelInfo: ModelInfo = {
   id: ChatModels.CLAUDE_4_6_OPUS,
@@ -397,6 +410,142 @@ describe('resolveOutputMaxTokens', () => {
 
     it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
       expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
+    });
+  });
+});
+
+const effortOf = (result: ReturnType<typeof buildThinkingParams>): AnthropicEffort | undefined =>
+  (result.thinkingConfig as { output_config?: { effort: AnthropicEffort } }).output_config?.effort;
+
+describe('Anthropic effort levels', () => {
+  it('offers exactly the five levels the current Claude models accept', () => {
+    expect(ANTHROPIC_EFFORT_LEVELS).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it.each(ANTHROPIC_EFFORT_LEVELS)('sends %s through to output_config', level => {
+    const result = buildThinkingParams(ChatModels.CLAUDE_5_OPUS, adaptiveModel, 16000, 4096, level);
+    expect(effortOf(result)).toBe(level);
+  });
+
+  // A legacy model has no output_config at all, so no level can reach it.
+  it.each(ANTHROPIC_EFFORT_LEVELS)('never emits output_config on a legacy model for %s', level => {
+    const result = buildThinkingParams(ChatModels.CLAUDE_4_6_OPUS, legacyModel, 16000, 4096, level);
+    expect('output_config' in result.thinkingConfig).toBe(false);
+  });
+});
+
+describe('supportsAnthropicEffort', () => {
+  it.each(Array.from(ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS))('accepts %s from the capability set', id => {
+    expect(supportsAnthropicEffort(id, undefined)).toBe(true);
+  });
+
+  // The record is the fallback for a model only the catalog knows about.
+  it('accepts a catalog-only model whose record says adaptive', () => {
+    expect(supportsAnthropicEffort('claude-opus-9-unreleased', adaptiveModel)).toBe(true);
+  });
+
+  it('rejects a legacy Claude model', () => {
+    expect(supportsAnthropicEffort(ChatModels.CLAUDE_4_6_OPUS, legacyModel)).toBe(false);
+  });
+
+  it('rejects an OpenAI reasoning model, whose effort is a different wire field', () => {
+    expect(supportsAnthropicEffort(ChatModels.GPT5_6_SOL, openAiReasoningModel)).toBe(false);
+  });
+
+  // A set member must get the effort shape even when its catalog row is sparse, which
+  // is the whole reason the set is consulted ahead of the record.
+  it('builds the adaptive shape for a set member whose record omits thinkingStyle', () => {
+    const sparse: ModelInfo = { ...baseModelInfo, id: ChatModels.CLAUDE_5_OPUS, thinkingStyle: undefined };
+    const result = buildThinkingParams(ChatModels.CLAUDE_5_OPUS, sparse, 16000, 4096, 'xhigh');
+    expect(result.thinkingConfig.thinking).toEqual({ type: 'adaptive' });
+    expect(effortOf(result)).toBe('xhigh');
+  });
+});
+
+describe('toAnthropicEffort', () => {
+  // The four shared names mean the same depth on both sides, so they pass through.
+  // Promoting 'xhigh' to 'max' (what Kimi and DeepSeek do) would buy more reasoning
+  // than was asked for, because unlike those providers Anthropic has both levels.
+  it.each([
+    ['low', 'low'],
+    ['medium', 'medium'],
+    ['high', 'high'],
+    ['xhigh', 'xhigh'],
+  ] as const)('passes %s through unchanged', (input, expected) => {
+    expect(toAnthropicEffort(input)).toBe(expected);
+  });
+
+  // Omitting instead would leave the turn on the 'high' default - MORE reasoning than
+  // a least-effort request asked for, not less.
+  it.each(['none', 'minimal'] as const)('resolves %s to the least level Anthropic can express', input => {
+    expect(toAnthropicEffort(input)).toBe('low');
+  });
+
+  it('maps an unstated effort to undefined so the default survives', () => {
+    expect(toAnthropicEffort(undefined)).toBeUndefined();
+  });
+
+  // The guarantee the mapping exists for: nothing outside Anthropic's vocabulary
+  // can reach output_config.effort.
+  it('only ever produces a level Anthropic accepts', () => {
+    const everyValue: readonly ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+    for (const value of everyValue) {
+      const mapped = toAnthropicEffort(value);
+      expect(mapped).toBeDefined();
+      expect(ANTHROPIC_EFFORT_LEVELS).toContain(mapped);
+    }
+  });
+});
+
+describe('resolveAnthropicEffort', () => {
+  describe('an unstated effort behaves exactly as before effort was wired', () => {
+    it('is high for an ordinary turn', () => {
+      expect(resolveAnthropicEffort({})).toBe('high');
+      expect(resolveAnthropicEffort({})).toBe(DEFAULT_ANTHROPIC_EFFORT);
+    });
+
+    it('is medium for a QuestMaster turn', () => {
+      expect(resolveAnthropicEffort({ questMaster: true })).toBe('medium');
+      expect(resolveAnthropicEffort({ questMaster: true })).toBe(DEFAULT_QUEST_MASTER_ANTHROPIC_EFFORT);
+    });
+
+    it('is unchanged when both effort options are explicitly undefined', () => {
+      expect(resolveAnthropicEffort({ anthropicEffort: undefined, reasoningEffort: undefined })).toBe('high');
+      expect(
+        resolveAnthropicEffort({ questMaster: true, anthropicEffort: undefined, reasoningEffort: undefined })
+      ).toBe('medium');
+    });
+
+    // buildThinkingParams defaults to the same value, so a caller that passes no
+    // effort argument at all is on the old behavior too.
+    it('matches what buildThinkingParams sends with no effort argument', () => {
+      const result = buildThinkingParams(ChatModels.CLAUDE_5_OPUS, adaptiveModel, 16000, 4096);
+      expect(effortOf(result)).toBe(resolveAnthropicEffort({}));
+    });
+  });
+
+  describe('a stated effort wins', () => {
+    it.each(ANTHROPIC_EFFORT_LEVELS)('takes the native option %s over the default', level => {
+      expect(resolveAnthropicEffort({ anthropicEffort: level })).toBe(level);
+    });
+
+    it('takes the native option over a QuestMaster default', () => {
+      expect(resolveAnthropicEffort({ questMaster: true, anthropicEffort: 'max' })).toBe('max');
+    });
+
+    it('maps reasoningEffort when the native option is unset', () => {
+      expect(resolveAnthropicEffort({ reasoningEffort: 'xhigh' })).toBe('xhigh');
+      expect(resolveAnthropicEffort({ reasoningEffort: 'none' })).toBe('low');
+    });
+
+    // The native option is in Anthropic's own vocabulary, so it is the more specific
+    // statement of the two and the only route to 'max'.
+    it('prefers the native option to a conflicting reasoningEffort', () => {
+      expect(resolveAnthropicEffort({ anthropicEffort: 'max', reasoningEffort: 'low' })).toBe('max');
+    });
+
+    it('overrides the QuestMaster default from reasoningEffort', () => {
+      expect(resolveAnthropicEffort({ questMaster: true, reasoningEffort: 'xhigh' })).toBe('xhigh');
     });
   });
 });

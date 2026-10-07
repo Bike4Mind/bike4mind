@@ -106,6 +106,7 @@ function normalizeProject(value: unknown): ChatProject | null {
     name: typeof raw.name === 'string' && raw.name ? raw.name : basename(raw.directory),
     branch: typeof raw.branch === 'string' ? raw.branch : '',
     workspace: raw.workspace === true,
+    ...(typeof raw.workspaceBranch === 'string' && raw.workspaceBranch ? { workspaceBranch: raw.workspaceBranch } : {}),
     workingDirectory: raw.workingDirectory,
     contextDirectories: Array.isArray(raw.contextDirectories)
       ? raw.contextDirectories.filter((entry): entry is string => typeof entry === 'string')

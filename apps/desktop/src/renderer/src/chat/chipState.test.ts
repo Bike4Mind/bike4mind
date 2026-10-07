@@ -154,9 +154,17 @@ describe('describeChipRow on what picking a branch will do', () => {
     expect(row.branchNotice).toMatch(/turn on worktree/i);
   });
 
-  it('adds nothing once the session runs in a worktree, where a pick does move it', () => {
+  /**
+   * This used to add nothing, on the reading that a pick with the toggle on checked that branch
+   * out. It does not any more: the pick is a base. The two readings differ by an entire branch,
+   * so the menu says which one it is.
+   */
+  it('says the pick is a base once the session runs in a worktree', () => {
     const inWorktree = { ...project, workspace: true, workingDirectory: '/Users/someone/code/agent+x' };
-    expect(describeChipRow(inWorktree, { isRepository: true, count: 3, checkedOut: 'main' }).branchNotice).toBeNull();
+    const notice = describeChipRow(inWorktree, { isRepository: true, count: 3, checkedOut: 'main' }).branchNotice;
+
+    expect(notice).toMatch(/base/i);
+    expect(notice).toMatch(/never checked out here/i);
   });
 });
 
@@ -180,5 +188,86 @@ describe('describeChipRow for a session that has not picked a branch', () => {
 
   it('names no branch before git has answered', () => {
     expect(describeChipRow(unbound, { isRepository: true, count: 2 }).branch.label).not.toBe('main');
+  });
+});
+
+describe('describeChipRow once the session has run here', () => {
+  const lookup = { isRepository: true, count: 3, checkedOut: 'main' };
+
+  it('locks the controls that would move the session, each saying why', () => {
+    const row = describeChipRow(project, lookup, true);
+
+    expect(row.locked).toBe(true);
+    for (const chip of [row.folder, row.worktree, row.addContext]) {
+      expect(chip.enabled).toBe(false);
+      expect(chip.tooltip).toMatch(/already run here/i);
+    }
+  });
+
+  /** Busy is timing and clears on its own; this one never does. They must not read alike. */
+  it('does not describe the lock as something to wait out', () => {
+    const row = describeChipRow(project, lookup, true);
+
+    expect(row.folder.tooltip).not.toMatch(/wait|finish|idle/i);
+    expect(row.folder.tooltip).toMatch(/new session/i);
+  });
+
+  it('keeps the chips readable rather than blanking them', () => {
+    const row = describeChipRow(project, lookup, true);
+
+    expect(row.folder.label).toBe('thing');
+    expect(row.folder.tooltip).toContain(project.directory);
+    expect(row.branch.label).toBe('main');
+    expect(row.branch.enabled).toBe(true);
+  });
+
+  it('leaves everything editable while nothing has run yet', () => {
+    const row = describeChipRow(project, lookup, false);
+
+    expect(row.locked).toBe(false);
+    expect(row.folder.enabled).toBe(true);
+    expect(row.worktree.enabled).toBe(true);
+    expect(row.addContext.enabled).toBe(true);
+  });
+
+  /** Creating a session is the one path that must stay open: it has no project at all yet. */
+  it('never locks a session that has chosen nothing', () => {
+    const row = describeChipRow(null, { isRepository: false, count: 0 }, true);
+
+    expect(row.locked).toBe(false);
+    expect(row.folder.enabled).toBe(true);
+  });
+});
+
+/**
+ * After the branch became a base, picking `main` means "start from main", not "work on main" -
+ * a difference of an entire branch, and the reading the user arrives with is the wrong one.
+ */
+describe('the branch menu notice with the worktree toggle on', () => {
+  it('says the picked branch is the base and is not checked out here', () => {
+    const row = describeChipRow(
+      { ...project, workspace: true, workspaceBranch: 'b4m/thing-a1b2c3', workingDirectory: '/w/b4m+thing-a1b2c3' },
+      { isRepository: true, count: 3, checkedOut: 'b4m/thing-a1b2c3' }
+    );
+
+    expect(row.branchNotice).toMatch(/base/i);
+    expect(row.branchNotice).toMatch(/new branch cut from it/i);
+    expect(row.branchNotice).not.toMatch(/nothing is checked out\./i);
+  });
+
+  it('names the branch the worktree is actually on in the toggle tooltip', () => {
+    const row = describeChipRow(
+      { ...project, workspace: true, workspaceBranch: 'b4m/thing-a1b2c3', workingDirectory: '/w/b4m+thing-a1b2c3' },
+      { isRepository: true, count: 3, checkedOut: 'b4m/thing-a1b2c3' }
+    );
+
+    expect(row.worktree.tooltip).toContain('/w/b4m+thing-a1b2c3');
+    expect(row.worktree.tooltip).toContain('b4m/thing-a1b2c3');
+  });
+
+  it('still says nothing is checked out with the toggle off', () => {
+    const row = describeChipRow(project, { isRepository: true, count: 3, checkedOut: 'main' });
+
+    expect(row.branchNotice).toMatch(/nothing is checked out/i);
   });
 });

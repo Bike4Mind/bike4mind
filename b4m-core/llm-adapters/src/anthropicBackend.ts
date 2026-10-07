@@ -50,8 +50,10 @@ import {
 } from '@bike4mind/common';
 import {
   buildThinkingParams,
+  resolveAnthropicEffort,
   resolveOutputMaxTokens,
   THINKING_ANSWER_HEADROOM_TOKENS,
+  type AnthropicEffort,
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
@@ -65,7 +67,7 @@ import {
 
 type ExtendedMessageCreateParams = MessageCreateParamsBase &
   Partial<ThinkingConfig> & {
-    output_config?: { effort: 'high' | 'medium' | 'low' };
+    output_config?: { effort: AnthropicEffort };
   };
 
 interface ToolUseEvent {
@@ -1069,7 +1071,11 @@ export class AnthropicBackend implements ICompletionBackend {
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor((options.maxTokens ?? 8192) * 0.25), 4096)
           : (thinkingOptions.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, apiParams.max_tokens ?? 4096, effort);
 

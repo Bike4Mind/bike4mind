@@ -39,10 +39,10 @@ export function RuntimeInfo() {
 
   return (
     <Stack spacing={1}>
+      {/* The app's own version only. The Electron, Node and Chromium versions stay on the
+          AppInfo payload - they cost nothing to carry and a diagnostics view would want them -
+          but in the account menu they are three lines of noise under the one that is read. */}
       <Row label="App" value={appInfo.appVersion} />
-      <Row label="Electron" value={appInfo.electronVersion} />
-      <Row label="Node" value={appInfo.nodeVersion} />
-      <Row label="Chromium" value={appInfo.chromeVersion} />
     </Stack>
   );
 }
