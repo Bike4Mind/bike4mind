@@ -1,6 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
@@ -105,7 +108,7 @@ vi.mock('@bike4mind/observability', () => ({
 vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers: vi.fn() }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
-import { createApp, drainInFlight } from './server';
+import { createApp, drainInFlight, DRAIN_TIMEOUT_MS } from './server';
 import { GENERIC_PROCESSING_FAILURE_REPLY } from './internal/route';
 import { questReplyText } from '@server/utils/questPollBody';
 
@@ -300,6 +303,24 @@ describe('ChatCompletion SIGTERM drain', () => {
 
     expect(outcome).toBe('drained');
     expect(logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatCompletion drain window vs ECS stopTimeout', () => {
+  // infra/ imports SST globals ($app, aws), so it cannot be imported into a node test - scan the
+  // source instead. The margin is the whole point: the drain timer starts after SIGTERM and ECS
+  // sends SIGKILL at stopTimeout, so a window equal to stopTimeout can never fire and the
+  // drain-expiry error LiveOps relies on would be unreachable.
+  const infraSource = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../../infra/chatCompletion.ts'),
+    'utf8'
+  );
+
+  it('keeps DRAIN_TIMEOUT_MS at least 5s under the ECS stopTimeout', () => {
+    const matches = [...infraSource.matchAll(/stopTimeout\s*=\s*(\d+)/g)];
+    expect(matches).toHaveLength(1);
+    const stopTimeoutMs = Number(matches[0][1]) * 1000;
+    expect(DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(stopTimeoutMs - 5_000);
   });
 });
 

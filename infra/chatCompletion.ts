@@ -21,8 +21,10 @@ import { websocketApi } from './websocket';
  * task drains in-flight quests for up to `stopTimeout` (120s, the ECS Fargate ceiling)
  * before SIGKILL. A quest still running past that window is cut off — so the container
  * removes the cold-start + 15-min ceiling for normal processing, but does not make
- * shutdown-time cancellation free. The drain window in server.ts is kept in lock-step
- * with the stopTimeout set below.
+ * shutdown-time cancellation free. The drain window in server.ts is deliberately set
+ * ~10s UNDER this stopTimeout, so its drain-expiry error can be logged before SIGKILL
+ * (a window equal to stopTimeout would never fire); the drift guard in server.test.ts
+ * enforces the margin.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
  * service's load balancer and gets a 202 back immediately; the service processes the quest
@@ -145,9 +147,10 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   },
   // Give in-flight quests the full ECS-allowed grace period to drain on SIGTERM before
   // SIGKILL. SST's Service args don't expose the container `stopTimeout`, so inject it
-  // into the task definition's containerDefinitions JSON. 120s is the Fargate maximum and
-  // matches DRAIN_TIMEOUT_MS in server.ts. Without this, ECS defaults to 30s and a deploy
-  // would hard-kill long quests — the same cut-off the service is meant to avoid.
+  // into the task definition's containerDefinitions JSON. 120s is the Fargate maximum;
+  // server.ts's DRAIN_TIMEOUT_MS is deliberately ~10s below it so the drain-expiry error
+  // can log before SIGKILL. Without this, ECS defaults to 30s and a deploy would hard-kill
+  // long quests - the same cut-off the service is meant to avoid.
   transform: {
     taskDefinition: args => {
       args.containerDefinitions = $output(args.containerDefinitions).apply(json => {
