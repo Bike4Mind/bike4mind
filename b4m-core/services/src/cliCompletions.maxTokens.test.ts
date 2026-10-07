@@ -52,7 +52,12 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   getTextModelCost: vi.fn(() => 0.001),
 }));
 
-import { ChatModels, getTextModelCost, PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS } from '@bike4mind/common';
+import {
+  ChatModels,
+  getTextModelCost,
+  PREFLIGHT_RESERVATION_REASONING_OUTPUT_TOKENS,
+  type CompletionTool,
+} from '@bike4mind/common';
 import { ADAPTIVE_THINKING_MAX_TOKENS_FLOOR } from '@bike4mind/llm-adapters';
 import { DEFAULT_OUTPUT_MAX_TOKENS, usdToCredits } from '@bike4mind/utils';
 import { executeCompletion } from './cliCompletions';
@@ -147,13 +152,15 @@ describe('executeCompletion - output budget', () => {
   it('forwards reasoningEffort alongside tools to the adapter on a GPT-5 model', async () => {
     availableModels = [GPT5_MODEL];
     const { db } = buildDb();
-    const wireTool = { toolSchema: { name: 'client_tool', description: 'x', parameters: { type: 'object' } } };
+    const wireTool: CompletionTool = {
+      toolSchema: { name: 'client_tool', description: 'x', parameters: { type: 'object' } },
+    };
 
     await executeCompletion({
       ...baseParams,
       model: ChatModels.GPT5,
       db,
-      options: { reasoningEffort: 'medium', tools: [wireTool as any] },
+      options: { reasoningEffort: 'medium', tools: [wireTool] },
     });
 
     expect(capturedOptions?.reasoningEffort).toBe('medium');
