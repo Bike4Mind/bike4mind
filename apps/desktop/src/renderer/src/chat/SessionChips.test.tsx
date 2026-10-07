@@ -51,8 +51,8 @@ describe('the branch chip against what git answers', () => {
   let root: Root;
   const inspectProject = vi.fn();
 
-  async function show(bound: ChatProject): Promise<void> {
-    await act(async () => root.render(<SessionChips project={bound} binding={binding} />));
+  async function show(bound: ChatProject, settledTurns = 0): Promise<void> {
+    await act(async () => root.render(<SessionChips project={bound} binding={binding} settledTurns={settledTurns} />));
     await act(async () => undefined);
   }
 
@@ -145,6 +145,77 @@ describe('the branch chip against what git answers', () => {
       window.dispatchEvent(new Event('focus'));
     });
     await act(async () => undefined);
+
+    expect(label()).toBe('feat/chips');
+  });
+
+  /**
+   * The case focus cannot catch: the agent's own `git switch` moves HEAD without the window
+   * ever being blurred, so the reading has to be re-taken when the reply that ran it ends.
+   */
+  it('re-reads HEAD when a reply ends', async () => {
+    inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
+    await show(project());
+    expect(label()).toBe('main');
+
+    inspectProject.mockResolvedValue(inspection({ currentBranch: 'feat/chips' }));
+    await show(project(), 1);
+
+    expect(label()).toBe('feat/chips');
+  });
+
+  /** A re-read is a trigger, not a poll: an idle chip asks git nothing after its first answer. */
+  it('asks git nothing while nothing has happened', async () => {
+    inspectProject.mockResolvedValue(inspection());
+    await show(project());
+    const asked = inspectProject.mock.calls.length;
+
+    await show(project(), 0);
+    await act(async () => undefined);
+
+    expect(inspectProject.mock.calls.length).toBe(asked);
+  });
+
+  /**
+   * Picking a branch with the toggle off checks nothing out, so a re-read must answer with the
+   * branch the folder is still on - never with the one the session has just recorded.
+   */
+  it('keeps naming the checked-out branch when a re-read follows a recorded-only pick', async () => {
+    inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
+    await show(project({ branch: 'main' }));
+
+    await show(project({ branch: 'feat/chips' }), 1);
+
+    expect(label()).toBe('main');
+  });
+
+  /**
+   * The race the `of === key` guard exists for, now that a second trigger can start a read:
+   * a reading begun before a move must not land on the folders it was not taken in.
+   */
+  it('drops a re-read that a later move has overtaken', async () => {
+    let release: (value: ProjectInspection) => void = () => undefined;
+    inspectProject.mockResolvedValue(inspection({ currentBranch: 'main' }));
+    await show(project());
+    expect(label()).toBe('main');
+
+    inspectProject.mockImplementation(
+      async () =>
+        await new Promise<ProjectInspection>(resolve => {
+          release = resolve;
+        })
+    );
+    await act(async () => {
+      root.render(<SessionChips project={project()} binding={binding} settledTurns={1} />);
+    });
+
+    inspectProject.mockResolvedValue(inspection({ directory: WORKTREE, currentBranch: 'feat/chips' }));
+    await show(project({ branch: 'feat/chips', workspace: true, workingDirectory: WORKTREE }), 1);
+    expect(label()).toBe('feat/chips');
+
+    await act(async () => {
+      release(inspection({ currentBranch: 'main' }));
+    });
 
     expect(label()).toBe('feat/chips');
   });

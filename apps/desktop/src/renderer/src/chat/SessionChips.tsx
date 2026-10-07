@@ -341,7 +341,7 @@ const PENDING: BranchReading = { branches: [], isRepository: true, checkedOut: u
  * the branch of a checkout this session never touches; asking the worktree for both would leave
  * the user no branch menu to escape with on a worktree that has since been deleted.
  */
-function useBranches(directory: string | null, workingDirectory: string | null): BranchReading {
+function useBranches(directory: string | null, workingDirectory: string | null, settledTurns: number): BranchReading {
   const [state, setState] = useState<KeyedReading>({ ...PENDING, of: null });
   const [reread, setReread] = useState(0);
 
@@ -380,7 +380,10 @@ function useBranches(directory: string | null, workingDirectory: string | null):
     return () => {
       current = false;
     };
-  }, [directory, workingDirectory, key, reread]);
+    // A reply that has ended is the other way HEAD moves: the agent's own tools run in this
+    // working directory, and `git switch` from one of them never blurs the window, so the
+    // focus listener above is blind to exactly the branch changes this app caused itself.
+  }, [directory, workingDirectory, key, reread, settledTurns]);
 
   return state.of === key ? state : PENDING;
 }
@@ -396,10 +399,20 @@ function keyOf(directory: string | null, workingDirectory: string | null): strin
  * how a project gets chosen, not a readout of a choice already made elsewhere. A Chat session
  * has no project and draws nothing here.
  */
-export function SessionChips({ project, binding }: { project: ChatProject | null; binding: ProjectBindingController }) {
+export function SessionChips({
+  project,
+  binding,
+  settledTurns,
+}: {
+  project: ChatProject | null;
+  binding: ProjectBindingController;
+  /** Monotonic count of replies this window has watched end; see useBranches. */
+  settledTurns: number;
+}) {
   const { branches, isRepository, checkedOut } = useBranches(
     project?.directory ?? null,
-    project?.workingDirectory ?? null
+    project?.workingDirectory ?? null,
+    settledTurns
   );
   const chips = useMemo(
     () => describeChipRow(project, { isRepository, count: branches.length, checkedOut }),

@@ -589,7 +589,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
           {/* Every Code session, bound or not. The chips are how a project is chosen, so gating
             them on one already being chosen is what made them unreachable. */}
           {conversation.session?.mode === 'code' && (
-            <SessionChips project={conversation.session.project ?? null} binding={conversation.project} />
+            <SessionChips
+              project={conversation.session.project ?? null}
+              binding={conversation.project}
+              settledTurns={conversation.settledTurns}
+            />
           )}
 
           <Composer
