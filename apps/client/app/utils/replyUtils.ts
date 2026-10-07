@@ -17,7 +17,7 @@ export function extractReplies(messageData: ReplyBearingMessage) {
         ? [messageData.reply]
         : [];
   // The server strips the choices block on finalize; this hides it while it streams. Same rule as
-  // the server (raw slots, answer slot only), so reasoning never decides what is cut.
+  // the server: every slot's block is hidden, options come only from the answer slot.
   const sourceReplies = stripChoicesFromReplies(rawReplies).replies;
 
   // Process and deduplicate short repeated segments that can occur during streaming

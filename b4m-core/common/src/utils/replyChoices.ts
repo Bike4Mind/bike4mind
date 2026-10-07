@@ -275,7 +275,9 @@ export function applyReplyChoices(quest: {
 }): ReplyChoicesOutcome {
   const fromSlots = stripChoicesFromReplies(quest.replies ?? []);
   const fromReply = typeof quest.reply === 'string' ? extractChoicesBlock(quest.reply) : null;
-  if (fromSlots.found) quest.replies = fromSlots.replies;
+  // Not gated on `found`: that describes the final slot only, and an earlier slot's block must
+  // still be stripped before it is stored. Slots without a block pass through unchanged.
+  if (quest.replies) quest.replies = fromSlots.replies;
   if (fromReply?.found) quest.reply = fromReply.text;
   const options = fromSlots.choices ?? fromReply?.choices ?? null;
   quest.suggestedChoices = options ? { options } : undefined;

@@ -451,6 +451,21 @@ describe('applyReplyChoices', () => {
     expect(quest.suggestedChoices).toBeUndefined();
     expect(quest.replies).toEqual([prose]);
   });
+
+  it('strips an earlier slot block from stored replies when the final slot has none', () => {
+    const preamble = `${prose}\n\n${block(JSON.stringify(two))}`;
+    const answer = '**Result: B**';
+    const quest: Parameters<typeof applyReplyChoices>[0] = { replies: [preamble, answer] };
+    expect(applyReplyChoices(quest)).toEqual({ status: 'absent' });
+    expect(quest.replies).toEqual([prose, answer]);
+    expect(quest.suggestedChoices).toBeUndefined();
+  });
+
+  it('leaves an absent replies field absent', () => {
+    const quest: Parameters<typeof applyReplyChoices>[0] = { reply: prose };
+    applyReplyChoices(quest);
+    expect(quest).not.toHaveProperty('replies');
+  });
 });
 
 describe('expandChoiceKey', () => {
