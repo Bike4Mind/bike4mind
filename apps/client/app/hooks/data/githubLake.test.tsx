@@ -216,15 +216,16 @@ describe('useLakeGitHubCanManage', () => {
     expect(get).toHaveBeenCalledTimes(1);
   });
 
-  it('reads true for a manager, and when the payload carries no flag (personal lake)', async () => {
+  it('reads true for a manager', async () => {
     get.mockResolvedValue({ data: { connection: null, canManage: true } });
-    const { result, unmount } = renderBoth('lake1');
+    const { result } = renderBoth('lake1');
     await waitFor(() => expect(result.current.canManage.data).toBe(true));
-    unmount();
+  });
 
+  it('fails closed (false) when the payload carries no flag', async () => {
     get.mockResolvedValue({ data: { connection: null } });
-    const second = renderBoth('lake2');
-    await waitFor(() => expect(second.result.current.canManage.data).toBe(true));
+    const { result } = renderBoth('lake2');
+    await waitFor(() => expect(result.current.canManage.data).toBe(false));
   });
 });
 
