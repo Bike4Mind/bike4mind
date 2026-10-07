@@ -13,6 +13,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { admitProposedSource } from '@server/dataLakes/proposalAdmissionDeps';
+import { serializeLakeClaim } from '@server/dataLakes/serializeLakeClaim';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
@@ -66,7 +67,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
 
     // Decline and restore run their gate and write inside one transaction so a grant revoke
     // committing mid-request collides on the lake doc and the retry re-reads live grants. Approve
-    // stays outside: it fetches the source over the network, which a retry would repeat.
+    // serializes only its gate and claim; the source fetch runs after commit (see `serializeClaim`).
     if (decision === 'restore') {
       const restored = await withTransaction(async () => {
         const lake = await resolveLake();
@@ -93,11 +94,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
       return res.json({ data: declined });
     }
 
-    await resolveLake();
     const { proposal: approved, fabFile } = await dataLakeService.approveDataLakeProposal(
       proposalId,
       actor,
-      { db, admitSource: admitProposedSource, logger: req.logger },
+      {
+        db,
+        admitSource: admitProposedSource,
+        serializeClaim: claim =>
+          serializeLakeClaim(async () => {
+            await resolveLake();
+            return claim();
+          }),
+        logger: req.logger,
+      },
       { approverName: req.user?.name || req.user?.username || undefined }
     );
     return res.json({ data: approved, fabFile: { id: fabFile.id, fileName: fabFile.fileName } });
