@@ -507,7 +507,7 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
 });
 const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/whatsNewGeneration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/releaseNotes.dispatch',
     timeout: '5 minutes',
     vpc: lambdaVpc,
     link: [
