@@ -101,7 +101,7 @@ export const func = withContext(async (event, context, logger) => {
      * slow invocation here can find its claim superseded and a successor scan already in flight or
      * finished; an unguarded write would then overwrite the successor's verdict - including
      * un-quarantining a file it had just confirmed 'blocked'. Same shape as the chunk claim's
-     * identity-guarded release in queueHandlers/fabFileChunk.ts. Returns whether the write landed.
+     * identity-guarded release in apps/workers/src/queueHandlers/fabFileChunk.ts. Returns whether the write landed.
      */
     const writeVerdict = async (
       patch: { moderationStatus: 'clean' | 'blocked'; blockReason?: string },

@@ -197,7 +197,7 @@ vi.mock('sst', () => ({
 
 const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
 
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 import { dispatch } from './fabFileChunk';
 import { ChunkClaimLostError } from '@bike4mind/common';
 

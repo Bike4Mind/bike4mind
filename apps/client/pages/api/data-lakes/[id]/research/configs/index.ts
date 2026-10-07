@@ -11,6 +11,7 @@ import {
 import { Request } from 'express';
 import { RESEARCH_RUN_TRIGGERS } from '@bike4mind/common';
 import { z } from 'zod';
+import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertLakeResearchManage } from '@server/dataLakes/assertLakeResearchManage';
 import { ResearchLeversInput, ResearchScheduleInput } from '@server/dataLakes/researchConfigInput';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
@@ -38,7 +39,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
-    const { lake } = await assertLakeResearchManage(req, id);
+    const { lake } = await assertLakeResearchManage(req, id, await toAccessContext(req));
     const [configs, pendingByLake] = await Promise.all([
       dataLakeResearchService.listResearchConfigs(lake.id, { db }),
       dataLakeProposalRepository.countPendingByLakes([lake.id]),
@@ -48,11 +49,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
+    // Resolved outside the transaction: it issues concurrent reads, which an ambient session rejects.
+    const ctx = await toAccessContext(req);
 
     // The manage gate runs inside the transaction so a grant revoke committing mid-request collides
     // on the lake doc and the retry re-reads live grants.
     const config = await withTransaction(async () => {
-      const { lake, actor, grants } = await assertLakeResearchManage(req, id);
+      const { lake, actor, grants } = await assertLakeResearchManage(req, id, ctx);
       const input = CreateInput.parse(req.body);
 
       const created = await dataLakeResearchService.createResearchConfig(lake, actor, grants, input, {

@@ -51,7 +51,7 @@ import {
 } from '@bike4mind/database';
 import { KnowledgeType } from '@bike4mind/common';
 import { dispatch } from './fabFileChunk';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 
 const DEPLOYMENT_DEFAULT = 'text-embedding-3-small';
 const COMMITTED_SPACE = 'voyage-3';

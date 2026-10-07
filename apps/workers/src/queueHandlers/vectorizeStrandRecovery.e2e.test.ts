@@ -105,7 +105,7 @@ vi.mock('sst', () => ({ Resource: new Proxy({}, { get: () => new Proxy({}, { get
 
 import { dispatch as chunkDispatch } from './fabFileChunk';
 import { dispatch as vectorizeDispatch } from './fabFileVectorize';
-import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from './sqsDelivery';
+import { FAB_FILE_CHUNK_MAX_RECEIVE_COUNT } from '@server/queueHandlers/sqsDelivery';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

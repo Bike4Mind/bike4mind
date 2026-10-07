@@ -1933,7 +1933,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * (`chunkStallReason`, `noExtractableTextAt`), which is what makes reprocess the documented way
    * back in for a file the rescue sweep has written off.
    */
-  resetChunkStateByIds(ids: string[]): Promise<string[]>;
+  resetChunkStateByIds(ids: string[], options?: { concurrency?: number }): Promise<string[]>;
   /**
    * Mark a file as halted by the convergence kill switch's CHUNK arm, choosing between the two
    * chunkless reasons by whether a producer actually removed its passages, and clearing the

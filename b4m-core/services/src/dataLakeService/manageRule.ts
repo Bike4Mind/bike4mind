@@ -175,12 +175,17 @@ function isGrantOrgContained(grant: LakeGrant, lakeOrg: string | undefined): boo
  *   - the archive/unarchive/delete/restore cascades, deliberately: each runs its claim and sweep in
  *     one call, so a transaction would span the whole sweep, and re-checking after the claim would
  *     strand the lake mid-status;
- *   - the writes with an external or long step - proposal approve, research run start, taxonomy
- *     apply/reanalyze, converge, rechunk, lake memory, inconsistency detection, finding belief -
+ *   - the writes with an external or long step - proposal approve, taxonomy apply/reanalyze,
  *     membership decisions, which can recompute stats once per removed duplicate, and corpus
  *     actions, whose merge audits a partial result that a rollback would contradict;
  *   - the toggle-tags join door (`fabFileService.toggleTags`), which reaches a lake from the file side;
  *   - any of the above on a lake in a transitional status, which `touchIfStable` skips.
+ *
+ * Research run start, converge, rechunk, lake memory, inconsistency detection and finding belief are
+ * serialized up to their decision: the gate and that route's DB writes run in the transaction
+ * alongside a lake-doc write (`touchIfStable`, or the route's own lake update); any external step
+ * runs after commit, and a revoke landing after that commit does not stop it. The transitional-lake
+ * exception above applies to these routes too.
  *
  * A departure lapse collides too when the lapsed grant could manage (`lapseDepartedMemberLakeAccess`
  * phase 1 touches the lake for an owner/curator grant, and like the writers skips a transitional
