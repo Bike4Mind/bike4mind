@@ -1071,6 +1071,20 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     );
   });
 
+  it('hands process() the authenticating key id, matching what the async path stores', async () => {
+    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect(mockProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.objectContaining({ apiKeyId: 'k1' }) })
+    );
+  });
+
+  it('hands process() no key id for a JWT/browser caller', async () => {
+    const { req, res } = fire({ apiKey: null, body: { message: 'hello', sessionId: 'sess-1', wait: true } });
+    await handler(req, res);
+    expect((mockProcess.mock.calls[0][0] as { body: { apiKeyId?: string } }).body.apiKeyId).toBeUndefined();
+  });
+
   describe('toolPayloads (structured tool output for programmatic callers)', () => {
     const PROBLEM = { name: 'shop', jobs: [], machines: [] };
     // Models what ToolBuilder does for real: it pushes onto the in-memory quest while

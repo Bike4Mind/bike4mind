@@ -101,7 +101,8 @@ export type ResponseSpec =
 
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
 export type CodeSample = {
-  body: unknown;
+  /** Omit when the operation declares no request body: the samples only send one when it does. */
+  body?: unknown;
   authToken: string;
   streaming?: boolean;
 };

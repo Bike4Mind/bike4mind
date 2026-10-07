@@ -239,6 +239,14 @@ describe('OrgGitHubLakeConnectionModel - sync claim', () => {
     expect(after?.lastSyncedAt).toBeInstanceOf(Date);
     expect(after?.ingestClaimToken).toBeUndefined();
   });
+
+  it('recordTreeCounts writes under the live claim and refuses a superseded token', async () => {
+    const { id } = await repo.create(base);
+    const token = await repo.claimForSync(id);
+    expect(await repo.recordTreeCounts(id, token!, { candidateCount: 12, skippedCount: 3 })).toBe(true);
+    expect(await repo.recordTreeCounts(id, 'stale-token', { candidateCount: 1, skippedCount: 1 })).toBe(false);
+    expect(await repo.findById(id)).toMatchObject({ treeCandidateCount: 12, treeSkippedCount: 3 });
+  });
 });
 
 describe('OrgGitHubLakeConnectionModel - disconnect compare-and-set', () => {

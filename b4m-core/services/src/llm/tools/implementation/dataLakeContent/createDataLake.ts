@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import {
-  MAX_TAG_PREFIX_LENGTH,
   MIN_DATA_LAKE_SLUG_LENGTH,
   deriveTagPrefixFromLakeName,
   slugifyDataLakeName,
+  withTagPrefixSuffix,
   type AccessContext,
 } from '@bike4mind/common';
 import type { ToolDefinition } from '../../base/types';
@@ -41,17 +41,6 @@ function isPrefixCollision(error: unknown): boolean {
     'code' in additionalInfo &&
     additionalInfo.code === TAG_PREFIX_UNAVAILABLE_CODE
   );
-}
-
-/** `acme:` -> `acme-2:`, cut so the result still fits MAX_TAG_PREFIX_LENGTH. */
-export function prefixCandidate(basePrefix: string, attempt: number): string {
-  if (attempt === 0) return basePrefix;
-  const suffix = `-${attempt + 1}`;
-  const stem = basePrefix
-    .slice(0, -1)
-    .slice(0, MAX_TAG_PREFIX_LENGTH - 1 - suffix.length)
-    .replace(/-+$/, '');
-  return `${stem}${suffix}:`;
 }
 
 /**
@@ -107,7 +96,7 @@ export const createDataLakeTool: ToolDefinition = {
           try {
             const lake = await createDataLake(
               context.userId,
-              { name, slug, description, fileTagPrefix: prefixCandidate(basePrefix, attempt) },
+              { name, slug, description, fileTagPrefix: withTagPrefixSuffix(basePrefix, attempt) },
               { db: adapters, logger: context.logger },
               organizationId,
               toolAuditPrincipal(context)

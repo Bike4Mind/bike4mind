@@ -118,8 +118,13 @@ import handler from '../music';
 
 type Handler = (req: unknown, res: unknown) => Promise<void>;
 
-const run = (body: unknown, apiKeyInfo?: unknown, userOrganizationId?: string) => {
-  const { req, res } = createMocks({ method: 'POST', body });
+const run = (
+  body: unknown,
+  apiKeyInfo?: unknown,
+  userOrganizationId?: string,
+  headers: Record<string, string> = {}
+) => {
+  const { req, res } = createMocks({ method: 'POST', body, headers });
   Object.assign(req, {
     user: { id: 'u1', organizationId: userOrganizationId ?? null },
     apiKeyInfo,
@@ -184,6 +189,7 @@ describe('POST /api/ai/music', () => {
     expect(params).toMatchObject({
       type: 'music_generation_usage',
       credits: 150,
+      source: 'api',
       organization: null,
       model: 'music_v1',
     });
@@ -205,6 +211,21 @@ describe('POST /api/ai/music', () => {
         status: 'ok',
       })
     );
+  });
+
+  it('stamps source cli on the ledger row and usage event for the b4m CLI', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateMusicCredits.mockReturnValue({ requiredCredits: 150, usdCost: 0.075, billedSeconds: 30 });
+
+    const { res, promise } = run({ prompt: 'lofi beat', lengthMs: 30000 }, undefined, undefined, {
+      'user-agent': 'b4m-cli/0.9.3',
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Same classifier apiKeyAuth stamps on ApiKeyUsageLog, so the dashboard slices agree.
+    expect(deductCredits.mock.calls[0][0]).toMatchObject({ source: 'cli' });
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ source: 'cli', creditsCharged: 150 }));
   });
 
   it('forwards caller-supplied forceInstrumental and format to the provider and to persistence', async () => {

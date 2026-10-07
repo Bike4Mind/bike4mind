@@ -16,6 +16,7 @@ import {
   driveLakeIngestQueue,
   dataLakeResearchQueue,
   generationCallbackQueue,
+  generationJobQueue,
 } from './queues';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
@@ -736,6 +737,32 @@ const questTimeoutSweepCron = new sst.aws.Cron('questTimeoutSweep', {
 });
 
 /**
+ * Generation Job Sweep
+ * Re-enqueues generation jobs whose SQS message was lost or whose worker died mid-step.
+ *
+ * Schedule: every 5 minutes
+ * Enabled: every stage, so previews and staging (where the test provider runs) get recovery too; it is a
+ * no-op when nothing is stalled.
+ * Self-host: apps/workers/src/selfhost/generationJobSweep.ts
+ */
+const generationJobSweepCron = new sst.aws.Cron('generationJobSweep', {
+  schedule: 'rate(5 minutes)',
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/workers/src/cron/generationJobSweep.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, generationJobQueue],
+    timeout: '2 minutes',
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+});
+
+/**
  * Agent Execution Abandoned Sweep
  * Releases agent-execution slots that the reactive in-Lambda sweep cannot
  * reach because the owning user never returns to start another execution.
@@ -1000,6 +1027,7 @@ export {
   modelDiscoveryFunction,
   modelDiscoveryCron,
   questTimeoutSweepCron,
+  generationJobSweepCron,
   agentExecutionAbandonedSweepCron,
   dataLakeBatchReconcileCron,
   spendReconciliationCron,

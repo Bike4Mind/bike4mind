@@ -51,6 +51,18 @@ export const DATA_LAKE_STATUSES = [
 export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 
 /**
+ * Statuses a slug lookup (`findBySlug` / `findBySlugAmongIds`) never resolves. The lake keeps
+ * reserving its slug (create still disambiguates past it, and restore needs it back), but reaching
+ * it by slug would let writes land on a lake the user deleted. By-id lookups are unaffected.
+ * `deleting` stays resolvable: the lifecycle route re-runs a stuck delete by id OR slug (API keys
+ * included), and hiding it would not 404 but fall through to the next same-slug lake the caller
+ * manages. Slug status does not keep writes off a `deleting` lake. The ingest doors gate on
+ * `isLakeIngestable`; the tag-write doors (tag toggle, createFabFile, file PATCH, presigned upload)
+ * and the PDF ingest script do not check status.
+ */
+export const DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES = ['deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
+
+/**
  * Stable (non-transitional) lake statuses - a lake sitting in one of these is at rest, not
  * mid-operation. Load-bearing as the INPUT to `DATA_LAKE_TRANSITIONAL_STATUSES` below, which is
  * what drives the needs-attention list; it is not itself a filter any list path applies.
@@ -650,7 +662,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * Resolve a lake by slug. Slug is unique only per scope (organizationId), so pass the
    * caller's membership set to disambiguate: a lake in one of the caller's own orgs is
    * preferred, falling back to an org-less lake with that slug. Without a set, only
-   * org-less lakes match.
+   * org-less lakes match. Never returns a lake in `DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES`.
    */
   findBySlug(slug: string, organizationIds?: string[]): Promise<IDataLakeDocument | null>;
   /**
@@ -661,7 +673,8 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * it here - keeping the decision of WHEN to pay for that extra grants lookup in the service
    * layer, not hidden inside this repository method. Sorted by `_id` so two candidates sharing a
    * slug (e.g. two independent `transferLakeOwnership` calls into different non-member orgs)
-   * resolve to the same winner every time.
+   * resolve to the same winner every time. Excludes `DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES` like
+   * `findBySlug`.
    */
   findBySlugAmongIds(slug: string, ids: string[]): Promise<IDataLakeDocument | null>;
   /** Resolve a lake by its globally-unique join meta-tag (`datalake:<slug>` / `datalake:<org>:<slug>`). */
@@ -728,7 +741,7 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   ): Promise<IDataLakeDocument[]>;
   /**
    * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055). Account-wide: active
-   * lakes the caller can see exist - by org membership or public listing - but whose own
+   * lakes the caller can see exist - by org membership, administering the org, or public listing - but whose own
    * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
    * through the owner or grant bypass (those are never "excluded"; the resolver restores them
    * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
@@ -762,10 +775,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        */
       callerMaySeeAllLakes?: boolean;
       /**
-       * Only read with `restrictToTags`. Orgs the caller holds admin rights in (pre-resolved via
-       * `findIdsWithAdminRights`). Their lakes count as already visible, matching browse's org-admin
-       * arm, so a non-member org admin is not told nothing was excluded. Widens visibility only,
-       * never reach.
+       * Orgs the caller holds admin rights in (pre-resolved via `findIdsWithAdminRights`), read by
+       * both the scoped and the account-wide count. Their lakes count as already visible, matching
+       * browse's org-admin arm, so a non-member org admin is not told nothing was excluded. Widens
+       * visibility only, never reach.
        */
       administeredOrgIds?: string[];
     }
@@ -846,6 +859,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     id: string,
     stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
   ): Promise<IDataLakeDocument | null>;
+  /**
+   * Bumps `updatedAt` and nothing else, so a manage write that would otherwise never write the lake
+   * document collides with a concurrent grant revoke (see the WRITE-TIME RESIDUAL note on
+   * `canManageLake`). Only meaningful inside `withTransaction`, after the gate.
+   *
+   * Skips a lake in a transitional status: `updatedAt` is that lake's stranded clock
+   * (`strandedCutoffMsFor`), and a data-plane write must not make a stuck lifecycle look busy.
+   * Returns whether the lake was touched.
+   */
+  touchIfStable(id: string): Promise<boolean>;
   /**
    * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
    * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller

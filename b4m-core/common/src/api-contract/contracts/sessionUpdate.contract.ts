@@ -47,6 +47,7 @@ export const sessionUpdateContract = defineEndpoint({
   responses: {
     200: { description: 'The updated session.', schema: SessionResponseSchema },
     404: { description: 'No session exists with the given id.', schema: ApiErrorSchema },
+    429: { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema },
   },
   codeSample: {
     authToken: 'b4m_live_<key>',

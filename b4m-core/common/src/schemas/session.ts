@@ -88,8 +88,8 @@ export const SessionIdParamSchema = z.object({
 });
 
 /**
- * Practical response subset for PUT /api/sessions/{id} - the fields a caller needs to
- * confirm an update took effect. ISession (types/entities/SessionTypes.ts) carries many
+ * Practical response subset for GET and PUT /api/sessions/{id} - the fields a caller needs to
+ * read a session or confirm an update took effect. ISession (types/entities/SessionTypes.ts) carries many
  * more server-internal fields not documented as public API surface here.
  */
 export const SessionResponseSchema = z.object({
@@ -121,6 +121,18 @@ export const SessionResponseSchema = z.object({
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
+/** Response for DELETE /api/sessions/{id}. */
+export const SessionDeleteResponseSchema = z.object({
+  newLastNotebookId: z
+    .string()
+    .nullable()
+    .describe(
+      "The caller's most recently updated remaining session, which the product UI opens next; null when none remains."
+    ),
+});
+
+export type SessionDeleteResponse = z.infer<typeof SessionDeleteResponseSchema>;
+
 /**
  * Request schema for POST /api/v1/sessions. Declares every client-settable field of
  * createSessionParametersSchema (b4m-core/services/src/sessionService/create.ts), which stays the
@@ -131,7 +143,12 @@ export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 export const CreateSessionRequestSchema = z.object({
   name: z.string(),
   projectId: z.string().optional().describe('Adds the new session to this project.'),
-  dataLakeId: z.string().nullish().describe('Seeds retrieval defaults from this data lake.'),
+  dataLakeId: z
+    .string()
+    .nullish()
+    .describe(
+      'Seeds retrieval defaults from this data lake and turns on forced retrieval. Get ids from `GET /api/v1/data-lakes`.'
+    ),
   // Loose on purpose: the route ignores a non-array and filters non-string entries itself, so a
   // typed array would newly reject bodies it accepts today.
   preauthorizedLakeIds: z

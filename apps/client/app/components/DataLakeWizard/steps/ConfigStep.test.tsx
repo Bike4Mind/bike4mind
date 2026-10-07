@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -16,8 +16,24 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
 // so this is the only lake-hook it still needs.
 const prefixClash = vi.hoisted(() => ({ current: undefined as { name: string; fileTagPrefix: string } | undefined }));
 
+const slugPreview = vi.hoisted(() => ({ current: undefined as string | undefined }));
+// The server's free-prefix answer. undefined echoes the sent prefix (free); null is "no answer".
+const prefixPreview = vi.hoisted(() => ({
+  current: undefined as string | null | undefined,
+  calls: [] as { tagPrefix: string | undefined; enabled: boolean }[],
+}));
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useDuplicatePrefixLake: () => prefixClash.current,
+  activeOrgId: () => undefined,
+  useDataLakeSlugPreview: (_name: string, tagPrefix: string | undefined, enabled: boolean) => {
+    prefixPreview.calls.push({ tagPrefix, enabled });
+    return {
+      data: {
+        slug: slugPreview.current,
+        tagPrefix: prefixPreview.current === undefined ? (tagPrefix ?? null) : prefixPreview.current,
+      },
+    };
+  },
 }));
 
 // The embedding-cost estimate reads admin settings via react-query; stub the values instead of
@@ -84,6 +100,8 @@ const renderStep = () =>
 
 afterEach(() => {
   useDataLakeWizardStore.getState().resetWizard();
+  slugPreview.current = undefined;
+  prefixPreview.current = undefined;
   settingsValues.current = {
     dataLakeEmbeddingSpendEnabled: 'true',
     dataLakeEmbeddingBudgetPerRunUsd: '5',
@@ -203,6 +221,38 @@ describe('ConfigStep - identity summary', () => {
     expect(screen.getByText('legal-contracts')).toBeInTheDocument();
   });
 
+  it('shows the server slug preview in create mode, which wins over what the name slugifies to', () => {
+    // A lake (possibly deleted) already holds "legal-contracts", so create would mint "-1".
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts' });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts-1')).toBeInTheDocument();
+  });
+
+  it('keeps the slug of the lake a same-prefix retry will restore, not the preview that counts it as taken', () => {
+    // A failed attempt archived "legal-contracts"; the server preview counts it and says "-1".
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts', tagPrefix: 'legal:' });
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts')).toBeInTheDocument();
+    expect(screen.queryByText('legal-contracts-1')).not.toBeInTheDocument();
+  });
+
+  it('shows the server preview once the prefix changes, since that retry creates a fresh lake', () => {
+    slugPreview.current = 'legal-contracts-1';
+    seedConfig({ name: 'Legal Contracts', tagPrefix: 'other:' });
+    useDataLakeWizardStore.setState({ recoverableLake: { id: 'lake1', tagPrefix: 'legal:', slug: 'legal-contracts' } });
+
+    renderStep();
+
+    expect(screen.getByText('legal-contracts-1')).toBeInTheDocument();
+  });
+
   it('shows the target lake real slug in append mode, not what the name slugifies to', () => {
     // The lake's stored slug can be disambiguated (e.g. "niche-2") and differ from
     // slugify(name); the summary must show the real appended slug.
@@ -313,5 +363,91 @@ describe('ConfigStep - embedding cost estimate banner', () => {
 
     expect(screen.getByTestId('datalake-estimate-over-budget-alert')).toBeInTheDocument();
     expect(screen.queryByTestId('wizard-start-upload-btn')).toBeNull();
+  });
+});
+
+describe('ConfigStep - a prefix held by a lake the form cannot see', () => {
+  // Reset before, not after: the afterEach resetWizard re-renders the still-mounted step.
+  beforeEach(() => {
+    prefixPreview.calls = [];
+  });
+  const help = () => screen.getByTestId('datalake-config-tagprefix-help');
+  const seedAuto = (name: string) => {
+    seedConfig({ name, tagPrefix: '' });
+    useDataLakeWizardStore.getState().deriveTagPrefixFromName();
+  };
+
+  it('swaps an auto-derived prefix for the free one and says why', () => {
+    prefixPreview.current = 'acme-1:';
+    seedAuto('Acme');
+
+    renderStep();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('acme-1:');
+    expect(help()).toHaveTextContent('"acme:" is held by another lake');
+    expect(help()).toHaveTextContent('this one uses "acme-1:"');
+    // The auto path never sends the prefix, so adopting the answer cannot re-key the query.
+    expect(prefixPreview.calls.every(call => call.tagPrefix === undefined)).toBe(true);
+  });
+
+  it('flags a typed prefix that is held, naming a free one, and never rewrites it', () => {
+    prefixPreview.current = 'legal-1:';
+    seedConfig({ name: 'Acme', tagPrefix: 'legal:' });
+
+    renderStep();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('legal:');
+    expect(help()).toHaveTextContent('This prefix is held by another lake');
+    expect(help()).toHaveTextContent('Try "legal-1:"');
+  });
+
+  it('drops the flag as soon as the typed prefix changes, before the debounced answer lands', () => {
+    prefixPreview.current = 'legal-1:';
+    seedConfig({ name: 'Acme', tagPrefix: 'legal:' });
+    renderStep();
+    expect(help()).toHaveTextContent('This prefix is held by another lake');
+
+    // The mock still answers "legal-1:" for the stale `legal:` key; that answer is not about this value.
+    act(() => useDataLakeWizardStore.getState().setTagPrefix('legal-new:'));
+
+    expect(help()).not.toHaveTextContent('held by another lake');
+  });
+
+  it('flags nothing while the preview has no answer', () => {
+    prefixPreview.current = null;
+    seedConfig({ name: 'Acme', tagPrefix: 'legal:' });
+
+    renderStep();
+
+    expect(help()).not.toHaveTextContent('held by another lake');
+  });
+
+  it('shows no auto-pick note for a differing auto prefix the server never picked', () => {
+    prefixPreview.current = null;
+    seedAuto('Acme');
+    useDataLakeWizardStore.setState(state => ({
+      autoDerivedTagPrefix: 'acme-1:',
+      config: { ...state.config, tagPrefix: 'acme-1:' },
+    }));
+
+    renderStep();
+
+    expect(help()).not.toHaveTextContent('held by another lake');
+  });
+
+  it('neither queries nor adopts on a retry that will restore its own archived lake', () => {
+    prefixPreview.current = 'acme-2:';
+    seedAuto('Acme');
+    useDataLakeWizardStore.setState(state => ({
+      autoDerivedTagPrefix: 'acme-1:',
+      config: { ...state.config, tagPrefix: 'acme-1:' },
+      recoverableLake: { id: 'lake1', tagPrefix: 'acme-1:', slug: 'acme-1' },
+    }));
+
+    renderStep();
+
+    expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('acme-1:');
+    expect(prefixPreview.calls.every(call => !call.enabled)).toBe(true);
+    expect(help()).not.toHaveTextContent('held by another lake');
   });
 });

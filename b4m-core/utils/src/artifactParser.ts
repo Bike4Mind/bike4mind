@@ -1,5 +1,11 @@
 import { Logger } from '@bike4mind/observability';
-import { ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType, matchArtifactBlocks } from '@bike4mind/common';
+import {
+  type ArtifactBlockMatch,
+  ArtifactOperation,
+  ArtifactType,
+  mapMimeTypeToArtifactType,
+  matchArtifactBlocks,
+} from '@bike4mind/common';
 
 // Value is anchored to its own quote kind so a double-quoted value can contain
 // apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
@@ -414,8 +420,6 @@ export function markToolEchoes(content: string, isToolEcho: (body: string) => bo
   return transformCodeBlocks(content, { isToolEcho }, true);
 }
 
-const ARTIFACT_CLOSE_LENGTH = '</artifact>'.length;
-
 const normalizeWhitespace = (value: string): string => value.trim().replace(/\s+/g, ' ');
 
 // Single-line only: the body lines of a multi-line `accDescr {` block still count.
@@ -427,34 +431,23 @@ const mermaidDedupeLines = (value: string): string[] =>
 const normalizeMermaid = (value: string): string => normalizeWhitespace(mermaidDedupeLines(value).join('\n'));
 
 /**
- * Protects every complete artifact span from the detectors and collects normalized mermaid bodies,
- * plus each body's first line (the raw pass matches only that). A span wrapping a tool-output
- * placeholder is not protected itself, but artifacts inside it still are.
+ * Protects every complete artifact span from the detectors and collects normalized mermaid bodies.
+ * A span wrapping a tool-output placeholder is not protected itself, but artifacts inside it still are.
  */
 function protectArtifactSpans(content: string, mask: ToolOutputMask): { masked: string; mermaidBodies: Set<string> } {
   const mermaidBodies = new Set<string>();
   const spans: Array<[number, number]> = [];
-  // A held block is skipped by rescanning from its body, so an inner artifact sharing its closer is still found.
-  for (let pos = 0, again = true; again;) {
-    again = false;
-    for (const block of matchArtifactBlocks(content.slice(pos))) {
-      const start = pos + block.index;
-      const type = Array.from(block.attrs.matchAll(ATTRIBUTE_REGEX))
-        .filter(m => m[1] === 'type')
-        .pop();
-      if ((type?.[2] ?? type?.[3]) === 'application/vnd.ant.mermaid') {
-        const lines = mermaidDedupeLines(block.body.trim());
-        mermaidBodies.add(normalizeMermaid(block.body));
-        mermaidBodies.add(normalizeWhitespace(lines[0] ?? ''));
-      }
-      // restore() is single-pass, so a span wrapping an already-protected region cannot itself be protected.
-      if (mask.holds(block.fullMatch)) {
-        pos = start + block.fullMatch.length - ARTIFACT_CLOSE_LENGTH - block.body.length;
-        again = true;
-        break;
-      }
-      spans.push([start, start + block.fullMatch.length]);
-    }
+  // restore() is single-pass, so a span wrapping an already-protected region cannot itself be protected;
+  // the scan descends into it instead, so an inner artifact sharing its closer is still found.
+  const holdsPlaceholder = (block: ArtifactBlockMatch) => mask.holds(block.fullMatch);
+  for (const block of matchArtifactBlocks(content, holdsPlaceholder)) {
+    const type = Array.from(block.attrs.matchAll(ATTRIBUTE_REGEX))
+      .filter(m => m[1] === 'type')
+      .pop();
+    if ((type?.[2] ?? type?.[3]) === 'application/vnd.ant.mermaid') mermaidBodies.add(normalizeMermaid(block.body));
+    if (holdsPlaceholder(block)) continue;
+    // Ordered and disjoint: the scan only resumes inside a block that does not become a span.
+    spans.push([block.index, block.index + block.fullMatch.length]);
   }
 
   let masked = '';
@@ -580,32 +573,6 @@ ${codeContent.trim()}
     } else {
       // If validation fails, keep the original content and log errors
       Logger.globalInstance.warn('Mermaid validation failed:', errors);
-      return fullMatch;
-    }
-  });
-
-  // Also handle raw Mermaid content (no code blocks) mixed with other content,
-  // e.g. when an LLM outputs raw Mermaid plus code blocks.
-  const rawMermaidRegex =
-    /((?:^|\n)(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|gantt|pie|mindmap)[\s\S]*?)(?=\n```|$)/gm;
-
-  content = content.replace(rawMermaidRegex, (fullMatch, mermaidContent) => {
-    // Skip if this is already inside a code block or artifact
-    if (echoOnly || holds(fullMatch) || fullMatch.includes('```') || fullMatch.includes('<artifact')) {
-      return fullMatch;
-    }
-
-    if (isDuplicateMermaid(mermaidContent)) return fullMatch;
-    const { isValid, cleanedContent } = validateMermaidSyntax(mermaidContent);
-
-    if (isValid && cleanedContent.trim()) {
-      const diagramType = extractMermaidDiagramType(cleanedContent);
-      const identifier = `mermaid-${diagramType}`;
-      const title = `${diagramType.charAt(0).toUpperCase() + diagramType.slice(1)} Diagram`;
-
-      return `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">${cleanedContent}</artifact>`;
-    } else {
-      // If validation fails, return original content
       return fullMatch;
     }
   });
@@ -1005,7 +972,9 @@ const SEQUENCE_PATTERNS = [
   /^(participant|actor)\s+\S/,
   /^(create\s+(participant|actor)|destroy)\s+\S/,
   /^box(\s|$)/,
-  /^[\w.]+(?: [\w.]+)*\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+(?: [\w.]+)*\s*:/,
+  // A hyphen joins word runs (`Auth-Service`); in the sender never before `x`, so it cannot also read as
+  // the `-x` arrow, an ambiguity that backtracks quadratically on a long `A-xA-x...` line with no colon.
+  /^[\w.]+(?:-(?!x)[\w.]+)*(?: [\w.]+(?:-(?!x)[\w.]+)*)*\s*(<<-->>|<<->>|-->>|->>|--x|--\)|-->|->|-x|-\))[+-]?\s*[\w.]+(?:-[\w.]+)*(?: [\w.]+(?:-[\w.]+)*)*\s*:/,
   /^Note\s+(left of|right of|over)\s+\S/,
   /^(loop|alt|else|opt|par|and|critical|option|break|rect)(\s|$)/,
   /^(autonumber|activate|deactivate|links?)(\s|$)/,
