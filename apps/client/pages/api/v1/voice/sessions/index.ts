@@ -154,6 +154,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       organizationId: req.user.organizationId ? String(req.user.organizationId) : '',
       sessionId: String(resolvedSessionId),
       reasoningModelId,
+      apiKeyId: req.apiKeyInfo?.keyId,
     },
     SESSION_TOKEN_TTL_SECONDS
   );

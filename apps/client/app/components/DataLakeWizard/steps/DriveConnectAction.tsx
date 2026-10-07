@@ -7,11 +7,10 @@ import { toast } from 'sonner';
 import {
   useLakeDriveConnection,
   useLakeDriveCanManage,
-  useConnectDriveFolderToLake,
   useDisconnectLakeDrive,
 } from '@client/app/hooks/data/googleDrive';
 import { describeDriveConnection } from '@client/app/hooks/data/driveConnectionDisplay';
-import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import { useLakeDriveFolderConnect } from '@client/app/hooks/data/useLakeDriveFolderConnect';
 import { getServerErrorField } from '@client/app/utils/error';
 import DriveAccessDisclosure from './DriveAccessDisclosure';
 
@@ -25,26 +24,10 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
 
   const { data: connection, isLoading, isError } = useLakeDriveConnection(lake.id);
   const canManage = useLakeDriveCanManage(lake.id).data === true;
-  const connect = useConnectDriveFolderToLake();
   const disconnect = useDisconnectLakeDrive();
+  const { openFolderPicker, isPicking, isConnecting } = useLakeDriveFolderConnect(lake.id);
 
   const lakeId = lake.id;
-
-  const { openFolderPicker, isPicking } = useDriveFolderPicker({
-    busy: connect.isPending,
-    onPicked: folder =>
-      connect.mutate(
-        { dataLakeId: lakeId, ...folder },
-        {
-          onSuccess: () =>
-            toast.success(`Syncing "${folder.folderName || folder.driveFolderId}" into this data lake...`),
-          // Surface the server's specific message (folder claimed elsewhere, lake already bound to a
-          // different folder, "connect Drive first", ...) rather than one generic string for every 409.
-          onError: (e: unknown) =>
-            toast.error(getServerErrorField(e) || 'Could not connect that folder. Please try again.'),
-        }
-      ),
-  });
 
   if (isLoading) {
     return <CircularProgress size="sm" data-testid="drive-connection-loading" />;
@@ -93,7 +76,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
             variant="outlined"
             color="neutral"
             startDecorator={<SyncIcon />}
-            loading={connect.isPending || isPicking}
+            loading={isConnecting || isPicking}
             onClick={openFolderPicker}
           >
             Re-sync
@@ -192,7 +175,7 @@ export default function DriveConnectAction({ lake }: { lake: { id: string } }) {
         variant="outlined"
         color="neutral"
         startDecorator={<CloudIcon />}
-        loading={isPicking || connect.isPending}
+        loading={isPicking || isConnecting}
         onClick={openFolderPicker}
         sx={{ alignSelf: 'flex-start' }}
       >

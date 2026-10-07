@@ -72,10 +72,21 @@ beforeEach(() => {
   h.tx.length = 0;
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.findById.mockResolvedValue({ id: 'prop-1', dataLakeId: 'lake1' });
-  h.approveDataLakeProposal.mockResolvedValue({
-    proposal: { id: 'prop-1', status: 'approved' },
-    fabFile: { id: 'file-9', fileName: 'Report' },
-  });
+  // Mirrors the service's shape: gate-and-claim inside `serializeClaim`, the admission after it.
+  h.approveDataLakeProposal.mockImplementation(
+    async (
+      _id: string,
+      _actor: unknown,
+      adapters: { serializeClaim: (claim: () => Promise<{ lake: typeof LAKE }>) => Promise<unknown> }
+    ) => {
+      await adapters.serializeClaim(async () => {
+        h.tx.push('claim');
+        return { lake: LAKE };
+      });
+      h.tx.push('admit');
+      return { proposal: { id: 'prop-1', status: 'approved' }, fabFile: { id: 'file-9', fileName: 'Report' } };
+    }
+  );
   h.declineDataLakeProposal.mockResolvedValue({ id: 'prop-1', status: 'declined' });
   h.restoreDataLakeProposal.mockResolvedValue({ id: 'prop-1', status: 'pending' });
 });
@@ -149,7 +160,9 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     const { res } = makeRes();
 
     await expect(handler(makeReq({ decision: 'approve' }) as never, res)).rejects.toThrow(/Proposal not found/);
-    expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
+    expect(h.tx).not.toContain('claim');
+    expect(h.tx).not.toContain('admit');
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 
   it('404s an unknown proposal', async () => {
@@ -205,10 +218,19 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     }
   );
 
-  it('approve stays outside the transaction and does not touch the lake', async () => {
+  it('approve serializes the gate and claim with a lake touch, and admits only after commit', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.tx.push('gate');
+      return LAKE;
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+
     await handler(makeReq({ decision: 'approve' }) as never, makeRes().res);
 
-    expect(h.tx).toEqual([]);
-    expect(h.touchIfStable).not.toHaveBeenCalled();
+    expect(h.tx).toEqual(['enter', 'gate', 'claim', 'touch', 'exit', 'admit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith(LAKE.id);
   });
 });

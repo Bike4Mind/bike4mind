@@ -922,6 +922,27 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   clearPendingConnector(id: string): Promise<void>;
   /**
+   * Clears `pendingConnector` and, only while the lake's name is still exactly `placeholder`, renames
+   * it to `name` (slug, datalakeTag and fileTagPrefix never change). Returns the pre-rename lake when
+   * the rename happened, otherwise null.
+   */
+  renameIfPlaceholderAndClearPending(
+    id: string,
+    placeholder: string,
+    name: string,
+    extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>
+  ): Promise<IDataLakeDocument | null>;
+  /**
+   * The caller's still-unbound connector-first lake in that org (draft, `pendingConnector` set, name
+   * still exactly `placeholder`), so a retried connect reuses it instead of inserting another.
+   */
+  findPendingPlaceholderLake(
+    userId: string,
+    organizationId: string,
+    connector: DataLakePendingConnector,
+    placeholder: string
+  ): Promise<IDataLakeDocument | null>;
+  /**
    * The reverse of `activateIfDraft`: active -> draft, guarded the same way (conditional in the
    * query, so a stale caller cannot demote a lake some other transition already moved on). The
    * only caller is `demoteDataLake`. Draft is excluded from grounding at query time (`status ===
