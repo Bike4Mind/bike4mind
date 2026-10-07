@@ -30,7 +30,9 @@ export interface CreditPreflightArgs {
  * overdraw by the cost of the calls in flight.
  *
  * Gated on the enforceCredits admin setting, so a deployment with credits
- * switched off never rejects a zero-balance user.
+ * switched off never rejects a zero-balance user. The post-call deduction is not
+ * gated on the setting: it always charges, so with enforcement off balances can
+ * go negative without bound (as realtime voice does).
  */
 export async function assertPreflightCredits({
   userId,

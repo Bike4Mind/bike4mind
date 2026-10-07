@@ -11,6 +11,7 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError 
       synthesize: vi.fn(),
       resolveTtsProvider: vi.fn(),
       assertPreflightCredits: vi.fn(),
+      estimateTtsCreditCost: vi.fn(),
       deductTtsCredits: vi.fn(),
       upload: vi.fn(),
       getSignedUrl: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (fn: unknown) => fn,
+}));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  estimateTtsCreditCost: (...a: unknown[]) => mocks.estimateTtsCreditCost(...a),
 }));
 vi.mock('@bike4mind/utils', () => ({
   aiVoiceService: () => ({ synthesize: (...a: unknown[]) => mocks.synthesize(...a) }),
@@ -63,6 +68,7 @@ beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.resolveTtsProvider.mockResolvedValue({ apiKey: 'k', voice: 'v1' });
   mocks.assertPreflightCredits.mockResolvedValue(undefined);
+  mocks.estimateTtsCreditCost.mockReturnValue(42);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.upload.mockResolvedValue(undefined);
   mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
@@ -80,6 +86,15 @@ describe('POST /api/elabs/text-to-speech (legacy)', () => {
       contentType: 'audio/mpeg',
     });
     expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates on the elevenlabs default-model estimate for the message length', async () => {
+    const { promise } = run();
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
+    expect(mocks.assertPreflightCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1', estimatedCredits: 42 })
+    );
   });
 
   it('returns 402 and never calls the provider when credits are exhausted', async () => {

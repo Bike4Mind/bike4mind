@@ -48,7 +48,9 @@ const VENDOR_FALLBACK_USD_PER_1K: Record<VoiceGenerationVendor, number> = {
 /**
  * The model each vendor's service synthesizes and bills with when the caller
  * names none. Read by OpenAIVoiceService / ElevenLabsVoiceService in
- * @bike4mind/utils, so a pre-flight estimate prices the same model the charge will.
+ * @bike4mind/utils, so a pre-flight estimate prices the model the charge will use
+ * when the requested vendor serves the call. If synthesis falls back to the other
+ * vendor, the charge uses that vendor's rate and can exceed the estimate.
  */
 export const TTS_DEFAULT_MODEL: Record<VoiceGenerationVendor, string> = {
   openai: 'tts-1',

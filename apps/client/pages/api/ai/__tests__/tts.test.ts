@@ -12,6 +12,7 @@ const { mocks, InsufficientCreditsPreflightError, TtsProviderNotConfiguredError,
       UnprocessableEntityError,
       mocks: {
         synthesizeTts: vi.fn(),
+        estimateTtsCreditCost: vi.fn(),
         assertPreflightCredits: vi.fn(),
         deductTtsCredits: vi.fn(),
         persistGeneratedAudio: vi.fn(),
@@ -44,7 +45,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
   TTS_MAX_INPUT_CHARS: { openai: 4096, elevenlabs: 10000 },
   VOICE_VENDOR_SUPPORTED_FORMATS: { openai: ['mp3', 'wav'], elevenlabs: ['mp3', 'pcm', 'opus'] },
   TTS_DEFAULT_MODEL: { openai: 'tts-1', elevenlabs: 'eleven_multilingual_v2' },
-  estimateTtsCreditCost: (_vendor: string, _model: string | undefined, characters: number) => characters * 10,
+  estimateTtsCreditCost: (...a: unknown[]) => mocks.estimateTtsCreditCost(...a),
 }));
 
 vi.mock('@server/utils/resolveTtsProvider', () => ({
@@ -114,6 +115,7 @@ const okSynthesis = (vendor = 'openai', fallbackFrom?: string) =>
 beforeEach(() => {
   Object.values(mocks).forEach(m => m.mockReset());
   mocks.assertPreflightCredits.mockResolvedValue(undefined);
+  mocks.estimateTtsCreditCost.mockImplementation((_v: string, _m: string, chars: number) => chars * 10);
   mocks.deductTtsCredits.mockResolvedValue(undefined);
   mocks.upload.mockResolvedValue(undefined);
   mocks.getSignedUrl.mockResolvedValue('https://s3/offload');
@@ -161,6 +163,7 @@ describe('POST /api/ai/tts', () => {
   it('prices the pre-flight from the requested text so the gate is cost-aware', async () => {
     const { promise } = run({ text: 'hello' });
     await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1', 5);
     expect(mocks.assertPreflightCredits).toHaveBeenCalledWith({
       userId: 'u1',
       estimatedCredits: 50,
