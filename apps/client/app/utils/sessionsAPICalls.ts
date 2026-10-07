@@ -76,18 +76,14 @@ export type SessionUpdatePayload = Partial<ISessionDocument> &
   Pick<SessionUpdateRequest, 'lakeScope'> & { includeLibraryFilesChoice?: boolean };
 
 // `includeLibraryFiles` is stripped because a whole-session echo (a rename) would otherwise resend a
-// possibly stale cached value over a newer toggle. A deliberate write uses the request-only
-// `includeLibraryFilesChoice` (no cached session carries it) or setSessionIncludeLibraryFiles.
+// possibly stale cached value over a newer toggle. The client-only `includeLibraryFilesChoice` (no
+// cached session carries it) is the one way to write the flag, so it can ride in the same PUT as
+// the scope change that defaults it.
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
   const { includeLibraryFilesChoice, ...body } = sessionData;
   delete body.includeLibraryFiles;
   if (includeLibraryFilesChoice !== undefined) body.includeLibraryFiles = includeLibraryFilesChoice;
   const response = await api.put(`/api/sessions/${sessionData.id}`, body);
-  return response.data;
-};
-
-export const setSessionIncludeLibraryFiles = async (id: string, includeLibraryFiles: boolean) => {
-  const response = await api.put(`/api/sessions/${id}`, { includeLibraryFiles });
   return response.data;
 };
 
