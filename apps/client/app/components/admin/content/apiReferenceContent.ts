@@ -449,38 +449,33 @@ PUT /api/sessions/[id]
 
 Projects organize files, sessions, and team members into workspaces.
 
-#### List Projects
+**Required API-key scope:** \`projects:read\` (or \`projects:write\`) to list and read,
+\`projects:write\` to create.
+
+#### List, Get, and Create Projects
 
 \`\`\`
-GET /api/projects
+GET  /api/v1/projects
+GET  /api/v1/projects/[id]
+POST /api/v1/projects
 \`\`\`
 
-**Response:**
-
-\`\`\`json
-{
-  "projects": [
-    {
-      "id": "proj_abc123",
-      "name": "Market Research Q1",
-      "description": "Research project for Q1 market analysis",
-      "fileCount": 15,
-      "sessionCount": 8,
-      "memberCount": 3,
-      "createdAt": "2025-01-05T09:00:00Z"
-    }
-  ],
-  "total": 12
-}
-\`\`\`
+> **These endpoints are generated from their contracts.** The full request/response
+> reference - every field, its type, and validation rules - lives in the
+> [generated API docs](/api/v1/docs) under \`listProjects\`, \`getProject\`, and
+> \`createProject\`, derived from the same objects the handlers validate with.
+>
+> The list is cursor-paginated: pass \`next_cursor\` back as \`cursor\` until it is
+> \`null\`. A project's \`file_ids\` and \`session_ids\` are shared with it, so anyone the
+> project is shared with can read them.
 
 #### Project Endpoints Summary
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | /api/projects | List projects |
-| POST | /api/projects | Create a project |
-| GET | /api/projects/[id] | Get project details |
+| GET | /api/v1/projects | List projects (cursor-paginated) |
+| POST | /api/v1/projects | Create a project |
+| GET | /api/v1/projects/[id] | Get project details |
 | PUT | /api/projects/[id] | Update project |
 | DELETE | /api/projects/[id] | Delete project |
 | GET | /api/projects/[id]/files | List project files |

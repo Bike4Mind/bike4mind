@@ -9,6 +9,9 @@ const ModelName = 'Project';
 
 export interface IProjectModel extends Model<IProjectDocument, {}, IProjectMethods> {}
 
+// Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
+const ownerOrMemberArms = (userId: string) => [{ userId }, { 'users.userId': userId }];
+
 export class ProjectRepository extends BaseRepository<IProjectDocument> implements IProjectRepository {
   shareable: IProjectRepository['shareable'];
 
@@ -65,11 +68,7 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     }
   ) {
     const queryConditions: Record<string, unknown> = {
-      $or: [
-        { userId }, // User is the owner
-        // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
-        { 'users.userId': userId }, // User is a member
-      ],
+      $or: ownerOrMemberArms(userId),
       ...filters.scope,
       deletedAt: { $exists: false },
     };
@@ -102,6 +101,36 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
       hasMore,
       total,
     };
+  }
+
+  async listAccessibleAfterId(
+    userId: string,
+    { scope, afterId, limit }: { scope?: Record<string, unknown>; afterId?: string; limit: number }
+  ) {
+    // Same access predicate as searchAccessible (a caller-supplied scope replaces the owner/member
+    // arms when it carries its own $or). deletedAt stays top-level so softDeletePlugin's
+    // `deletedAt: null` find hook merges with it rather than contradicting a nested copy.
+    const conditions: Record<string, unknown> = {
+      $or: ownerOrMemberArms(userId),
+      ...scope,
+      deletedAt: null,
+    };
+
+    if (afterId !== undefined) {
+      if (!mongoose.isObjectIdOrHexString(afterId)) throw new Error(`Invalid project cursor id: ${afterId}`);
+      // Appended to $and rather than set as _id so it can neither clobber nor be clobbered by the scope.
+      const existingAnd = Array.isArray(conditions.$and) ? conditions.$and : [];
+      conditions.$and = [...existingAnd, { _id: { $gt: convertId(afterId) } }];
+    }
+
+    const result = await this.projectModel
+      .find(conditions)
+      .sort({ _id: 1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasMore = result.length > limit;
+    return { data: result.slice(0, limit).map(doc => doc.toJSON()), hasMore };
   }
 
   async findAllBySessionId(sessionId: string) {
