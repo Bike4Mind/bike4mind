@@ -1625,7 +1625,11 @@ async function lakeScopedSearch(
   // Gate on dataLakeTags, not on membership: it still names every accessible lake, dynamic or
   // registry, so a caller with only dynamic-lake access (all memberships, no meta-tags reachable
   // yet) is not mistaken for a lake-less one. Do not swap this for a memberships-based gate.
-  if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly)) return emptyResult(embeddingModel, budgets);
+  // A restricted caller with admitted attachments has a real corpus even with no lake in reach.
+  const admitsAttachments = restrictToDataLake && (admitFileIds?.length ?? 0) > 0;
+  if (!query.trim() || (dataLakeTags.length === 0 && !ownFilesOnly && !admitsAttachments)) {
+    return emptyResult(embeddingModel, budgets);
+  }
 
   // --- Scope the files (metadata only) within the accessible data lakes ---
   const scoped = await collectScopedFiles({

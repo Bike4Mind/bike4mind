@@ -3731,7 +3731,7 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
     expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
       restrictToDataLake: true,
-      ownFilesOnly: false,
+      ownFilesOnly: true,
       admitFileIds: [ATTACHED_ID],
     });
     const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;

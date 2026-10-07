@@ -81,6 +81,7 @@ import {
 import {
   narrowLakeAccessToSession,
   sessionExcludesLibraryFiles,
+  hasLakeArms as accessHasLakeArms,
   sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
@@ -2020,6 +2021,27 @@ function compareForcedRetrievalCandidates(a: ForcedRetrievalCandidate, b: Forced
  * `citables[N-1]` (index-only citation: the model never names a source, so it
  * cannot fabricate one).
  */
+/**
+ * Lake rows first, then the union's remaining (library) rows, deduped by id and capped at
+ * `listingLimit`. `hasMore` also flips when the merged rows overflow the cap even though neither
+ * listing reported more, so the caller still marks the candidate set as truncated.
+ */
+export function mergeLakeFirstListing<T extends { id: string }>(
+  lakeListing: { data: T[]; hasMore?: boolean },
+  scopeListing: { data: T[]; hasMore?: boolean },
+  listingLimit: number
+): { data: T[]; hasMore: boolean } {
+  const lakeFileIds = new Set(lakeListing.data.map(f => f.id));
+  const libraryRows = scopeListing.data.filter(f => !lakeFileIds.has(f.id));
+  return {
+    data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
+    hasMore:
+      lakeListing.hasMore === true ||
+      scopeListing.hasMore === true ||
+      lakeListing.data.length + libraryRows.length > listingLimit,
+  };
+}
+
 export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private chatCompletion: ChatCompletionContext;
   private logger: Logger;
@@ -2859,7 +2881,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
       const excludeLibrary = sessionExcludesLibraryFiles(this.includeLibraryFiles, resolvedAccess, this.retrievalTags);
-      const hasLakeArms = dataLakeTags.length > 0 || dataLakeTagPrefixes.length > 0 || lakeMemberships.length > 0;
+      const hasLakeArms = accessHasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived
       // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
@@ -2942,17 +2964,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         prioritizeLakeFiles ? listFiles(true) : null,
         listFiles(excludeLibrary),
       ]);
-      const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
-      const libraryRows = lakeListing ? scopeListing.data.filter(f => !lakeFileIds.has(f.id)) : [];
-      const fileResults = lakeListing
-        ? {
-            data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
-            hasMore:
-              lakeListing.hasMore === true ||
-              scopeListing.hasMore === true ||
-              lakeListing.data.length + libraryRows.length > listingLimit,
-          }
-        : scopeListing;
+      const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
 
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.

@@ -72,7 +72,7 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
  * key to accidentally carry, so the server's parse drops it rather than reading the echoed
  * `retrievalTags: []` Mongoose hydrates onto every session as a deliberate "ground on no lake".
  */
-export type SessionUpdatePayload = Partial<ISessionDocument> &
+export type SessionUpdatePayload = Omit<Partial<ISessionDocument>, 'includeLibraryFiles'> &
   Pick<SessionUpdateRequest, 'lakeScope'> & { includeLibraryFilesChoice?: boolean };
 
 // `includeLibraryFiles` is stripped because a whole-session echo (a rename) would otherwise resend a
@@ -80,7 +80,9 @@ export type SessionUpdatePayload = Partial<ISessionDocument> &
 // cached session carries it) is the one way to write the flag, so it can ride in the same PUT as
 // the scope change that defaults it.
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
-  const { includeLibraryFilesChoice, ...body } = sessionData;
+  const { includeLibraryFilesChoice, ...rest } = sessionData;
+  // The type already excludes the key; this still catches a cached session cast past it.
+  const body: Record<string, unknown> = { ...rest };
   delete body.includeLibraryFiles;
   if (includeLibraryFilesChoice !== undefined) body.includeLibraryFiles = includeLibraryFilesChoice;
   const response = await api.put(`/api/sessions/${sessionData.id}`, body);

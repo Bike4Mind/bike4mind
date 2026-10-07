@@ -1,3 +1,4 @@
+import { isObjectIdShaped } from '../../base/objectId';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
   DATALAKE_TAG_PREFIX,
@@ -433,7 +434,14 @@ export const describeKnowledgeBaseTool: ToolDefinition = {
         const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
-          if (await sessionExcludesLibrary(context)) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+          if (await sessionExcludesLibrary(context)) {
+            if (!(context.attachedFileIds ?? []).some(isObjectIdShaped)) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            return (
+              "No data lake is in this chat's scope and your other files are turned off for this chat, so there is " +
+              'no corpus shape to describe. The files attached to this chat are still searchable - use ' +
+              'count_knowledge_base for a total.'
+            );
+          }
           return (
             'You have no data lake / curated library available in this session, so there is no corpus shape ' +
             'to describe. Your knowledge base is your own and shared files - use count_knowledge_base for a total.'

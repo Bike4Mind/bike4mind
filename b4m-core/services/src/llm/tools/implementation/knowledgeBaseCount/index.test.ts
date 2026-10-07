@@ -274,4 +274,23 @@ describe('count_knowledge_base with the library off', () => {
     const ctx = makeContext({ sessionIncludeLibraryFiles: false } as never);
     expect(await run(ctx)).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
   });
+  it('counts only the attached files (ownership-checked) when no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: [],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [],
+    });
+    const search = vi.fn().mockResolvedValue({ data: [], total: 1, hasMore: false });
+    const ctx = makeContext(
+      { sessionIncludeLibraryFiles: false, attachedFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4', 'not-an-id'] } as never,
+      search
+    );
+    const out = await run(ctx);
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(out).toContain('attached to this chat');
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search.mock.calls[0][2]).toMatchObject({ restrictToFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4'] });
+    expect(search.mock.calls[0][5]).not.toHaveProperty('skipOwnership');
+  });
 });

@@ -705,6 +705,24 @@ export function buildInProcessCreditCapCheck(
 const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
 
 /**
+ * Every file attached to a run: message files, session files and session knowledge. Shared by
+ * attachment materialization and the tool deps' attachedFileIds so the two cannot drift; mirrors
+ * ChatCompletionProcess's attachedFileIds union for a chat turn.
+ */
+export function attachedFileIdsForRun(
+  execution: { messageFileIds?: string[]; sessionFabFileIds?: string[] } | undefined,
+  sessionKnowledgeIds: string[] | undefined
+): string[] {
+  return Array.from(
+    new Set([
+      ...(execution?.messageFileIds ?? []),
+      ...(execution?.sessionFabFileIds ?? []),
+      ...(sessionKnowledgeIds ?? []),
+    ])
+  );
+}
+
+/**
  * Resolve this run's attachment ids and extract their content, using the SAME extractor the chat
  * path uses so an agent turn gets the raw-content fallback, cosine excerpting, truncation notices
  * and image blocks that a chat turn gets.
@@ -729,9 +747,7 @@ async function materializeAttachmentsForRun(args: {
 }) {
   const { execution, sessionKnowledgeIds, scope, lakeAccess, modelInfo, apiKeyTable, logger } = args;
 
-  const requestedIds = Array.from(
-    new Set([...(execution.messageFileIds ?? []), ...(execution.sessionFabFileIds ?? []), ...sessionKnowledgeIds])
-  );
+  const requestedIds = attachedFileIdsForRun(execution, sessionKnowledgeIds);
   if (requestedIds.length === 0) return undefined;
 
   // A model we cannot size gives no honest budget, and guessing one would inline against a window
@@ -1623,7 +1639,7 @@ async function processExecution(
       // passthrough. Until then an agent delegated from a personal-corpus session searches the
       // caller's lakes; it is bounded by that caller's own entitlements, never another tenant's.
       inlinedAttachmentIds,
-      attachedFileIds: session.knowledgeIds ?? [],
+      attachedFileIds: attachedFileIdsForRun(execution, session.knowledgeIds),
       fullyInlinedAttachmentIds,
       onToolLlmUsage: usage => addToolUsage(pendingToolUsage, usage),
       db: {
@@ -3440,7 +3456,7 @@ async function processSubagentDispatch(
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
       sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Without it a library-off session's delegated agent cannot open the files attached to it.
-      attachedFileIds: session.knowledgeIds ?? [],
+      attachedFileIds: attachedFileIdsForRun(undefined, session.knowledgeIds),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

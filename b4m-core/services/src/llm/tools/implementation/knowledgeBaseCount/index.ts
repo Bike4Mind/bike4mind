@@ -1,4 +1,5 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import type { IFabFileRepository } from '@bike4mind/common';
 import {
   filterRetrievalExcluded,
@@ -160,7 +161,19 @@ export const knowledgeBaseCountTool: ToolDefinition = {
         const { lakes } = await resolveSessionLakeAccess(context);
 
         if (lakes.length === 0) {
-          if (await sessionExcludesLibrary(context)) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+          if (await sessionExcludesLibrary(context)) {
+            const attached = (context.attachedFileIds ?? []).filter(isObjectIdShaped);
+            if (!attached.length) return LIBRARY_OFF_NO_LAKE_MESSAGE;
+            // Same ownership check as any other count: an attached id only counts if the caller can read it.
+            const counted = await countScope(context, {
+              filters: { restrictToFileIds: attached },
+              options: { includeShared: true, userGroups: context.user.groups ?? [] },
+            });
+            return (
+              `No data lake is in this chat's scope and your other files are turned off for this chat. The files ` +
+              `attached to this chat are still searchable: ${describeCount(counted)}.${REPORTING_NOTE}`
+            );
+          }
           // No curated library, but the caller's own and shared files are still what
           // search_knowledge_base reads, so counting nothing here would misreport the corpus.
           const own = await countScope(context, {

@@ -26,7 +26,8 @@ export const sessionUpdateContract = defineEndpoint({
     'retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or ' +
     'send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` ' +
     'sets whether the session grounds on your own library alongside its lakes; `false` confines it to ' +
-    'lake content (plus its attached files) even when every lake is in scope, and is set aside (library ' +
+    'lake content even when every lake is in scope (files attached to the session still reach the ' +
+    'model and its knowledge-base tools), and is set aside (library ' +
     'included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key ' +
     '(`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every ' +
     'member of every project containing this session by default (see `propagateToProjects`), ' +

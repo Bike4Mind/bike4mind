@@ -32,6 +32,8 @@ export function retrievalTagsNameALake(
  * sets). Tags derived from attaching a lake file to a plain chat carry neither, so it keeps its library.
  * Data Lakes mode turned OFF (`forceKnowledgeRetrieval === false`) includes the library whatever the
  * stored flag says; the flag is kept, not rewritten, so turning the mode back ON restores that choice.
+ * The unset default here is not the only writer: any lake-picker change, including clearing to all
+ * lakes, stores an explicit false on a never-chosen chat (useSetLakeScope), and explicit wins.
  */
 export function libraryFlagForScope(session: {
   includeLibraryFiles?: boolean;

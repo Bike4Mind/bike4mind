@@ -60,7 +60,7 @@ export const generateTools = (
     sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
     sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
     sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
-    /** `session.includeLibraryFiles`, forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+    /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
     sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     organizationId?: ToolContext['organizationId'];

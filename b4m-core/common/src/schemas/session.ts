@@ -71,8 +71,9 @@ export const SessionUpdateRequestSchema = z.object({
     .optional()
     .describe(
       'Whether the session grounds on your own library (files you own, or that are shared with you ' +
-        'or your groups) alongside its lakes. `false` confines retrieval to lake content and the ' +
-        "session's attached files, including when every lake is in scope. Omit to leave it unchanged; " +
+        'or your groups) alongside its lakes. `false` confines retrieval to lake content, including when ' +
+        "every lake is in scope; the session's attached files still reach the model and stay searchable " +
+        'by its knowledge-base tools. Omit to leave it unchanged; ' +
         'while never set, the library is excluded only when a lake was picked for the session (Data ' +
         'Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. ' +
         'While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value ' +

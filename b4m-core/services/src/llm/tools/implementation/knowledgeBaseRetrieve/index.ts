@@ -1,5 +1,6 @@
 import { ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
+import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import { citationTagDescription, CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
@@ -296,9 +297,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
               if (
                 excludesLibrary &&
-                !dataLakeTags.length &&
-                !dataLakeTagPrefixes.length &&
-                !lakeMemberships.length &&
+                !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
                 !admitFileIds.length
               ) {
                 return LIBRARY_OFF_NO_LAKE_MESSAGE;

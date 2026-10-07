@@ -7,6 +7,7 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
+  mergeLakeFirstListing,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -5018,5 +5019,38 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     expect(content).not.toContain('Uptime is 95%.');
     expect(content).toContain('Uptime is 99.9%.');
     expect(content).not.toContain(CONFLICT_NOTE);
+  });
+});
+
+describe('mergeLakeFirstListing', () => {
+  const row = (id: string) => ({ id });
+
+  it('keeps a lake file that the union also returned exactly once, in its lake slot', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('lake-1')], hasMore: false },
+      { data: [row('a'), row('lake-1'), row('b')], hasMore: false },
+      10
+    );
+    expect(merged.data.map(r => r.id)).toEqual(['lake-1', 'a', 'b']);
+    expect(merged.hasMore).toBe(false);
+  });
+
+  it('reports hasMore when the merged rows overflow the cap though neither listing did', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('l1'), row('l2')], hasMore: false },
+      { data: [row('a'), row('b')], hasMore: false },
+      3
+    );
+    expect(merged.data.map(r => r.id)).toEqual(['l1', 'l2', 'a']);
+    expect(merged.hasMore).toBe(true);
+  });
+
+  it('reports no more when the merged rows exactly fill the cap', () => {
+    const merged = mergeLakeFirstListing(
+      { data: [row('l1')], hasMore: false },
+      { data: [row('a')], hasMore: false },
+      2
+    );
+    expect(merged.hasMore).toBe(false);
   });
 });

@@ -295,8 +295,9 @@ export interface ToolContext {
    */
   sessionLakeScopeExplicit?: boolean;
   /**
-   * `session.includeLibraryFiles` (the "+ My files" chip). Read only through sessionExcludesLibrary
-   * (resolveSessionLakeAccess.ts), never raw: unset has a per-session default there.
+   * The "+ My files" chip resolved by libraryFlagForScope(session) (common), NOT the raw
+   * `session.includeLibraryFiles`: passing the raw field skips the Data-Lakes-off override. Read only
+   * through sessionExcludesLibrary (resolveSessionLakeAccess.ts), which defaults unset per session.
    */
   sessionIncludeLibraryFiles?: boolean;
   /**

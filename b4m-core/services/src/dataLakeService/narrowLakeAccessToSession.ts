@@ -39,6 +39,19 @@ export function sessionNamesALake(access: ResolvedLakeAccessSet, sessionRetrieva
 }
 
 /**
+ * Whether a resolved access set still has a lake arm to search. With the library excluded and no
+ * arm, an ownership query under restrictToDataLake has zero conditions and throws, so every
+ * library-off search site checks this first.
+ */
+export function hasLakeArms(access: {
+  dataLakeTags: readonly unknown[];
+  dataLakeTagPrefixes: readonly unknown[];
+  lakeMemberships: readonly unknown[];
+}): boolean {
+  return access.dataLakeTags.length > 0 || access.dataLakeTagPrefixes.length > 0 || access.lakeMemberships.length > 0;
+}
+
+/**
  * Whether a session leaves the caller's own/shared/group library out of its grounding (the
  * "+ My files" chip off). The ONE derivation forced retrieval (KnowledgeRetrievalFeature) and every
  * knowledge tool (resolveSessionLakeAccess.ts sessionExcludesLibrary) share: unset excludes exactly

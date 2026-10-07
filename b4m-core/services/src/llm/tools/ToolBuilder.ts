@@ -126,7 +126,7 @@ export interface ToolBuilderConfig {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
-  /** `session.includeLibraryFiles`, forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
   sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];

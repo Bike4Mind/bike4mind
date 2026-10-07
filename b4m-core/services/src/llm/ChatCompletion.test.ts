@@ -683,6 +683,59 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // The library-off flag and the attached-file allow-list must reach BOTH doors from a real turn;
+  // the feature/tool unit tests construct their own arguments and would stay green without these.
+  describe('library-off plumbing at both doors', () => {
+    const captureToolDeps = () => {
+      const originalBuildMcpTools = ToolBuilder.prototype.buildMcpTools;
+      const captured: { deps?: any } = {};
+      const spy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockImplementation(function (this: any, args: any) {
+        captured.deps = this.deps;
+        return originalBuildMcpTools.call(this, args);
+      });
+      return { captured, restore: () => spy.mockRestore() };
+    };
+
+    it('forced-retrieval door: passes the resolved library flag as the trailing argument', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(false);
+    });
+
+    it('forced-retrieval door: Data Lakes off resolves a stored false to true', async () => {
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = false;
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      const call = (service as any).buildOptimizedFeatures.mock.calls[0];
+      expect(call[call.length - 1]).toBe(true);
+    });
+
+    it('tool door: forwards sessionIncludeLibraryFiles and the session attachments as attachedFileIds', async () => {
+      const { captured, restore } = captureToolDeps();
+      mockSession.userId = 'user1';
+      mockSession.includeLibraryFiles = false;
+      mockSession.forceKnowledgeRetrieval = true;
+      mockSession.knowledgeIds = ['k1'];
+      const body = wireMinimalTurn();
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(captured.deps.sessionIncludeLibraryFiles).toBe(false);
+      expect(captured.deps.attachedFileIds).toEqual(expect.arrayContaining(['k1']));
+      restore();
+    });
+  });
+
   describe('a user stop', () => {
     it('landing before processing starts is honoured instead of saving running over it', async () => {
       mockSession.userId = 'user1';

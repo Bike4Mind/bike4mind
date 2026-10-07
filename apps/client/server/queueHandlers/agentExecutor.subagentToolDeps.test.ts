@@ -190,3 +190,20 @@ describe('processSubagentDispatch tool deps', () => {
     expect(deps.attachedFileIds).toEqual([]);
   });
 });
+
+describe('attachedFileIdsForRun', () => {
+  it('unions message files, session files and session knowledge without duplicates', async () => {
+    const { attachedFileIdsForRun } = await import('./agentExecutor');
+    expect(attachedFileIdsForRun({ messageFileIds: ['m', 'k'], sessionFabFileIds: ['f'] }, ['k']).sort()).toEqual([
+      'f',
+      'k',
+      'm',
+    ]);
+  });
+
+  it('falls back to session knowledge alone when the run carries no attachments', async () => {
+    const { attachedFileIdsForRun } = await import('./agentExecutor');
+    expect(attachedFileIdsForRun(undefined, ['k'])).toEqual(['k']);
+    expect(attachedFileIdsForRun(undefined, undefined)).toEqual([]);
+  });
+});

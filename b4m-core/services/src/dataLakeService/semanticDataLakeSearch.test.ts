@@ -265,6 +265,35 @@ describe('semanticDataLakeSearch lakeMemberships (#2243)', () => {
     expect(opts.includeShared).toBe(true);
   });
 
+  it('a restricted search with admitted attachments and no lake still scopes them instead of bailing', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    const ATTACHED = '64b7f0f0f0f0f0f0f0f0f0f1';
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: [], restrictToDataLake: true, admitFileIds: [ATTACHED] },
+      { db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } } } as never
+    );
+    expect(search).toHaveBeenCalled();
+    expect(search.mock.calls[0][5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED] });
+  });
+
+  it('ownFilesOnly + restrictToDataLake + admitFileIds (library-off personal corpus) reaches the admit arm', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    const ATTACHED = '64b7f0f0f0f0f0f0f0f0f0f2';
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: [], ownFilesOnly: true, restrictToDataLake: true, admitFileIds: [ATTACHED] },
+      { db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } } } as never
+    );
+    expect(search.mock.calls[0][5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED] });
+  });
+
+  it('admitFileIds without restrictToDataLake does not bypass the empty-dataLakeTags bail', async () => {
+    const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
+    await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], admitFileIds: ['64b7f0f0f0f0f0f0f0f0f0f3'] }, {
+      db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock([]) } },
+    } as never);
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it('the empty-dataLakeTags bail still fires even with non-empty lakeMemberships', async () => {
     const search = filesAdapter([{ data: [], hasMore: false, total: 0 }]);
     const result = await semanticDataLakeSearch({ ...baseParams(), dataLakeTags: [], lakeMemberships: [MEMBERSHIP] }, {

@@ -1,5 +1,6 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
+import { hasLakeArms } from '../../../../dataLakeService/narrowLakeAccessToSession';
 import {
   citationTagDescription,
   CitableSource,
@@ -683,9 +684,7 @@ async function trySemanticKbSearch(
     const lakeMemberships = lakeMembershipsFrom(lakes);
     if (
       excludesLibrary &&
-      !dataLakeTags.length &&
-      !dataLakeTagPrefixes.length &&
-      !lakeMemberships.length &&
+      !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
       !admitFileIds.length
     ) {
       return NO_SEMANTIC_RESULT;
@@ -706,7 +705,7 @@ async function trySemanticKbSearch(
         lakeMemberships,
         // Without this the arm below returns empty for a suppressed session and the turn silently
         // falls to metadata-only keyword search - see ownFilesOnly.
-        ownFilesOnly: context.suppressLakeArms === true && !excludesLibrary,
+        ownFilesOnly: context.suppressLakeArms === true,
         restrictToDataLake: excludesLibrary,
         admitFileIds,
         budgets,
@@ -1423,9 +1422,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
             if (
               excludesLibrary &&
-              !dataLakeTags.length &&
-              !dataLakeTagPrefixes.length &&
-              !lakeMemberships.length &&
+              !hasLakeArms({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships }) &&
               !admitFileIds.length
             ) {
               await context.statusUpdate({

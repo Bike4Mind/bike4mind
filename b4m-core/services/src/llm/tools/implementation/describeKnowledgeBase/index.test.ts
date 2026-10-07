@@ -553,4 +553,30 @@ describe('describe_knowledge_base with the library off', () => {
     const ctx = makeContext({ sessionIncludeLibraryFiles: false } as never);
     expect(await run(ctx)).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
   });
+  it('points at the attached files instead of reporting an empty corpus', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: [],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [],
+    });
+    const ctx = makeContext({
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: ['64b7f0f0f0f0f0f0f0f0f0f4'],
+    } as never);
+    const out = await run(ctx);
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(out).toContain('attached to this chat');
+  });
+
+  it('a malformed attached id alone still reports the empty corpus', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({
+      dataLakeTags: [],
+      dataLakeTagPrefixes: [],
+      scopedTagPrefixes: [],
+      lakes: [],
+    });
+    const ctx = makeContext({ sessionIncludeLibraryFiles: false, attachedFileIds: ['nope'] } as never);
+    expect(await run(ctx)).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+  });
 });
