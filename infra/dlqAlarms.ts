@@ -41,7 +41,6 @@ import {
   driveDisconnectPurgeQueueDLQ,
   githubLakeIngestQueueDLQ,
   githubLakeRevokeQueueDLQ,
-  videoGenerationDLQ,
   generationJobDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -362,13 +361,6 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'githubLakeRevokeQueue',
     queue: githubLakeRevokeQueueDLQ,
-  },
-  {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
-    queue: videoGenerationDLQ,
   },
   {
     label: 'generation-job',

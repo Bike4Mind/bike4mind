@@ -5,7 +5,6 @@ export * from './mementoGating';
 export * from './artifactGating';
 export * from './forcedRetrievalAbstention';
 export * from './ImageGeneration';
-export * from './VideoGeneration';
 export * from './ChatCompletionFeatures';
 export * from './ImageEdit';
 export * from './imageModerationGate';

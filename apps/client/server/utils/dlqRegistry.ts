@@ -109,12 +109,6 @@ const DLQ_REGISTRY = [
     sourceQueue: 'questExportQueue',
   },
   {
-    label: 'video-generation',
-    displayName: 'Video Generation',
-    application: 'VideoGeneration',
-    sourceQueue: 'videoGenerationQueue',
-  },
-  {
     label: 'generation-job',
     displayName: 'Generation Job',
     application: 'GenerationJob',

@@ -21,6 +21,7 @@ export {
   resolveEffectiveOwnerIds,
   resolveLakeManageRung,
   type LakeGrant,
+  type SerializeLakeClaim,
 } from './manageRule';
 export * from './authorizeLakeManage';
 // The per-turn manage re-check. Exported so the admin key-mint route screens a lake binding
@@ -58,6 +59,8 @@ export * from './demoteDataLake';
 export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';
+export { recordLakeConfigChange } from './recordLakeConfigChange';
+export { diffLakeConfig } from './diffLakeConfig';
 export * from './recordLakeMembershipChange';
 export * from './recordLakeUploadBatch';
 export * from './prefixArmMembership';

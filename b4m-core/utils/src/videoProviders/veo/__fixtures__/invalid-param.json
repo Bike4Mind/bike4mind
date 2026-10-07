@@ -1,0 +1,38 @@
+{
+  "scenario": "invalid-param",
+  "recordedAt": "2026-10-06T15:50:35.621Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/models/veo-3.1-fast-generate-preview:predictLongRunning",
+        "body": {
+          "instances": [
+            {
+              "prompt": "a lighthouse"
+            }
+          ],
+          "parameters": {
+            "durationSeconds": 4,
+            "aspectRatio": "1:7",
+            "resolution": "720p"
+          }
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "error": {
+            "code": 400,
+            "message": "`aspectRatio` does not support `1:7` as a valid value.  Please refer to the Gemini API documentation for supported usage.",
+            "status": "INVALID_ARGUMENT"
+          }
+        }
+      }
+    }
+  ]
+}

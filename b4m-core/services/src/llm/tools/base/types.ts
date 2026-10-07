@@ -56,8 +56,8 @@ export interface KbScope {
  * than re-pricing the tokens at some other model's rate.
  *
  * The agent executor accumulates these into `ToolUsageTotals`
- * (apps/client agentExecutor.iterationBilling.ts) - same five fields, kept in sync by
- * hand. Keep both in step on a rename.
+ * (apps/client/server/queueHandlers/agentExecutor.billing.ts) - same five fields, kept in
+ * sync by hand. Keep both in step on a rename.
  */
 export type ToolLlmUsage = {
   model: string;

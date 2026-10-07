@@ -361,7 +361,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   advanceCounters(counters, checkpoint, cumulativeCost);
 
   // Charge + analytics reflect agent AND tool spend (the customer paid for both). The
-  // iterationBilling record below stays agent-only.
+  // iterationBilling record below stays agent-only. The ledger row and usage event carry the
+  // agent model, but these token counts include tool tokens priced at the tools' own models,
+  // so read credits/costUsd - never re-price tokens x model.
   const chargedInputTokens = deltas.inputTokens + toolUsage.inputTokens;
   const chargedOutputTokens = deltas.outputTokens + toolUsage.outputTokens;
   const chargedCacheReadTokens = deltas.cacheReadTokens + toolUsage.cacheReadTokens;

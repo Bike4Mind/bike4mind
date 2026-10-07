@@ -4,9 +4,9 @@ import type { Logger } from '@bike4mind/observability';
 
 /**
  * Covers the `finally { await dispatchQuestCallback(body.questId, logger); }` wrapper shared by
- * the three generation queue handlers (imageGeneration, imageEdit, videoGeneration): the
+ * the two generation queue handlers (imageGeneration, imageEdit): the
  * callback must fire whether `process()` resolves or rejects, and a rejection must still
- * propagate out of `dispatch`. The three handlers' own test files only cover the factory's
+ * propagate out of `dispatch`. The two handlers' own test files only cover the factory's
  * lazy-Resource-access contract, never this finally-block behaviour.
  */
 
@@ -18,7 +18,6 @@ const h = vi.hoisted(() => ({
   mockDispatchQuestCallback: vi.fn(),
   mockImageGenerationProcess: vi.fn(),
   mockImageEditProcess: vi.fn(),
-  mockVideoGenerationProcess: vi.fn(),
 }));
 
 vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({
@@ -58,10 +57,6 @@ vi.mock('@bike4mind/services/llm', async orig => {
       constructor(_opts: unknown) {}
       process = h.mockImageEditProcess;
     },
-    VideoGenerationService: class MockVideoGenerationService {
-      constructor(_opts: unknown) {}
-      process = h.mockVideoGenerationProcess;
-    },
   };
 });
 
@@ -88,11 +83,6 @@ describe.each([
     name: 'imageEdit',
     modulePath: './imageEdit',
     mockProcess: h.mockImageEditProcess,
-  },
-  {
-    name: 'videoGeneration',
-    modulePath: './videoGeneration',
-    mockProcess: h.mockVideoGenerationProcess,
   },
 ])('$name dispatch: generation callback runs in the finally block', ({ modulePath, mockProcess }) => {
   beforeEach(() => {

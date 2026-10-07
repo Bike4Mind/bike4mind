@@ -8,6 +8,7 @@ import {
   fabFileRepository,
   lakeMembershipDecisionRepository,
   lakeMembershipRemovalRepository,
+  withTransaction,
 } from '@bike4mind/database';
 import { REPAIR_DECISIONS } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
@@ -66,44 +67,49 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     }
 
     const ctx = await toAccessContext(req);
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    dataLakeService.assertLakeWritable(lake);
-
-    const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
-      db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-    if (!canManage) {
-      throw new BadRequestError('You do not have permission to resolve duplicates in this data lake');
-    }
-
     // The removal inside recomputes stats, which can flip a draft lake active and emit a
     // config-change row; `auditPrincipal` is what keeps a key-driven call from being recorded as
     // the human.
     const actor = { ...ctx, auditPrincipal: lakeConfigAuditPrincipal(req.user!, req.apiKeyInfo) };
 
-    const { group, removedFabFileIds } = await dataLakeService.applyAdmissionDecision(
-      actor,
-      lake,
-      parsed.data.decision === 'keep-specific'
-        ? { fileName: parsed.data.fileName, decision: 'keep-specific', keptFabFileId: parsed.data.keptFabFileId! }
-        : { fileName: parsed.data.fileName, decision: parsed.data.decision, keptFabFileId: null },
-      {
-        db: {
-          dataLakes: dataLakeRepository,
-          dataLakeAccessGrants: dataLakeAccessGrantRepository,
-          fabFiles: fabFileRepository,
-          lakeMembershipDecisions: lakeMembershipDecisionRepository,
-          // The removal door's restore record - required, not optional: without it "Undo" on a
-          // replacement silently does nothing.
-          lakeMembershipRemovals: lakeMembershipRemovalRepository,
-          ...lakeConfigAuditDb,
-          ...lakeMembershipAuditDb,
-        },
-        logger: req.logger,
+    const { group, removedFabFileIds } = await withTransaction(async () => {
+      const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+        db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      dataLakeService.assertLakeWritable(lake);
+
+      const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
+        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+      });
+      if (!canManage) {
+        throw new BadRequestError('You do not have permission to resolve duplicates in this data lake');
       }
-    );
+
+      const result = await dataLakeService.applyAdmissionDecision(
+        actor,
+        lake,
+        parsed.data.decision === 'keep-specific'
+          ? { fileName: parsed.data.fileName, decision: 'keep-specific', keptFabFileId: parsed.data.keptFabFileId! }
+          : { fileName: parsed.data.fileName, decision: parsed.data.decision, keptFabFileId: null },
+        {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            fabFiles: fabFileRepository,
+            lakeMembershipDecisions: lakeMembershipDecisionRepository,
+            // The removal door's restore record - required, not optional: without it "Undo" on a
+            // replacement silently does nothing.
+            lakeMembershipRemovals: lakeMembershipRemovalRepository,
+            ...lakeConfigAuditDb,
+            ...lakeMembershipAuditDb,
+          },
+          logger: req.logger,
+        }
+      );
+      // Serializes this write against a concurrent grant revoke - see WRITE-TIME RESIDUAL on `canManageLake`.
+      await dataLakeRepository.touchIfStable(lake.id);
+      return result;
+    });
 
     return res.json({
       success: true,
