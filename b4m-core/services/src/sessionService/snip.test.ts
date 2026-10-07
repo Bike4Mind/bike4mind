@@ -258,7 +258,7 @@ describe('snipSession', () => {
     const NO_ACCESS = async () => ({ entitlements: [] });
     const snipFrom = async (
       surface: string | undefined,
-      targetSurface: string | null,
+      targetSurface: string | null | undefined,
       resolveSurfaceAccess?: () => Promise<{ entitlements: string[] }>
     ) => {
       const { db } = makeAdapters();
@@ -284,8 +284,9 @@ describe('snipSession', () => {
       expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'opti' }));
     });
 
+    // With access, so only an honored `null` target (not the no-entitlement fallback) yields no surface.
     it('snips an opti session into the main list', async () => {
-      const { db, run } = await snipFrom('opti', null, NO_ACCESS);
+      const { db, run } = await snipFrom('opti', null, OPTI_ACCESS);
       await run;
       expect(db.sessions.create.mock.calls[0][0].surface).toBeUndefined();
     });
@@ -296,9 +297,29 @@ describe('snipSession', () => {
       expect(db.sessions.create).not.toHaveBeenCalled();
     });
 
+    it('400s an unregistered destination', async () => {
+      const { db, run } = await snipFrom(undefined, 'some-private-surface', OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    it('400s a targeted snip out of an unregistered surface', async () => {
+      const { db, run } = await snipFrom('some-private-surface', null, OPTI_ACCESS);
+      await expect(run).rejects.toMatchObject({ statusCode: 400 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
+    });
+
+    // A copy without a target inherits even a surface this repo does not register.
+    it('inherits an unregistered surface when no target is named', async () => {
+      const { db, run } = await snipFrom('some-private-surface', undefined);
+      await run;
+      expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ surface: 'some-private-surface' }));
+    });
+
     it('refuses a targeted snip when the route supplied no access resolver', async () => {
-      const { run } = await snipFrom(undefined, 'opti');
+      const { db, run } = await snipFrom(undefined, 'opti');
       await expect(run).rejects.toMatchObject({ statusCode: 403 });
+      expect(db.sessions.create).not.toHaveBeenCalled();
     });
   });
 
