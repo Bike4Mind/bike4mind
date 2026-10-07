@@ -598,6 +598,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         // permission card on an already-finished run - the reconnect arm of the
         // same bug the terminal transitions above guard against.
         pendingPermission: isActiveStatus(snapshot.status) ? snapshot.pendingPermission : undefined,
+        isAborting: isActiveStatus(snapshot.status) ? exec.isAborting : false,
         lastKnownIteration: Math.max(exec.lastKnownIteration, snapshot.iterationCount),
         // Step replay. Replace iterations only when the server actually
         // supplied them - `undefined` means "live-only reconnect" (legacy

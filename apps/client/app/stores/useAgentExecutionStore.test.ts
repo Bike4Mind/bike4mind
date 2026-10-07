@@ -827,6 +827,20 @@ describe('useAgentExecutionStore — clears stale pendingPermission on terminal 
     expect(exec.pendingPermission).toBeUndefined();
   });
 
+  it('hydrateFromReconnect clears isAborting for a TERMINAL run', () => {
+    const { startExecution, markAborting, hydrateFromReconnect } = useAgentExecutionStore.getState();
+    startExecution('exec-recon-abort', 'session-A');
+    markAborting('exec-recon-abort');
+    hydrateFromReconnect({
+      executionId: 'exec-recon-abort',
+      sessionId: 'session-A',
+      status: 'completed',
+      totalCreditsUsed: 3,
+      iterationCount: 2,
+    });
+    expect(useAgentExecutionStore.getState().executions['exec-recon-abort'].isAborting).toBe(false);
+  });
+
   it('hydrateFromReconnect keeps pendingPermission for a still-ACTIVE run', () => {
     useAgentExecutionStore.getState().hydrateFromReconnect({
       executionId: 'exec-recon-active',
