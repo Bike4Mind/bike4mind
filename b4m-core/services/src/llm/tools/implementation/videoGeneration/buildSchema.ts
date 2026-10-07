@@ -26,18 +26,33 @@ const describeModel = (id: VideoModelId): string => {
   );
 };
 
+const unionInCatalogOrder = <T extends string>(ordered: readonly T[], offered: readonly T[]): [T, ...T[]] => {
+  const [first, ...rest] = ordered.filter(value => offered.includes(value));
+  if (first === undefined) throw new Error('Usable video models declare no values for this option');
+  return [first, ...rest];
+};
+
 // The schema is converted with z.toJSONSchema for the LLM, so keep it free of transforms, refinements and catch.
 // Per-model duration strictness is enforced downstream by validateAgainstCapabilities in createVideoJob.
 export function buildVideoToolSchema(usableModels: readonly [VideoModelId, ...VideoModelId[]]) {
   const bounds = usableModels.map(id => durationBounds(VIDEO_MODEL_CATALOG[id]));
   const min = Math.min(...bounds.map(b => b.min));
   const max = Math.max(...bounds.map(b => b.max));
+  const usableCaps = usableModels.map(id => VIDEO_MODEL_CATALOG[id]);
+  const aspectRatios = unionInCatalogOrder(
+    ASPECT_RATIOS,
+    usableCaps.flatMap(caps => caps.aspectRatios)
+  );
+  const resolutions = unionInCatalogOrder(
+    RESOLUTION_TIERS,
+    usableCaps.flatMap(caps => caps.resolutions)
+  );
   const schema = z.object({
     model: z.enum(usableModels).describe('Which video model to use'),
     prompt: z.string().min(1).max(4000).describe('What the clip should show'),
     durationSeconds: z.number().int().min(min).max(max).optional().describe('Clip length; must fit the chosen model'),
-    aspectRatio: z.enum(ASPECT_RATIOS).optional(),
-    resolution: z.enum(RESOLUTION_TIERS).optional(),
+    aspectRatio: z.enum(aspectRatios).optional(),
+    resolution: z.enum(resolutions).optional(),
     inputImageFileId: z
       .string()
       .optional()
