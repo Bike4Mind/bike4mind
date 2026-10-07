@@ -293,7 +293,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             } else {
               const { dataLakeTags, dataLakeTagPrefixes, lakes } = await dynamicAccess();
               const lakeMemberships = lakeMembershipsFrom(lakes);
-              if (excludesLibrary && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+              const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
+              if (
+                excludesLibrary &&
+                !dataLakeTags.length &&
+                !dataLakeTagPrefixes.length &&
+                !lakeMemberships.length &&
+                !admitFileIds.length
+              ) {
                 return LIBRARY_OFF_NO_LAKE_MESSAGE;
               }
               warnIfManyLakeMemberships(lakeMemberships, context.logger, 'retrieve_knowledge_content');
@@ -311,6 +318,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                   lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                   restrictToDataLake: excludesLibrary,
+                  admitFileIds,
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                   ...retrievalFilter,

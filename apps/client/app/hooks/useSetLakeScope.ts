@@ -31,7 +31,7 @@ export default function useSetLakeScope() {
     (lakeTags: string[]) => {
       if (!currentSession) return;
       const explicit = lakeTags.length > 0;
-      // Picking a scope defaults the caller's library off, but never overrides a choice already made.
+      // Any scope change, including clearing to all lakes, defaults the library off unless a choice was already made.
       const defaultLibraryOff = currentSession.includeLibraryFiles === undefined;
       setCurrentSession({
         ...currentSession,

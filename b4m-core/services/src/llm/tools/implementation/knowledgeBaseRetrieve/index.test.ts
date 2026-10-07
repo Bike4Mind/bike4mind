@@ -1856,4 +1856,39 @@ describe('retrieve_knowledge_content with the library off', () => {
     expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
     expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
   });
+
+  it('admits attached files on the query path, matching search_knowledge_base', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(lakeAccess);
+    const ctx = offContext({ attachedFileIds: [FILE_ID, 'not-an-id'] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      restrictToDataLake: true,
+      admitFileIds: [FILE_ID],
+    });
+  });
+
+  it('searches attached files on the query path when no lake is reachable', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue({ ...lakeAccess, dataLakeTags: [] });
+    const ctx = offContext({ attachedFileIds: [FILE_ID] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    const out = await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      admitFileIds: [FILE_ID],
+    });
+  });
+
+  it('admits no attached files on the query path when the library is on', async () => {
+    const ctx = makeContext({ sessionIncludeLibraryFiles: true, attachedFileIds: [FILE_ID] });
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({ data: [], total: 0 });
+    await knowledgeBaseRetrieveTool.implementation(ctx, undefined).toolFn({ query: 'notes' });
+
+    expect((ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mock.calls[0][5]).toMatchObject({
+      restrictToDataLake: false,
+      admitFileIds: [],
+    });
+  });
 });
