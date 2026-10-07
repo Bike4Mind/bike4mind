@@ -55,7 +55,11 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
 }));
 
 import { handler, runQuestTimeoutSweep } from './questTimeoutSweep';
-import { QUEST_TIMEOUT_THRESHOLD_MS, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  QUEST_TIMEOUT_THRESHOLD_MS,
+  STUCK_QUEST_RECOVERED_LOG,
+  UNFINISHED_REPLY_NOTICE,
+} from '@server/chatCompletion/questTimeoutRecovery';
 
 const staleQuest = (overrides: Record<string, unknown> = {}) => ({
   id: 'q-1',
@@ -123,8 +127,12 @@ describe('questTimeoutSweep cron', () => {
     await handler();
 
     // The Slack error channel is fed only by ERROR-level lines (infra/logMonitor.ts);
-    // a warn-level recovery is invisible to LiveOps triage.
-    expect(mockLogger.error).toHaveBeenCalledWith('[QuestTimeoutSweep] Recovered stuck quest', { questId: 'q-1' });
+    // a warn-level recovery is invisible to LiveOps triage. The message is the shared
+    // recovery constant so the same filter catches every settle site.
+    expect(mockLogger.error).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
+      questId: 'q-1',
+      via: 'sweep',
+    });
   });
 
   it('recovers a stuck quest with content by flipping status only (no error clobber)', async () => {
