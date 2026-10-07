@@ -73,7 +73,7 @@ export const GITHUB_LAKE_STATE_OPTIONS = { audience: 'github-lake-install-state'
 /** Files purged per revoke-queue receive (revoke and disconnect alike), sized to finish well inside its 10-minute timeout (infra/queues.ts). */
 export const REVOKE_PURGE_SLICE_SIZE = 1000;
 
-/** The githubLakeRevokeQueue message (queueHandlers/githubLakeRevoke.ts parses the same shape). */
+/** The githubLakeRevokeQueue message (apps/workers/src/queueHandlers/githubLakeRevoke.ts parses the same shape). */
 export type GitHubLakeRevokeMessage = { connectionId: string; installationId: number };
 
 type GitHubLakeStatePayload = BaseStatePayload & { userId: string; dataLakeId: string };
