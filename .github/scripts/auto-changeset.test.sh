@@ -80,6 +80,30 @@ run_step() {
   )
 }
 
+# Usage: run_verify <repo-work-dir> <pr-title> <pr-number>; sets VERIFY_RC.
+run_verify() {
+  VERIFY_RC=0
+  (
+    cd "$1"
+    PR_TITLE="$2" PR_NUMBER="$3" REPO="owner/repo" bash "$VERIFY" >"$1/.verify-output" 2>&1
+  ) || VERIFY_RC=$?
+}
+
+# Usage: expect_verify <rc> <label> <repo-work-dir> <pr-title> <pr-number>
+# Also asserts the verifier never pushed to the repo's real remote.
+expect_verify() {
+  local want="$1" label="$2" dir="$3" before
+  before=$(git -C "$dir" ls-remote origin 2>/dev/null)
+  run_verify "$dir" "$4" "$5"
+  if [ "$VERIFY_RC" -ne "$want" ]; then
+    fail "$label" "exit $VERIFY_RC, want $want:" "$(cat "$dir/.verify-output")"
+  elif [ "$(git -C "$dir" ls-remote origin 2>/dev/null)" != "$before" ]; then
+    fail "$label" "the verifier pushed to origin"
+  else
+    ok "$label"
+  fi
+}
+
 ok() {
   echo "PASS: $1"
   PASSED=$((PASSED + 1))
@@ -249,6 +273,89 @@ if [ -f "$D/work/.changeset/pr-905.md" ]; then
   fail "a chore generates no changeset" "$(cat "$D/work/.changeset/pr-905.md")"
 else
   ok "a chore generates no changeset"
+fi
+
+# --- verify-changeset.sh: fails whenever the bot would still commit ---
+D="$WORK/verify-missing"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+expect_verify 1 "verify fails: feat PR with no changeset" "$D/work" "feat(auth): new grant type" 910
+
+D="$WORK/verify-wrong-bump"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "fix(auth): correct token refresh" 911
+expect_verify 1 "verify fails: patch changeset under a feat title" "$D/work" "feat(auth): new grant type" 911
+
+D="$WORK/verify-stale"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "feat(auth): new grant type" 912
+expect_verify 1 "verify fails: stale changeset after the title became chore" "$D/work" "chore(auth): tidy" 912
+
+D="$WORK/verify-wrong-packages"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "fix(auth): correct token refresh" 913
+(
+  cd "$D/work"
+  mkdir -p b4m-core/common/src
+  printf '%s\n' "touched" >b4m-core/common/src/index.ts
+  git add -A
+  git commit --quiet -m "fix: also common"
+  git push --quiet 2>/dev/null
+)
+expect_verify 1 "verify fails: changeset misses a newly touched package" "$D/work" "fix(auth): correct token refresh" 913
+
+# --- verify-changeset.sh: passes every legitimate head ---
+D="$WORK/verify-match"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "feat(auth): new grant type" 914
+expect_verify 0 "verify passes: bot-generated changeset matches" "$D/work" "feat(auth): new grant type" 914
+
+D="$WORK/verify-chore"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+expect_verify 0 "verify passes: chore title needs no changeset" "$D/work" "chore(auth): bump a dev dependency" 915
+
+D="$WORK/verify-private"
+mkdir -p "$D"
+make_repo "$D" "apps/client/src/page.tsx"
+expect_verify 0 "verify passes: diff touches only private packages" "$D/work" "feat(client): new page" 916
+
+D="$WORK/verify-manual"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+(
+  cd "$D/work"
+  printf '%s\n' '---' '"@bike4mind/auth": minor' '---' '' 'Hand written.' >.changeset/hand-written.md
+  git add -A
+  git commit --quiet -m "chore: manual changeset"
+  git push --quiet 2>/dev/null
+)
+expect_verify 0 "verify passes: manual changeset covers the bump" "$D/work" "fix(auth): correct token refresh" 917
+
+D="$WORK/verify-opt-out"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "fix(auth): correct token refresh" 918
+(
+  cd "$D/work"
+  git rm --quiet .changeset/pr-918.md
+  git commit --quiet -m "chore: drop the auto-changeset"
+  git push --quiet 2>/dev/null
+)
+expect_verify 0 "verify passes: human-deleted changeset (opt-out)" "$D/work" "fix(auth): correct token refresh" 918
+
+# --- A title edit on a bot-authored head must regenerate, not skip ---
+# The "Skip if last commit is from bot" step exists only to break the loop on the bot's
+# own push; on an `edited` event it would leave the old bump in place.
+if grep -A1 -- '- name: Skip if last commit is from bot' "$REPO_ROOT/.github/workflows/auto-changeset.yml" |
+  grep -q "github.event.action == 'synchronize'"; then
+  ok "bot-head skip applies only to synchronize"
+else
+  fail "bot-head skip applies only to synchronize"
 fi
 
 echo

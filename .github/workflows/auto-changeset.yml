@@ -69,7 +69,9 @@ jobs:
           git config user.email "b4m-release-bot[bot]@users.noreply.github.com"
 
       - name: Skip if last commit is from bot
-        if: env.SKIP != 'true'
+        if: env.SKIP != 'true' && github.event.action == 'synchronize'
+        # Only the bot's own push needs skipping (it would loop). A title edit on a
+        # bot-authored head must still regenerate, or the old bump level ships.
         run: |
           LAST_AUTHOR=$(git log -1 --format='%an')
           if [ "$LAST_AUTHOR" = "b4m-release-bot[bot]" ]; then
@@ -85,3 +87,43 @@ jobs:
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: bash .github/scripts/generate-changeset.sh
+
+      # Failure/clear comments use the workflow token, not the App token, so the
+      # report still posts when generating the App token is what failed. Best effort.
+      - name: Report failure on the PR
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          MARKER="<!-- auto-changeset-failed -->"
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          BODY="${MARKER}
+          **Auto-Changeset failed** ([run]($RUN_URL)), so no changeset was written for this PR. The required \`validate\` check blocks merge until the PR head carries the changeset this workflow would generate.
+
+          To fix, any one of:
+          - Re-run the failed run (open the run link, then **Re-run failed jobs**), or push a new commit.
+          - If you just changed the PR title, save it again to re-trigger this workflow.
+          - Run \`pnpm changeset\` to add a manual changeset at or above this PR's bump level.
+          - Delete \`.changeset/pr-${PR_NUMBER}.md\` in your own commit to opt out of a release deliberately."
+          ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" 2>/dev/null | head -1 || true)
+          if [ -n "$ID" ]; then
+            gh api "repos/$REPO/issues/comments/$ID" -X PATCH -f body="$BODY" > /dev/null || true
+          else
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$BODY" > /dev/null || true
+          fi
+
+      - name: Clear failure comment
+        if: success() && env.SKIP != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("<!-- auto-changeset-failed -->")) | .id' 2>/dev/null | head -1 || true)
+          if [ -n "$ID" ]; then
+            gh api "repos/$REPO/issues/comments/$ID" -X DELETE > /dev/null || true
+          fi
