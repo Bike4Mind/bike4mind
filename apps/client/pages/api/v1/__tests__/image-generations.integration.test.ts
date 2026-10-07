@@ -109,7 +109,7 @@ vi.mock('@server/managers/sessionManager', () => ({
   getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
 }));
 
-vi.mock('@server/queueHandlers/imageGeneration', () => ({
+vi.mock('@server/imageGenerations/imageGeneration', () => ({
   getImageGeneration: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
 

@@ -6,7 +6,7 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageEdit } from '@server/queueHandlers/imageEdit';
+import { getImageEdit } from '@server/imageGenerations/imageEdit';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import { resolveBillingOrgId } from '@server/utils/orgAccess';

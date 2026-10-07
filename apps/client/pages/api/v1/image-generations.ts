@@ -9,7 +9,7 @@
  */
 
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getImageGeneration } from '@server/queueHandlers/imageGeneration';
+import { getImageGeneration } from '@server/imageGenerations/imageGeneration';
 import { generateImageContract, GenerateImageIvokeParams } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
