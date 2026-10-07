@@ -57,6 +57,8 @@ import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
 import { loadSystemPromptById } from '@server/utils/sessionSystemPromptResolver';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { buildVideoToolConfig } from '@server/videoGenerations/buildVideoToolConfig';
+import { getCreateVideoJobDeps, getVideoJobDeps } from '@server/generationJobs/wiring';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
@@ -332,6 +334,8 @@ export async function processQuest(params: z.infer<typeof QuestStartBodySchema>,
     body: requestBody,
     logger,
     externalTools,
+    videoToolConfigResolver: () =>
+      buildVideoToolConfig(user.id, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() }),
   });
 
   return;
