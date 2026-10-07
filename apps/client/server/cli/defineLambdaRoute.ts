@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   type EndpointContract,
+  HTTPError,
   type RequestBodyOf,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
@@ -148,9 +149,17 @@ export function defineLambdaRoute<C extends EndpointContract>(
       result = await handle({ validated, auth, requestId, event });
     } catch (error) {
       // A thrown handler error must not surface as an opaque API-gateway 502 -
-      // shape it into a 500 with the correlation id. Log it too, or the id in the
-      // body has nothing to correlate to in CloudWatch.
-      new Logger({ metadata: { requestId } }).error(`[${contract.operationId}] Unhandled handler error`, error);
+      // shape it with the correlation id. Log it too, or the id in the body has
+      // nothing to correlate to in CloudWatch. An HTTPError keeps its own status,
+      // logged at the same levels as errorHandler's Next transport.
+      const log = new Logger({ metadata: { requestId } });
+      if (error instanceof HTTPError) {
+        const message = `[${contract.operationId}] ${error.statusCode}: ${error.message}`;
+        if (error.statusCode >= 500 && !error.expected) log.error(message, error);
+        else log.warn(message);
+        return json(error.statusCode, { error: error.message, request_id: requestId });
+      }
+      log.error(`[${contract.operationId}] Unhandled handler error`, error);
       return json(500, {
         error: error instanceof Error ? error.message : 'Internal server error',
         request_id: requestId,
