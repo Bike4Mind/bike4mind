@@ -88,12 +88,50 @@ export function totalTokens(usage: ChatUsage | undefined): number | null {
   return total > 0 ? total : null;
 }
 
+/** "$3.20", or four places where two would round a real charge away to "$0.00". */
+function formatUsd(usd: number): string {
+  return `$${usd.toFixed(usd < 0.01 ? 4 : 2)}`;
+}
+
 /** "$3.20" from the server's own figure, or "12 credits" when only credits came; null when neither. */
 export function formatCost(usage: ChatUsage | null | undefined): string | null {
   if (!usage) return null;
-  if (usage.usdCost !== undefined) return `$${usage.usdCost.toFixed(usage.usdCost < 0.01 ? 4 : 2)}`;
+  if (usage.usdCost !== undefined) return formatUsd(usage.usdCost);
   if (usage.creditsUsed !== undefined) return `${Math.round(usage.creditsUsed).toLocaleString('en-US')} credits`;
   return null;
+}
+
+/**
+ * What one reply cost, in CREDITS - deliberately not formatCost, which prefers the dollar.
+ *
+ * A reader asking what a reply cost is asking against a balance, and the balance is denominated
+ * in credits; "$0.0004" cannot be subtracted from "31,667 credits" by eye. The dollar figure is
+ * still the better one for an absolute sense of spend, so it stays - see describeReplyCost.
+ *
+ * Null when the server reported no credit figure. That is NOT zero, per ChatUsage: a reply from
+ * before this was captured, or a turn that failed, has to render nothing rather than "0 credits".
+ */
+export function formatCreditsSpent(usage: ChatUsage | null | undefined): string | null {
+  const credits = usage?.creditsUsed;
+  if (credits === undefined) return null;
+  // Spending under a credit is still spending, and rounding it to "0 credits" says it was free -
+  // the same lie this file refuses to tell by rendering an absent figure as a zero.
+  if (credits > 0 && Math.round(credits) === 0) return '<1 credit';
+  return `${formatCredits(credits)} ${Math.round(credits) === 1 ? 'credit' : 'credits'}`;
+}
+
+/**
+ * The detail behind that figure: where the tokens went, then what it came to in dollars.
+ *
+ * The dollar line reads `usdCost` directly rather than calling formatCost, which falls back to
+ * credits when no dollar figure came - repeating the headline in the line meant to add to it.
+ */
+export function describeReplyCost(usage: ChatUsage | null | undefined): string | null {
+  const lines: string[] = [];
+  const split = describeSplit(usage);
+  if (split) lines.push(split);
+  if (usage?.usdCost !== undefined) lines.push(formatUsd(usage.usdCost));
+  return lines.length === 0 ? null : lines.join('\n');
 }
 
 /** The four-way split, for a tooltip: "12k new input, 1.1M cached, 40k cache write, 3.2k output". */

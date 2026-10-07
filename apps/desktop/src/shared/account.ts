@@ -22,3 +22,27 @@ export interface AccountCredits {
   /** Set when the read failed. Present with a null balance, never with a real one. */
   error?: string;
 }
+
+/** The caller's active subscription, as `GET /api/v1/me` states it. */
+export interface AccountPlan {
+  name: string;
+  interval: 'monthly' | 'yearly';
+  /** ISO 8601. When the current billing period ENDS - not a cancellation date. */
+  currentPeriodEndsAt: string;
+}
+
+/**
+ * Rung on the plan ladder, straight off the wire. `free` is no subscription; `other` is still a
+ * paying account whose plan this deployment cannot name, which is the one case where a null
+ * `plan` must not be read as "not paying".
+ */
+export type AccountTier = 'free' | 'basic' | 'pro' | 'other';
+
+/** The caller's own commercial state: what they hold, and what they are on. */
+export interface AccountProfile {
+  credits: AccountCredits;
+  /** Null when the deployment named no plan. `tier` is what tells free from unnameable. */
+  plan: AccountPlan | null;
+  /** Null when the read failed, or when the server stated no tier. */
+  tier: AccountTier | null;
+}

@@ -1,6 +1,7 @@
 import { createHashHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { DevLogsWindow } from './devlog/DevLogsWindow';
 import { Home } from './routes/Home';
+import { Profile } from './routes/Profile';
 
 const rootRoute = createRootRoute();
 
@@ -8,6 +9,12 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   component: Home,
+});
+
+const profileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/profile',
+  component: Profile,
 });
 
 // Its own window, opened by a chord rather than navigated to from the app: see
@@ -23,7 +30,7 @@ const devLogsRoute = createRoute({
 // API to push against. Hash history is the one mode that behaves the same there as it
 // does against the dev server.
 export const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, devLogsRoute]),
+  routeTree: rootRoute.addChildren([indexRoute, profileRoute, devLogsRoute]),
   history: createHashHistory(),
 });
 

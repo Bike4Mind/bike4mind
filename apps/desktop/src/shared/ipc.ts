@@ -1,4 +1,4 @@
-import type { AccountCredits } from './account';
+import type { AccountCredits, AccountProfile } from './account';
 import type { AccountPage, AuthState, EnvironmentSelection, SetEnvironmentResult } from './auth';
 import type {
   ChromeHostsResult,
@@ -38,6 +38,7 @@ import type {
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
 import type { SkillsState } from './skills';
 import type { UpdateInstallResult, UpdateState } from './update';
+import type { AccountUsageResult, UsageWindowId } from './usage';
 
 /**
  * IPC contract shared by the main process and the preload bridge.
@@ -60,6 +61,8 @@ export const IPC_CHANNELS = {
   /** main -> renderer push; the renderer never polls for auth state. */
   authStateChanged: 'auth:state-changed',
   accountGetCredits: 'account:get-credits',
+  accountGetProfile: 'account:get-profile',
+  usageGetHistory: 'usage:get-history',
   chatListModels: 'chat:list-models',
   chatSetSessionModel: 'chat:set-session-model',
   chatSetSessionReasoningEffort: 'chat:set-session-reasoning-effort',
@@ -302,6 +305,23 @@ export interface DesktopApi {
      * A push channel would need main to watch a number only the server knows.
      */
     getCredits(): Promise<AccountCredits>;
+    /**
+     * The same read as `getCredits`, plus the plan the account is on. For the profile screen,
+     * which states balance and plan together and would otherwise describe one account from two
+     * round-trips taken at two different instants.
+     */
+    getProfile(): Promise<AccountProfile>;
+  };
+  usage: {
+    /**
+     * The account's own spend over one trailing window.
+     *
+     * Asked when the profile screen opens, never on app start: these are aggregations over a
+     * month of events, and nothing outside that screen draws them. Answers are held for a
+     * short while in main - see UsageService - so `force` is what a Refresh needs to get past
+     * the cache after a turn has just spent.
+     */
+    getHistory(window: UsageWindowId, force?: boolean): Promise<AccountUsageResult>;
   };
   chat: {
     /**
