@@ -53,6 +53,11 @@ const h = vi.hoisted(() => {
     generatedDownload: vi.fn(async () => Buffer.from('generated-bytes')),
     canAccessGeneratedImage: vi.fn(async () => false),
     createZipBuffer: vi.fn(async () => Buffer.from('zip')),
+    metadata: vi.fn(),
+    availableModels: vi.fn(async () => []),
+    upload: vi.fn(),
+    signedUrl: vi.fn(),
+    progress: vi.fn(),
   };
 });
 
@@ -107,7 +112,7 @@ vi.mock('@bike4mind/common', async () => {
 
 // No summary model available -> generateSummary short-circuits to null (no LLM call).
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: vi.fn(async () => []),
+  getAvailableModels: h.availableModels,
   getLlmByModel: vi.fn(() => null),
 }));
 
@@ -119,9 +124,9 @@ vi.mock('@bike4mind/observability', () => ({ Logger: class {} }));
 
 vi.mock('@bike4mind/fab-pipeline', () => ({
   S3Storage: class {
-    getMetadata = vi.fn().mockRejectedValue(new Error('not found')); // ZIP absent -> proceed
-    upload = vi.fn().mockResolvedValue(undefined);
-    getSignedUrl = vi.fn().mockResolvedValue('https://download.test/export.zip');
+    getMetadata = h.metadata;
+    upload = h.upload;
+    getSignedUrl = h.signedUrl;
   },
 }));
 
@@ -134,7 +139,7 @@ vi.mock('@server/utils/generatedImageAccess', () => ({
   userCanAccessGeneratedImage: h.canAccessGeneratedImage,
 }));
 
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient: h.progress }));
 
 vi.mock('@client/app/utils/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
@@ -161,7 +166,8 @@ import { dispatch } from './questExport';
 
 const makeLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() });
 
-const runExport = (callerId: string) => {
+const exportContext = { getRemainingTimeInMillis: () => 600000 };
+const runExport = (callerId: string, context = exportContext) => {
   h.planFindById.mockResolvedValue({
     userId: h.OWNER_ID,
     sharedWith: [h.COLLABORATOR_ID],
@@ -179,7 +185,7 @@ const runExport = (callerId: string) => {
   const event = {
     Records: [{ body: JSON.stringify({ exportJobId: 'job-1', planId: 'plan-1', userId: callerId }) }],
   };
-  return dispatch(event as never, {} as never, makeLogger() as never);
+  return dispatch(event as never, context as never, makeLogger() as never);
 };
 
 describe('questExport image access subject', () => {
@@ -343,7 +349,7 @@ describe('questExport owner-arm readability', () => {
     const event = {
       Records: [{ body: JSON.stringify({ exportJobId: 'job-2', planId: 'plan-2', userId: callerId }) }],
     };
-    return dispatch(event as never, {} as never, makeLogger() as never);
+    return dispatch(event as never, exportContext as never, makeLogger() as never);
   };
 
   const exportedMarkdown = () => {
@@ -405,7 +411,7 @@ describe('questExport reply extraction', () => {
     const event = {
       Records: [{ body: JSON.stringify({ exportJobId: 'job-3', planId: 'plan-3', userId: h.OWNER_ID }) }],
     };
-    await dispatch(event as never, {} as never, makeLogger() as never);
+    await dispatch(event as never, exportContext as never, makeLogger() as never);
     expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
     const [markdown] = h.createZipBuffer.mock.calls[0] as unknown as [string];
     return markdown;
@@ -505,11 +511,12 @@ describe('questExport queue multiplex', () => {
       ],
     };
 
-    await dispatch(event as never, {} as never, makeLogger() as never);
+    await dispatch(event as never, exportContext as never, makeLogger() as never);
 
     expect(h.runOrgFeedbackSummary).toHaveBeenCalledWith(
       expect.objectContaining({ summaryJobId: 'sum-1' }),
-      expect.anything()
+      expect.anything(),
+      expect.any(Function)
     );
     expect(h.planFindById).not.toHaveBeenCalled();
   });
@@ -520,4 +527,124 @@ describe('questExport queue multiplex', () => {
     expect(h.runOrgFeedbackSummary).not.toHaveBeenCalled();
     expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
   });
+});
+
+beforeEach(() => {
+  h.metadata
+    .mockReset()
+    .mockRejectedValue(Object.assign(new Error('missing'), { name: 'NotFound', $metadata: { httpStatusCode: 404 } }));
+  h.upload.mockReset().mockResolvedValue(undefined);
+  h.signedUrl.mockReset().mockResolvedValue('https://download.test/export.zip');
+  h.progress.mockReset().mockResolvedValue(undefined);
+});
+
+describe('quest export replay', () => {
+  it('keeps the same object identity across midnight and a changed goal', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T23:59:59Z'));
+      await runExport(h.OWNER_ID);
+      const key = h.upload.mock.calls.at(-1)![1];
+      h.metadata.mockImplementation(async candidate => {
+        if (candidate !== key) throw Object.assign(new Error('missing'), { name: 'NotFound' });
+        return {};
+      });
+      vi.setSystemTime(new Date('2026-01-02T00:01:00Z'));
+      const plan = { ...(await h.planFindById()), goal: 'Renamed goal' };
+      h.planFindById.mockResolvedValue(plan);
+      await dispatch(
+        {
+          Records: [{ body: JSON.stringify({ exportJobId: 'job-1', planId: 'plan-1', userId: h.OWNER_ID }) }],
+        } as never,
+        exportContext as never,
+        makeLogger() as never
+      );
+      expect(h.upload).toHaveBeenCalledTimes(1);
+      expect(h.metadata.mock.calls.at(-1)![0]).toBe(key);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['AccessDenied', 'network unavailable'])('retries metadata failure %s without regenerating', async name => {
+    h.metadata.mockRejectedValueOnce(Object.assign(new Error(name), { name }));
+    await expect(runExport(h.OWNER_ID)).rejects.toThrow(name);
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+
+  it('does not rebuild an existing ZIP when completion notification fails', async () => {
+    h.metadata.mockResolvedValue({});
+    h.progress.mockImplementation(async (_user, _endpoint, frame) => {
+      if (frame.status === 'completed') throw new Error('socket failed');
+    });
+    await expect(runExport(h.OWNER_ID)).rejects.toThrow('socket failed');
+    expect(h.upload).not.toHaveBeenCalled();
+  });
+});
+
+it.each([
+  [h.OWNER_ID, 'plan-2'],
+  [h.COLLABORATOR_ID, 'plan-1'],
+])('scopes a reused job ID to user %s and plan %s', async (userId, planId) => {
+  await runExport(h.OWNER_ID);
+  const first = h.upload.mock.calls[0][1];
+  await dispatch(
+    {
+      Records: [{ body: JSON.stringify({ exportJobId: 'job-1', planId, userId }) }],
+    } as never,
+    exportContext as never,
+    makeLogger() as never
+  );
+  expect(h.upload.mock.calls[1][1]).not.toBe(first);
+});
+it('yields before starting work after the cooperative deadline', async () => {
+  await expect(
+    dispatch(
+      { Records: [{ body: JSON.stringify({ exportJobId: 'job-1', planId: 'plan-1', userId: h.OWNER_ID }) }] } as never,
+      { getRemainingTimeInMillis: () => 0 } as never,
+      makeLogger() as never
+    )
+  ).rejects.toThrow('budget');
+  expect(h.upload).not.toHaveBeenCalled();
+});
+
+it('does not regenerate an existing artifact after a signed URL failure', async () => {
+  h.metadata.mockResolvedValue({});
+  h.signedUrl.mockRejectedValueOnce(new Error('signing unavailable'));
+  await expect(runExport(h.OWNER_ID)).rejects.toThrow('signing unavailable');
+  expect(h.upload).not.toHaveBeenCalled();
+});
+
+it.each([
+  [2, 'quest lookup'],
+  [3, 'image lookup'],
+  [4, 'summary'],
+  [5, 'ZIP creation'],
+  [6, 'upload'],
+])('stops before %s (%s) when that checkpoint expires', async (index, stage) => {
+  vi.clearAllMocks();
+  h.questFind.mockReturnValue({
+    lean: async () => [{ _id: 'q1', sessionId: h.SESSION_ID, reply: `![fig](${h.OWNER_IMAGE_URL})`, images: [] }],
+  });
+  h.sessionFindAllByIds.mockImplementation(async ids =>
+    ids
+      .filter(id => id === h.SESSION_ID)
+      .map(id => ({ id, _id: id, userId: h.OWNER_ID, users: [{ userId: h.COLLABORATOR_ID }] }))
+  );
+  let check = 0;
+  const context = { getRemainingTimeInMillis: () => (++check === index ? 0 : 600000) };
+  await expect(runExport(h.OWNER_ID, context)).rejects.toThrow('budget');
+  const next = {
+    'quest lookup': h.questFind,
+    'image lookup': h.fabFileFindOne,
+    summary: h.availableModels,
+    'ZIP creation': h.createZipBuffer,
+    upload: h.upload,
+  };
+  expect(next[stage as keyof typeof next]).not.toHaveBeenCalled();
+  expect(h.progress).toHaveBeenLastCalledWith(
+    h.OWNER_ID,
+    expect.anything(),
+    expect.objectContaining({ status: 'failed' })
+  );
 });
