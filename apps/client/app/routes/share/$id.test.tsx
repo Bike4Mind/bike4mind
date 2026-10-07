@@ -96,6 +96,29 @@ describe('SharePage', () => {
     expect(screen.queryByTestId('share-error-modal')).toBeNull();
   });
 
+  it('shows the expired modal, never Accept, for a loaded invite whose expiresAt has passed', async () => {
+    vi.mocked(fetchInvite).mockResolvedValue({
+      ...loadedInvite,
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    } as never);
+    renderPage();
+
+    expect(await screen.findByTestId('share-expired-modal')).toBeTruthy();
+    expect(screen.queryByLabelText('Accept')).toBeNull();
+  });
+
+  it('shows the expired modal, not a retry modal, when one invite expired and another failed', async () => {
+    mockId.value = 'a,b';
+    vi.mocked(fetchInvite).mockImplementation(async id => {
+      if (id === 'a') return 'expired';
+      throw new Error('boom');
+    });
+    renderPage();
+
+    expect(await screen.findByTestId('share-expired-modal')).toBeTruthy();
+    expect(screen.queryByTestId('share-error-modal')).toBeNull();
+  });
+
   it('shows a retryable error modal on a non-404 failure', async () => {
     vi.mocked(fetchInvite).mockRejectedValue(new Error('boom'));
     renderPage();

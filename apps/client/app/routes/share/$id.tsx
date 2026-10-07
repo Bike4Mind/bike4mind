@@ -92,12 +92,18 @@ const SharePage = () => {
     queryKey: ['invites', 'multiple', inviteIds.sort()],
     queryFn: async () => {
       const results = await Promise.allSettled(inviteIds.map(inviteId => fetchInvite(inviteId)));
+      const isPastExpiry = (inv: { expiresAt?: Date | string | null }) =>
+        !!inv.expiresAt && new Date(inv.expiresAt).getTime() <= Date.now();
       const items = results.flatMap((r, i) =>
-        r.status === 'fulfilled' && r.value && r.value !== 'expired' ? [{ id: inviteIds[i], invite: r.value }] : []
+        r.status === 'fulfilled' && r.value && r.value !== 'expired' && !isPastExpiry(r.value)
+          ? [{ id: inviteIds[i], invite: r.value }]
+          : []
       );
-      const expired = results.some(r => r.status === 'fulfilled' && r.value === 'expired');
+      const expired = results.some(
+        r => r.status === 'fulfilled' && r.value && (r.value === 'expired' || isPastExpiry(r.value))
+      );
       const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
-      if (!items.length && failed) {
+      if (!items.length && !expired && failed) {
         console.error('Failed to load invite', failed.reason);
         throw failed.reason;
       }

@@ -197,6 +197,25 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
+  it('returns 404 (not 410) to a stranger requesting an expired named invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'stranger@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
   it('allows a caller with share authority on the underlying document even when not a named recipient', async () => {
     resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
