@@ -5,6 +5,7 @@ import {
   normalizeTagPrefix,
   type DataLakeMembershipScope,
 } from '@bike4mind/common';
+import { isObjectIdOrHexString } from 'mongoose';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
@@ -253,8 +254,10 @@ export function buildOwnershipConditions(
   // below select files, so a single-lake view can't fall back to "all files the user owns".
   const conditions: object[] = options?.restrictToDataLake ? [] : [...baseAccess];
 
-  if (options?.restrictToDataLake && options.admitFileIds?.length) {
-    conditions.push({ $and: [{ _id: { $in: options.admitFileIds } }, { $or: baseAccess }] });
+  // Attached ids come from request bodies; a malformed one would make the whole query throw a CastError.
+  const admitFileIds = options?.admitFileIds?.filter(id => isObjectIdOrHexString(id)) ?? [];
+  if (options?.restrictToDataLake && admitFileIds.length) {
+    conditions.push({ $and: [{ _id: { $in: admitFileIds } }, { $or: baseAccess }] });
   }
 
   conditions.push(

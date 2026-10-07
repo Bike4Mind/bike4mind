@@ -3691,28 +3691,30 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     );
   });
 
+  const ATTACHED_ID = '64b7f0c2a1b2c3d4e5f60718';
+
   it("library off still searches the chat's attached files on both arms", async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
     semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
     const ctx = makeFlagContext({
       sessionRetrievalTags: ['datalake:mine'],
       sessionIncludeLibraryFiles: false,
-      attachedFileIds: ['att-1'],
+      attachedFileIds: [ATTACHED_ID],
     });
     await run(ctx);
 
     expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
       restrictToDataLake: true,
-      admitFileIds: ['att-1'],
+      admitFileIds: [ATTACHED_ID],
     });
     const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
-    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: ['att-1'] });
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED_ID] });
   });
 
   it('library on admits nothing extra, since the base arms already cover attachments', async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
     semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
-    await run(makeFlagContext({ sessionIncludeLibraryFiles: true, attachedFileIds: ['att-1'] }));
+    await run(makeFlagContext({ sessionIncludeLibraryFiles: true, attachedFileIds: [ATTACHED_ID] }));
 
     expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({ restrictToDataLake: false, admitFileIds: [] });
   });
@@ -3722,7 +3724,7 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     const ctx = makeFlagContext({
       suppressLakeArms: true,
       sessionIncludeLibraryFiles: false,
-      attachedFileIds: ['att-1'],
+      attachedFileIds: [ATTACHED_ID],
     });
     const out = await run(ctx);
 
@@ -3730,14 +3732,27 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
       restrictToDataLake: true,
       ownFilesOnly: false,
-      admitFileIds: ['att-1'],
+      admitFileIds: [ATTACHED_ID],
     });
     const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
-    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: ['att-1'] });
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: [ATTACHED_ID] });
   });
 
   it('library off wins over a personal-corpus session: nothing is searched', async () => {
     const ctx = makeFlagContext({ suppressLakeArms: true, sessionIncludeLibraryFiles: false });
+    const out = await run(ctx);
+
+    expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock).not.toHaveBeenCalled();
+    expect(ctx.db.fabfiles!.search).not.toHaveBeenCalled();
+  });
+
+  it('a malformed attached id is dropped before it can reach an _id query', async () => {
+    const ctx = makeFlagContext({
+      suppressLakeArms: true,
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: ['not-an-id'],
+    });
     const out = await run(ctx);
 
     expect(out).toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);

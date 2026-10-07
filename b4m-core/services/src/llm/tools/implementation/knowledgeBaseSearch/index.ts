@@ -1,4 +1,5 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
+import { isObjectIdShaped } from '../../base/objectId';
 import {
   citationTagDescription,
   CitableSource,
@@ -669,7 +670,7 @@ async function trySemanticKbSearch(
     // keyword arm reports the empty corpus (an ownership query with zero arms would throw on
     // restrictToDataLake).
     const excludesLibrary = await sessionExcludesLibrary(context);
-    const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []) : [];
+    const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -1419,7 +1420,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
             const excludesLibrary = await sessionExcludesLibrary(context);
-            const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []) : [];
+            const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []).filter(isObjectIdShaped) : [];
             if (
               excludesLibrary &&
               !dataLakeTags.length &&
