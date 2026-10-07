@@ -21,8 +21,10 @@ permissions:
   contents: write
   pull-requests: write
 
+# Body-only edits get their own group: they skip, so letting them cancel an in-flight
+# generate run would leave the PR without its changeset.
 concurrency:
-  group: changeset-${{ github.event.pull_request.number }}
+  group: changeset-${{ github.event.pull_request.number }}${{ github.event.action == 'edited' && !github.event.changes.title && '-body-edit' || '' }}
   cancel-in-progress: true
 
 env:

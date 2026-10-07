@@ -358,6 +358,13 @@ else
   fail "bot-head skip applies only to synchronize"
 fi
 
+if grep -A1 '^concurrency:' "$REPO_ROOT/.github/workflows/auto-changeset.yml" |
+  grep -q -- "-body-edit"; then
+  ok "body-only edits do not share the generate run's concurrency group"
+else
+  fail "body-only edits do not share the generate run's concurrency group"
+fi
+
 echo
 echo "passed: $PASSED  failed: $FAILED"
 [ "$FAILED" -eq 0 ]
