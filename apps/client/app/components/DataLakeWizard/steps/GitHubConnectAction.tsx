@@ -110,7 +110,7 @@ export default function GitHubConnectAction({ lake }: { lake: LakeSourcePanelLak
   const confirmingSwitch = switchPromptLakeId === lake.id;
 
   const { data: connection, isLoading, isError } = useLakeGitHubConnection(lake.id);
-  const canManage = useLakeGitHubCanManage(lake.id).data ?? true;
+  const canManage = useLakeGitHubCanManage(lake.id).data === true;
   const { begin: beginConnect, isPending: connecting } = useBeginLakeGitHubConnect(lake.id);
   const resync = useResyncLakeGitHub();
   const disconnect = useDisconnectLakeGitHub();
