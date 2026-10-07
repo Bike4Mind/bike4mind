@@ -134,8 +134,11 @@ export function useCompleteLakeGitHubConnect() {
       );
       return response.data.connection;
     },
-    onSuccess: async (_connection, { dataLakeId }) => {
-      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+    onSuccess: (connection, { dataLakeId }) => {
+      // Seed the bound connection and refetch in the background: an awaited invalidation would hold
+      // the picker's spinner until every observer of the key refetched.
+      queryClient.setQueryData(dataLakeKeys.gitHubConnection(dataLakeId), connection);
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
       // The picker's list is now stale (the bound repository must show as taken); a closed picker
       // just refetches fresh next time it opens rather than carrying this invalidation forward.
       queryClient.removeQueries({ queryKey: dataLakeKeys.gitHubRepositoryChoices(dataLakeId) });
@@ -150,27 +153,32 @@ export function useResyncLakeGitHub() {
     mutationFn: async (dataLakeId: string) => {
       await api.post(`/api/data-lakes/${dataLakeId}/github-connection/sync`);
     },
-    onSuccess: async (_data, dataLakeId) => {
-      await queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+    onSuccess: (_data, dataLakeId) => {
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
     },
   });
 }
 
 /**
- * Disconnect a lake's repository. The route only queues the purge, so the connection reads back as
- * `disconnecting` until the purge releases it (useLakeGitHubConnection keeps the file lists fresh).
+ * Disconnect a lake's repository. The route only queues the purge (202), so the connection reads
+ * back as `disconnecting` until the purge releases it (useLakeGitHubConnection keeps the file lists
+ * fresh); a 204 means there was no connection to disconnect.
  */
 export function useDisconnectLakeGitHub() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (dataLakeId: string) => {
-      await api.delete(`/api/data-lakes/${dataLakeId}/github-connection`);
+      const response = await api.delete(`/api/data-lakes/${dataLakeId}/github-connection`);
+      return { queued: response.status !== 204 };
     },
-    onSuccess: async (_data, dataLakeId) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) }),
-        invalidateLakeFileQueries(queryClient, dataLakeId),
-      ]);
+    onSuccess: ({ queued }, dataLakeId) => {
+      // Show the outcome now and refresh in the background: awaiting the refetches (the tag-count
+      // prefix spans every lake) held the confirm spinner for the length of the slowest one.
+      queryClient.setQueryData<LakeGitHubConnection | null>(dataLakeKeys.gitHubConnection(dataLakeId), previous =>
+        queued ? previous && { ...previous, disconnecting: true, disconnectStalled: false } : null
+      );
+      void queryClient.invalidateQueries({ queryKey: dataLakeKeys.gitHubConnection(dataLakeId) });
+      void invalidateLakeFileQueries(queryClient, dataLakeId);
     },
   });
 }
