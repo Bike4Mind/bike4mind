@@ -663,7 +663,22 @@ B4M_DISCOVERY_DRIVER=true
 
 The `worker` is the only service that runs discovery on a schedule, even though every service loads the same env file. It runs discovery once at boot (if no recent successful run exists) and then on the interval. The flag gates the admin "Run now" button too: without it the app answers 503 and starts nothing, so an install that never sets it stays offline however the run is asked for.
 
-Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure, except for Bedrock (see [Amazon Bedrock](#amazon-bedrock-optional) below). Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
+
+### Amazon Bedrock (optional)
+
+Bedrock models are off on self-host by default: the stack's `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are the MinIO credentials, so they are never sent to AWS. To use Bedrock, set a dedicated pair in `.env.selfhost`:
+
+```bash
+BEDROCK_AWS_ACCESS_KEY_ID=...
+BEDROCK_AWS_SECRET_ACCESS_KEY=...
+# Required for temporary (SSO / assumed-role) credentials.
+BEDROCK_AWS_SESSION_TOKEN=...
+```
+
+With SSO, `aws configure export-credentials --format env` prints the three values; copy them under the `BEDROCK_` prefix. Temporary credentials expire after a few hours, and an expired set shows up as a Bedrock auth error in discovery runs and in chat - re-export and restart the stack. The account needs Bedrock model access in us-east-1 and us-east-2, the regions chat requests are sent to.
+
+Once set, Bedrock models appear in the picker, discovery lists and promotes them, and chat to them works. Without them, each discovery run logs one `bedrock skipped` info line. The default chat model stays the direct-Anthropic one either way. AWS Transcribe (speech-to-text) and Bedrock embeddings stay hosted-only: Transcribe reads media from S3, which self-host keeps in MinIO.
 
 ### Abandoned agent execution recovery
 
