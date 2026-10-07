@@ -1048,6 +1048,43 @@ describe('runModelDiscovery', () => {
       expect(result.metrics.ModelsPromoted).toBe(1);
     });
 
+    it('promotes a model priced only by an adapter literal when no price row or source quotes it', async () => {
+      // Moonshot publishes no pricing, so kimi-k3 has no source price and, on an
+      // environment where the seed was never applied, no row in force either.
+      const kimiK3: DiscoveredModel = {
+        modelId: 'kimi-k3',
+        patch: {
+          id: 'kimi-k3',
+          vendor: 'moonshot',
+          backend: ModelBackend.Kimi,
+          type: 'text',
+          name: 'Kimi K3',
+          contextWindow: 256_000,
+        },
+      };
+      const kimi = harness([
+        stubSource({ name: 'kimi', kind: 'provider', records: [kimiK3], authoritativeFor: [ModelBackend.Kimi] }),
+      ]);
+      expect(kimi.prices.rows).toHaveLength(0);
+
+      const result = await runModelDiscovery(kimi.adapters, kimi.options);
+
+      expect(result.diff[0]).toMatchObject({ modelId: 'kimi-k3', promoted: true, blockedBy: [] });
+    });
+
+    it('still blocks a model with neither a literal, a row, nor a trusted source price', async () => {
+      const unpriced: DiscoveredModel = {
+        modelId: 'gpt-unpriced-9',
+        patch: { ...gpt6.patch, id: 'gpt-unpriced-9', name: 'GPT unpriced' },
+      };
+      const blocked = harness([openaiSource([unpriced])]);
+
+      const result = await runModelDiscovery(blocked.adapters, blocked.options);
+
+      expect(result.diff[0]).toMatchObject({ modelId: 'gpt-unpriced-9', promoted: false });
+      expect(result.diff[0].blockedBy).toContain('no-trusted-price');
+    });
+
     it('never supersedes an operator price row', async () => {
       await seedPrice(bench, { input: 2.5e-6, output: 12e-6 }, 'manual reprice');
 
