@@ -1,4 +1,5 @@
 import {
+  getMemberCreditPeriodStart,
   IOrganizationDocument,
   IOrganizationRepository,
   IUserShare,
@@ -116,6 +117,16 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
         },
         lastCreditUsedAt: {
           type: Date,
+          default: null,
+        },
+        // Start of the UTC month `usedCredits` belongs to; missing/older reads as 0 spent.
+        periodStart: {
+          type: Date,
+          default: null,
+        },
+        // Per-member monthly cap overriding the org's `maxCreditsPerMember`; null inherits it.
+        maxCredits: {
+          type: Number,
           default: null,
         },
       },
@@ -244,9 +255,9 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    *    incremented - so N racing joins land N members with `seats` equal to that size, never a
    *    double-raise past it.
    *
-   * `deletedAt: null` keeps the write off a soft-deleted org: the softDeletePlugin only hooks
-   * `find`/`findOne`, not `findOneAndUpdate`, so without this a delete landing between the caller's
-   * read and this write would grow a dead org's ceiling.
+   * `deletedAt: null` keeps the write off a soft-deleted org, so a delete landing between the
+   * caller's read and this write cannot grow a dead org's ceiling. softDeletePlugin's update hook
+   * adds the same filter; this one is redundant but keeps the guarantee visible here.
    *
    * Returns the PRE-image ({ new: false }) - the caller derives before/after seats from this one
    * atomically-matched document rather than from an earlier read, so two racers can't report
@@ -267,10 +278,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * matches no doc and returns null - the caller routes that to the same 'at-capacity' outcome the
    * Stripe path already uses (an admin is alerted to add seats), rather than raising past the ceiling.
    */
-  async addMemberRaisingSeats(
-    organizationId: string,
-    member: IUserShare
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberRaisingSeats(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -304,10 +312,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * Returns the PRE-image ({ new: false }); null means already a member, org gone, OR at capacity -
    * the caller re-reads to tell those apart.
    */
-  async addMemberIfUnderCeiling(
-    organizationId: string,
-    member: IUserShare
-  ): Promise<IOrganizationDocument | null> {
+  async addMemberIfUnderCeiling(organizationId: string, member: IUserShare): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
         _id: organizationId,
@@ -480,16 +485,30 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
     return orgs.map(org => org._id.toString());
   }
 
-  async incrementCurrentStorage(organizationId: string, count: number): Promise<void> {
-    await this.organizationModel.findByIdAndUpdate(organizationId, [
+  /**
+   * Atomically drop a member from `users`, `userDetails` and `adminUserIds`, and vacate
+   * `managerId` if they held it, in one pipeline update, so a concurrent add or credit `$inc` on
+   * another member survives. A pipeline rather than `$pull` because `$pull` rejects the whole
+   * update when a field is stored as `null`; `$ifNull` heals that like the old whole-doc write did.
+   * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
+   * matches. Idempotent (safe under a withTransaction retry).
+   */
+  async removeMember(organizationId: string, userId: string): Promise<void> {
+    const without = (field: string, idPath: string) => ({
+      $filter: {
+        input: { $ifNull: [`$${field}`, []] },
+        cond: { $ne: [{ $toString: idPath }, userId] },
+      },
+    });
+    await this.organizationModel.updateOne({ _id: organizationId }, [
       {
         $set: {
-          currentStorageSize: {
-            $max: [0, { $add: [{ $ifNull: ['$currentStorageSize', 0] }, count] }],
-          },
+          users: without('users', '$$this.userId'),
+          userDetails: without('userDetails', '$$this.id'),
+          adminUserIds: without('adminUserIds', '$$this'),
+          managerId: { $cond: [{ $eq: [{ $toString: '$managerId' }, userId] }, null, '$managerId'] },
         },
       },
-      { new: true },
     ]);
   }
 
@@ -527,44 +546,83 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
   }
 
   /**
-   * Update a user's usage details within an organization.
-   * Uses $inc for creditsDelta (atomic increment) and $set for lastCreditUsedAt
-   * to avoid race conditions with concurrent requests.
+   * Set one member's monthly credit budget override; false when they have no `userDetails` row or
+   * are no longer a member. The membership arm (owner, manager, or a `users[]` row - the same tiers
+   * as the services `isCurrentOrgMember`) stops a removal racing the caller's membership check from
+   * having a limit written onto the departed member's row.
+   */
+  async setMemberMaxCredits(organizationId: string, userId: string, maxCredits: number | null): Promise<boolean> {
+    const result = await this.organizationModel.updateOne(
+      {
+        _id: organizationId,
+        'userDetails.id': userId,
+        $or: [{ userId }, { managerId: userId }, { 'users.userId': userId }],
+      },
+      { $set: { 'userDetails.$.maxCredits': maxCredits } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  /**
+   * Record spend against a member's monthly budget within an organization.
    *
-   * The caller must ensure a `userDetails` row exists first (see `ensureUserDetails`): the positional
-   * `$` operator here updates an existing element and cannot create one, so a missing row makes this
-   * a no-op (logged below).
+   * The per-member cap is a UTC calendar-month budget: a row whose `periodStart` is missing or
+   * earlier than the current month is stale, so this write resets its `usedCredits` to the new
+   * delta and stamps `periodStart` in the same atomic pipeline update - concurrent settlements
+   * cannot lose a reset or an increment. The read side (`getPeriodUsedCredits`) shares the same
+   * boundary via `getMemberCreditPeriodStart`.
+   *
+   * The caller must ensure a `userDetails` row exists first (see `ensureUserDetails`): this updates
+   * an existing element and cannot create one, so a missing row makes this a no-op (logged below).
    *
    * @param organizationId - The ID of the organization
    * @param userId - The ID of the user within the organization
-   * @param updates - creditsDelta uses $inc for atomicity, lastCreditUsedAt uses $set
+   * @param updates - creditsDelta is added to the current period's usage; lastCreditUsedAt is set
    */
   async updateUserDetails(
     organizationId: string,
     userId: string,
-    updates: { creditsDelta?: number; lastCreditUsedAt?: Date }
+    updates: { creditsDelta?: number; lastCreditUsedAt?: Date },
+    now: Date = new Date()
   ): Promise<void> {
-    const updateOps: Record<string, Record<string, unknown>> = {};
+    if (updates.creditsDelta === undefined && updates.lastCreditUsedAt === undefined) return;
 
-    if (updates.creditsDelta !== undefined) {
-      updateOps.$inc = { 'userDetails.$.usedCredits': updates.creditsDelta };
-    }
+    const periodStart = getMemberCreditPeriodStart(now);
+    const isCurrentPeriod = { $gte: [{ $ifNull: ['$$this.periodStart', new Date(0)] }, periodStart] };
+    const currentUsage = { $cond: [isCurrentPeriod, { $ifNull: ['$$this.usedCredits', 0] }, 0] };
+    const changes: Record<string, unknown> = {
+      usedCredits: { $add: [currentUsage, updates.creditsDelta ?? 0] },
+      periodStart: { $cond: [isCurrentPeriod, '$$this.periodStart', periodStart] },
+    };
     if (updates.lastCreditUsedAt !== undefined) {
-      updateOps.$set = { 'userDetails.$.lastCreditUsedAt': updates.lastCreditUsedAt };
+      changes.lastCreditUsedAt = updates.lastCreditUsedAt;
     }
 
-    if (Object.keys(updateOps).length > 0) {
-      const result = await this.organizationModel.updateOne(
-        { _id: organizationId, 'userDetails.id': userId },
-        updateOps
-      );
+    // Pipelines skip Mongoose casting, so ids compare via `$toString` (as in `removeMember`).
+    const result = await this.organizationModel.updateOne({ _id: organizationId, 'userDetails.id': userId }, [
+      {
+        $set: {
+          userDetails: {
+            $map: {
+              input: '$userDetails',
+              in: {
+                $cond: [
+                  { $eq: [{ $toString: '$$this.id' }, userId] },
+                  { $mergeObjects: ['$$this', changes] },
+                  '$$this',
+                ],
+              },
+            },
+          },
+        },
+      },
+    ]);
 
-      if (result.matchedCount === 0) {
-        console.warn(
-          `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
-            'Credits were deducted from the org but usage was not tracked for this user.'
-        );
-      }
+    if (result.matchedCount === 0) {
+      console.warn(
+        `updateUserDetails: No userDetails entry found for user ${userId} in organization ${organizationId}. ` +
+          'Credits were deducted from the org but usage was not tracked for this user.'
+      );
     }
   }
 }

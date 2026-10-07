@@ -57,10 +57,9 @@ describe('researchTaskService - remove', () => {
     // Assert
     expect(mockResearchTaskRepo.findByIdAndUserId).toHaveBeenCalledWith(taskId, mockUser.id);
     expect(mockResearchTaskRepo.update).toHaveBeenCalledOnce();
-    const updatedTask = mockResearchTaskRepo.update.mock.calls[0][0];
-    expect(updatedTask.id).toBe(taskId);
-    expect(updatedTask.deletedAt).toBeInstanceOf(Date);
-    expect(result).toEqual(updatedTask); // Check if the returned task has deletedAt set
+    expect(mockResearchTaskRepo.update).toHaveBeenCalledWith({ id: taskId, deletedAt: expect.any(Date) });
+    expect(result.id).toBe(taskId);
+    expect(result.deletedAt).toBeInstanceOf(Date);
   });
 
   it('should throw NotFoundError if the research task is not found', async () => {

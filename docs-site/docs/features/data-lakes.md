@@ -44,6 +44,14 @@ Archiving and deleting are two separate reversal paths, and each has its own in-
 `Unarchiving` comes back from `Archived`, `Restoring` comes back from `Deleted`. Only one lifecycle
 action can hold a lake at a time.
 
+**A new Data Lake starts as `Draft`, and a draft lake is excluded from AI retrieval.** The assistant
+cannot find its files even after they finish uploading and indexing. Adding files does not publish a
+lake -- publishing is a deliberate step, so that no lake starts grounding answers without someone
+choosing it. Use **Publish** in the Data Lakes list once the lake is ready.
+
+This holds for a lake the assistant creates from chat with the **Save to Data Lake** tool (see
+[Smart Tools](./smart-tools.md)) too: it starts as `Draft`, and saving files into it does not publish it.
+
 ## Use Cases
 
 - **Domain-specific knowledge** -- upload medical literature, legal documents, or technical manuals and scope retrieval to authorized users
@@ -84,6 +92,31 @@ Two lifecycle actions ran on the same lake at once -- for example Archive and De
 started from the lake's panel before the first finished. Only one of them can complete, and the
 other reports this instead of overwriting it. The message names the status that won; the lake is in
 that state and is safe to act on from there. Re-run the action you wanted if it is still available.
+
+**I saved a research configuration and nothing new appeared in the lake's History tab. Why?**
+The History tab records a research-configuration edit only when a setting meaningfully changes.
+Saving the same values again, or reordering the same entries in **Only these sites**, **Never these
+sites** or **Tags to propose**, does not add a row.
+
+**Who can connect a Google Drive folder to a Data Lake?**
+On an organization Data Lake, an organization owner or manager (or a platform admin). On a
+personal Data Lake, only the person who created it: the folder syncs using their own linked Google
+Drive, so unlinking Google Drive from their profile stops that sync until they link it again and
+reconnect the folder. Either way the Data Lake must be connector-fed and not archived. A curated
+Data Lake must be switched to connector-fed in its settings first. A Drive folder can feed only one
+Data Lake, personal or organization. To move a Drive-fed Data Lake into or out of an organization,
+disconnect its folder first and reconnect it afterwards.
+
+**What happens when I disconnect a Google Drive folder?**
+Every file the connection brought into the Data Lake is permanently deleted, along with its
+extracted text and search entries, and it is removed from any chat it was attached to. This cannot
+be undone. The confirmation dialog shows how many files will be deleted before you confirm. Files
+you uploaded by hand are kept.
+
+**Why does my Drive connection say "Disconnecting"?**
+The files are removed in the background, so a large folder can take a few minutes. Until that
+finishes the connection shows **Disconnecting** and cannot be synced. If it stops making progress,
+a **Retry disconnect** button appears.
 
 ## Related
 

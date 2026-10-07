@@ -3,9 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const LAKE = { id: 'lake1', datalakeTag: 'datalake:lake1', createdByUserId: 'creator-1' };
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   approveDataLakeProposal: vi.fn(),
   declineDataLakeProposal: vi.fn(),
+  restoreDataLakeProposal: vi.fn(),
   findById: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'creator-1', isAdmin: false })),
   admitProposedSource: vi.fn(),
@@ -27,12 +31,23 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     approveDataLakeProposal: h.approveDataLakeProposal,
     declineDataLakeProposal: h.declineDataLakeProposal,
+    restoreDataLakeProposal: h.restoreDataLakeProposal,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: { findById: h.findById },
+  lakeConfigChangeEventRepository: {},
+  adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 vi.mock('@server/dataLakes/proposalAdmissionDeps', () => ({ admitProposedSource: h.admitProposedSource }));
@@ -43,7 +58,7 @@ const makeReq = (body: Record<string, unknown>) => ({
   method: 'POST',
   query: { id: 'lake1', proposalId: 'prop-1' },
   body,
-  user: { id: 'creator-1' },
+  user: { id: 'creator-1', name: 'Casey Creator' },
   logger: { warn: vi.fn(), error: vi.fn() },
 });
 
@@ -54,6 +69,7 @@ const makeRes = () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.tx.length = 0;
   h.assertLakeAccess.mockResolvedValue(LAKE);
   h.findById.mockResolvedValue({ id: 'prop-1', dataLakeId: 'lake1' });
   h.approveDataLakeProposal.mockResolvedValue({
@@ -61,6 +77,7 @@ beforeEach(() => {
     fabFile: { id: 'file-9', fileName: 'Report' },
   });
   h.declineDataLakeProposal.mockResolvedValue({ id: 'prop-1', status: 'declined' });
+  h.restoreDataLakeProposal.mockResolvedValue({ id: 'prop-1', status: 'pending' });
 });
 
 describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
@@ -72,12 +89,30 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     expect(h.approveDataLakeProposal).toHaveBeenCalledWith(
       'prop-1',
       expect.objectContaining({ userId: 'creator-1' }),
-      expect.objectContaining({ admitSource: h.admitProposedSource })
+      expect.objectContaining({ admitSource: h.admitProposedSource }),
+      { approverName: 'Casey Creator' }
     );
     expect(json).toHaveBeenCalledWith({
       data: { id: 'prop-1', status: 'approved' },
       fabFile: { id: 'file-9', fileName: 'Report' },
     });
+  });
+
+  // A session write needs no override, but an API-key caller must be attributed to the KEY, not
+  // silently folded into the creator's own identity - deleting this wiring would still pass every
+  // other assertion in this file.
+  it('attaches auditPrincipal for an API-key caller, so the write is attributed to the key', async () => {
+    const { res } = makeRes();
+    const req = { ...makeReq({ decision: 'approve' }), apiKeyInfo: { keyId: 'key-1' } };
+
+    await handler(req as never, res);
+
+    expect(h.approveDataLakeProposal).toHaveBeenCalledWith(
+      'prop-1',
+      expect.objectContaining({ auditPrincipal: expect.objectContaining({ principalKind: 'apiKey' }) }),
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('declines with the reviewer reason and admits nothing', async () => {
@@ -93,6 +128,20 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     );
     expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'declined' } });
+  });
+
+  it('restores a declined proposal through the service and admits nothing', async () => {
+    const { res, json } = makeRes();
+
+    await handler(makeReq({ decision: 'restore' }) as never, res);
+
+    expect(h.restoreDataLakeProposal).toHaveBeenCalledWith(
+      'prop-1',
+      expect.objectContaining({ userId: 'creator-1' }),
+      expect.anything()
+    );
+    expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'pending' } });
   });
 
   it('404s a proposal that belongs to another lake, so managing one lake cannot rule on another', async () => {
@@ -116,5 +165,50 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     await expect(handler(makeReq({ decision: 'auto_approve' }) as never, res)).rejects.toThrow();
     expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
     expect(h.declineDataLakeProposal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['decline', 'declineDataLakeProposal'],
+    ['restore', 'restoreDataLakeProposal'],
+  ] as const)(
+    '%s: runs the gates and the write inside one transaction, then touches the resolved lake last',
+    async (decision, writeFn) => {
+      h.assertLakeAccess.mockImplementation(async () => {
+        h.tx.push('gate');
+        return LAKE;
+      });
+      h[writeFn].mockImplementation(async () => {
+        h.tx.push('write');
+        return { id: 'prop-1' };
+      });
+      h.touchIfStable.mockImplementation(async () => {
+        h.tx.push('touch');
+        return true;
+      });
+
+      await handler(makeReq({ decision }) as never, makeRes().res);
+
+      expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+      expect(h.touchIfStable).toHaveBeenCalledWith(LAKE.id);
+    }
+  );
+
+  it.each(['decline', 'restore'] as const)(
+    '%s: neither writes nor touches when the belongs-to check fails',
+    async decision => {
+      h.findById.mockResolvedValue({ id: 'prop-1', dataLakeId: 'lake-other' });
+
+      await expect(handler(makeReq({ decision }) as never, makeRes().res)).rejects.toThrow(/Proposal not found/);
+      expect(h.declineDataLakeProposal).not.toHaveBeenCalled();
+      expect(h.restoreDataLakeProposal).not.toHaveBeenCalled();
+      expect(h.touchIfStable).not.toHaveBeenCalled();
+    }
+  );
+
+  it('approve stays outside the transaction and does not touch the lake', async () => {
+    await handler(makeReq({ decision: 'approve' }) as never, makeRes().res);
+
+    expect(h.tx).toEqual([]);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

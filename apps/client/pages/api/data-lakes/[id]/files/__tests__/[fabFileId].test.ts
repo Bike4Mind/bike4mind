@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   assertLakeAccess: vi.fn(),
   assertLakeWritable: vi.fn(),
   removeFileFromDataLake: vi.fn(),
@@ -33,7 +36,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -66,6 +77,7 @@ const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unkno
 describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.removeFileFromDataLake.mockResolvedValue({ success: true, fileCount: 2, totalSizeBytes: 30 });
@@ -165,11 +177,42 @@ describe('DELETE /api/data-lakes/[id]/files/[fabFileId]', () => {
       expect.anything()
     );
   });
+
+  it('DELETE: runs the gate and the write inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.tx.push('gate');
+      return { id: 'lake-oid-1', slug: 'my-lake' };
+    });
+    h.removeFileFromDataLake.mockImplementation(async () => {
+      h.tx.push('write');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+
+    await call(req('DELETE', { id: 'my-lake', fabFileId: 'f1' }), res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('DELETE: neither writes nor touches when the gate throws', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('DELETE', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.removeFileFromDataLake).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false });
     h.assertLakeWritable.mockReturnValue(undefined);
     h.addFileToDataLake.mockResolvedValue({ success: true, fileCount: 3, totalSizeBytes: 40 });
@@ -249,5 +292,35 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]', () => {
       'f1',
       expect.anything()
     );
+  });
+
+  it('POST: runs the gate and the write inside one transaction, then touches the resolved lake last', async () => {
+    h.assertLakeAccess.mockImplementation(async () => {
+      h.tx.push('gate');
+      return { id: 'lake-oid-1', slug: 'my-lake' };
+    });
+    h.addFileToDataLake.mockImplementation(async () => {
+      h.tx.push('write');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+
+    await call(req('POST', { id: 'my-lake', fabFileId: 'f1' }), res);
+
+    expect(h.tx).toEqual(['enter', 'gate', 'write', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-oid-1');
+  });
+
+  it('POST: neither writes nor touches when the gate throws', async () => {
+    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('POST', { id: 'lake1', fabFileId: 'f1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.addFileToDataLake).not.toHaveBeenCalled();
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

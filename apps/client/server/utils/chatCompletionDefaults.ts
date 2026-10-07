@@ -32,6 +32,7 @@ import {
   dataLakeRepository,
   fallbackLakeSettingsRepository,
 } from '@bike4mind/database';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import {
   ChatModels,
   ContextTelemetry,
@@ -183,6 +184,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
+      ...lakeWriteToolDb,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

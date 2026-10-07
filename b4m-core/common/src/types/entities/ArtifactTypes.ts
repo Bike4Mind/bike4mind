@@ -364,11 +364,9 @@ export type ArtifactPayload = z.infer<typeof ArtifactPayloadSchema>;
  *  - newlines inside the attribute list (AI sometimes wraps long tags),
  *  - `>` characters inside double- or single-quoted attribute values.
  *
- * Exported as a string (not a compiled RegExp) so each consumer can
- * compose it into their own regex with the flags they need, avoiding
- * shared mutable `lastIndex` state.
- *
- * Usage: `new RegExp('<artifact\\s+(' + ARTIFACT_ATTRS_PATTERN + ')>...')`
+ * No production parser composes it any more: it backtracks quadratically on a repeated
+ * unclosed opener, so the parsers use the linear readers in utils/artifactOpenTag.ts, whose
+ * tests check them against regexes built from this string. Must stay in sync with them.
  */
 export const ARTIFACT_ATTRS_PATTERN = String.raw`(?:[^>"']|"[^"]*"|'[^']*')*`;
 

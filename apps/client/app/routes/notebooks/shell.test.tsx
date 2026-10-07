@@ -21,6 +21,7 @@ import {
 const h = vi.hoisted(() => ({
   containerMounts: 0,
   containerIds: [] as (string | undefined)[],
+  citationHostProvided: [] as boolean[],
   newPageMounts: 0,
   newPageUnmounts: 0,
   notebookPageMounts: 0,
@@ -32,6 +33,7 @@ vi.mock('@client/app/components/Session/SessionContainer', () => {
       h.containerMounts++;
     }, []);
     h.containerIds.push(currentSessionId);
+    h.citationHostProvided.push(!!useCitationInteraction().onInternalCitationClick);
     return <div data-testid="session-container">{currentSessionId ?? 'new'}</div>;
   };
   return { default: SessionContainerStub };
@@ -68,6 +70,7 @@ vi.mock('./$id', () => {
 });
 
 import NotebookShell from './shell';
+import { useCitationInteraction } from '@client/app/components/Session/CitationInteractionContext';
 
 const buildRouter = (initialPath: string) => {
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -93,6 +96,7 @@ const shown = () => screen.getByTestId('session-container').textContent;
 beforeEach(() => {
   h.containerMounts = 0;
   h.containerIds = [];
+  h.citationHostProvided = [];
   h.newPageMounts = 0;
   h.newPageUnmounts = 0;
   h.notebookPageMounts = 0;
@@ -126,6 +130,18 @@ describe('notebook shell', () => {
     expect(h.containerMounts).toBe(1);
     expect(h.notebookPageMounts).toBe(1);
     expect(h.newPageMounts).toBe(0);
+  });
+
+  it('mounts the chat inside the citation host on /new and on a notebook', async () => {
+    // Without the host a lake chip falls back to navigating away from the conversation.
+    const router = buildRouter('/new');
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByTestId('session-container')).toBeTruthy();
+
+    await go(router, '/notebooks/a');
+
+    expect(h.citationHostProvided.length).toBeGreaterThan(1);
+    expect(h.citationHostProvided.every(Boolean)).toBe(true);
   });
 
   it("re-runs /new's reset on entering /new from a notebook, without remounting the chat", async () => {

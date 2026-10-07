@@ -61,6 +61,18 @@ afterEach(async () => {
   await Subscription.deleteMany({});
 });
 
+describe('subscription acquisition', () => {
+  it('persists touches and includes them in the admin owner-details projection', async () => {
+    const acquisition = { firstTouch: { source: 'widgets' }, lastTouch: { source: 'email', medium: 'newsletter' } };
+    await Subscription.create({ ...row(), acquisition });
+
+    const result = await subscriptionRepository.findWithOwnerDetails();
+
+    expect(result.subscriptions).toHaveLength(1);
+    expect(result.subscriptions[0].acquisition).toEqual(acquisition);
+  });
+});
+
 describe('findCancelableUserSubscriptionByPriceId', () => {
   it('returns a delinquent row, which the active-only lookup hid', async () => {
     await Subscription.create(row({ status: 'past_due' }));

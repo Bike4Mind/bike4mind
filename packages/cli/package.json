@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/cli",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "mcpName": "io.github.bike4mind/bike4mind",
   "type": "module",
   "description": "Interactive CLI tool for Bike4Mind with ReAct agents",
@@ -67,12 +67,12 @@
     "@google/genai": "^1.46.0",
     "@joplin/turndown-plugin-gfm": "^1.0.67",
     "@mendable/firecrawl-js": "^1.29.3",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@octokit/rest": "^22.0.1",
     "@opensearch-project/opensearch": "2.11.0",
     "@smithy/node-http-handler": "^4.9.3",
     "async-mutex": "^0.5.0",
-    "axios": "1.18.0",
+    "axios": "1.20.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "cheerio": "1.2.0",
@@ -109,7 +109,7 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "sharp": "^0.35.4",
-    "shell-quote": "^1.10.0",
+    "shell-quote": "^1.12.0",
     "speakeasy": "^2.0.0",
     "tiktoken": "^1.0.22",
     "tldts": "^7.4.13",
@@ -151,7 +151,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

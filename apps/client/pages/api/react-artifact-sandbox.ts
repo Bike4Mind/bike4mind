@@ -311,10 +311,39 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       if (!event.data || event.data.type !== 'react-artifact-render') return;
       if (rendered) return;
       rendered = true;
-      try { renderArtifact(event.data.code, event.data.dependencies || [], event.data.mode); }
-      catch (error) { showError(error.message); postError(error.message, error.stack); }
+      try {
+        renderArtifact(event.data.code, event.data.dependencies || [], event.data.mode);
+        // Report straight after rendering. The ResizeObserver below catches later changes,
+        // but the first paint is the one the parent needs and React may commit without the
+        // observed box ever changing size again.
+        setTimeout(reportHeight, 0);
+        setTimeout(reportHeight, 250);
+      } catch (error) {
+        showError(error.message);
+        postError(error.message, error.stack);
+      }
     }
     window.addEventListener('message', handleRenderMessage);
+
+    // Report how tall the rendered component actually is, so the parent can size the frame
+    // to its content instead of guessing. A cross-origin iframe cannot be measured from
+    // outside, so the measurement has to come from in here.
+    var lastReportedHeight = 0;
+    function reportHeight() {
+      var root = document.getElementById('root');
+      var height = Math.ceil(root ? root.scrollHeight : document.body.scrollHeight);
+      if (!height || Math.abs(height - lastReportedHeight) < 2) return;
+      lastReportedHeight = height;
+      window.parent.postMessage({ type: 'react-sandbox-height', height: height }, '*');
+    }
+    // Observe #root, not body: body carries min-height 100vh, so it is always exactly the
+    // frame's height and never changes when the component renders into it. (No backticks in
+    // this script - it lives inside a TS template literal.)
+    if (typeof ResizeObserver !== 'undefined' && rootEl) {
+      new ResizeObserver(reportHeight).observe(rootEl);
+    }
+    window.addEventListener('load', reportHeight);
+
     window.parent.postMessage({ type: 'react-sandbox-ready' }, '*');
   </script>
 </body>

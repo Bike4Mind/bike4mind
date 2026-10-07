@@ -42,7 +42,18 @@ vi.mock('@server/utils/storage', () => ({
   getPublishedArtifactsStorage: () => ({ download: mockDownload }),
 }));
 
+// The share-token helpers are stubbed rather than re-exported from the real module (importing it
+// for real drags in the whole model graph and breaks unrelated suites). shareTokenFilter returns a
+// SENTINEL, so the tests below assert the route delegates to it instead of hand-rolling a filter;
+// the filter's actual semantics are owned by PublishedArtifactModel.shareToken.test.ts, against
+// real Mongo. liveShareTokens mirrors the real fold (legacy scalar first, revoked entries out).
 vi.mock('@bike4mind/database', () => ({
+  shareTokenFilter: (token: string) => ({ __shareFilterFor: token }),
+  liveShareTokens: (a: { shareToken?: string | null; shareTokens?: { token?: string; revokedAt?: Date | null }[] }) => {
+    const live = (a.shareTokens ?? []).filter(e => !!e?.token && !e.revokedAt);
+    const legacy = a.shareToken;
+    return legacy && !live.some(e => e.token === legacy) ? [{ token: legacy, revokedAt: null }, ...live] : live;
+  },
   PublishedArtifact: {
     findOne: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockArtifactFindOne(...a)) }),
     updateOne: (...a: unknown[]) => mockUpdateOne(...a),
@@ -758,6 +769,53 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     const doc1 = a1._getData() as string;
     expect(doc1).toContain('SECOND_ARTIFACT');
     expect(doc1).not.toContain('FIRST_ARTIFACT');
+  });
+
+  const fencedDoc = (marker: string) =>
+    `<!DOCTYPE html>\n<html><head><title>${marker}</title></head><body><h1>${marker}</h1></body></html>`;
+  const fetchDoc = async (publicId: string, a: string) => {
+    const { res, promise } = run(['r', publicId], { a });
+    await promise;
+    return res;
+  };
+
+  it('keeps ?a= indexes for a reply body holding two fenced html documents', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({
+        publicId: 'rf2',
+        slug: 'rf2',
+        title: 'Two fences',
+        renderedBody:
+          '```html\n' + fencedDoc('FIRST_FENCE') + '\n```\n\n```html\n' + fencedDoc('SECOND_FENCE') + '\n```',
+      })
+    );
+
+    const doc0 = (await fetchDoc('rf2', '0'))._getData() as string;
+    expect(doc0).toContain('FIRST_FENCE');
+    expect(doc0).not.toContain('SECOND_FENCE');
+    const doc1 = (await fetchDoc('rf2', '1'))._getData() as string;
+    expect(doc1).toContain('SECOND_FENCE');
+  });
+
+  it('gives a marked tool-output region no ?a= index, so the authored fence after it is ?a=0', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      htmlReply({
+        publicId: 'rmark',
+        slug: 'rmark',
+        title: 'Marked then authored',
+        renderedBody:
+          '~~~html b4m-tool-output\n' +
+          fencedDoc('QUOTED_TOOL_OUTPUT') +
+          '\n~~~\n\n```html\n' +
+          fencedDoc('AUTHORED_PAGE') +
+          '\n```',
+      })
+    );
+
+    const doc0 = (await fetchDoc('rmark', '0'))._getData() as string;
+    expect(doc0).toContain('AUTHORED_PAGE');
+    expect(doc0).not.toContain('QUOTED_TOOL_OUTPUT');
+    expect((await fetchDoc('rmark', '1'))._getStatusCode()).toBe(404);
   });
 
   it('treats an empty ?a= as the normal page render, not artifact index 0', async () => {
@@ -2737,5 +2795,238 @@ describe('GET /api/publish/serve - Save as PDF', () => {
     // The wrapper cannot call print() on the frame, so the trigger rides inside it.
     expect(isolated.res._getData() as string).toContain('window.print');
     expect(wrapper.res._getData() as string).not.toContain('window.print');
+  });
+});
+
+describe('GET /api/publish/serve - sign-up gate is for anonymous viewers of open-public pages', () => {
+  const GATE = 'id="b4m-gate-dismiss"';
+  const reply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r-gate',
+    title: 'A reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Hello',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'x',
+    ...over,
+  });
+  // Stored bytes as renderArtifactIndexHtml bakes them at publish time.
+  const bakedBundleBytes = async () => {
+    const { renderArtifactIndexHtml } = await import('@server/services/publish/renderArtifactHtml');
+    return Buffer.from(renderArtifactIndexHtml('html', '<p>baked body</p>', 'Baked'));
+  };
+
+  it('renders the gate for an anonymous viewer of a public reply', async () => {
+    mockArtifactFindOne.mockReturnValue(reply());
+    const { res, promise } = run(['r', 'r-gate']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain(GATE);
+  });
+
+  it('omits the gate for the owner of a private reply', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'private' }));
+    const { res, promise } = run(['r', 'r-gate'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  it('omits the gate for a same-org colleague on an organization reply', async () => {
+    mockArtifactFindOne.mockReturnValue(reply({ visibility: 'organization', tier: 'organization', scopeId: 'org_42' }));
+    const { res, promise } = run(['r', 'r-gate'], { user: { id: 'colleague', organizationId: 'org_42' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Hello');
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  it('omits the gate for a signed-in viewer of a public reply and keeps that page out of the shared cache', async () => {
+    mockArtifactFindOne.mockReturnValue(reply());
+    const { res, promise } = run(['r', 'r-gate'], { user: { id: 'owner1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('keeps the gate baked into a public bundle for an anonymous viewer', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain(GATE);
+  });
+
+  it('strips the baked gate from the ?format=raw text of a public bundle', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('baked body');
+    expect(data).not.toContain('Create free account');
+  });
+
+  it('strips the baked gate from a public bundle for a signed-in viewer, and does not cache it', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('baked body');
+    expect(data).not.toContain(GATE);
+
+    const { res: appRes, promise: appPromise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await appPromise;
+    expect(appRes.getHeader('Cache-Control')).toBe('private, no-store');
+  });
+
+  it('strips the baked gate from a private bundle for its owner', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private' }));
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('baked body');
+    expect(data).not.toContain(GATE);
+  });
+
+  it('strips the baked gate from an organization bundle for a same-org colleague', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ visibility: 'organization', tier: 'organization', scopeId: 'org_42', ownerId: 'owner1' })
+    );
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'org_42', 'my-slug'], {
+      user: { id: 'colleague', organizationId: 'org_42' },
+      raw: true,
+    });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+
+  it('strips the baked gate from a public bundle behind an access gate', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+    mockDownload.mockResolvedValue(await bakedBundleBytes());
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' }, raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain(GATE);
+  });
+});
+
+describe('GET /api/publish/serve - per-entry share-link view counts (#3255)', () => {
+  const withEntry = (over: Record<string, unknown> = {}) =>
+    bundle({
+      visibility: 'private',
+      shareTokens: [{ _id: 'entry1', token: 'tok123', revokedAt: null }],
+      ...over,
+    });
+  // The per-link write is the updateOne carrying arrayFilters; the artifact-level bump has none.
+  const perLinkCall = () =>
+    mockUpdateOne.mock.calls.find(call => !!(call[2] as { arrayFilters?: unknown })?.arrayFilters);
+
+  it('resolves through the shared shareTokenFilter, not a hand-rolled query', async () => {
+    mockArtifactFindOne.mockReturnValue(withEntry());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { promise } = run(['a', 'tok123']);
+    await promise;
+
+    // Delegation, not a hand-rolled filter: the route must build its query from the shared
+    // helper, so the serve path and the gate handlers cannot drift apart on revocation semantics.
+    expect(mockArtifactFindOne.mock.calls[0][0]).toEqual({ deletedAt: null, __shareFilterFor: 'tok123' });
+  });
+
+  it('counts the matched entry: +1 viewCount and a lastViewedAt stamp, for an ANONYMOUS viewer', async () => {
+    mockArtifactFindOne.mockReturnValue(withEntry());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { promise } = run(['a', 'tok123']);
+    await promise;
+
+    const call = perLinkCall();
+    expect(call).toBeDefined();
+    expect((call![1] as { $inc: Record<string, number> }).$inc['shareTokens.$[entry].viewCount']).toBe(1);
+    expect((call![1] as { $set: Record<string, Date> }).$set['shareTokens.$[entry].lastViewedAt']).toBeInstanceOf(Date);
+    expect(call![2]).toEqual({ arrayFilters: [{ 'entry._id': 'entry1' }] });
+  });
+
+  it('does not count the owner or a crawler', async () => {
+    mockArtifactFindOne.mockReturnValue(withEntry());
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const owner = run(['a', 'tok123'], { user: { id: 'owner1' } });
+    await owner.promise;
+    expect(perLinkCall()).toBeUndefined();
+
+    mockUpdateOne.mockClear();
+    const crawler = run(['a', 'tok123'], { userAgent: 'Slackbot-LinkExpanding 1.0' });
+    await crawler.promise;
+    expect(perLinkCall()).toBeUndefined();
+  });
+
+  it('still serves a pre-backfill row (scalar only) without a per-link count', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', shareToken: 'tok123', shareTokens: [] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(perLinkCall()).toBeUndefined();
+    // The artifact-level counters still bump.
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
+
+  it('does not count a /p/* view', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ shareTokens: [{ _id: 'entry1', token: 'tok123' }] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>Hi</body></html>'));
+
+    const { promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+    expect(perLinkCall()).toBeUndefined();
+  });
+
+  // The share page frames its artifact as `/a/<token>?a=0`. That sub-request is a sub-resource of
+  // the page the viewer already counted, so counting it too would double every framed view.
+  it('does not count the framed sub-document of a share link, only the page', async () => {
+    const reply = {
+      publicId: 'r-shared',
+      title: 'Shared reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody:
+        '<artifact identifier="tip" type="text/html" title="Tip">' +
+        '<!DOCTYPE html><html><body><script>window.ok=1</script></body></html>' +
+        '</artifact>',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'r-shared',
+      shareTokens: [{ _id: 'entry1', token: 'tokshare', revokedAt: null }],
+    };
+    mockArtifactFindOne.mockReturnValue(reply);
+
+    const page = run(['a', 'tokshare']);
+    await page.promise;
+    expect(perLinkCall()).toBeDefined(); // the page itself counts, exactly once
+
+    mockUpdateOne.mockClear();
+    const sub = run(['a', 'tokshare'], { a: '0' });
+    await sub.promise;
+    expect(sub.res._getStatusCode()).toBe(200);
+    expect(perLinkCall()).toBeUndefined();
   });
 });

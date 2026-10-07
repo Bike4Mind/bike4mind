@@ -55,6 +55,60 @@ describe('snipSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
 
+  // `citationStyle` is create-only, so a snip that drops it is stuck on the 'named' default for good.
+  it('carries the source session citationStyle onto the snip', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      citationStyle: 'indexed',
+      corpusGroundingMode: 'retrieve',
+      retrievalExcludeFilenameMarkers: ['draft'],
+      retrievalVectorizedOnly: true,
+      forceKnowledgeRetrieval: true,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        citationStyle: 'indexed',
+        corpusGroundingMode: 'retrieve',
+        retrievalExcludeFilenameMarkers: ['draft'],
+        retrievalVectorizedOnly: true,
+      })
+    );
+  });
+
+  /**
+   * Pins `knowledgeIdsFromSourceSession`: the snip must copy the source's knowledgeIds without
+   * re-running the access filter, which would drop a teammate-authored organization-lake file the
+   * caller cannot independently resolve. Uses an ObjectId-shaped id so the id survives the earlier
+   * ObjectId-shape drop and actually reaches the filter this test is pinning the opt-out of.
+   */
+  it('copies the source knowledgeIds without re-running the access filter', async () => {
+    const { db } = makeAdapters();
+    const FILE_ID = '507f1f77bcf86cd799439011';
+    const findAccessibleInIds = vi.fn().mockResolvedValue([]);
+    db.fabFiles = { findAccessibleInIds };
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [FILE_ID],
+      tags: [],
+      retrievalTags: ['datalake:acme'],
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(findAccessibleInIds).not.toHaveBeenCalled();
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ knowledgeIds: [FILE_ID] }));
+  });
+
   /**
    * A snip keeps only the quests AFTER the snip point, so the quest the source tags were derived
    * from is usually gone from the copy. The copy must look untagged so the groom re-derives tags

@@ -5,6 +5,7 @@ import {
   IUserDocument,
   IOrganizationDocument,
   IUsageEventInput,
+  UsageEventFeature,
   ModelInfo,
   MusicGenerationVendor,
   materializePromptMetaSession,
@@ -49,6 +50,12 @@ export function buildToolUsageEvent(params: {
   cacheWriteTokens?: number;
   /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
   finishReason?: string;
+  /**
+   * Defaults to 'tool'. The music and audio tools pass the feature their direct endpoint
+   * writes (music_generation, sound_effects, text_to_speech), so a track counts as a track
+   * whichever path made it - the Gears status reads these features to unlock its gears.
+   */
+  feature?: UsageEventFeature;
 }): IUsageEventInput {
   const { quest, user, organization } = params;
   return {
@@ -57,7 +64,7 @@ export function buildToolUsageEvent(params: {
     ownerId: organization ? organization.id : user.id,
     ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
     sessionId: quest.sessionId,
-    feature: 'tool',
+    feature: params.feature ?? 'tool',
     provider: params.provider,
     model: params.model,
     inputTokens: params.inputTokens ?? 0,
@@ -101,6 +108,8 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** The authenticating API key, forwarded to the tool context (see ToolContext.apiKeyId). */
+  apiKeyId?: ToolContext['apiKeyId'];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
@@ -111,6 +120,8 @@ export interface ToolBuilderConfig {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Reader opt-in consent, forwarded to the tool context (see ToolContext.sessionReaderConsentDatalakeTags). */
+  sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
@@ -174,6 +185,9 @@ const TOOL_PREAMBLES: Record<string, string> = {
   edit_image: 'Editing the image…',
   music_generation: 'Composing music…',
   audio_generation: 'Generating audio…',
+  list_my_data_lakes: 'Checking which data lakes you can save to...',
+  create_data_lake: 'Creating a new data lake...',
+  save_content_to_data_lake: 'Saving that to your data lake...',
 };
 
 function resolveToolPreamble(toolName: string): string | null {
@@ -208,6 +222,10 @@ function resolveToolStatus(toolName: string, data: any): string | null {
       return '🔢 Counting the documents in the data lake…';
     case 'describe_knowledge_base':
       return '🗂️ Mapping the shape of the data lake…';
+    case 'save_content_to_data_lake':
+      return typeof d.fileName === 'string'
+        ? `Saving "${truncateForStatus(d.fileName)}" to the data lake...`
+        : TOOL_PREAMBLES[toolName];
     case 'web_search':
       return query ? `🌐 Searching the web: “${truncateForStatus(query)}”` : '🌐 Searching the web…';
     case 'web_fetch':
@@ -507,6 +525,7 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units: billedSeconds,
+          feature: 'music_generation',
         })
       );
     }
@@ -583,6 +602,7 @@ export class ToolBuilder {
           costUsd: usdCost,
           creditsCharged: creditsUsed,
           units,
+          feature: data.kind === 'sound_effect' ? 'sound_effects' : 'text_to_speech',
         })
       );
     }
@@ -809,8 +829,11 @@ export class ToolBuilder {
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
+        organizationId: organization?.id,
+        apiKeyId: this.deps.apiKeyId,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

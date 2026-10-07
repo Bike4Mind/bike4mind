@@ -9,7 +9,13 @@ import {
   type IEmbedBranding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
-import { userApiKeyService, cacheService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
+import {
+  userApiKeyService,
+  cacheService,
+  userService,
+  isTokenVersionCurrent,
+  isTokenTypeAcceptable,
+} from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
@@ -190,12 +196,12 @@ function toApiKeyInfo(v: {
  * touching that middleware. Without this a banned, charged-back or suspended
  * owner's key kept working on exactly the surfaces that spend money.
  *
- * MUST STAY IN SYNC with the equivalent block in
- * apps/client/server/middlewares/apiKeyAuth.ts - same lookup, same order, same thrown error
- * classes. The thrown STATUS is not observable end to end on these paths, though: the
- * Function-URL adapter (defineLambdaRoute) reports any auth throw as 401, and the apiKeyOrJwt
- * resolver swallows a key failure to fall through to JWT - so a 403 raised here can surface as
- * 401 downstream. Keep the messages aligned, but do not rely on the status code reaching the caller.
+ * Exactly one copy of the gate: `apiKeyAuth` calls {@link assertAccountStateUsable} rather than
+ * repeating these conditions. The thrown STATUS is not observable end to end on these paths,
+ * though: the Function-URL adapter (defineLambdaRoute) reports any auth throw as 401, and the
+ * apiKeyOrJwt resolver swallows a key failure to fall through to JWT - so a 403 raised here can
+ * surface as 401 downstream. Keep the messages aligned, but do not rely on the status code
+ * reaching the caller.
  *
  * This is the `User.findById` the consent gate above deliberately declines to pay
  * on the api-key path. Account state is not the same trade: consent can be proven
@@ -215,18 +221,23 @@ async function assertOwnerAccountUsable(userId: string): Promise<void> {
  * The account-state checks of {@link assertOwnerAccountUsable} against an already-loaded
  * user, so the JWT path (verifyJwtToken, which already holds the user) can apply the same
  * gate without a second lookup. One helper so the two entry points can't drift.
+ *
+ * Which conditions block comes from `userService.accountBlockReasons`, the single definition
+ * shared with the admin update and the Stripe dispute path. The error classes and messages
+ * below are this client's mapping and must follow that list's precedence.
  */
-function assertAccountStateUsable(user: IUserDocument): void {
-  if (user.isBanned) {
-    throw new UnauthorizedError('User not found or banned');
-  }
-  if (user.disputePending) {
-    throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-  }
-  if (user.moderation?.status === 'suspended') {
-    throw new ForbiddenError(
-      'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
-    );
+export function assertAccountStateUsable(user: IUserDocument): void {
+  switch (userService.accountBlockReasons(user)[0]) {
+    case 'banned':
+      throw new UnauthorizedError('User not found or banned');
+    case 'disputePending':
+      throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
+    case 'suspended':
+      throw new ForbiddenError(
+        'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
+      );
+    default:
+      return;
   }
 }
 
@@ -381,9 +392,43 @@ const JWT_RATE_LIMIT_BY_SOURCE: Record<CompletionSource, number> = {
 const JWT_RATE_LIMIT_DEFAULT = 100;
 const JWT_RATE_WINDOW_MS = 60 * 60_000; // 1 hour
 
+/**
+ * A counter kept apart from the shared per-user one. Callers without a bucket
+ * share a single counter across every surface, so a CLI/agent session running
+ * at its 1000 cap would exhaust a 100-cap endpoint on the same account. A public
+ * endpoint that documents its own budget needs its own bucket.
+ */
+export type JwtRateLimitBucket = 'tools' | 'desktop';
+
+/**
+ * Per-client caps for first-party clients that run a client-side tool loop against the
+ * completions endpoint - one turn fans out into one completion per tool round, so their ceiling
+ * has to be counted in rounds rather than turns. Matched on the User-Agent the client sets, the
+ * same signal `resolveApiCompletionSource` uses for `b4m-cli/`.
+ *
+ * Each entry carries its own bucket, and the limit and the key are read from the SAME match, so
+ * a raised ceiling cannot spend a counter another surface reads. Without that, a desktop session
+ * past 1000 would lock the same user's CLI out of its own 1000 until the window closed - see the
+ * JwtRateLimitBucket note above.
+ *
+ * Only the ceiling moves. `source` is untouched, so desktop traffic stays recorded as source
+ * `api` for credit and analytics - deliberately alongside third-party API clients, not as `cli`.
+ */
+const JWT_RATE_LIMIT_BY_CLIENT: ReadonlyArray<{ pattern: RegExp; limit: number; bucket: JwtRateLimitBucket }> = [
+  { pattern: /^b4m-desktop\//i, limit: 6000, bucket: 'desktop' },
+];
+
+function matchClient(client?: string) {
+  return client ? JWT_RATE_LIMIT_BY_CLIENT.find(entry => entry.pattern.test(client)) : undefined;
+}
+
 function getJwtRateLimit(source?: CompletionSource): number {
   if (!source) return JWT_RATE_LIMIT_DEFAULT;
   return JWT_RATE_LIMIT_BY_SOURCE[source] ?? JWT_RATE_LIMIT_DEFAULT;
+}
+
+function jwtRateLimitKey(userId: string, bucket?: JwtRateLimitBucket): string {
+  return bucket ? `rate-limit:ws-auth:${bucket}:${userId}` : `rate-limit:ws-auth:${userId}`;
 }
 
 /**
@@ -398,10 +443,17 @@ function getJwtRateLimit(source?: CompletionSource): number {
  * hit the cap could never recover without going idle for a full hour from
  * their *most recent* request.
  */
-export async function checkRateLimit(userId: string, source?: CompletionSource): Promise<void> {
-  const key = `rate-limit:ws-auth:${userId}`;
+export async function checkRateLimit(
+  userId: string,
+  source?: CompletionSource,
+  options: { bucket?: JwtRateLimitBucket; client?: string } = {}
+): Promise<void> {
+  // One match drives both: an explicit bucket still wins, but a client-matched cap always
+  // brings its own counter with it.
+  const byClient = matchClient(options.client);
+  const key = jwtRateLimitKey(userId, options.bucket ?? byClient?.bucket);
   const adapters = { db: { caches: cacheRepository } };
-  const limit = getJwtRateLimit(source);
+  const limit = byClient?.limit ?? getJwtRateLimit(source);
 
   const current = await cacheService.get({ key }, { ...adapters, schema: z.coerce.number() });
   if (current === null) {

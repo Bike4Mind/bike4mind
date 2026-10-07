@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError } from '@bike4mind/common';
 
 const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -79,6 +79,8 @@ vi.mock('@bike4mind/database', () => ({
   TelemetryAuditLogModel: { create: vi.fn().mockResolvedValue(undefined) },
 }));
 
+vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+
 import handler from '../update';
 
 const run = ({
@@ -139,6 +141,7 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(mockAdminUpdateUser).toHaveBeenCalled();
+    expect(mockAdminUpdateUser.mock.calls[0][2].db.userApiKeys).toBeDefined();
   });
 
   it('does not run the lockout check at all for a non-demote update (isAdmin absent from body)', async () => {
@@ -173,15 +176,17 @@ describe('PUT /api/users/:id/update - admin branch requires the admin scope', ()
   // profile update. So the gate sits on the admin branch, which writes credits,
   // roles and email.
   it('403s an api-key caller without admin:* on the admin branch', async () => {
-    const { res, promise } = run({
+    const { promise } = run({
       user: ADMIN,
       userId: 'someone-else',
       body: { currentCredits: 999999 },
       apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] },
     });
-    await promise;
-
-    expect(res._getStatusCode()).toBe(403);
+    // Thrown, not written: baseApi is stubbed here, and its real errorHandler is what renders
+    // the shared envelope (name, error, request_id) around this additionalInfo.
+    const error = await promise.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ForbiddenError);
+    expect(error).toMatchObject({ statusCode: 403, additionalInfo: { required_scopes: [ApiKeyScope.ADMIN] } });
     expect(mockAdminUpdateUser).not.toHaveBeenCalled();
   });
 

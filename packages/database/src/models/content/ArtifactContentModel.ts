@@ -1,5 +1,6 @@
 import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import type { RepositoryPatch, RepositoryUpdateOptions } from '@bike4mind/common';
 
 // mongoose 8.24 defaults Document's _id to ObjectId; this model keys on a
 // string _id, so parametrize Document<string> to keep the interface assignable.
@@ -82,9 +83,17 @@ export class ArtifactContentRepository extends BaseRepository<IArtifactContentDo
 
   // Override update to accept `id` or `_id`. Last-writer-wins like BaseRepository.update; no guarded
   // variant is exposed (no artifact-content caller opts in).
+  update(
+    data: Partial<IArtifactContentDocument>,
+    options?: RepositoryUpdateOptions<IArtifactContentDocument>
+  ): Promise<IArtifactContentDocument | null>;
+  update(
+    data: RepositoryPatch<IArtifactContentDocument>,
+    options?: RepositoryUpdateOptions<IArtifactContentDocument>
+  ): Promise<IArtifactContentDocument | null>;
   async update(
     data: Partial<IArtifactContentDocument>,
-    options?: Record<string, unknown>
+    options?: RepositoryUpdateOptions<IArtifactContentDocument>
   ): Promise<IArtifactContentDocument | null> {
     if (!data.id && !data._id) {
       throw new Error('id or _id is required');

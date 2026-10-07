@@ -65,6 +65,7 @@ import { dataLakeService, fabFilesService, scopedSettingsService } from '@bike4m
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import {
   CONVERGENCE_ORIGIN,
+  DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES,
   DATA_LAKES,
   KnowledgeType,
   isChunkStalled,
@@ -84,10 +85,10 @@ import {
 const PDF_MIME = 'application/pdf';
 /** Default max per-file size (MB) when the MaxFileSize admin setting is unset; parity with fabFileService. */
 const DEFAULT_MAX_FILE_MB = 20;
-/** Only rescue files older than this - keep in sync with server/worker/chunkScan.ts. */
+/** Only rescue files older than this - keep in sync with apps/client/server/s3/chunkScan.ts. */
 const STRAGGLER_MIN_AGE_MS = 2 * 60_000;
 /** A claim held longer than this is treated as stranded (a worker hard-killed before its finally).
- * Keep in sync with CHUNK_CLAIM_STALE_MS in server/worker/chunkScan.ts. */
+ * Keep in sync with CHUNK_CLAIM_STALE_MS in apps/client/server/s3/chunkScan.ts. */
 const CHUNK_CLAIM_STALE_MS = 30 * 60_000;
 
 export interface Options {
@@ -147,7 +148,7 @@ const liveFilter = (lake: LakeTarget) => ({ ...membership(lake), deletedAt: null
 
 /** Complete-but-unchunked lake files (lost S3 event / failed extraction), including files stranded
  * mid-claim by a hard-killed worker. Keep in sync with buildFabFileChunkScanFilter in
- * apps/client/server/worker/chunkScan.ts - including its stale-claim arm (a claim older than
+ * apps/client/server/s3/chunkScan.ts - including its stale-claim arm (a claim older than
  * CHUNK_CLAIM_STALE_MS, or an isChunking:true file predating chunkClaimedAt, is rescuable).
  *
  * KNOWN DRIFT, stated rather than left to be discovered: chunkScan's filter now also excludes a
@@ -280,6 +281,24 @@ async function isLakeConvergencePaused(lake: LakeTarget): Promise<boolean> {
     console.warn('PauseLakeConvergence read failed; treating as not paused:', err);
     return false;
   }
+}
+
+// findBySlug skips deleted/purging lakes, so a miss (or an org-less hit under --organizationId) may
+// be a fall-through past the scope's own lake. Returns that skipped lake for resolveLakeTarget to refuse.
+export async function findUnresolvableShadow(
+  slug: string,
+  scopeOrg: string | undefined,
+  dbLake: { organizationId?: unknown } | null
+): Promise<{ status: string; organizationId?: string } | null> {
+  if (dbLake && (!scopeOrg || String(dbLake.organizationId ?? '') === scopeOrg)) return null;
+  const sameScope = await dataLakeRepository.find({
+    ...(scopeOrg ? { organizationId: scopeOrg } : { organizationId: { $in: [null, ''] } }),
+    slug,
+  });
+  const hidden = sameScope.find(l =>
+    (DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES as readonly string[]).includes(l.status ?? '')
+  );
+  return hidden?.status ? { status: hidden.status, organizationId: scopeOrg } : null;
 }
 
 export async function requeueStragglers(lake: LakeTarget, opts: Options): Promise<number> {
@@ -563,6 +582,7 @@ async function main(opts: Options): Promise<number> {
     opts.slug,
     opts.organizationId ? [opts.organizationId] : undefined
   );
+  const shadow = await findUnresolvableShadow(opts.slug, opts.organizationId, dbLake);
   const lake = resolveLakeTarget(
     opts.slug,
     dbLake
@@ -575,7 +595,8 @@ async function main(opts: Options): Promise<number> {
           createdByUserId: dbLake.createdByUserId,
         }
       : null,
-    DATA_LAKES
+    DATA_LAKES,
+    shadow
   );
   if (!lake)
     throw new Error(

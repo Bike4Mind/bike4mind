@@ -5,6 +5,7 @@
 // and ElevenLabs appends "/chat/completions" when making the actual request,
 // so the file lives at that suffix. This is the canonical (and only) location
 // of the handler.
+import { DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
 import { adminSettingsRepository, questRepository, userRepository } from '@bike4mind/database';
 import {
   ChatCompletionFeature,
@@ -14,6 +15,7 @@ import {
   type ToolDefinition,
 } from '@bike4mind/services/llm';
 import { getSettingsMap, getSettingsValue, type IQueueService } from '@bike4mind/utils';
+import { stripToolOutputMarker } from '@bike4mind/utils/artifactParser';
 import { type Logger } from '@bike4mind/observability';
 import {
   buildClientToolPassthrough,
@@ -143,9 +145,13 @@ async function runFullPipeline(
     // creation) stay off so the whole voice turn runs in-process - no separate
     // Lambda or SQS dispatch.
     tools: [...VOICE_BUILTIN_TOOLS, ...Object.keys(clientTools)],
+    // The save-intent gate would otherwise offer the data-lake tools past the list above.
+    deniedTools: [...DATA_LAKE_TOOL_NAMES],
     enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
+    // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
+    skipReplyChoices: true,
     // Inject the voice agent's system prompt (ElevenLabs-rendered, incl. per-user
     // override) at the top of the context so it drives the response persona.
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),
@@ -182,7 +188,7 @@ async function runFullPipeline(
 
   // process() mutates the quest in place. Use the last reply item (the visible
   // answer after any thinking reply) to match what onReplyStream forwarded.
-  return quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '';
+  return stripToolOutputMarker(quest.replies?.[quest.replies.length - 1] ?? quest.reply ?? '');
 }
 
 export const config = {

@@ -16,12 +16,17 @@ export const SubscribeButton = () => {
   );
 };
 
-export const SessionCreditsButton = () => {
+/** `secondary` renders it outlined and neutral, for when it sits beside Subscribe as the lesser option. */
+export const SessionCreditsButton = ({ secondary = false }: { secondary?: boolean }) => {
   const [open, setOpen] = useState(false);
 
   return (
     <>
-      <Button onClick={() => setOpen(true)} data-testid="session-credits-btn">
+      <Button
+        onClick={() => setOpen(true)}
+        data-testid="session-credits-btn"
+        {...(secondary && { variant: 'outlined', color: 'neutral' })}
+      >
         Add Credits
       </Button>
       <CreditsModal open={open} onClose={() => setOpen(false)} />

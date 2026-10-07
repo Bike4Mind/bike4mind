@@ -1,8 +1,12 @@
 import { create } from 'zustand';
-import { isReservedTagPrefix } from '@bike4mind/common';
-import type { TaxonomyStatus } from '@bike4mind/common';
+import {
+  deriveTagPrefixFromLakeName,
+  isReservedTagPrefix,
+  MAX_TAG_PREFIX_SUFFIX_ATTEMPTS,
+  withTagPrefixSuffix,
+} from '@bike4mind/common';
+import type { DataLakeOrigin, DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
-import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
   parseFilesToTree,
   getAllFiles,
@@ -91,9 +95,22 @@ export interface UploadProgress {
    * optionalSteps.taxonomy is true.
    */
   taxonomyStatus?: TaxonomyStatus;
+  /**
+   * Lifecycle status of the lake this run committed into (#3222). From the create response or the
+   * target lake, never assumed - absent means a fallback lake, which always serves.
+   */
+  lakeStatus?: DataLakeStatus;
+  /** Id of that same lake, so the Complete screen can publish a draft in place. Set beside lakeStatus. */
+  lakeId?: string;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
+
+const isSuffixedTagPrefixOf = (prefix: string, base: string): boolean =>
+  !!base &&
+  Array.from({ length: MAX_TAG_PREFIX_SUFFIX_ATTEMPTS - 1 }, (_, i) => withTagPrefixSuffix(base, i + 1)).includes(
+    prefix
+  );
 
 const DEFAULT_OPTIONAL_STEPS: OptionalSteps = {
   preview: false,
@@ -158,17 +175,31 @@ export interface WizardTargetLake {
   requiredEntitlement?: string;
   /**
    * The lake's org scope, `null` for a personal lake. Carried so the wizard can gate the Drive
-   * connect control the way `SelectedLakeHeader` does: connecting is an org-lake capability
-   * server-side, so offering it on a personal lake is a button that can only ever fail.
+   * connect control the way `SelectedLakeHeader` does (canConnectLakeDrive): an org lake needs a
+   * manager, a personal lake its creator, so offering it otherwise is a button that can only ever fail.
    *
-   * REQUIRED-and-nullable rather than optional, matching `isOwn` on ManageableDataLakeConfig and for
-   * the same reason: an absent field would read as "personal" and silently hide the control on a
+   * REQUIRED-and-nullable rather than optional, matching `isCreator` on ManageableDataLakeConfig and
+   * for the same reason: an absent field would read as "personal" and silently hide the control on a
    * real org lake, with a green typecheck. Required makes a call site that forgets it a compile
    * error instead.
    */
   organizationId: string | null;
   /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
+  /**
+   * Whether the caller created this lake (ManageableDataLakeConfig.isCreator) - the personal half of
+   * that gate. Creator, not effective owner (`isOwn`): personal-lake membership and the ingest's
+   * admin-actor writes are anchored to `createdByUserId`, which an ownership transfer leaves unchanged.
+   */
+  isCreator: boolean;
+  /**
+   * Lake lifecycle, so appending files to a lake that is still `draft` discloses on the Complete
+   * screen that the new files ground nothing yet (#3222). Optional because `DataLakeConfig.status`
+   * is: a built-in fallback lake has no document and always serves.
+   */
+  status?: DataLakeStatus;
+  /** Lets the GitHub connect control offer the switch to connector-fed before it starts. */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -188,6 +219,9 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement?: string;
   organizationId?: string | null;
   canManage?: boolean;
+  isCreator: boolean;
+  status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -197,6 +231,9 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement: lake.requiredEntitlement,
   organizationId: lake.organizationId ?? null,
   canManage: lake.canManage ?? false,
+  isCreator: lake.isCreator,
+  status: lake.status,
+  origin: lake.origin,
 });
 
 /**
@@ -209,6 +246,11 @@ export const toWizardTargetLake = (lake: {
 export interface RecoverableLake {
   id: string;
   tagPrefix: string;
+  /**
+   * The slug the lake was created with. A reuse keeps it, so ConfigStep shows it instead of the
+   * server preview, which counts this archived lake as taken and would say "-1".
+   */
+  slug: string;
   /**
    * The account scope the lake was created under (undefined = personal), since the account
    * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner
@@ -236,7 +278,8 @@ interface DataLakeWizardStore {
   config: DataLakeFormValues;
   /**
    * The last prefix deriveTagPrefixFromName produced, so a rename can re-derive over it while a
-   * hand-edited prefix stays untouched. Never read outside that action.
+   * hand-edited prefix stays untouched. Also tells useWizardIdentityPreview whether the prefix
+   * is still the wizard's to change (adoptAutoTagPrefix).
    */
   autoDerivedTagPrefix: string;
   duplicateCheckResults: { duplicateCount: number; checkedAt: number } | null;
@@ -258,6 +301,11 @@ interface DataLakeWizardStore {
    * Cleared on close so re-deep-linking the SAME lake still fires the panel's sync effect.
    */
   managerLakeId: string | null;
+  /**
+   * Lake id the GitHub repository picker is open for, or null when closed. Opened only by the GitHub
+   * callback page; read by GitHubRepositoryPickerModal, mounted once in DataLakeManagerPanel.
+   */
+  gitHubRepoPickerLakeId: string | null;
 
   // Navigation
   openWizard: () => void;
@@ -265,6 +313,8 @@ interface DataLakeWizardStore {
   closeWizard: () => void;
   openManager: (tab?: ManagerTab, lakeId?: string | null) => void;
   closeManager: () => void;
+  openGitHubRepoPicker: (lakeId: string) => void;
+  closeGitHubRepoPicker: () => void;
   setStep: (step: WizardStep) => void;
 
   // Source step
@@ -279,6 +329,7 @@ interface DataLakeWizardStore {
   // Tag prefix (owned by the Config step; the taxonomy step's competing home was removed)
   setTagPrefix: (prefix: string) => void;
   deriveTagPrefixFromName: () => void;
+  adoptAutoTagPrefix: (prefix: string) => void;
 
   // Config step
   setConfig: (config: Partial<DataLakeFormValues>) => void;
@@ -318,6 +369,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
+  gitHubRepoPickerLakeId: null,
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -328,7 +380,12 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // An optional tab lets callers deep-link straight to the public discover catalog.
   openManager: (tab: ManagerTab = 'mine', lakeId: string | null = null) =>
     set({ isManagerOpen: true, managerTab: tab, managerLakeId: lakeId }),
-  closeManager: () => set({ isManagerOpen: false, managerLakeId: null }),
+  // The picker is mounted inside the manager, so closing the manager closes it too; left set, it
+  // would pop back up on the next, unrelated manager open.
+  closeManager: () => set({ isManagerOpen: false, managerLakeId: null, gitHubRepoPickerLakeId: null }),
+
+  openGitHubRepoPicker: lakeId => set({ gitHubRepoPickerLakeId: lakeId }),
+  closeGitHubRepoPicker: () => set({ gitHubRepoPickerLakeId: null }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so
   // the (locked) Config step shows the right values.
@@ -410,6 +467,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       // used to derive a prefix the create endpoint refuses, which is the one value in this
       // form the user never chose.
       const prefix = deriveTagPrefixFromLakeName(state.config.name);
+      // Same name, and the current value is the free `-N` the server picked for it (see
+      // adoptAutoTagPrefix): keep it. Re-deriving would drop back to the held base, and a retry
+      // would then miss the lake its failed attempt archived under that `-N` (canReuseRecoverableLake).
+      if (current && isSuffixedTagPrefixOf(current, prefix)) return state;
       // A lake named "Datalake" derives the reserved membership namespace, which the server
       // rejects and Start Upload gates on - leaving the user blocked over a value they never
       // typed. Leave the field for them to fill instead of seeding one that cannot be used.
@@ -422,6 +483,19 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
         config: { ...state.config, tagPrefix: prefix },
       };
     }),
+
+  /**
+   * Take the server's free prefix (useWizardIdentityPreview) in place of an auto-derived one the
+   * preview found held, keeping it marked auto-derived so a rename still re-derives. A no-op once
+   * the user has typed a prefix, which also covers a keystroke landing while the preview was in
+   * flight.
+   */
+  adoptAutoTagPrefix: prefix =>
+    set(state =>
+      state.autoDerivedTagPrefix && state.config.tagPrefix === state.autoDerivedTagPrefix
+        ? { autoDerivedTagPrefix: prefix, config: { ...state.config, tagPrefix: prefix } }
+        : state
+    ),
 
   // ── Config Step ─────────────────────────────────────────────────────────
 

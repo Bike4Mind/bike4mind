@@ -11,6 +11,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const axiosGet = vi.hoisted(() => vi.fn());
 vi.mock('axios', () => ({ default: { get: axiosGet } }));
+vi.mock('@bike4mind/common', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/common')>()),
+  APP_NAME: 'TestApp',
+  WEBSITE_URL: 'https://example.test',
+}));
 
 import { fetchAndParseURL } from './ingest';
 import { ssrfSafeHttpAgent, ssrfSafeHttpsAgent } from './ssrfProtection';
@@ -61,6 +66,7 @@ describe('fetchAndParseURL redirect handling', () => {
     expect(axiosGet).toHaveBeenCalledTimes(2);
     expect(axiosGet.mock.calls[1][0]).toBe('http://93.184.216.35/article/');
     expect(result.title).toBe('An Article');
+    expect(result.finalUrl).toBe('http://93.184.216.35/article/');
     expect(result.textContent).toContain('Hello');
   });
 
@@ -99,6 +105,16 @@ describe('fetchAndParseURL redirect handling', () => {
     // HTTPS_PROXY/HTTP_PROXY from the environment by default and installs its own agent, which
     // displaces ours - so the pin above would silently stop applying wherever a proxy env var is set.
     expect(axiosGet.mock.calls[0][1]).toMatchObject({ proxy: false });
+  });
+
+  it('sends a descriptive User-Agent instead of the axios default', async () => {
+    axiosGet.mockResolvedValueOnce(ok(PAGE));
+
+    await fetchAndParseURL(PUBLIC_URL, { logger });
+
+    expect(axiosGet.mock.calls[0][1].headers['User-Agent']).toBe(
+      'Mozilla/5.0 (compatible; TestApp/1.0; +https://example.test)'
+    );
   });
 
   it('gives up after too many redirects instead of looping', async () => {
@@ -302,6 +318,20 @@ describe('fetchAndParseURL content typing and naming after redirects', () => {
     const result = await fetchAndParseURL('http://93.184.216.34/pasted-link', { logger });
 
     expect(result.title).toBe('final-document');
+  });
+
+  it('titles a page from its <head> title alone, without icon labels or the site suffix', async () => {
+    axiosGet.mockResolvedValueOnce(
+      html(
+        '<html><head><title>An Article | Example Site</title>' +
+          '<meta property="og:site_name" content="Example Site"></head><body>' +
+          '<button><svg><title>Close banner</title></svg></button><p>Hello</p></body></html>'
+      )
+    );
+
+    const result = await fetchAndParseURL('http://93.184.216.34/article', { logger });
+
+    expect(result.title).toBe('An Article');
   });
 });
 
@@ -1047,5 +1077,212 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(textAt20).not.toContain('Home');
     expect(textAt20).not.toContain('Docs');
     expect(textAt20).toContain(remnant20);
+  });
+
+  it('drops button-styled CTA links and promo cards that sit beside the article inside <main>', async () => {
+    // Shaped after a Common Paper standard page: the hero's CTAs are siblings of the h1 and intro,
+    // and the offer card is hidden until a script reveals it, so neither rule above sees chrome.
+    const page =
+      '<html><body><main><article><section><div class="container">' +
+      '<h1>Cloud Service Agreement</h1>' +
+      '<p>A plain language agreement for buying and selling cloud services.</p>' +
+      '<a class="button-text button-set" href="/signup">Create your free CSA</a>' +
+      '<a class="btn btn-secondary" href="#formats">All downloads and formats</a>' +
+      '<div id="header-offer" class="row display-none"><div class="card offer-card">' +
+      '<h4>Streamline your full contract workflow</h4>' +
+      '<p>Templates -&gt; Proposals -&gt; Negotiations -&gt; Esignature</p>' +
+      '<a class="button-classic" href="/signup">Try it free</a>' +
+      '</div></div>' +
+      '</div></section>' +
+      '<h2>Using this agreement</h2><p>The agreement consists of a Cover Page plus the Standard Terms.</p>' +
+      '</article></main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const chrome of ['Create your free CSA', 'All downloads', 'Streamline', 'Templates', 'Try it free']) {
+      expect(text).not.toContain(chrome);
+    }
+    expect(text).toContain('Cloud Service Agreement');
+    expect(text).toContain('A plain language agreement for buying and selling cloud services.');
+    expect(text).toContain('The agreement consists of a Cover Page plus the Standard Terms.');
+  });
+
+  it('keeps content that is merely hidden, such as a collapsed accordion answer', async () => {
+    const page =
+      '<html><body><main><h2>FAQ</h2><button>Are there setup fees?</button>' +
+      '<section class="AccordionItem__content" style="display: none;">' +
+      '<p>There are no setup fees or monthly fees.</p></section></main></body></html>';
+
+    expect(await fetchText(page)).toContain('There are no setup fees or monthly fees.');
+  });
+
+  it('keeps a button-styled link that runs inside a sentence, or whose label is prose', async () => {
+    const page =
+      '<html><body><main>' +
+      '<p>Read the <a class="btn-link" href="/terms">Standard Terms</a> before signing.</p>' +
+      '<div><a class="button" href="/guide">Our guide covers this. It is worth a read.</a></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Read the Standard Terms before signing.');
+    expect(text).toContain('Our guide covers this. It is worth a read.');
+  });
+
+  it('keeps a button-styled link that is the whole of a heading, table cell or list item', async () => {
+    const page =
+      '<html><body><main><p>Release notes for every version of the toolkit below.</p>' +
+      '<h2><a class="btn-anchor" href="#install">Install</a></h2>' +
+      '<table><tr><td><a class="btn btn-sm" href="/v2.3.1.zip">v2.3.1</a></td></tr></table>' +
+      '<ul><li><a class="btn" href="/docs/a">Getting started</a></li></ul>' +
+      '<div>Read <em>the</em> <a class="btn" href="/terms">terms</a></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of ['Install', 'v2.3.1', 'Getting started', 'terms']) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('keeps a promo-named wrapper once it is a page section rather than a card', async () => {
+    const terms = 'The offer is valid for new customers only and renews at the standard rate. '.repeat(5);
+    const page =
+      '<html><body><main><h1>Spring offer</h1>' +
+      `<section class="offer"><p>${terms}</p></section>` +
+      '<div class="newsletter-issue"><h2>Issue 42</h2><p>This week in tooling.</p></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('renews at the standard rate.');
+    expect(text).toContain('Issue 42');
+    expect(text).toContain('This week in tooling.');
+  });
+
+  it('matches promo words as whole class tokens, and never on a wrapper holding the h1', async () => {
+    const page =
+      '<html><body><div class="cta-layout"><h1>Pricing</h1><p>Plans for teams of every size.</p></div>' +
+      '<div class="coffee-offered"><p>We offered coffee to every attendee.</p></div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Pricing');
+    expect(text).toContain('Plans for teams of every size.');
+    expect(text).toContain('We offered coffee to every attendee.');
+  });
+
+  it('keeps promo-named inline elements inside a sentence', async () => {
+    const page =
+      '<html><body><main>' +
+      '<p>Read our <a class="cta-link" href="/g">pricing guide</a> before you choose a plan.</p>' +
+      '<p>Annual plans include <span class="offer">two months free</span> compared with monthly billing.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Read our pricing guide before you choose a plan.');
+    expect(text).toContain('Annual plans include two months free compared with monthly billing.');
+  });
+
+  it('keeps headings and API entries whose id is a promo word, and ignores ids for promo matching', async () => {
+    const page =
+      '<html><body><main>' +
+      '<h2 id="subscribe-to-a-topic">Subscribe to a topic</h2><p>Call client.subscribe(topic) to listen.</p>' +
+      '<div id="subscribe" class="method"><h4>subscribe()</h4><p>Registers a listener for events.</p></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of ['Subscribe to a topic', 'client.subscribe(topic)', 'subscribe()', 'Registers a listener']) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('keeps a button link whose neighbour is inline markup separated by a comment', async () => {
+    const page =
+      '<html><body><main><p>Pick the build that matches your operating system.</p>' +
+      '<div><em>Linux users:</em><!-- dl --><a class="btn" href="/dl">Download v3.2</a></div>' +
+      '</main></body></html>';
+
+    expect(await fetchText(page)).toContain('Download v3.2');
+  });
+
+  it('keeps a button link between running text and a comment', async () => {
+    const page =
+      '<html><body><main><p>Pick the build that matches your operating system.</p>' +
+      '<div>Read the<!-- --><a class="btn" href="/t">terms</a><!-- -->first.</div></main></body></html>';
+
+    expect(await fetchText(page)).toContain('terms');
+  });
+
+  it('keeps promo-named structured content and control-less blocks', async () => {
+    const page =
+      '<html><body><main><h1>Plans</h1><p>Everything you need to know about our plans.</p>' +
+      '<ol class="signup-steps"><li>Create an account</li><li>Verify your email</li></ol>' +
+      '<table class="offer-table"><tr><td>Plan A</td><td>Ten seats</td></tr></table>' +
+      '<div class="offer-details"><dl><dt>Term</dt><dd>Twelve months</dd></dl></div>' +
+      '<ul class="offer-features"><li>Unlimited exports</li></ul>' +
+      '<div class="newsletter-issue"><h4>Issue 41</h4><p>Notes on tooling.</p></div>' +
+      '<div class="subscribe-info"><p>Webhooks deliver events to your endpoint.</p></div>' +
+      '<p>Use this code at checkout:</p><div class="promo-code">SPRING25</div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of [
+      'Create an account',
+      'Ten seats',
+      'Twelve months',
+      'Unlimited exports',
+      'Issue 41',
+      'Webhooks deliver events',
+      'SPRING25',
+    ]) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('keeps promo-named content that holds only inline links or structured content', async () => {
+    const page =
+      '<html><body><main><h1>Plans</h1><p>Everything you need to know about our plans.</p>' +
+      '<div class="subscribe-info"><p>Webhooks deliver events to your <a href="/docs/endpoint">endpoint</a>.</p></div>' +
+      '<div class="signup-steps"><ol><li><a href="/register">Register steps</a></li><li>Verify your email</li></ol></div>' +
+      '<div class="offer-wrap"><table><tr><td>Student plan</td><td><a href="/student">Apply</a></td></tr></table></div>' +
+      '<div class="promo-code"><code>SPRING25</code><button>Copy</button></div>' +
+      '<table><tr class="promo-row"><td>Team plan</td><td>$2</td><td><a href="/team">Join</a></td></tr></table>' +
+      '<figure><img src="x"><figcaption class="promo">Photo courtesy of <a href="/x">Acme</a></figcaption></figure>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    for (const kept of ['endpoint', 'Register steps', 'Student plan', 'SPRING25', 'Team plan', 'Photo courtesy']) {
+      expect(text).toContain(kept);
+    }
+  });
+
+  it('drops a promo card whose only control is a button or form', async () => {
+    const page =
+      '<html><body><main><h1>Plans</h1><p>Everything you need to know about our plans.</p>' +
+      '<div class="offer-card"><h4>Spring sale</h4><p>Two months free.</p><button>Claim it</button></div>' +
+      '<div class="newsletter-box"><p>Get updates in your inbox.</p><form><input type="email"></form></div>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Spring sale');
+    expect(text).not.toContain('Get updates in your inbox.');
+    expect(text).toContain('Everything you need to know about our plans.');
+  });
+
+  it('restores a promo card and its nested button when pruning would leave too little text', async () => {
+    const page =
+      '<html><body><main><div class="offer-card"><h4>Spring sale</h4>' +
+      '<a class="button-classic" href="/signup">Try it free</a></div></main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Spring sale');
+    expect(text).toContain('Try it free');
   });
 });

@@ -5,7 +5,7 @@ import type { DataLakeGroundingMode, ISessionDocument } from '@bike4mind/common'
 import { api } from '@client/app/contexts/ApiContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { updateAllQueryData } from '@client/app/utils/react-query';
+import { updateSessionsQueryData } from '@client/app/hooks/data/sessions';
 
 type SessionCreateDeps = {
   queryClient: ReturnType<typeof useQueryClient>;
@@ -22,7 +22,7 @@ async function createAndOpenSession(
   const res = await api.post<ISessionDocument>('/api/sessions/create', body);
   const created = res.data;
   queryClient.setQueryData(['sessions', created.id], created);
-  updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
+  updateSessionsQueryData(queryClient, 'write', created);
   setCurrentSession(created);
   setCurrentSessionId(created.id);
   closeManager();

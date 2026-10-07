@@ -73,6 +73,10 @@ type RedactablePromptMeta = {
  * the field stays ids - a future version carrying the conflicting SENTENCES (the detector has them:
  * InconsistencyEvidence.excerpt) would be `fullContext`'s class exactly and would have to join the
  * list below rather than ride along inside this one.
+ *
+ * `sourceOrigin` is kept too: it carries lake ids/names and an ownership bit, i.e. a label for a
+ * chip the viewer can already see, not a slice of the owner's corpus. It would move to the list
+ * below only if it ever carried content.
  */
 const OWNER_ONLY_CITABLE_METADATA_FIELDS = ['fullContext'] as const;
 

@@ -1,3 +1,4 @@
+import { humanizeTagSegment } from '@bike4mind/common';
 import type { SvgIconComponent } from '@mui/icons-material';
 import SortByAlphaIcon from '@mui/icons-material/SortByAlpha';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
@@ -142,5 +143,5 @@ const CATEGORY_LABELS: Record<string, string> = {
 export function humanizeSegment(segment: string, depth: number): string {
   if (depth === 0 && PREFIX_LABELS[segment]) return PREFIX_LABELS[segment];
   if (depth === 1 && CATEGORY_LABELS[segment]) return CATEGORY_LABELS[segment];
-  return segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+  return humanizeTagSegment(segment);
 }

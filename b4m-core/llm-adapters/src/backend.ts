@@ -32,6 +32,14 @@ interface IChoiceBase {
   chunkText?: string | null;
   /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
   channel?: StreamChannel;
+  /**
+   * Whether chunkText is a tool-call argument fragment. Adapters whose prose shares a choice index
+   * with a tool call must set this; left undefined, a chunk at an index whose tool name is already
+   * known is treated as an argument fragment.
+   * While a tool is streaming, only `false` choices are forwarded to the client as text. An
+   * argument fragment (`true`) must arrive after the choice that carries its `tool` header.
+   */
+  toolArguments?: boolean;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
@@ -105,6 +113,12 @@ export interface ICompletionOptionTools {
     strict?: boolean;
   };
   _isMcpTool?: boolean; // Flag to identify MCP tools (enables tool chaining for MCP only)
+  /**
+   * The artifact MIME type this tool's results may carry, exactly as its `<artifact type="...">`
+   * spells it. Set only from a trusted tool registration (services ToolDefinition), never by an
+   * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
+   */
+  artifactType?: string;
 }
 
 export interface ICompletionOptions {
@@ -210,6 +224,29 @@ export interface ICompletionOptions {
      * case. Internal - do not set manually.
      */
     liveToolUseIds?: string[];
+    /**
+     * The single recursive-artifact-echo guard for this whole tool-chaining chain - created
+     * lazily by whichever level first streams an artifact, then threaded UNCHANGED through
+     * every deeper recursive complete() call so text buffered at one level and an artifact
+     * emitted by a CHAINED tool call several levels deeper stay in one true generation order
+     * (Anthropic/Gemini/Bedrock keep tools available on the recursive call to enable chaining).
+     * A fresh guard per level would either delete a legitimate chained artifact alongside the
+     * echo it exists to catch, or let the artifact bypass buffered text ahead of it and arrive
+     * out of order - see createRecursiveArtifactGuard. Set once, at the first level that needs
+     * it, via `options._internal?.artifactGuard ?? createRecursiveArtifactGuard(cb)`; only that
+     * level calls `flush()`. Internal - do not set manually.
+     */
+    artifactGuard?: {
+      // info is `any` here (matching LooseCompletionCallback in toolStreamingHelper.ts) because
+      // the four backends' own completion-callback types differ in whether info is required
+      // (Anthropic, Gemini, OpenAI) or optional (Bedrock) - structurally incompatible with each
+      // other in both directions, so a single shared field type has to accept every one of them.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
+      callback: (text: (string | null | undefined)[], info: any) => Promise<void>;
+      emitArtifact: (results: string[], info: CompletionInfo) => Promise<void>;
+      markDelivered: (markup: string) => void;
+      flush: () => Promise<void>;
+    };
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;

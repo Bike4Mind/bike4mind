@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
 import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
+import { REPLY_CHOICES_INVALID_REASONS } from '../utils/replyChoices';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -339,6 +340,16 @@ export const CitableSourceSchema = z.object({
        * stamps the wrong shape should fail here, not render a badge that silently names nobody.
        */
       conflictsWith: z.array(z.string()).optional(),
+      /** Chip label origin (CitableSourceOrigin); a writer that stamps the wrong shape should fail here. */
+      sourceOrigin: z
+        .discriminatedUnion('kind', [
+          z.object({
+            kind: z.literal('lake'),
+            lakes: z.array(z.object({ id: z.string(), name: z.string() })).min(1),
+          }),
+          z.object({ kind: z.literal('library'), owned: z.boolean() }),
+        ])
+        .optional(),
       /** web_search's provider-located place (WebSearchPlace), the only source of map coordinates. */
       place: z
         .object({
@@ -703,7 +714,7 @@ export const RetrievalSummarySchema = z.object({
   /**
    * Which of this turn's injected lake prompt ids were BOTH in the session's pre-authorized (manage-
    * but-not-member admission) set AND injected on this turn - see unionPreauthorizedLakeAccess and
-   * pages/api/sessions/create.ts. A subset of injectedLakePromptIds, never a superset. Narrows the
+   * pages/api/v1/sessions/index.ts. A subset of injectedLakePromptIds, never a superset. Narrows the
    * session's static `preauthorizedLakeIds` (what was ADMITTED) to what a given turn actually used.
    *
    * MEMBERSHIP, NOT CAUSATION. An admitted lake the caller could already reach - its creator, or a
@@ -719,10 +730,11 @@ export const RetrievalSummarySchema = z.object({
    * A subset of injectedLakePromptIds, never a superset. Derived at both injection sites via
    * grantedLakeIdsUsedFor.
    *
-   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is the only one that can cross an org
+   * THE ARM WORTH NAMING SEPARATELY: the grant arm (#2495) is one of the two that can cross an org
    * boundary - `grantLakeAccess` can hand a CURATOR grant to an arbitrary cross-tenant user, and
-   * that grant carries injection trust. The creator and org arms cannot reach past one org, and a
-   * reader grant is excluded permanently, so a lake listed here is the case an operator auditing
+   * that grant carries injection trust. The other is the reader opt-in arm, recorded separately in
+   * `readerOptInLakeIdsUsed` below. The creator and org arms cannot reach past one org, and a
+   * reader grant is excluded permanently, so these two fields are the cases an operator auditing
    * cross-tenant prompt influence is actually looking for.
    *
    * MEMBERSHIP, NOT CAUSATION, the same caveat the field above carries: a granted lake its holder
@@ -737,6 +749,18 @@ export const RetrievalSummarySchema = z.object({
    * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
    */
   grantedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * Which of this turn's injected lake prompt ids entered ONLY through the READER OPT-IN arm - a
+   * reader (tag/entitlement holder) on a session explicitly scoped to a lake whose manager set
+   * `injectPromptForReaders`. A subset of injectedLakePromptIds.
+   *
+   * CAUSATION, unlike the two fields above: a lake the caller also reaches by the pre-authorized,
+   * grant, creator or org arm is NOT listed, so a non-empty value is exactly the prompts that would
+   * not have been injected without the opt-in. Absent means none did. A turn can run both injection
+   * sites (forced retrieval and the knowledge tools); the merged value is a union, so a lake is
+   * listed if EITHER site's own causation check admitted it via the opt-in alone.
+   */
+  readerOptInLakeIdsUsed: z.array(z.string()).optional(),
   /**
    * How many lakes were excluded from this turn's scope because the caller lacks the access to
    * search them, and why (#3055). Resolved at the seed alongside `lakeScope`, from a dedicated
@@ -757,9 +781,11 @@ export const RetrievalSummarySchema = z.object({
    * text - prose could leak a lake's identity through phrasing - so a future exclusion cause (e.g.
    * an archived or quota-limited lake) adds an enum value here rather than a description.
    *
-   * 'access' is the only reason today: the caller's org membership or the lake's public listing
-   * surfaced it as a candidate (they could see it exists) but they hold neither its own
-   * gate/entitlement nor an ownership or grant exception for it.
+   * 'access' is the only reason today: the caller could see the lake exists (their org membership,
+   * the lake's public listing, or having created it; administering its org; an admin may see any
+   * lake) but they hold neither its own gate/entitlement nor an ownership or grant exception for
+   * it. A lake the caller could not see is never counted, so the count cannot confirm that a
+   * guessed lake tag exists.
    *
    * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
    * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
@@ -776,6 +802,25 @@ export const RetrievalSummarySchema = z.object({
       // sizes) rather than by any relationship between two derived lists.
       count: z.number().int().nonnegative(),
       reason: z.enum(['access']),
+    })
+    .optional(),
+  /**
+   * How many lakes this session named (a `datalake:` retrieval tag) were left out of this turn's
+   * scope because they are not serving yet, and why. Retrieval is active-only by design, so a
+   * draft lake narrows the scope to nothing; without this field a turn that abstained for that
+   * reason reads, after the outcome merge, like a search that ran and found nothing.
+   *
+   * Same contract as `excludedLakes`, which it sits beside rather than inside (one session can
+   * name one gated and one draft lake, and that object holds a single reason): ABSENT MEANS NOT
+   * MEASURED, never "every named lake was serving" - a measured turn with nothing missing records
+   * `count: 0`. COUNT AND REASON ONLY, never an id or name, and only drafts the CALLER created are
+   * counted, so naming a tag cannot probe whether another user's draft exists. `reason` is a closed
+   * enum; a further non-serving cause (e.g. an archived lake) adds a value here.
+   */
+  notServingLakes: z
+    .object({
+      count: z.number().int().nonnegative(),
+      reason: z.enum(['draft']),
     })
     .optional(),
 });
@@ -845,6 +890,21 @@ export const PromptMetaZodSchema = z.object({
    * letting the client render a truncated-artifact recovery affordance.
    */
   finishReason: z.string().optional(),
+  /**
+   * Why reply-choice buttons did or did not appear: `offered` is whether REPLY_CHOICES_GUIDANCE
+   * actually reached the model this turn - requested AND not evicted by the system-prompt budget
+   * (see SYSTEM_PROMPT_PRIORITY.replyChoices in systemPromptSources.ts) - `status`/`reason` the
+   * finalize outcome (see ReplyChoicesOutcome in ../utils/replyChoices.ts). Written once at
+   * finalize; absent on Research Mode turns (which skip finalize entirely) and any other turn that
+   * never finalized.
+   */
+  replyChoices: z
+    .object({
+      offered: z.boolean(),
+      status: z.enum(['parsed', 'absent', 'invalid']),
+      reason: z.enum(REPLY_CHOICES_INVALID_REASONS).optional(),
+    })
+    .optional(),
   /**
    * Set when an emitted artifact looks voluntarily abbreviated - placeholder comments in
    * place of real code, or calls into functions that were never defined. The complement to

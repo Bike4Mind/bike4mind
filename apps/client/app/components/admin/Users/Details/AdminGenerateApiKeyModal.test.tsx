@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { ApiKeyScope } from '@bike4mind/common';
+import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
 
 const h = vi.hoisted(() => ({
@@ -131,5 +133,53 @@ describe('AdminGenerateApiKeyModal - pre-authorized lakes', () => {
 
     fireEvent.click(screen.getByTestId('admin-generate-key-lake-checkbox-lakeA').querySelector('input')!);
     expect(screen.getByTestId('admin-generate-key-lakes-count').textContent).toContain('1 selected');
+  });
+});
+
+describe('AdminGenerateApiKeyModal - ingest scopes', () => {
+  const GENERIC = GENERIC_MODAL_API_KEY_SCOPES[0].value;
+  const scopeInput = (value: string) => screen.getByTestId(`admin-generate-key-scope-${value}`).querySelector('input')!;
+
+  const submitScopes = () => {
+    fireEvent.change(screen.getByPlaceholderText(/Data Lake Upload/i), { target: { value: 'ci ingest' } });
+    fireEvent.click(screen.getByText('Generate API Key'));
+    return h.mutate.mock.calls[0][0].data.scopes;
+  };
+
+  it('offers QA ingest but not Overwatch ingest, which needs a productId this path never sends', () => {
+    renderModal();
+    expect(screen.getByText('QA: Ingest')).toBeTruthy();
+    expect(screen.queryByTestId(`admin-generate-key-scope-${ApiKeyScope.OVERWATCH_INGEST_WRITE}`)).toBeNull();
+  });
+
+  it('the generic counter ignores a selected ingest scope, and Select All replaces it', () => {
+    renderModal();
+    const counter = () => screen.getByTestId('admin-generate-key-scopes-count').textContent;
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+
+    fireEvent.click(screen.getByText('Select All'));
+    expect(counter()).toContain(
+      `(${GENERIC_MODAL_API_KEY_SCOPES.length}/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`
+    );
+    expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+
+    fireEvent.click(screen.getByText('Clear All'));
+    expect(counter()).toContain(`(0/${GENERIC_MODAL_API_KEY_SCOPES.length} selected)`);
+    expect(scopeInput(ApiKeyScope.QA_INGEST).checked).toBe(false);
+  });
+
+  it('an ingest scope replaces the selection, since it must be the only scope', () => {
+    renderModal();
+    fireEvent.click(scopeInput(GENERIC));
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    expect(submitScopes()).toEqual([ApiKeyScope.QA_INGEST]);
+  });
+
+  it('a generic scope drops a selected ingest scope', () => {
+    renderModal();
+    fireEvent.click(scopeInput(ApiKeyScope.QA_INGEST));
+    fireEvent.click(scopeInput(GENERIC));
+    expect(submitScopes()).toEqual([GENERIC]);
   });
 });

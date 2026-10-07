@@ -14,7 +14,7 @@ interface SetApikeyAdapters {
     apiKeys: {
       updateAllByUserIdAndType: (userId: string, type: ApiKeyType, value: Partial<IApiKeyDocument>) => Promise<unknown>;
       findByIdAndUserIdAndType: (id: string, userId: string, type: ApiKeyType) => Promise<IApiKeyDocument | null>;
-      update: (value: IApiKeyDocument) => Promise<unknown>;
+      update: (value: Partial<IApiKeyDocument>) => Promise<unknown>;
     };
   };
 }
@@ -30,7 +30,7 @@ export const setApiKey = async (userId: string, parameters: SetApiKeyParameters,
 
   apiKey.isActive = true;
 
-  await db.apiKeys.update(apiKey);
+  await db.apiKeys.update({ id: apiKey.id, isActive: true });
 
   return apiKey;
 };

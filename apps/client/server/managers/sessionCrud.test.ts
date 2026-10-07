@@ -15,6 +15,7 @@ const {
   favoriteRepoFind,
   userRepoFindById,
   defineAbilitiesForSpy,
+  createAttachmentLakeAccessSpy,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -53,6 +54,7 @@ const {
     favoriteRepoFind: vi.fn(),
     userRepoFindById: vi.fn(),
     defineAbilitiesForSpy: vi.fn(),
+    createAttachmentLakeAccessSpy: vi.fn(),
   };
 });
 
@@ -98,6 +100,10 @@ vi.mock('@bike4mind/common', () => ({
 
 vi.mock('@bike4mind/observability', () => ({
   Logger: { log: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
+  createAttachmentLakeAccess: createAttachmentLakeAccessSpy,
 }));
 
 vi.mock('@casl/mongoose', () => ({
@@ -197,6 +203,63 @@ describe('sessionCrud', () => {
       // asyncPromises holds the deferred work (analytics + user update)
       expect(result.asyncPromises.length).toBeGreaterThanOrEqual(2);
       await Promise.all(result.asyncPromises);
+    });
+
+    it('forwards the origin to createSession as an option, not a parameter', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger, origin: { channel: 'api', apiKeyId: 'key-1' } });
+
+      const [, params, , options] = createSessionService.mock.calls.at(-1)!;
+      expect(options).toEqual({ origin: { channel: 'api', apiKeyId: 'key-1' } });
+      expect(params).not.toHaveProperty('origin');
+    });
+
+    it('does not create (or stamp) when an existing session is resolved', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+      await getOrCreateSession({ sessionId: 'owned', user, logger, origin: { channel: 'api' } });
+      expect(createSessionService).not.toHaveBeenCalled();
+    });
+
+    it('forwards agentIds to createSession as a create parameter', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger, agentIds: ['a1', 'a2'] });
+
+      const [, params] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ agentIds: ['a1', 'a2'] }));
+    });
+
+    it('defaults agentIds to [] so a session with no selected agents is unchanged', async () => {
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      await getOrCreateSession({ user, ability: allowAbility, logger });
+
+      const [, params] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ agentIds: [] }));
+    });
+
+    it('ignores agentIds when an existing session is resolved (no create, no attach)', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+
+      const result = await getOrCreateSession({ sessionId: 'owned', user, logger, agentIds: ['a1'] });
+
+      expect(result.wasCreated).toBe(false);
+      expect(createSessionService).not.toHaveBeenCalled();
+    });
+
+    it("hands createSession the attachment-door lake resolver for the caller's supplied files", async () => {
+      const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
+      createAttachmentLakeAccessSpy.mockReturnValueOnce(async () => lakeAccess);
+      createSessionService.mockResolvedValueOnce({ id: 'sess-new', name: 'New Notebook' });
+
+      const result = await getOrCreateSession({ fabFileIds: ['f1'], user, ability: allowAbility, logger });
+      await Promise.all(result.asyncPromises);
+
+      const [, params, adapters] = createSessionService.mock.calls.at(-1)!;
+      expect(params).toEqual(expect.objectContaining({ knowledgeIds: ['f1'] }));
+      await expect(adapters.resolveAttachmentLakeAccess()).resolves.toBe(lakeAccess);
+      expect(createAttachmentLakeAccessSpy).toHaveBeenCalledWith(user, logger);
     });
 
     it('also logs project add + activity when created within a project', async () => {

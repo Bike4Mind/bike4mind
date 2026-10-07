@@ -11,7 +11,7 @@ import type { ISession } from '../types/entities/SessionTypes';
  * access the session, including a non-entitled user it was deliberately shared with.
  *
  * `preauthorizedLakeIds` records a manager's manage-but-not-member admission to a lake (see
- * ISession.preauthorizedLakeIds) - an authorization detail set once by pages/api/sessions/create.ts,
+ * ISession.preauthorizedLakeIds) - an authorization detail set once by pages/api/v1/sessions/index.ts,
  * not something a client consumer reads or needs to render.
  *
  * This list is the single source of truth: add a field here and every response boundary
@@ -55,6 +55,13 @@ export function redactSessionForClient<T extends Partial<ISession>>(
   const clientSession = { ...plain } as Record<string, unknown>;
   for (const field of SERVER_OWNED_SESSION_FIELDS) {
     delete clientSession[field];
+  }
+  // origin.channel is display data the sidebar reads; origin.apiKeyId names the creating key and
+  // is stripped like a server-owned field. Copied, not mutated, for the same reason as above.
+  const origin = clientSession.origin as Record<string, unknown> | null | undefined;
+  if (origin && typeof origin === 'object' && 'apiKeyId' in origin) {
+    const { apiKeyId: _apiKeyId, ...publicOrigin } = origin;
+    clientSession.origin = publicOrigin;
   }
   return clientSession as ClientSession<T>;
 }

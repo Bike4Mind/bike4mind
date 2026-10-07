@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
-import { PublishedArtifact } from '@bike4mind/database';
+import { PublishedArtifact, liveShareTokens } from '@bike4mind/database';
 import {
   VisibilitySchema,
   CommentPolicySchema,
@@ -105,7 +105,7 @@ const handler = baseApi()
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareToken -shareTokenUpdatedAt')
+      .select('-shareToken -shareTokenUpdatedAt -shareTokens.token')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
@@ -207,7 +207,15 @@ const handler = baseApi()
     // every unrelated PATCH - a title rename - rejected with an access-gate error it can't
     // act on. Unscoped, a stored inconsistency holds title/description/tags hostage.
     const touchesGateSurface = parsed.data.accessGate !== undefined || parsed.data.visibility !== undefined;
-    if (touchesGateSurface && artifact.accessGate && artifact.visibility !== 'public' && !artifact.shareToken) {
+    // Reads the ARRAY, not the legacy scalar (#3255 step 3): with several links per artifact
+    // the enforcing surface is "at least one LIVE link", and liveShareTokens() still folds in
+    // a pre-backfill scalar-only link.
+    if (
+      touchesGateSurface &&
+      artifact.accessGate &&
+      artifact.visibility !== 'public' &&
+      liveShareTokens(artifact).length === 0
+    ) {
       return res.status(400).json({
         error:
           'An access gate requires visibility "public" or an active share link - clear the gate, set visibility to public, or create a share link first',

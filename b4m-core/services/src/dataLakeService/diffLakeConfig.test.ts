@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLake } from '@bike4mind/common';
-import { LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
-import { diffLakeConfig, grantChange, ownershipChange } from './diffLakeConfig';
+import { LAKE_CONFIG_FIELD_AUDIT, LAKE_CONFIG_VALUE_MAX_CHARS, lakeConfigTextFingerprint } from '@bike4mind/common';
+import {
+  diffLakeConfig,
+  grantChange,
+  ownershipChange,
+  proposalReviewChange,
+  uploadBatchChange,
+} from './diffLakeConfig';
 
 const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
   name: 'Widget Docs',
@@ -16,6 +22,11 @@ const lake = (overrides: Partial<IDataLake> = {}): Partial<IDataLake> => ({
 describe('diffLakeConfig', () => {
   it('records nothing for an identical document - the whole reason a diff exists', () => {
     expect(diffLakeConfig(lake(), lake())).toEqual([]);
+  });
+
+  it('never audits the purge claim id - an internal lifecycle token, not config', () => {
+    expect(LAKE_CONFIG_FIELD_AUDIT.purgeClaimId).toBe('excluded');
+    expect(diffLakeConfig(lake(), lake({ purgeClaimId: 'claim-a' }))).toEqual([]);
   });
 
   it('emits only the field that moved, not every field it compared', () => {
@@ -50,11 +61,19 @@ describe('diffLakeConfig', () => {
   it('treats an unset boolean as false, so writing false onto a never-set field is no change', () => {
     expect(diffLakeConfig(lake(), lake({ isPublic: false }))).toEqual([]);
     expect(diffLakeConfig(lake(), lake({ auditQueryTextEnabled: false }))).toEqual([]);
+    expect(diffLakeConfig(lake(), lake({ injectPromptForReaders: false }))).toEqual([]);
   });
 
   it('catches the audit control being flipped off - the sharpest case in the issue', () => {
     const changes = diffLakeConfig(lake({ auditQueryTextEnabled: true }), lake({ auditQueryTextEnabled: false }));
     expect(changes).toEqual([{ field: 'auditQueryTextEnabled', kind: 'literal', before: true, after: false }]);
+  });
+
+  it('records the reader opt-in flag (injectPromptForReaders) being turned on', () => {
+    // Unlike a string field, a boolean's "unset" side normalizes to a concrete `false` (see
+    // normalizeValue), so `before` is present here too - matching auditQueryTextEnabled above.
+    const changes = diffLakeConfig(lake(), lake({ injectPromptForReaders: true }));
+    expect(changes).toEqual([{ field: 'injectPromptForReaders', kind: 'literal', before: false, after: true }]);
   });
 
   it('records numeric and org-scope moves, including their explicit clear sentinels', () => {
@@ -243,5 +262,58 @@ describe('grantChange', () => {
       after: 'user:u1=reader',
     });
     expect(grantChange('user', 'u1', 'reader', 'reader', until, new Date(until))).toBeNull();
+  });
+});
+
+describe('proposalReviewChange', () => {
+  it('names the proposal by its title, keeping the source url that identifies it', () => {
+    expect(proposalReviewChange({ title: 'Quarterly report', sourceUrl: 'https://x.test/r' }, 'declined')).toEqual({
+      field: 'proposalReview',
+      kind: 'literal',
+      after: 'declined: Quarterly report (https://x.test/r)',
+    });
+  });
+
+  it('tells apart two proposals that share a title', () => {
+    const a = proposalReviewChange({ title: 'Home', sourceUrl: 'https://a.test/' }, 'approved');
+    const b = proposalReviewChange({ title: 'Home', sourceUrl: 'https://b.test/' }, 'approved');
+    expect(a.after).not.toBe(b.after);
+  });
+
+  it('falls back to the source url for a blank title', () => {
+    expect(proposalReviewChange({ title: '  ', sourceUrl: 'https://x.test/r' }, 'approved').after).toBe(
+      'approved: https://x.test/r'
+    );
+  });
+});
+
+describe('uploadBatchChange', () => {
+  const batch = (over: Partial<Parameters<typeof uploadBatchChange>[0]> = {}) => ({
+    vectorizedFiles: 0,
+    failedFiles: 0,
+    skippedFiles: 0,
+    ...over,
+  });
+
+  it('summarizes a clean batch by its added count', () => {
+    expect(uploadBatchChange(batch({ vectorizedFiles: 1 }))).toEqual({
+      field: 'upload',
+      kind: 'literal',
+      after: '1 file added',
+    });
+    expect(uploadBatchChange(batch({ vectorizedFiles: 12 })).after).toBe('12 files added');
+  });
+
+  it('never hides the files that did not land', () => {
+    expect(
+      uploadBatchChange(batch({ vectorizedFiles: 9, failedFiles: 2, skippedFiles: 1, deferredFiles: 3 })).after
+    ).toBe('9 files added (2 failed, 1 skipped, 3 not finished)');
+  });
+
+  it('leads with the outcome when the batch did not finish normally', () => {
+    expect(uploadBatchChange(batch({ vectorizedFiles: 2 }), 'cancelled').after).toBe('Upload cancelled: 2 files added');
+    expect(uploadBatchChange(batch({ vectorizedFiles: 2, failedFiles: 1 }), 'stopped').after).toBe(
+      'Upload stopped: 2 files added (1 failed)'
+    );
   });
 });

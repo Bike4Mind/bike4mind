@@ -4,8 +4,15 @@ import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import type { Request, Response, NextFunction } from 'express';
 import { marked } from 'marked';
+import type { Types } from 'mongoose';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
-import { PublishedArtifact, User } from '@bike4mind/database';
+import {
+  PublishedArtifact,
+  User,
+  liveShareTokens,
+  shareTokenFilter,
+  type PublishedArtifactShareToken,
+} from '@bike4mind/database';
 import {
   buildPublishUrlPath,
   checkShareGrant,
@@ -36,7 +43,12 @@ import {
   isAppWrapperHost,
   VIEWER_SANDBOX,
 } from '@server/services/publish/viewerSecurity';
-import { buildShareFooterHtml, buildSignupGateHtml } from '@client/app/utils/shareFooter';
+import {
+  buildShareFooterHtml,
+  buildSignupGateHtml,
+  shouldShowSignupGate,
+  stripSignupGateHtml,
+} from '@client/app/utils/shareFooter';
 // Use require for all Prism imports so ESM/CJS interop can't split the singleton:
 // language component files call require('../prism-core') and must get the exact same
 // object reference that our highlight calls use.
@@ -285,9 +297,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Resolve the artifact.
   let artifact: PublishedArtifactLean | null = null;
   if (resolved.kind === 'share') {
+    // Shared filter, not a hand-rolled one: findByShareToken cannot be used here (it needs a
+    // lean read), but the rollout tolerance and revocation semantics must not diverge from it.
     artifact = await PublishedArtifact.findOne({
-      shareToken: resolved.shareToken,
       deletedAt: null,
+      ...shareTokenFilter(resolved.shareToken),
     }).lean<PublishedArtifactLean>();
   } else if (resolved.kind === 'bundle') {
     artifact = await PublishedArtifact.findOne({
@@ -483,6 +497,14 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
       : undefined;
 
+  // Per-link view counting (#3255 step 2). Computed once here and threaded to every
+  // bumpViewCount call the way gateViewAudit is, so no branch recomputes it. Undefined for a
+  // row the backfill has not reached yet (it resolved through the legacy scalar): such a view
+  // still serves and still bumps the artifact counters, just without a per-link count.
+  const shareTokenEntryId = isShare
+    ? liveShareTokens(artifact).find(entry => entry.token === shareToken)?._id
+    : undefined;
+
   if (isShare) {
     // No-sign-in links are unlisted capabilities: stop the token leaking to third
     // parties via the Referer header on any outbound link the artifact author
@@ -508,6 +530,21 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // cached `?export=` response would be an ATTACHMENT served in place of the page. A
   // user-initiated download is not a hot path, so there is nothing to trade away.
   const exportCacheControl = 'private, no-store, must-revalidate';
+
+  const viewerIsProspect = shouldShowSignupGate(effectiveVisibility, req.user as { id?: string });
+  // Exports and the plain-text alternate are never rendered pages, so they never carry it.
+  // A share-link holder is already authorized to see everything on this page, so there is
+  // nothing to invite them past. Stored bundle bytes may have the gate baked in at publish
+  // time; it is stripped below whenever this is false, which also covers a visibility
+  // change after publish.
+  const showSignupGate = viewerIsProspect && !isShare && !exportFormat && !isFormatRaw;
+  // An authenticated view of an open-public page drops the gate, so it must not land in the
+  // shared cache and be handed to anonymous viewers.
+  const viewCacheControl = isShare
+    ? SHARE_CACHE_CONTROL
+    : isOpenPublic && !viewerIsProspect
+      ? 'private, no-store'
+      : cacheControlFor(effectiveVisibility);
 
   // Whether a plain, credential-free navigation to this artifact re-authorizes - the
   // condition for OFFERING an export link on a viewer surface. A `?export=` click is a
@@ -535,7 +572,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
               replyBodyForExport(artifact)
             )
           : renderViewerPage(artifact, { noindex: true, noReferrer: isShare, standalone: true });
-      bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+      bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
+        gateView: gateViewAudit,
+        shareTokenEntryId,
+      });
       return sendExport(res, exportFormat, artifact.title, body, exportCacheControl);
     }
     // Reply/fabfile artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
@@ -612,10 +652,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       canFrameArtifacts,
       exportFormats,
       sharedBy: ownerName ?? undefined,
-      // A share-link holder is already authorized to see everything on this page, and a
-      // signed-in viewer already has an account - the prompt is only for an anonymous
-      // visitor who arrived at a plain public link.
-      signupPrompt: !isShare && !req.user,
+      signupGate: showSignupGate,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -636,9 +673,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         "frame-ancestors 'self'",
       ].join('; ')
     );
-    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+    res.setHeader('Cache-Control', viewCacheControl);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
+      gateView: gateViewAudit,
+      shareTokenEntryId,
+    });
     return res.status(200).send(page);
   }
 
@@ -703,6 +743,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
   }
+  if (!showSignupGate) indexHtml = stripSignupGateHtml(indexHtml);
 
   if (isFormatRaw) {
     if (!isOpenPublic) {
@@ -759,7 +800,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       assetMode: 'inline',
       assets: collected.assets,
     });
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
+      gateView: gateViewAudit,
+      shareTokenEntryId,
+    });
     return sendExport(res, exportFormat, artifact.title, exportHtml, exportCacheControl);
   }
 
@@ -822,17 +866,16 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
+      gateView: gateViewAudit,
+      shareTokenEntryId,
+    });
     return res.status(200).send(srcdoc);
   }
 
   // `?v={sha}` historical views are a cold path served `no-store` (removes the
   // dependency on whether the CDN keys on the `v` query string).
-  const bundleCacheControl = isShare
-    ? SHARE_CACHE_CONTROL
-    : isKnownOlderVersion
-      ? 'private, no-store'
-      : cacheControlFor(effectiveVisibility);
+  const bundleCacheControl = !isShare && isKnownOlderVersion ? 'private, no-store' : viewCacheControl;
 
   // The per-artifact isolated origin (Approach B), e.g. `abc123.usercontent.app.<domain>`.
   // Empty when SERVER_DOMAIN is unset (Approach B disabled) OR the artifact is non-public:
@@ -941,7 +984,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
+  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], {
+    gateView: gateViewAudit,
+    shareTokenEntryId,
+  });
   return res.status(200).send(wrapperPage);
 });
 
@@ -1313,6 +1359,10 @@ interface PublishedArtifactLean {
    *  even after the source Quest changes or is deleted. Reply source only. */
   citables?: CitableSource[];
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
+  /** Legacy single share link; still the source of truth during the rollout. */
+  shareToken?: string | null;
+  /** Every share link ever minted. Only the entry that served THIS request is counted. */
+  shareTokens?: PublishedArtifactShareToken[];
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
 }
@@ -1371,16 +1421,42 @@ function bumpViewCount(
   artifact: { publicId: string; ownerId: string },
   viewer: { id?: string } | undefined,
   userAgent?: string,
-  // #408: when the served view passed a gate, record per-account attribution
-  // alongside the aggregate counter. Only set for authenticated gate views.
-  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string }
+  opts: {
+    // #408: when the served view passed a gate, record per-account attribution
+    // alongside the aggregate counter. Only set for authenticated gate views.
+    gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string };
+    // #3255: `_id` of the shareTokens[] entry this request resolved through, when the request
+    // came in on a share link and that entry exists. Absent for /p/* views and for pre-backfill
+    // rows, whose only link is the legacy scalar and so has no id to count against.
+    shareTokenEntryId?: Types.ObjectId;
+  } = {}
 ): void {
+  const { gateView, shareTokenEntryId } = opts;
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
   const countsAsExternal = isAuthed && !isOwner && !isCrawler;
   const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
-  void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
+  // The per-link counter needs its own definition, NOT externalViewCount's: a share link exists
+  // so the viewer does NOT sign in, so requiring authentication would leave it at zero forever.
+  // Anonymous-inclusive and crawler-excluded; owner-excluded only when the owner is
+  // AUTHENTICATED, since `isOwner` needs a credential to compare - an anonymous owner opening
+  // their own link is indistinguishable from a stranger and does count. Acceptable here (unlike
+  // for externalViewCount, where it was a credit-reward bypass): a per-link count is a
+  // vanity/diagnostic number that grants nothing.
+  const countsAsShareView = !!shareTokenEntryId && !isOwner && !isCrawler;
+  void (
+    countsAsShareView
+      ? PublishedArtifact.updateOne(
+          { publicId: artifact.publicId },
+          {
+            $inc: { ...inc, 'shareTokens.$[entry].viewCount': 1 },
+            $set: { 'shareTokens.$[entry].lastViewedAt': new Date() },
+          },
+          { arrayFilters: [{ 'entry._id': shareTokenEntryId }] }
+        )
+      : PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc })
+  ).catch(() => undefined);
   // Audit non-owner authenticated gate views only: the point is who OTHER than the
   // owner reached a gated artifact, and the owner bypasses their own gate anyway.
   if (gateView && viewer?.id && !isOwner) {
@@ -1627,13 +1703,10 @@ function renderViewerPage(
     /** Display name of the artifact owner, shown in the page header. Omitted when unknown. */
     sharedBy?: string;
     /**
-     * Show the anonymous-visitor sign-up affordances (header link + prompt card). The
-     * content on this page is already fully delivered either way, so this only controls
-     * whether we invite the visitor to make their own - never whether they can read this
-     * one. False for a share-link viewer (already authorized by the link) and a signed-in
-     * viewer (already has an account); see the call site for the exact condition.
+     * Show the anonymous-visitor sign-up affordances (header link + prompt card). See
+     * shouldShowSignupGate; ignored for a standalone export, which never carries either.
      */
-    signupPrompt?: boolean;
+    signupGate?: boolean;
   }
 ): string {
   const {
@@ -1644,7 +1717,7 @@ function renderViewerPage(
     exportFormats = [],
     standalone = false,
     sharedBy,
-    signupPrompt = false,
+    signupGate = false,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1719,10 +1792,10 @@ function renderViewerPage(
         reportPublicId: artifact.publicId,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
-  // Sign-up prompt: shown to anonymous, non-share-link viewers only (not standalone
-  // exports, share-link holders, or signed-in viewers - all of whom already have full
-  // access, so there is nothing to invite them past).
-  const gate = standalone || !signupPrompt ? null : buildSignupGateHtml();
+  // Sign-up prompt: shown to anonymous, non-share-link viewers of an open-public page only
+  // (not standalone exports, share-link holders, or signed-in viewers - all of whom already
+  // have full access, so there is nothing to invite them past). See shouldShowSignupGate.
+  const gate = signupGate && !standalone ? buildSignupGateHtml() : null;
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
@@ -1815,7 +1888,7 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    ${signupPrompt ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
+    ${signupGate ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
   </div>
 </header>`
 }

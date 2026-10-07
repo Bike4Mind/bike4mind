@@ -17,6 +17,7 @@ import {
   MAX_DISCOVERY_PASSES,
   MAX_PERSISTED_RUN_DETAIL,
   PROBE_MAX_ATTEMPTS,
+  presentationOwnedOutsideDiscovery,
   runModelDiscovery,
 } from './runModelDiscovery';
 import type {
@@ -719,6 +720,63 @@ describe('runModelDiscovery', () => {
         expect(result.lifecycle.transitions[0]).toMatchObject({ from: 'active', to: 'deprecated' });
         expect(reporting.catalog.rows).toHaveLength(1);
         expect(reporting.state.misses).toEqual([]);
+      });
+    });
+
+    describe('bedrock inference profiles', () => {
+      const bedrockRecord = (id: string, name: string) =>
+        testRecord({
+          id,
+          vendor: 'anthropic',
+          backend: ModelBackend.Bedrock,
+          name,
+          adapterFamily: 'bedrock-anthropic',
+          dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'native' },
+          lifecycle: { status: 'active' },
+        });
+
+      const seedActive = (harnessed: Harness, id: string, name: string) =>
+        harnessed.catalog.append({
+          modelId: id,
+          source: 'seed',
+          patch: bedrockRecord(id, name),
+          ownedGroups: ['identity', 'limits', 'dispatch', 'lifecycle'],
+          effectiveFrom: new Date(START.getTime() - DAY),
+        });
+
+      // The listing carries the bare foundation id, never a profile id; the
+      // catalog holds the profile id it is built from.
+      const bareFoundation: DiscoveredModel = {
+        modelId: 'anthropic.claude-sonnet-4-6',
+        patch: bedrockRecord('anthropic.claude-sonnet-4-6', 'Claude Sonnet 4.6 (Bedrock)'),
+        lifecycleEvidence: 'typed',
+      };
+
+      it('never absence-graduates a profile id the foundation listing covers', async () => {
+        const bedrock = harness([
+          stubSource({
+            name: 'bedrock',
+            kind: 'provider',
+            records: [bareFoundation],
+            authoritativeFor: [ModelBackend.Bedrock],
+          }),
+        ]);
+        await seedActive(bedrock, 'global.anthropic.claude-sonnet-4-6', 'Claude Sonnet 4.6 (global)');
+        // Control: a bare Bedrock id the listing does NOT carry must still
+        // graduate, or a fix that disabled absence for all of Bedrock would pass.
+        await seedActive(bedrock, 'anthropic.foo-v1:0', 'Foo');
+
+        for (let run = 0; run < 3; run += 1) {
+          if (run > 0) bedrock.advance(DAY);
+          await runModelDiscovery(bedrock.adapters, bedrock.options);
+        }
+
+        const profileRows = bedrock.catalog.rows.filter(row => row.modelId === 'global.anthropic.claude-sonnet-4-6');
+        expect(profileRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(false);
+        expect(bedrock.state.states.get('global.anthropic.claude-sonnet-4-6')?.missCount ?? 0).toBe(0);
+
+        const controlRows = bedrock.catalog.rows.filter(row => row.modelId === 'anthropic.foo-v1:0');
+        expect(controlRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
     });
 
@@ -1696,5 +1754,37 @@ describe('runModelDiscovery', () => {
       // charge it would be re-probed with live calls every run forever.
       expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
     });
+  });
+});
+
+describe('presentationOwnedOutsideDiscovery', () => {
+  const presenting = (modelId: string, source: string, ownedGroups: string[] = ['presentation']) =>
+    ({
+      modelId,
+      source,
+      ownedGroups,
+      patch: {},
+      schemaVersion: 1,
+      effectiveFrom: new Date(0),
+    }) as unknown as Parameters<typeof presentationOwnedOutsideDiscovery>[0][number];
+
+  it('names models a seed or operator row presents, never ones only discovery presents', () => {
+    const owned = presentationOwnedOutsideDiscovery(
+      [
+        presenting('seeded', 'seed'),
+        presenting('curated', 'operator'),
+        presenting('discovered', 'discovery'),
+        presenting('seeded-limits-only', 'seed', ['limits']),
+      ],
+      new Set()
+    );
+
+    expect([...owned].sort()).toEqual(['curated', 'seeded']);
+  });
+
+  it('includes every adapter literal id, with or without a row in force', () => {
+    const owned = presentationOwnedOutsideDiscovery([presenting('in-code', 'discovery')], new Set(['in-code']));
+
+    expect(owned.has('in-code')).toBe(true);
   });
 });

@@ -37,11 +37,11 @@ const makePorts = ({ candidates = [hit(1)], ...overrides }: PortOverrides = {}) 
     search: vi.fn(async () => candidates),
     judge: vi.fn(async (candidate: ResearchCandidate) => {
       calls.judged.push(candidate.url);
-      return { relevance: 1, costMicroUsd: 1_000 };
+      return { outcome: 'judged', relevance: 1, costMicroUsd: 1_000 };
     }),
     fetchSource: vi.fn(async (url: string) => {
       calls.fetched.push(url);
-      return { title: 'Fetched title', text: 'body text' };
+      return { title: 'Fetched title', finalUrl: url, text: 'body text' };
     }),
     propose: vi.fn(async (candidate: ProposalCandidate) => {
       calls.proposals.push(candidate);
@@ -60,9 +60,14 @@ describe('executeResearchRun', () => {
     expect(ports.search).toHaveBeenCalledWith('coastal erosion', 7, 30);
   });
 
-  it('proposes a cleared candidate with its run provenance and advisory confidence', async () => {
+  it('proposes a cleared candidate with its run provenance, advisory confidence and rationale', async () => {
     const { ports, calls } = makePorts();
-    (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue({ relevance: 0.82, costMicroUsd: 500 });
+    (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue({
+      outcome: 'judged',
+      relevance: 0.82,
+      rationale: 'directly about coastal erosion',
+      costMicroUsd: 500,
+    });
 
     const result = await executeResearchRun(levers(), 'run-1', ports);
 
@@ -74,6 +79,7 @@ describe('executeResearchRun', () => {
       text: 'body text',
       proposedTags: ['research'],
       confidence: 0.82,
+      rationale: 'directly about coastal erosion',
       provenance: { producer: RESEARCH_RUN_PRODUCER, runId: 'run-1', query: 'coastal erosion', retrievedAt: NOW },
     });
     expect(result.totals.proposed).toBe(1);
@@ -83,9 +89,57 @@ describe('executeResearchRun', () => {
 
   it('falls back to the search hit title when the fetch yields none', async () => {
     const { ports, calls } = makePorts();
-    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({ title: '', text: 'body' });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: '',
+      finalUrl: 'https://example.com/1',
+      text: 'body',
+    });
     await executeResearchRun(levers(), 'run-1', ports);
     expect(calls.proposals[0].title).toBe('Result 1');
+  });
+
+  it('keeps the search hit title when the fetched title is only the url last path segment', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [
+        { title: 'Job shop scheduling with deep RL', url: 'https://arxiv.org/pdf/1909.08247', snippet: 's' },
+      ],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: '1909.08247',
+      finalUrl: 'https://arxiv.org/pdf/1909.08247',
+      text: 'body',
+    });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('Job shop scheduling with deep RL');
+  });
+
+  it('keeps the fetched title when it is a placeholder but the hit title is blank', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [{ title: '   ', url: 'https://arxiv.org/pdf/1909.08247', snippet: 's' }],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: '1909.08247',
+      finalUrl: 'https://arxiv.org/pdf/1909.08247',
+      text: 'body',
+    });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('1909.08247');
+  });
+
+  it('checks the placeholder against the redirected final url, not the search hit url', async () => {
+    const { ports, calls } = makePorts({
+      candidates: [
+        { title: 'Real paper title', url: 'https://ieeexplore.ieee.org/iel4/9/6845/00277252.pdf', snippet: 's' },
+      ],
+    });
+    (ports.fetchSource as ReturnType<typeof vi.fn>).mockResolvedValue({
+      title: ';jsessionid=ABC123',
+      finalUrl: 'https://ieeexplore.ieee.org/document/277252/;jsessionid=ABC123',
+      text: 'body',
+    });
+    await executeResearchRun(levers(), 'run-1', ports);
+    expect(calls.proposals[0].title).toBe('Real paper title');
+    expect(calls.proposals[0].sourceUrl).toBe('https://ieeexplore.ieee.org/iel4/9/6845/00277252.pdf');
   });
 
   // Rule 1: the free filter runs first, so a narrow allow list costs nothing to enforce.
@@ -115,7 +169,11 @@ describe('executeResearchRun', () => {
   describe('rule 2 - the cost ceiling', () => {
     it('stops before the judgment that would exceed it', async () => {
       const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3)] });
-      (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue({ relevance: 0.1, costMicroUsd: 600 });
+      (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue({
+        outcome: 'judged',
+        relevance: 0.1,
+        costMicroUsd: 600,
+      });
 
       const result = await executeResearchRun(levers({ costCeilingMicroUsd: 1_000 }), 'run-1', ports);
 
@@ -126,18 +184,97 @@ describe('executeResearchRun', () => {
       expect(result.stopReason).toBe('cost_ceiling');
     });
 
-    it('proposes nothing when the model is unreachable, and says so rather than blaming the web', async () => {
+    it('proposes nothing when the model fails, and says so rather than blaming the web', async () => {
       const { ports } = makePorts({ candidates: [hit(1), hit(2)] });
-      (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      (ports.judge as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ outcome: 'failed', error: 'model access denied', costMicroUsd: 30 })
+        .mockResolvedValueOnce({ outcome: 'failed', error: 'a later error', costMicroUsd: 0 });
 
       const result = await executeResearchRun(levers(), 'run-1', ports);
 
-      // A null judgment reports no cost, and is still conservative for the candidate - but it is
-      // counted apart from a genuine low score, because "20 hits, 20 below relevance" would send a
-      // manager off to retune a query that was never the problem.
+      // Conservative for the candidate, but counted apart from a genuine low score, because "20 hits,
+      // 20 below relevance" would send a manager off to retune a query that was never the problem.
       expect(result.totals.judgeFailed).toBe(2);
       expect(result.totals.belowRelevance).toBe(0);
       expect(result.totals.proposed).toBe(0);
+      // Still charged: a failed call that burned tokens moves the ceiling.
+      expect(result.spentMicroUsd).toBe(30);
+      expect(result).toMatchObject({ judgeStepFailed: true, judgeError: 'model access denied' });
+    });
+
+    it('is not a failed judge step when at least one candidate was scored', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2)] });
+      (ports.judge as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ outcome: 'failed', error: 'rate limited', costMicroUsd: 0 })
+        .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.1, costMicroUsd: 10 });
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(result.totals).toMatchObject({ judgeFailed: 1, belowRelevance: 1 });
+      expect(result).toMatchObject({ judgeStepFailed: false, judgeError: 'rate limited' });
+    });
+
+    it('is not a failed judge step when nothing was judged at all', async () => {
+      const { ports } = makePorts({ candidates: [] });
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+      expect(result.judgeStepFailed).toBe(false);
+      expect(result.judgeError).toBeUndefined();
+    });
+  });
+
+  describe('judge circuit breaker', () => {
+    const failing = { outcome: 'failed', error: 'model access denied', costMicroUsd: 0 } as const;
+    const bucketSum = ({ searchHits: _hits, ...buckets }: Record<string, number>): number =>
+      Object.values(buckets).reduce((sum, n) => sum + n, 0);
+
+    it('stops after three failures with nothing scored, and counts the rest as not judged', async () => {
+      const candidates = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n =>
+        hit(n, [2, 4, 7].includes(n) ? 'spam.net' : 'example.com')
+      );
+      const { ports, calls } = makePorts({ candidates, judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(levers({ blockedDomains: ['spam.net'] }), 'run-1', ports);
+
+      expect(ports.judge).toHaveBeenCalledTimes(3);
+      expect(calls.fetched).toEqual([]);
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result).toMatchObject({ judgeStepFailed: true, judgeError: 'model access denied' });
+      expect(result.totals).toMatchObject({ searchHits: 10, filteredBySource: 3, judgeFailed: 3, notJudged: 4 });
+      expect(bucketSum({ ...result.totals })).toBe(result.totals.searchHits);
+    });
+
+    it('leaves nothing uncounted when the breaker trips on the last candidate', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3)], judge: vi.fn(async () => failing) });
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(result.stopReason).toBe('judge_unavailable');
+      expect(result.totals).toMatchObject({ judgeFailed: 3, notJudged: 0 });
+    });
+
+    it('does not trip on a judge that fails once and then recovers', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3), hit(4)] });
+      (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValueOnce(failing);
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(ports.judge).toHaveBeenCalledTimes(4);
+      expect(result.stopReason).toBe('exhausted');
+      expect(result.totals).toMatchObject({ judgeFailed: 1, proposed: 3, notJudged: 0 });
+    });
+
+    it('keeps going through failures once the judge has scored something', async () => {
+      const { ports } = makePorts({ candidates: [hit(1), hit(2), hit(3), hit(4), hit(5)] });
+      (ports.judge as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.1, costMicroUsd: 10 })
+        .mockResolvedValue(failing);
+
+      const result = await executeResearchRun(levers(), 'run-1', ports);
+
+      expect(ports.judge).toHaveBeenCalledTimes(5);
+      expect(result.stopReason).toBe('exhausted');
+      expect(result).toMatchObject({ judgeStepFailed: false });
+      expect(result.totals).toMatchObject({ belowRelevance: 1, judgeFailed: 4, notJudged: 0 });
     });
   });
 
@@ -145,8 +282,8 @@ describe('executeResearchRun', () => {
   it('never fetches a candidate below the relevance floor', async () => {
     const { ports, calls } = makePorts({ candidates: [hit(1), hit(2)] });
     (ports.judge as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ relevance: 0.2, costMicroUsd: 10 })
-      .mockResolvedValueOnce({ relevance: 0.9, costMicroUsd: 10 });
+      .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.2, costMicroUsd: 10 })
+      .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.9, costMicroUsd: 10 });
 
     const result = await executeResearchRun(levers({ minRelevance: 0.6 }), 'run-1', ports);
 
@@ -159,7 +296,7 @@ describe('executeResearchRun', () => {
     const { ports, calls } = makePorts({ candidates: [hit(1), hit(2)] });
     (ports.fetchSource as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({ title: 't', text: 'x' });
+      .mockResolvedValueOnce({ title: 't', finalUrl: 'https://example.com/2', text: 'x' });
 
     const result = await executeResearchRun(levers(), 'run-1', ports);
 
@@ -234,8 +371,8 @@ describe('executeResearchRun', () => {
     const onProgress = vi.fn(async () => {});
     const { ports } = makePorts({ candidates: [hit(1), hit(2)], onProgress });
     (ports.judge as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ relevance: 0.1, costMicroUsd: 10 })
-      .mockResolvedValueOnce({ relevance: 0.9, costMicroUsd: 10 });
+      .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.1, costMicroUsd: 10 })
+      .mockResolvedValueOnce({ outcome: 'judged', relevance: 0.9, costMicroUsd: 10 });
 
     await executeResearchRun(levers(), 'run-1', ports);
 

@@ -39,6 +39,8 @@ export type DescribableDriveConnection = {
   lastError: string | null;
   folderName: string | null;
   driveFolderId: string;
+  disconnecting?: boolean;
+  syncStale?: boolean;
 };
 
 /**
@@ -56,6 +58,22 @@ export function describeDriveConnection(connection: DescribableDriveConnection):
 } {
   const folder = connection.folderName || connection.driveFolderId;
   const badge = DRIVE_STATUS_BADGE[connection.status] ?? UNKNOWN_STATUS_BADGE;
+
+  if (connection.disconnecting) {
+    return {
+      label: 'Disconnecting',
+      title: `Disconnecting the Google Drive folder "${folder}" and removing its files`,
+      color: 'warning',
+    };
+  }
+
+  if (connection.status === 'syncing' && connection.syncStale) {
+    return {
+      label: 'Sync stalled',
+      title: `Sync for the Google Drive folder "${folder}" stopped responding - use Re-sync to restart it`,
+      color: 'warning',
+    };
+  }
 
   // A run is in flight, so any lastError belongs to the PREVIOUS one - reporting this as a sync that
   // stopped short would be wrong. DriveConnectAction still renders the old message on its own line.

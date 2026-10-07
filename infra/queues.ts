@@ -5,14 +5,20 @@ import {
   slackExportBucket,
   whatsNewDistributionBucket,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, SINGLE_RECORD_BATCH } from './constants';
+import {
+  DEFAULT_LAMBDA_ENVIRONMENT,
+  PRODUCTION_STAGES,
+  SINGLE_RECORD_BATCH,
+  TEST_VIDEO_PROVIDER_ENVIRONMENT,
+} from './constants';
 import { imageProcessor } from './imageProcessor';
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { router, whatsNewDistributionId, appUrlForLambdaEnv } from './router';
+import { router, whatsNewDistributionId, appUrlForLambdaEnv, cdnUrlForLambdaEnv } from './router';
+import { searxngUrl } from './searxng';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -57,6 +63,22 @@ const lakeMemoryQueue = new sst.aws.Queue('lakeMemoryQueue', {
   },
 });
 
+// Model-driven lake inconsistency detection (#3057). Reads a lake's documents through an LLM to find
+// contradictions no pattern rule can see. Off the request path because the pass makes several
+// sequential LLM calls and cannot fit the frontend Lambda's 60s budget. retry: 2 like lake memory -
+// the findings write is an upsert keyed on (lakeId, detector, kind, subject), so a redelivery
+// re-asserts rows rather than duplicating them, which makes a retry safe.
+const lakeInconsistencyModelQueueDLQ = new sst.aws.Queue('lakeInconsistencyModelQueueDLQ', {});
+const lakeInconsistencyModelQueue = new sst.aws.Queue('lakeInconsistencyModelQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run and a duplicate
+  // run bills the same LLM work concurrently.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: lakeInconsistencyModelQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
 // Google Drive -> data lake ingest (#1589). Walks a connected Drive folder, fetches/exports each
 // file, and lands bytes in fabFileBucket for the existing chunk/vectorize pipeline. Long ingest, so
 // a generous timeout; idempotent by driveFileId, so a dropped run is safe to retry.
@@ -67,6 +89,37 @@ const driveLakeIngestQueue = new sst.aws.Queue('driveLakeIngestQueue', {
   dlq: {
     queue: driveLakeIngestQueueDLQ.arn,
     retry: 2,
+  },
+});
+
+// GitHub repository -> data lake ingest. Same shape as driveLakeIngestQueue: long ingest, self re-enqueue.
+const githubLakeIngestQueueDLQ = new sst.aws.Queue('githubLakeIngestQueueDLQ', {});
+const githubLakeIngestQueue = new sst.aws.Queue('githubLakeIngestQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: githubLakeIngestQueueDLQ.arn,
+    retry: 2,
+  },
+});
+
+// GitHub data-lake connection teardown -> purge and release it. Fed when the App's access is revoked
+// (pages/api/webhooks/github/lake.ts) and when a user disconnects (DELETE github-connection). SQS is
+// the retry: GitHub never redelivers on its own, and a live sync makes the purge 409.
+const githubLakeRevokeQueueDLQ = new sst.aws.Queue('githubLakeRevokeQueueDLQ', {});
+const githubLakeRevokeQueue = new sst.aws.Queue('githubLakeRevokeQueue', {
+  // Must exceed the handler's 10-minute timeout (below) or SQS redelivers mid-run. The purge runs in
+  // slices that re-enqueue (REVOKE_PURGE_SLICE_SIZE, githubLakeConnection.ts), and a run cut off by
+  // the timeout still resumes on the next receive: the connection stays disabled and the purge
+  // re-finds only the files still left.
+  visibilityTimeout: '12 minutes',
+  dlq: {
+    queue: githubLakeRevokeQueueDLQ.arn,
+    // The last of 7 receives starts at (7 - 1) x 12 = 72 min, past the point a sync claim goes stale
+    // (CHAINED_SYNC_CLAIM_STALE_MS, 60 min, OrgGitHubLakeConnectionModel.ts), but not a live sync that
+    // keeps renewing its claim: that one dead-letters unpurged, and the DLQ alarm (dlqAlarms.ts) is the
+    // prompt to redrive it.
+    retry: 7,
   },
 });
 
@@ -81,7 +134,7 @@ const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
 });
 const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/fabFileVectorize.dispatch',
+    handler: 'apps/workers/src/queueHandlers/fabFileVectorize.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
@@ -149,7 +202,7 @@ const fabFileChunkQueue = new sst.aws.Queue('fabFileChunkQueue', {
 });
 const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/fabFileChunk.dispatch',
+    handler: 'apps/workers/src/queueHandlers/fabFileChunk.dispatch',
     runtime: 'nodejs24.x',
     timeout: '13 minutes',
     vpc: lambdaVpc,
@@ -239,6 +292,59 @@ const fabFileBucketNotification = fabFileBucket.notify({
   ],
 });
 
+// Generation Callback Queue - declared before the image/video generation queues below because
+// their subscriptions (and the quest-timeout sweep cron) need to link it too: each enqueues a
+// signed HTTPS completion callback here after a job settles, for delivery to API-key callers.
+const generationCallbackQueueDLQ = new sst.aws.Queue('generationCallbackQueueDLQ', {
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs', // Encrypt payloads (carries the caller's callback URL)
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+const generationCallbackQueue = new sst.aws.Queue('generationCallbackQueue', {
+  visibilityTimeout: '2 minutes', // 30s Lambda timeout + safety margin for retries
+  dlq: {
+    queue: generationCallbackQueueDLQ.arn,
+    retry: 5, // Industry standard: 5 retries with exponential backoff
+  },
+  transform: {
+    queue: {
+      kmsMasterKeyId: 'alias/aws/sqs', // Encrypt payloads (carries the caller's callback URL)
+    },
+  },
+});
+const generationCallbackQueueSubscription = generationCallbackQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/generationCallback.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '1 week', // Extended retention for delivery debugging
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // The callback body mirrors GET /api/quests/{id}, whose `files[].url` needs the CDN base.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          reserved: 10,
+        }
+      : undefined,
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // Image Generation Queue
 const imageGenerationDLQ = new sst.aws.Queue('imageGenerationDLQ', {});
 const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
@@ -254,7 +360,16 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor, eventBus],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      imageProcessor,
+      eventBus,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -296,7 +411,15 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      imageProcessor,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -334,7 +457,7 @@ const researchEngineQueue = new sst.aws.Queue('researchEngineQueue', {
 
 const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/researchEngineQueue.dispatch',
+    handler: 'apps/workers/src/queueHandlers/researchEngineQueue.dispatch',
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '15 minutes',
@@ -443,7 +566,7 @@ const notebookCurationQueue = new sst.aws.Queue('notebookCurationQueue', {
 });
 const notebookCurationQueueSubscription = notebookCurationQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/notebookCuration.dispatch',
+    handler: 'apps/workers/src/queueHandlers/notebookCuration.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -475,7 +598,7 @@ const agentProactiveMessageQueue = new sst.aws.Queue('agentProactiveMessageQueue
 });
 const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/agentProactiveMessage.dispatch',
+    handler: 'apps/workers/src/queueHandlers/agentProactiveMessage.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -538,7 +661,7 @@ const githubWebhookQueue = new sst.aws.Queue('githubWebhookQueue', {
 });
 const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/githubWebhook.dispatch',
+    handler: 'apps/workers/src/queueHandlers/githubWebhook.dispatch',
     runtime: 'nodejs24.x',
     timeout: '1 minute', // Fast processing for webhooks
     vpc: lambdaVpc,
@@ -591,7 +714,7 @@ const webhookDeliveryQueue = new sst.aws.Queue('webhookDeliveryQueue', {
 });
 const webhookDeliveryQueueSubscription = webhookDeliveryQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/webhookDelivery.dispatch',
+    handler: 'apps/workers/src/queueHandlers/webhookDelivery.dispatch',
     runtime: 'nodejs24.x',
     timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
     vpc: lambdaVpc,
@@ -636,7 +759,7 @@ const slackExportQueue = new sst.aws.Queue('slackExportQueue', {
 });
 const slackExportQueueSubscription = slackExportQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/slackExport.dispatch',
+    handler: 'apps/workers/src/queueHandlers/slackExport.dispatch',
     runtime: 'nodejs24.x',
     timeout: '15 minutes', // Maximum Lambda timeout for large exports
     memory: '1024 MB', // More memory for processing large message sets
@@ -683,6 +806,8 @@ const questExportQueueSubscription = questExportQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Recognizes `<cdnUrl>/generated/<key>` image URLs embedded in exported plans.
+      NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     },
     permissions: [
       {
@@ -696,7 +821,7 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 
 // Data Lake Cleanup Queue
 // Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
-// Pure Mongo (no buckets/websocket), so DB secrets are all it needs.
+// Links fabFileBucket because the sweep deletes each purged file's stored objects; no websocket.
 const dataLakeCleanupQueueDLQ = new sst.aws.Queue('dataLakeCleanupQueueDLQ', {});
 const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
   visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
@@ -711,7 +836,9 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    // githubLakeRevokeQueue: releasing a lake's GitHub connection hands a failed post-release uninstall
+    // to it (releaseGitHubLakeConnection, githubLakeConnection.ts).
+    link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
       retention: '3 days',
     },
@@ -730,7 +857,7 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
 // so the handler can push `data_lake_batch_progress` taxonomyStatus updates live.
 const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeTaxonomyAnalysis.dispatch',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     vpc: lambdaVpc,
@@ -752,7 +879,7 @@ const dataLakeTaxonomyQueueSubscription = dataLakeTaxonomyQueue.subscribe(
 // lake fails in isolation and DLQs on its own.
 const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/lakeMemoryExtraction.dispatch',
+    handler: 'apps/workers/src/queueHandlers/lakeMemoryExtraction.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -760,6 +887,30 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
     // run sends the next slice's message to its own queue), so it needs Resource.lakeMemoryQueue.url and
     // the sqs:SendMessage grant that linking the queue confers.
     link: [...allSecrets, websocketApi, lakeMemoryQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Model inconsistency detection subscription (#3057). 10 minutes, matching lake memory: the run makes
+// up to ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE) sequential LLM calls,
+// each able to take the SmallLLMService timeout twice over, so its worst case is minutes rather than
+// seconds (the queue's visibilityTimeout is 12 min above to stay ahead of it). The detector checks the
+// remaining clock between batches and stops cleanly rather than being killed mid-call. No self-link:
+// this handler does not re-enqueue - the pass is bounded to one sample per run by design.
+// SINGLE_RECORD_BATCH so one lake fails in isolation and DLQs on its own.
+const lakeInconsistencyModelQueueSubscription = lakeInconsistencyModelQueue.subscribe(
+  {
+    handler: 'apps/workers/src/queueHandlers/lakeInconsistencyModelDetection.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
     logging: {
       retention: '3 days',
     },
@@ -778,7 +929,7 @@ const lakeMemoryQueueSubscription = lakeMemoryQueue.subscribe(
 // writes a file - approving one of its proposals does, through the ordinary ingestion door.
 const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/dataLakeResearchRun.dispatch',
+    handler: 'apps/workers/src/queueHandlers/dataLakeResearchRun.dispatch',
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
@@ -788,6 +939,9 @@ const dataLakeResearchQueueSubscription = dataLakeResearchQueue.subscribe(
     },
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // Research runs resolve the web-search provider like ChatCompletion does; same wiring
+      // as infra/chatCompletion.ts and infra/agentExecutor.ts.
+      ...(searxngUrl ? { SEARXNG_BASE_URL: searxngUrl } : {}),
     },
   },
   SINGLE_RECORD_BATCH
@@ -805,6 +959,71 @@ const driveLakeIngestQueueSubscription = driveLakeIngestQueue.subscribe(
     // one in flight, so it needs Resource.driveLakeIngestQueue.url and the sqs:SendMessage grant that
     // linking the queue confers (mirrors lakeMemoryQueue above).
     link: [...allSecrets, fabFileBucket, driveLakeIngestQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Drive disconnect purge: deletes the files a disconnected Drive connection ingested, one bounded
+// slice per run, then releases the connection. Links fabFileBucket for the stored-object deletes and
+// its own queue because each slice re-enqueues the remainder.
+const driveDisconnectPurgeQueueDLQ = new sst.aws.Queue('driveDisconnectPurgeQueueDLQ', {});
+const driveDisconnectPurgeQueue = new sst.aws.Queue('driveDisconnectPurgeQueue', {
+  visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
+  dlq: {
+    queue: driveDisconnectPurgeQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const driveDisconnectPurgeQueueSubscription = driveDisconnectPurgeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/driveDisconnectPurge.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket, driveDisconnectPurgeQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+const githubLakeIngestQueueSubscription = githubLakeIngestQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubLakeIngest.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // fabFileBucket for the uploads; the queue itself for deadline, rate-limit and claim-loser re-enqueues.
+    link: [...allSecrets, fabFileBucket, githubLakeIngestQueue],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+const githubLakeRevokeQueueSubscription = githubLakeRevokeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubLakeRevoke.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    // Links its own queue: the handler re-enqueues for each remaining purge slice, and its release
+    // hands a failed post-release uninstall back to this queue (githubLakeConnection.ts).
+    link: [...allSecrets, fabFileBucket, githubLakeRevokeQueue],
     logging: {
       retention: '3 days',
     },
@@ -894,7 +1113,15 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '15 minutes', // Max Lambda timeout (900 seconds)
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, eventBus],
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      eventBus,
+      generationCallbackQueue,
+    ],
     logging: {
       retention: '3 days',
     },
@@ -903,6 +1130,54 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
     },
     concurrency: {
       // Limit concurrency - video generation is resource-intensive
+      reserved: 5,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Generation Job Queue
+// One engine step per message (submit, poll or store) for the generic GenerationJob engine; a step that
+// needs another turn re-enqueues itself with a delay. The subscription timeout, queue visibility timeout
+// and the engine lease (apps/client/server/generationJobs/wiring.ts LEASE_MS) must stay ordered:
+// timeout (5 min) < lease (5.5 min) < visibility (6 min), so a running step is never redelivered or
+// overlapped by another worker. That ordering holds because Lambda enforces the timeout; the self-host
+// runner (apps/workers/src/selfhost/main.ts) has no hard kill, so there it relies on provider and storage
+// call timeouts and its own runBudgetMs is only advisory.
+const generationJobDLQ = new sst.aws.Queue('generationJobDLQ', {});
+const generationJobQueue = new sst.aws.Queue('generationJobQueue', {
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: generationJobDLQ.arn,
+    retry: 5,
+  },
+});
+const generationJobQueueSubscription = generationJobQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/generationJob.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    memory: '2048 MB',
+    vpc: lambdaVpc,
+    link: [
+      ...allSecrets,
+      websocketApi,
+      generatedImagesBucket,
+      fabFileBucket,
+      appFilesBucket,
+      eventBus,
+      generationCallbackQueue,
+      generationJobQueue,
+    ],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
+    },
+    concurrency: {
+      // Store steps hold up to 256MB of output and providers rate-limit.
       reserved: 5,
     },
   },
@@ -929,7 +1204,7 @@ const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
 });
 const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
   {
-    handler: 'apps/client/server/cron/liveopsTriageWorker.handler',
+    handler: 'apps/workers/src/cron/liveopsTriageWorker.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
@@ -978,7 +1253,7 @@ const secopsTriageQueue = new sst.aws.Queue('secopsTriageQueue', {
 
 const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
   {
-    handler: 'apps/client/server/cron/secopsTriageWorker.handler',
+    handler: 'apps/workers/src/cron/secopsTriageWorker.handler',
     runtime: 'nodejs24.x',
     timeout: '5 minutes',
     memory: '512 MB',
@@ -1101,7 +1376,7 @@ const sreFixQueue = new sst.aws.Queue('sreFixQueue', {
 });
 const sreFixQueueSubscription = sreFixQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
+    handler: 'apps/workers/src/queueHandlers/sreFix.dispatch',
     runtime: 'nodejs24.x',
     timeout: '2 minutes',
     // 1024 MB, not 256: at 256 the handler died in INIT (module graph is the full
@@ -1157,7 +1432,7 @@ const sreJobQueue = new sst.aws.Queue('sreJobQueue', {
 });
 const sreJobQueueSubscription = sreJobQueue.subscribe(
   {
-    handler: 'apps/client/server/queueHandlers/sreJob.dispatch',
+    handler: 'apps/workers/src/queueHandlers/sreJob.dispatch',
     runtime: 'nodejs24.x',
     timeout: '8 minutes',
     memory: '1024 MB',
@@ -1426,13 +1701,50 @@ const bobRunQueueSubscription = bobRunQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// LibreOncology mock-oral audio render (@bike4mind/premium-libreoncology). Declared here rather than in
+// the overlay's contributeInfra so web can link it; the worker is re-exported via serverHandlerStubs.
+const libreoncologyAudioRenderQueueDLQ = new sst.aws.Queue('libreoncologyAudioRenderQueueDLQ', {});
+const libreoncologyAudioRenderQueue = new sst.aws.Queue('libreoncologyAudioRenderQueue', {
+  // Must exceed the worker timeout plus the 30s the worker's render claim outlives it, or a
+  // still-running render is redelivered.
+  visibilityTimeout: '16 minutes',
+  dlq: {
+    queue: libreoncologyAudioRenderQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const libreoncologyAudioRenderQueueSubscription = libreoncologyAudioRenderQueue.subscribe(
+  {
+    handler: 'apps/client/server/premium-generated/libreoncologyAudioRender.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, fabFileBucket],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  {
+    ...SINGLE_RECORD_BATCH,
+    // Every job draws on the org's one ElevenLabs key, shared with live voice sessions, so unbounded
+    // fan-out would rate-limit the live product. 2 is the lowest value AWS accepts.
+    transform: { eventSourceMapping: { scalingConfig: { maximumConcurrency: 2 } } },
+  }
+);
+
 export {
   // Queues
   fabFileChunkQueue,
   fabFileVectorizeQueue,
+  generationCallbackQueue,
   imageGenerationQueue,
   imageEditQueue,
   videoGenerationQueue,
+  generationJobQueue,
   researchEngineQueue,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
@@ -1446,7 +1758,11 @@ export {
   dataLakeTaxonomyQueue,
   dataLakeResearchQueue,
   lakeMemoryQueue,
+  lakeInconsistencyModelQueue,
   driveLakeIngestQueue,
+  driveDisconnectPurgeQueue,
+  githubLakeIngestQueue,
+  githubLakeRevokeQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1456,13 +1772,16 @@ export {
   agentContinuationQueue,
   optihashiRunCompletionQueue,
   bobRunQueue,
+  libreoncologyAudioRenderQueue,
   // DLQs
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
   fabFileModerationDLQ,
+  generationCallbackQueueDLQ,
   imageGenerationDLQ,
   imageEditDLQ,
   videoGenerationDLQ,
+  generationJobDLQ,
   researchEngineQueueDLQ,
   whatsNewGenerationQueueDLQ,
   whatsNewHighlightsQueueDLQ,
@@ -1476,7 +1795,11 @@ export {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
+  driveDisconnectPurgeQueueDLQ,
+  githubLakeIngestQueueDLQ,
+  githubLakeRevokeQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1488,12 +1811,15 @@ export {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
+  libreoncologyAudioRenderQueueDLQ,
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
+  generationCallbackQueueSubscription,
   imageGenerationQueueSubscription,
   imageEditQueueSubscription,
   videoGenerationQueueSubscription,
+  generationJobQueueSubscription,
   fabFileBucketNotification,
   researchEngineQueueSubscription,
   whatsNewGenerationQueueSubscription,
@@ -1508,7 +1834,11 @@ export {
   dataLakeTaxonomyQueueSubscription,
   dataLakeResearchQueueSubscription,
   lakeMemoryQueueSubscription,
+  lakeInconsistencyModelQueueSubscription,
   driveLakeIngestQueueSubscription,
+  driveDisconnectPurgeQueueSubscription,
+  githubLakeIngestQueueSubscription,
+  githubLakeRevokeQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,
@@ -1517,4 +1847,5 @@ export {
   overwatchAnalyticsQueueSubscription,
   optihashiRunCompletionQueueSubscription,
   bobRunQueueSubscription,
+  libreoncologyAudioRenderQueueSubscription,
 };

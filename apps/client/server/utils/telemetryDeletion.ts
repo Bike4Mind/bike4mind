@@ -21,11 +21,13 @@ export async function triggerTelemetryDeletion(
 
   const hashes = await regenerateUserTelemetryHashes(userId);
 
-  // $unset telemetry from matching Quest documents (telemetry is embedded, not separate collection)
+  // $unset telemetry from matching Quest documents (telemetry is embedded, not separate collection).
+  // includeDeleted: a soft-deleted quest still stores its telemetry, and softDeletePlugin's update
+  // hook would otherwise skip it.
   const result = await Quest.updateMany(
     { 'promptMeta.contextTelemetry.anonymousSessionId.hash': { $in: hashes } },
     { $unset: { 'promptMeta.contextTelemetry': '' } }
-  );
+  ).setOptions({ includeDeleted: true });
 
   const durationMs = Date.now() - startTime;
 

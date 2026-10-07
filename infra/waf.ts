@@ -207,7 +207,7 @@ export const wafAiRateLimitAlarmTopic =
 export const wafAlarmSlackHandler =
   isWafEnabled && $app.stage === 'production'
     ? new sst.aws.Function('WafAlarmSlackHandler', {
-        handler: 'apps/client/server/events/wafAlarmToSlack.handler',
+        handler: 'apps/workers/src/events/wafAlarmToSlack.handler',
         link: [secrets.SLACK_ERROR_REPORTING_WEBHOOK_URL],
         environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
         logging: { retention: '1 month' },

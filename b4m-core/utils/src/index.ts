@@ -57,6 +57,7 @@ export * from './safeObjectKey';
 // Also available via the lightweight `@bike4mind/utils/globMatches` subpath.
 export * from './globMatches';
 export * from './normalizeId';
+export * from './toolEchoMatcher';
 // Also available via the lightweight `@bike4mind/utils/retrievalExclusion` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './retrievalExclusion';
@@ -98,6 +99,7 @@ export * from './artifactParser';
 export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
+export * from './calibratedTokenizer';
 export * from './url';
 export {
   withRetry,

@@ -1,7 +1,7 @@
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
-import { IOrganizationDocument } from '@bike4mind/common';
+import { ApiKeyScope, IOrganizationDocument } from '@bike4mind/common';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { SUBSCRIPTION_PLANS_MAP } from '@client/lib/userSubscriptions/constants';
 import { ORGANIZATION_SUBSCRIPTION_CREDITS_PER_SEAT } from '@client/lib/subscriptions/constants';
@@ -9,7 +9,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 
-const handler = baseApi().get(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(
   asyncHandler(async (req, res) => {
     // Check admin authorization
     if (!req.user?.isAdmin) {

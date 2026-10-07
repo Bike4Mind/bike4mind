@@ -9,6 +9,7 @@
  * budget, so it is not safe to expose broadly even though it writes nothing.
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@client/server/middlewares/baseApi';
 import { prReportService } from '@bike4mind/services';
 import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
@@ -16,7 +17,7 @@ import { BadRequestError, ForbiddenError } from '@bike4mind/utils';
 import { assertRepoFormat } from '@server/services/prReport/guards';
 import { createGenerateDeps, loadPrReportConfig } from '@server/services/prReport/context';
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

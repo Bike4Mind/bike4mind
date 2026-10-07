@@ -5,7 +5,7 @@ import {
   IUserDocument,
   IUserRepository,
 } from '@bike4mind/common';
-import { IRegistrationInvite, RegInviteStatusType } from '@bike4mind/common';
+import { IRegInviteDocument, RegInviteStatusType, RepositoryUpdateOptions } from '@bike4mind/common';
 import { ISubscriberRepository } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { BadRequestError } from '@bike4mind/utils';
@@ -55,8 +55,11 @@ interface RegisterUserAdapters {
     users: IUserRepository;
     adminSettings: IAdminSettingsRepository;
     registrationInvites: {
-      findByCode: (code: string) => Promise<IRegistrationInvite | null>;
-      update: (invite: IRegistrationInvite) => Promise<unknown>;
+      findByCode: (code: string) => Promise<IRegInviteDocument | null>;
+      update: (
+        invite: Partial<IRegInviteDocument>,
+        options?: RepositoryUpdateOptions<IRegInviteDocument>
+      ) => Promise<unknown>;
     };
     subscribers?: ISubscriberRepository;
 
@@ -153,7 +156,7 @@ export const registerUser = async (
   const hasInviteCode = typeof inviteCode === 'string' && inviteCode.trim().length > 0;
   const normalizedInviteCode = hasInviteCode ? inviteCode!.trim() : '';
 
-  let invite: IRegistrationInvite | null = null;
+  let invite: IRegInviteDocument | null = null;
   let isUnlimitedInvite = false;
   let freeCredits = 0;
   let effectiveStorage = 1000;
@@ -340,7 +343,18 @@ export const registerUser = async (
       invite.usedbyId = user.id;
       invite.status = RegInviteStatusType.used;
     }
-    await db.registrationInvites.update(invite);
+    await db.registrationInvites.update(
+      isUnlimitedInvite
+        ? { id: invite.id, usageHistory: invite.usageHistory, status: invite.status }
+        : {
+            id: invite.id,
+            usageHistory: invite.usageHistory,
+            used: invite.used,
+            usedbyId: invite.usedbyId,
+            status: invite.status,
+          },
+      isUnlimitedInvite ? { unset: ['used', 'usedbyId'] } : undefined
+    );
   }
 
   return user;
@@ -403,18 +417,18 @@ export const registerViaOTC = async (
     finalTags = finalTags.filter(t => t !== PENDING_FREE_CREDITS_TAG);
   }
 
-  const verifiedUser = {
-    ...newUser,
+  const verification = {
     emailVerified: true,
     emailVerifiedAt: new Date(),
     tags: finalTags,
     // The pending amount is cleared exactly when the pending tag is dropped (grant
     // settled or nothing to grant); on grant failure both survive as the retry breadcrumb.
     pendingCreditGrant: finalTags.includes(PENDING_FREE_CREDITS_TAG) ? (newUser.pendingCreditGrant ?? null) : null,
-  } as IUserDocument;
-  await db.users.update(verifiedUser);
+  };
+  // currentCredits is deliberately not written: addCredits already `$inc`ed it.
+  await db.users.update({ id: newUser.id, ...verification });
 
-  return verifiedUser;
+  return { ...newUser, ...verification } as IUserDocument;
 };
 
 async function hashPassword(password: string): Promise<string> {

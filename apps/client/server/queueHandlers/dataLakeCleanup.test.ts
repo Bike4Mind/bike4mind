@@ -8,15 +8,22 @@ vi.mock('@server/queueHandlers/utils', () => ({
 
 const h = vi.hoisted(() => ({
   cleanup: vi.fn(),
+  beginPurgeExecution: vi.fn(),
+  hardDeleteWithChunks: vi.fn(),
+  findById: vi.fn(),
   releasePurgingToDeleted: vi.fn(),
   openSearchRetrievalIndex: vi.fn(() => ({ removeForDataLake: vi.fn() })),
   selfHostOpenSearchEnabled: vi.fn(() => false),
   releaseDriveConnectionForLake: vi.fn(),
+  releaseGitHubLakeConnectionForLake: vi.fn(),
   stampLakeMemoryPurge: vi.fn(),
   shredPrincipalMemory: vi.fn(),
+  getFilesStorage: vi.fn(() => ({ delete: vi.fn() })),
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {
+    findById: h.findById,
+    beginPurgeExecution: h.beginPurgeExecution,
     releasePurgingToDeleted: h.releasePurgingToDeleted,
     stampLakeMemoryPurge: h.stampLakeMemoryPurge,
   },
@@ -30,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
-  fabFileRepository: {},
+  fabFileRepository: { hardDeleteWithChunks: h.hardDeleteWithChunks },
   fabFileChunkRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -41,14 +48,23 @@ vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpen
 vi.mock('@server/integrations/google/drive/common', () => ({
   releaseDriveConnectionForLake: h.releaseDriveConnectionForLake,
 }));
+// The real module chains into @octokit (ESM), which this suite has no reason to load - mock it at
+// its own boundary like the Drive release above.
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
+  releaseGitHubLakeConnectionForLake: h.releaseGitHubLakeConnectionForLake,
+}));
 vi.mock('@server/memory/ledgerMemoryStore', () => ({ shredPrincipalMemory: h.shredPrincipalMemory }));
 vi.mock('@server/memory/factCipher', () => ({ createKeyProvider: () => ({}) }));
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: h.getFilesStorage }));
 
 import { dispatch } from './dataLakeCleanup';
 
 const logger = { warn: vi.fn(), error: vi.fn(), log: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never;
 const makeEvent = (body: unknown) => ({ Records: [{ body: JSON.stringify(body) }] }) as never;
-const payload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } };
+const legacyPayload = { dataLakeId: 'lake1', actor: { userId: 'u1', isAdmin: false } };
+// A redelivered message can be refused after a newer purge claimed the lake, so the release must be
+// keyed to the claim this message was accepted under.
+const payload = { ...legacyPayload, purgeClaimId: 'claim-a' };
 
 describe('dataLakeCleanup consumer', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -86,6 +102,17 @@ describe('dataLakeCleanup consumer', () => {
         }),
         logger,
       })
+    );
+  });
+
+  it("wires the object store, so a purge deletes each file's stored bytes and not just its rows", async () => {
+    h.cleanup.mockResolvedValue(undefined);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    expect(h.getFilesStorage).toHaveBeenCalled();
+    expect(h.cleanup).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ storage: expect.anything() })
     );
   });
 
@@ -136,6 +163,29 @@ describe('dataLakeCleanup consumer', () => {
     expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('folder claim'), expect.anything());
   });
 
+  it('wires the GitHub release port, so a purge frees the repository claim it was holding', async () => {
+    // Same reason as the Drive port above: unwired, the row outlives its lake and its globally
+    // unique repositoryId can never be reached to release again.
+    h.cleanup.mockResolvedValue(undefined);
+    h.releaseGitHubLakeConnectionForLake.mockResolvedValue({ installationRetained: false });
+    await dispatch(makeEvent(payload), {} as never, logger);
+    const port = h.cleanup.mock.calls[0][2].releaseGitHubConnection;
+    await port({ dataLakeId: 'lake1' });
+    expect(h.releaseGitHubLakeConnectionForLake).toHaveBeenCalledWith('lake1');
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('repository claim'),
+      expect.objectContaining({ dataLakeId: 'lake1', installationRetained: false })
+    );
+  });
+
+  it('stays quiet when the purged lake had no GitHub connection', async () => {
+    h.cleanup.mockResolvedValue(undefined);
+    h.releaseGitHubLakeConnectionForLake.mockResolvedValue(null);
+    await dispatch(makeEvent(payload), {} as never, logger);
+    await h.cleanup.mock.calls[0][2].releaseGitHubConnection({ dataLakeId: 'lake1' });
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('repository claim'), expect.anything());
+  });
+
   it('shreds the lake memory profile and raises the purge fence, in that order', async () => {
     // Two halves of one erase. The shred destroys the DEK; the fence is what stops an extraction
     // ALREADY in flight from re-appending facts under a fresh key. `exists: false` is not enough on
@@ -177,6 +227,7 @@ describe('dataLakeCleanup consumer', () => {
   });
 
   it('releases an accepted purge its own guard refused, and says so at ERROR (#1744)', async () => {
+    h.releasePurgingToDeleted.mockResolvedValueOnce(true);
     // Was a silent WARN, which is precisely how an accepted, irreversible purge could vanish with no
     // user-visible trace. The release puts the lake back in the deleted list where its owner can
     // see it and retry, so the purge either completes or comes back - never neither.
@@ -184,9 +235,21 @@ describe('dataLakeCleanup consumer', () => {
     await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('releasing the accepted purge'),
-      expect.objectContaining({ dataLakeId: 'lake1' })
+      expect.objectContaining({ dataLakeId: 'lake1', purgeClaimId: 'claim-a' })
     );
-    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1');
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', 'claim-a');
+  });
+
+  it('rejects dispatch when the release itself fails, so SQS retries rather than stranding the lake purging', async () => {
+    h.cleanup.mockRejectedValue(new BadRequestError('must be soft-deleted'));
+    h.releasePurgingToDeleted.mockRejectedValueOnce(new Error('mongo down'));
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('mongo down');
+  });
+
+  it('releases a legacy message with no claim id anonymously', async () => {
+    h.cleanup.mockRejectedValue(new BadRequestError('must be soft-deleted'));
+    await expect(dispatch(makeEvent(legacyPayload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.releasePurgingToDeleted).toHaveBeenCalledWith('lake1', undefined);
   });
 
   it('does NOT release on an unexpected error, since that sweep may be half-done', async () => {
@@ -210,5 +273,44 @@ describe('dataLakeCleanup consumer', () => {
     expect(logger.warn).toHaveBeenCalled();
     // Parsing the lake id is what failed, so there is no purge to release.
     expect(h.releasePurgingToDeleted).not.toHaveBeenCalled();
+  });
+
+  it('retains a started current-generation authorization failure for DLQ recovery', async () => {
+    h.cleanup.mockRejectedValueOnce(new BadRequestError('permission changed'));
+    h.releasePurgingToDeleted.mockResolvedValueOnce(false);
+    h.findById.mockResolvedValueOnce({ purgeClaimId: 'claim-a', purgeStartedAt: new Date() });
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('permission changed');
+  });
+
+  it.each([payload, legacyPayload])('wires the production claim and bounded deletion adapters', async input => {
+    h.cleanup.mockResolvedValueOnce(undefined);
+    await dispatch(makeEvent(input), {} as never, logger);
+    const options = h.cleanup.mock.calls[0][2];
+    expect(options.purgeClaimId).toBe('purgeClaimId' in input ? input.purgeClaimId : undefined);
+    await options.beginPurge();
+    expect(h.beginPurgeExecution).toHaveBeenCalledWith(
+      'lake1',
+      'purgeClaimId' in input ? input.purgeClaimId : undefined
+    );
+    await options.deleteFileAndChunks('f1');
+    expect(h.hardDeleteWithChunks).toHaveBeenCalledWith('f1');
+  });
+
+  it.each([{ purgeClaimId: 'claim-b', purgeStartedAt: new Date() }, { purgeClaimId: 'claim-a' }])(
+    'acknowledges a refused non-started or different generation',
+    async lake => {
+      h.cleanup.mockRejectedValueOnce(new BadRequestError('refused'));
+      h.releasePurgingToDeleted.mockResolvedValueOnce(false);
+      h.findById.mockResolvedValueOnce(lake);
+      await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+      expect(logger.warn).toHaveBeenCalled();
+    }
+  );
+
+  it('does not reread the lake after successfully releasing an unstarted generation', async () => {
+    h.cleanup.mockRejectedValueOnce(new BadRequestError('refused'));
+    h.releasePurgingToDeleted.mockResolvedValueOnce(true);
+    await expect(dispatch(makeEvent(payload), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.findById).not.toHaveBeenCalled();
   });
 });

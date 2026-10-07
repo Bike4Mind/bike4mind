@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy/styles';
 
 const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
@@ -16,7 +16,8 @@ vi.mock('@client/app/utils/metaPixel', () => ({
   loadMetaPixel: mockLoadMetaPixel,
 }));
 
-import { CookieConsentBanner } from './CookieConsentBanner';
+import { CookieConsentBanner, useCookieSettings } from './CookieConsentBanner';
+import { captureUtmParams, flushUtmCapture } from '../utils/utmCapture';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
@@ -60,6 +61,9 @@ describe('CookieConsentBanner', () => {
     mockLoadRedditPixel.mockClear();
     mockLoadMetaPixel.mockClear();
     clearCookies();
+    useCookieSettings.setState({ isOpen: false });
+    // What the inline tag in layout.tsx would have set; each test states its own.
+    delete window.__b4mGaConsentDefault;
   });
 
   it('shows banner when no consent is stored', () => {
@@ -71,6 +75,18 @@ describe('CookieConsentBanner', () => {
 
     expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
     expect(screen.getByTestId('cookie-consent-decline-btn')).toBeInTheDocument();
+  });
+
+  // Nobody asked for the first-run banner, so it must not pull focus off the page.
+  it('leaves focus alone on the first-run ask', () => {
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+
+    expect(screen.getByRole('region', { name: 'Cookie settings' })).toBeInTheDocument();
+    expect(document.body).toHaveFocus();
   });
 
   it('hides banner when consent was previously granted', () => {
@@ -255,6 +271,41 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
     });
 
+    it('flushes a held landing campaign when Accept is clicked after the URL has changed', () => {
+      window.history.replaceState({}, '', '/?utm_source=newsletter');
+      captureUtmParams();
+      window.history.replaceState({}, '', '/');
+      expect(document.cookie).not.toContain('b4m_last_touch=');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(document.cookie).toContain('b4m_last_touch=%7B%22source%22%3A%22newsletter%22%7D');
+      expect(document.cookie).toContain('b4m_app_first_touch=%7B%22source%22%3A%22newsletter%22%7D');
+    });
+
+    it('discards a held landing campaign on Decline so a later grant cannot flush it', () => {
+      window.history.replaceState({}, '', '/?utm_source=newsletter');
+      captureUtmParams();
+      window.history.replaceState({}, '', '/');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      localStorageMock.setItem('cookie_consent', 'granted');
+      flushUtmCapture();
+
+      expect(document.cookie).not.toContain('b4m_last_touch=');
+      expect(document.cookie).not.toContain('b4m_app_first_touch=');
+    });
+
     it('carries an acceptance across without asking again', () => {
       setRegion('eu');
       setSharedDecision('granted');
@@ -345,5 +396,348 @@ describe('CookieConsentBanner', () => {
     expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
     expect(mockLoadRedditPixel).not.toHaveBeenCalled();
     expect(mockLoadMetaPixel).not.toHaveBeenCalled();
+  });
+
+  // A later decline has to actually stop checkout from copying stale attribution
+  // into Stripe, not just gate new pixel loads.
+  describe('clearing attribution cookies on a later decline', () => {
+    function setAttributionCookies() {
+      document.cookie = 'b4m_utm=%7B%22source%22%3A%22newsletter%22%7D; path=/';
+      document.cookie = 'b4m_last_touch=%7B%22source%22%3A%22newsletter%22%7D; path=/';
+      document.cookie = 'b4m_app_first_touch=%7B%22source%22%3A%22newsletter%22%7D; path=/';
+    }
+
+    function attributionCookiesPresent(): boolean {
+      return ['b4m_utm', 'b4m_last_touch', 'b4m_app_first_touch'].some(name =>
+        document.cookie.split('; ').some(c => c.startsWith(`${name}=`))
+      );
+    }
+
+    it('expires held attribution cookies when this origin already decided denied', () => {
+      setAttributionCookies();
+      localStorageMock.setItem('cookie_consent', 'denied');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(attributionCookiesPresent()).toBe(false);
+    });
+
+    it('expires held attribution cookies when the marketing site decided denied', () => {
+      setAttributionCookies();
+      setSharedDecision('denied');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(attributionCookiesPresent()).toBe(false);
+    });
+
+    it('expires held attribution cookies on a Decline click', () => {
+      setAttributionCookies();
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(attributionCookiesPresent()).toBe(false);
+    });
+  });
+  // Withdrawing consent has to be as easy as giving it, so a decision made once must be
+  // reachable again - from the profile menu or the login footer, both via this store.
+  describe('reopened from Cookie settings', () => {
+    const originalLocation = window.location;
+    const reload = vi.fn();
+
+    beforeEach(() => {
+      reload.mockClear();
+      // jsdom's location.reload is non-configurable, so spyOn cannot wrap it.
+      Object.defineProperty(window, 'location', { configurable: true, value: { ...originalLocation, reload } });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, 'location', { configurable: true, value: originalLocation });
+    });
+
+    const renderAndReopen = () => {
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+      act(() => useCookieSettings.getState().open());
+    };
+
+    it('shows a manage screen with the choice in force, not the first-run ask', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+
+      renderAndReopen();
+
+      expect(screen.getByText('Cookie settings.')).toBeInTheDocument();
+      expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
+        'You are currently allowing campaign attribution cookies.'
+      );
+      expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('Declining reloads the page');
+      expect(screen.getByTestId('cookie-consent-cancel-btn')).toBeInTheDocument();
+      expect(screen.queryByText(/By clicking/)).not.toBeInTheDocument();
+    });
+
+    // Both triggers come after the banner in the tab order, so a keyboard user who opened it
+    // has to be taken there.
+    it('moves focus into the manage screen when it opens', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+      expect(screen.getByRole('region', { name: 'Cookie settings' })).toBe(screen.getByTestId('cookie-consent-banner'));
+    });
+
+    it('withdraws a grant: stores the decline, tells gtag, and reloads so the pixels unload', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      renderAndReopen();
+      mockGtag.mockClear();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(localStorageMock.getItem('cookie_consent')).toBe('denied');
+      expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'denied' });
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+      expect(useCookieSettings.getState().isOpen).toBe(false);
+    });
+
+    it('clears attribution when a grant is withdrawn without configured trackers', () => {
+      for (const name of [
+        'NEXT_PUBLIC_GA_MEASUREMENT_ID',
+        'NEXT_PUBLIC_REDDIT_PIXEL_ID',
+        'NEXT_PUBLIC_META_PIXEL_ID',
+      ]) {
+        vi.stubEnv(name, '');
+      }
+      try {
+        localStorageMock.setItem('cookie_consent', 'granted');
+        const cookieNames = ['b4m_utm', 'b4m_last_touch', 'b4m_app_first_touch'];
+        for (const name of cookieNames) document.cookie = `${name}=campaign; path=/`;
+        renderAndReopen();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+        expect(localStorageMock.getItem('cookie_consent')).toBe('denied');
+        for (const name of cookieNames) expect(document.cookie).not.toContain(`${name}=`);
+        expect(reload).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it('grants over a decline live, with no reload', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent(
+        'You are currently declining campaign attribution cookies.'
+      );
+      expect(screen.getByTestId('cookie-consent-banner')).not.toHaveTextContent('reloads the page');
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(localStorageMock.getItem('cookie_consent')).toBe('granted');
+      expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+      expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('does not reload when the choice withdraws nothing', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      renderAndReopen();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(localStorageMock.getItem('cookie_consent')).toBe('denied');
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    // The visitors the region gate never asks. Before this they had no way to decline at all.
+    it('lets a visitor auto-allowed by region decline', () => {
+      setRegion('row');
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-banner')).toHaveTextContent('You are currently allowing');
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(localStorageMock.getItem('cookie_consent')).toBe('denied');
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    // Reported as the marketing site's decision, but a choice here is recorded here and outranks it.
+    it('overrides a grant carried over from the marketing site', () => {
+      setSharedDecision('granted');
+      renderAndReopen();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+
+      expect(localStorageMock.getItem('cookie_consent')).toBe('denied');
+      expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it('Cancel closes it and changes nothing', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      renderAndReopen();
+      mockGtag.mockClear();
+      mockLoadRedditPixel.mockClear();
+      mockLoadMetaPixel.mockClear();
+
+      fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+
+      expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+      expect(useCookieSettings.getState().isOpen).toBe(false);
+      expect(localStorageMock.getItem('cookie_consent')).toBe('granted');
+      expect(mockGtag).not.toHaveBeenCalled();
+      expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it('stays the first-run ask when there is no decision to manage yet', () => {
+      renderAndReopen();
+
+      expect(screen.getByText(/By clicking/)).toBeInTheDocument();
+      expect(screen.queryByText('Cookie settings.')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('cookie-consent-cancel-btn')).not.toBeInTheDocument();
+    });
+
+    // The first-run ask is already on screen, so opening it changes nothing visible; focus is
+    // the only sign the request landed.
+    it('moves focus to Decline when opened before any decision', () => {
+      renderAndReopen();
+
+      expect(screen.getByTestId('cookie-consent-decline-btn')).toHaveFocus();
+    });
+
+    describe('handing focus back on close', () => {
+      // Stands in for either real trigger: it holds focus, then opens settings.
+      const renderWithTrigger = () => {
+        render(
+          <TestWrapper>
+            <button data-testid="trigger" onClick={() => useCookieSettings.getState().open()}>
+              Cookie settings
+            </button>
+            <input data-testid="elsewhere" />
+            <CookieConsentBanner />
+          </TestWrapper>
+        );
+        const trigger = screen.getByTestId('trigger');
+        trigger.focus();
+        fireEvent.click(trigger);
+        return trigger;
+      };
+
+      it('returns focus to the trigger when the manage screen is cancelled', () => {
+        localStorageMock.setItem('cookie_consent', 'granted');
+        const trigger = renderWithTrigger();
+        expect(screen.getByTestId('cookie-consent-cancel-btn')).toHaveFocus();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+
+        expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+        expect(trigger).toHaveFocus();
+      });
+
+      it('returns focus to the trigger after a choice made from the first-run ask', () => {
+        const trigger = renderWithTrigger();
+        expect(screen.getByTestId('cookie-consent-decline-btn')).toHaveFocus();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+        expect(screen.queryByTestId('cookie-consent-banner')).not.toBeInTheDocument();
+        expect(trigger).toHaveFocus();
+      });
+
+      // A browser that does not focus a button on click (Safari) leaves focus where it was.
+      it('does not pull focus off an element that already holds it', () => {
+        localStorageMock.setItem('cookie_consent', 'granted');
+        renderWithTrigger();
+        const elsewhere = screen.getByTestId('elsewhere');
+        elsewhere.focus();
+
+        fireEvent.click(screen.getByTestId('cookie-consent-cancel-btn'));
+
+        expect(elsewhere).toHaveFocus();
+      });
+    });
+  });
+
+  // The inline tag records the landing page with a cookie only when it could read a grant
+  // before sending it. Otherwise a later grant must record the page again, once, or GA's
+  // cookied session starts on a later event with no source and reports "(not set)".
+  describe('recording the page on a grant', () => {
+    const pageViews = () => mockGtag.mock.calls.filter(c => c[0] === 'event' && c[1] === 'page_view');
+    const renderBanner = () =>
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+    it('records the page once when an undecided visitor accepts', () => {
+      setRegion('eu');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      expect(pageViews()).toHaveLength(0);
+
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+
+      expect(pageViews()).toHaveLength(1);
+      // After the grant, so the hit carries the cookie.
+      const grant = mockGtag.mock.calls.findIndex(c => c[0] === 'consent' && c[2]?.analytics_storage === 'granted');
+      const pageView = mockGtag.mock.calls.findIndex(c => c[0] === 'event' && c[1] === 'page_view');
+      expect(grant).toBeGreaterThanOrEqual(0);
+      expect(pageView).toBeGreaterThan(grant);
+    });
+
+    it('does not record the page again when the tag already had the grant', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      window.__b4mGaConsentDefault = 'granted';
+      renderBanner();
+      expect(pageViews()).toHaveLength(0);
+    });
+
+    it('records the page at most once, however often consent is granted', () => {
+      localStorageMock.setItem('cookie_consent', 'denied');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      act(() => useCookieSettings.getState().open());
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      act(() => useCookieSettings.getState().open());
+      fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
+      expect(pageViews()).toHaveLength(1);
+    });
+
+    // A tag that read the signals differently from the banner: the banner's grant still heals it.
+    it('records the page when the banner grants on load but the tag had defaulted to denied', () => {
+      localStorageMock.setItem('cookie_consent', 'granted');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      expect(pageViews()).toHaveLength(1);
+    });
+
+    it('never records the page on a decline', () => {
+      setRegion('eu');
+      window.__b4mGaConsentDefault = 'denied';
+      renderBanner();
+      fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
+      expect(pageViews()).toHaveLength(0);
+    });
   });
 });

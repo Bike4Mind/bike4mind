@@ -27,6 +27,7 @@ import {
   Divider,
   Dropdown,
   IconButton,
+  type IconButtonProps,
   ListItemDecorator,
   Menu,
   MenuButton,
@@ -41,9 +42,21 @@ interface QuestExportMenuProps {
   planId: string;
   plan: IQuestMasterPlanDocument;
   size?: 'sm' | 'md';
+  /**
+   * Trigger styling, for a host whose other controls are the shared artifact-card icon
+   * buttons. Defaults to the standalone outlined button the quest viewer uses.
+   */
+  variant?: 'outlined' | 'plain';
+  buttonSx?: IconButtonProps['sx'];
 }
 
-const QuestExportMenu: React.FC<QuestExportMenuProps> = ({ planId, plan, size = 'sm' }) => {
+const QuestExportMenu: React.FC<QuestExportMenuProps> = ({
+  planId,
+  plan,
+  size = 'sm',
+  variant = 'outlined',
+  buttonSx,
+}) => {
   const { handleCopyToClipboard } = useCopyToClipboard({ showToast: true });
   const { startExport, isExporting: isZipExporting } = useQuestExport();
   const [isPdfGenerating, setIsPdfGenerating] = useState(false);
@@ -138,7 +151,8 @@ const QuestExportMenu: React.FC<QuestExportMenuProps> = ({ planId, plan, size = 
           slots={{ root: IconButton }}
           slotProps={{
             root: {
-              variant: 'outlined',
+              variant,
+              sx: buttonSx,
               color: 'neutral',
               size,
               disabled: isExporting,

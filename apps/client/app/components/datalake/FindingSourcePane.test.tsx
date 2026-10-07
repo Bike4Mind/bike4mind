@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { LakeFindingSource } from '@bike4mind/common';
@@ -18,7 +18,7 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 // Stands in for the #3038 chunk renderer so the pane's contract with it - the passage is handed
 // over as `citedPassage`, in the whole document - is asserted rather than assumed.
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
-  default: (props: { content: string; citedPassage?: string }) => {
+  default: (props: { content: string; citedPassage?: string; stripFrontmatter?: boolean }) => {
     h.markdown(props);
     return <div data-testid="markdown-viewer">{props.content}</div>;
   },
@@ -38,10 +38,13 @@ const source: LakeFindingSource = {
   excerpt: 'ARR reached $4.2M in Q1.',
 };
 
-const renderPane = (over: Partial<LakeFindingSource> = {}) =>
+const renderPane = (
+  over: Partial<LakeFindingSource> = {},
+  props: Partial<React.ComponentProps<typeof FindingSourcePane>> = {}
+) =>
   render(
     <TestWrapper>
-      <FindingSourcePane source={{ ...source, ...over }} />
+      <FindingSourcePane source={{ ...source, ...over }} {...props} />
     </TestWrapper>
   );
 
@@ -57,7 +60,11 @@ describe('FindingSourcePane', () => {
 
     expect(screen.getByTestId('markdown-viewer')).toHaveTextContent('ARR reached $4.2M in Q1.');
     expect(h.markdown).toHaveBeenCalledWith(
-      expect.objectContaining({ content: '# Update\n\nARR reached $4.2M in Q1.', citedPassage: source.excerpt })
+      expect.objectContaining({
+        content: '# Update\n\nARR reached $4.2M in Q1.',
+        citedPassage: source.excerpt,
+        stripFrontmatter: true,
+      })
     );
   });
 
@@ -65,7 +72,10 @@ describe('FindingSourcePane', () => {
     renderPane();
 
     expect(screen.getByTestId('finding-source-title')).toHaveTextContent('investor-update.md');
-    expect(screen.getByTestId('finding-source-citation')).toHaveAttribute('href', '/data-lakes?article=file-a');
+    expect(screen.getByTestId('finding-source-citation')).toHaveAttribute(
+      'href',
+      '/data-lakes?article=file-a&passage=' + encodeURIComponent(source.excerpt)
+    );
   });
 
   // The finding's own name is what the detector saw, so it survives a file read that came back
@@ -110,5 +120,38 @@ describe('FindingSourcePane', () => {
 
     expect(screen.queryByTestId('markdown-viewer')).not.toBeInTheDocument();
     expect(screen.queryByTestId('finding-source-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('offers no retired marker or restore action for a document still in ranking', () => {
+    renderPane({}, { onReturnToRanking: vi.fn() });
+
+    expect(screen.queryByTestId('finding-source-superseded-chip')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('finding-source-return-to-ranking-btn')).not.toBeInTheDocument();
+  });
+
+  it('marks a superseded document and returns it to ranking on click', () => {
+    const onReturnToRanking = vi.fn();
+    renderPane({}, { superseded: true, onReturnToRanking });
+
+    expect(screen.getByTestId('finding-source-superseded-chip')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('finding-source-return-to-ranking-btn'));
+    expect(onReturnToRanking).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the restore button while the unsupersede is in flight', () => {
+    const onReturnToRanking = vi.fn();
+    renderPane({}, { superseded: true, onReturnToRanking, returning: true });
+
+    const button = screen.getByTestId('finding-source-return-to-ranking-btn');
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onReturnToRanking).not.toHaveBeenCalled();
+  });
+
+  it('shows the retired marker but no restore button when the caller cannot undo the ruling', () => {
+    renderPane({}, { superseded: true });
+
+    expect(screen.getByTestId('finding-source-superseded-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('finding-source-return-to-ranking-btn')).not.toBeInTheDocument();
   });
 });

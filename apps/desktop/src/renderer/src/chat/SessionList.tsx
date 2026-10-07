@@ -71,12 +71,14 @@ export function NavItem({
   label,
   onClick,
   end,
+  loading,
   testId,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
   end?: ReactNode;
+  loading?: boolean;
   testId: string;
 }) {
   return (
@@ -85,6 +87,7 @@ export function NavItem({
       size="sm"
       variant="plain"
       color="neutral"
+      loading={loading}
       startDecorator={icon}
       endDecorator={end}
       onClick={onClick}
@@ -418,6 +421,7 @@ export function SessionList({
   onTogglePin,
   onToggleArchived,
   customize,
+  settings,
   footer,
 }: {
   sessions: ChatSessionSummary[];
@@ -436,8 +440,10 @@ export function SessionList({
   onDelete: (sessionId: string) => void;
   onTogglePin: (session: ChatSessionSummary) => void;
   onToggleArchived: (session: ChatSessionSummary) => void;
-  /** The app-settings slot under the nav entries, which owns its own expanded state. */
+  /** The Customize nav row, which carries its own attention badge. */
   customize?: ReactNode;
+  /** The Settings nav row, likewise. */
+  settings?: ReactNode;
   footer?: ReactNode;
 }) {
   const [query, setQuery] = useState('');
@@ -574,6 +580,7 @@ export function SessionList({
             outlives the local session files. */}
         <NavItem icon={<ArtifactIcon />} label="Artifacts" onClick={onOpenArtifacts} testId="chat-artifacts-btn" />
         {customize}
+        {settings}
         <Box sx={{ px: 0.5, pt: 0.5 }}>
           <Input
             size="sm"

@@ -9,30 +9,32 @@ import {
   CompareArrowsRounded as ConflictIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { DATA_LAKE, PERSONAL_LIBRARY, SHARED_LIBRARY } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { citedPassageOf } from '@client/app/components/Knowledge/citedPassage';
+import { ExpandCollapseButton } from './ExpandCollapseButton';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
-  /** Maximum height in pixels before scrolling */
-  maxHeight?: number;
 }
+
+/** Sources shown before the reader asks for the rest. Enough to see the list has substance. */
+const COLLAPSED_COUNT = 3;
 
 const getIconForType = (type: CitableSourceType) => {
   switch (type) {
     case 'web_url':
-      return <WebIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <WebIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'document':
-      return <DocumentIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <DocumentIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'dataset':
-      return <DatasetIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <DatasetIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'mcp':
-      return <McpIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <McpIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     default:
-      return <WebIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <WebIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
   }
 };
 
@@ -72,26 +74,56 @@ const conflictingTitlesOf = (source: CitableSource, titleById: Map<string, strin
   return unnamed > 0 ? [...named, `${unnamed} further source${unnamed === 1 ? '' : 's'}`] : named;
 };
 
+/**
+ * Label (and optional full-list tooltip) for an internal chip's origin.
+ *
+ * Falls back to DATA_LAKE because legacy chips and agent-scoped chips carry no `sourceOrigin`.
+ * Labels are deliberately not viewer-relative: `owned` is relative to the conversation owner whose
+ * retrieval made the chip, and share viewers see the same chip.
+ *
+ * `metadata` is an open bag read from stored docs, so the origin is narrowed from `unknown` and a
+ * malformed value falls back rather than throwing inside the reply.
+ */
+const internalLabelOf = (source: CitableSource): { label: string; title?: string } => {
+  const origin: unknown = source.metadata?.sourceOrigin;
+  if (typeof origin === 'object' && origin !== null) {
+    const { kind, lakes, owned } = origin as Record<string, unknown>;
+    if (kind === 'lake' && Array.isArray(lakes)) {
+      const names = lakes.flatMap((lake: unknown) => {
+        const name = typeof lake === 'object' && lake !== null ? (lake as Record<string, unknown>).name : undefined;
+        return typeof name === 'string' && name ? [name] : [];
+      });
+      if (names.length === 1) return { label: names[0] };
+      if (names.length > 1) return { label: `${names[0]} +${names.length - 1}`, title: names.join(', ') };
+    } else if (kind === 'library' && typeof owned === 'boolean') {
+      return { label: owned ? PERSONAL_LIBRARY : SHARED_LIBRARY };
+    }
+  }
+  return { label: DATA_LAKE };
+};
+
 const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[] }> = ({
   source,
   conflictingTitles,
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const navigate = useNavigate();
-  // Opt-in host override: when a surface provides onCitationClick (e.g. the
-  // LibreOncology source drawer), the click is handled in-surface instead of
-  // navigating. Default (no provider) keeps the existing navigation behavior.
-  const { onCitationClick } = useCitationInteraction();
+  // Opt-in host overrides: when a surface provides onCitationClick (any source) or
+  // onInternalCitationClick (relative URLs only), the click is handled in-surface instead of
+  // navigating. onCitationClick wins when both are set. Default (no provider) keeps the existing
+  // navigation behavior.
+  const { onCitationClick, onInternalCitationClick } = useCitationInteraction();
 
   // Detect internal (relative) vs external URLs
   const isInternal = !!source.url && source.url.startsWith('/');
 
   // Extract hostname for display if URL exists
   let hostname = '';
+  let hostnameTitle: string | undefined;
   let faviconUrl: string | null = null;
   if (isInternal) {
     // Show a friendly label for internal deep-links instead of the raw path
-    hostname = DATA_LAKE;
+    ({ label: hostname, title: hostnameTitle } = internalLabelOf(source));
   } else {
     try {
       if (source.url) {
@@ -113,19 +145,21 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       }
     : undefined;
 
-  const handleClick =
-    handleHostClick ??
-    (isInternal
-      ? () => {
-          // Hand the reader's destination the passage this chip cited, so the viewer can mark it
-          // instead of dropping them at the top of the document (#3038). Written on EVERY internal
-          // click, clearing on a chip that carries no passage: a leftover anchor from the previous
-          // citation would otherwise mark a stale extent in the newly-opened file.
-          setSessionLayout({ citedPassage: citedPassageOf(source) });
-          const url = new URL(source.url!, window.location.origin);
-          navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
-        }
-      : undefined);
+  const navigateToInternal = () => {
+    // Hand the reader's destination the passage this chip cited, so the viewer can mark it
+    // instead of dropping them at the top of the document (#3038). Written on EVERY internal
+    // click, clearing on a chip that carries no passage: a leftover anchor from the previous
+    // citation would otherwise mark a stale extent in the newly-opened file.
+    setSessionLayout({ citedPassage: citedPassageOf(source) });
+    const url = new URL(source.url!, window.location.origin);
+    navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
+  };
+
+  const handleInternalClick = () => {
+    if (!onInternalCitationClick?.(source)) navigateToInternal();
+  };
+
+  const handleClick = handleHostClick ?? (isInternal ? handleInternalClick : undefined);
 
   // When the host handles clicks, render as a button (no external navigation).
   const renderAsButton = isInternal || !!handleHostClick;
@@ -160,27 +194,37 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}
-      sx={{
+      sx={theme => ({
         display: 'flex',
         alignItems: 'center',
-        gap: 1.5,
-        p: 1,
-        borderRadius: 'sm',
-        bgcolor: 'background.level1',
-        border: '1px solid',
-        borderColor: 'divider',
-        transition: 'all 0.2s',
-        textDecoration: 'none',
-        cursor: source.url ? 'pointer' : 'default',
-        flexShrink: 0,
-        background: 'none',
+        gap: '12px',
+        py: 1.25,
+        px: '16px',
         width: '100%',
         textAlign: 'left',
-        '&:hover': {
-          bgcolor: 'background.level2',
-          borderColor: 'primary.outlinedBorder',
-        },
-      }}
+        textDecoration: 'none',
+        // The artifact-card frame (see ArtifactPreviewCard), so a source reads as the same
+        // family as every other framed thing a reply produces. It previously set
+        // background.level1 and hovered to level2 - neither of which this theme defines -
+        // and then killed both with `background: 'none'` on the next line, so the row had
+        // no fill at all.
+        backgroundColor: theme.palette.reading.cardBase,
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
+        borderRadius: '8px',
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: theme.palette.reading.cardLine,
+        transition: 'all 0.2s ease-in-out',
+        cursor: source.url ? 'pointer' : 'default',
+        // A source with nowhere to go does not lift: the same hover on a dead row is a
+        // promise the click cannot keep.
+        ...(source.url && {
+          '&:hover': {
+            transform: 'translateY(-2px)',
+            boxShadow: 'sm',
+          },
+        }),
+      })}
     >
       {/* Favicon or fallback icon */}
       <Box
@@ -199,8 +243,8 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             alt=""
             onError={() => setFaviconError(true)}
             style={{
-              width: 16,
-              height: 16,
+              width: 20,
+              height: 20,
               borderRadius: '2px',
             }}
           />
@@ -225,22 +269,38 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             }}
           >
             {source.title}
-            {hostname && (
+          </Typography>
+          {/* A sibling of the title, not inside it, so a long title cannot ellipsise the lake name
+              away; capped so a long lake name or hostname clips itself rather than the title. */}
+          {hostname && (
+            <Tooltip size="sm" placement="top" title={hostnameTitle}>
               <Typography
                 component="span"
                 level="body-xs"
+                data-testid={isInternal ? 'citable-source-origin-label' : undefined}
                 sx={{
                   color: 'text.tertiary',
-                  ml: 1,
+                  ml: 0.5,
+                  flexShrink: 0,
+                  maxWidth: '50%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
               >
                 {hostname}
               </Typography>
-            )}
-          </Typography>
+            </Tooltip>
+          )}
+          {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
+              default bottom lands the box on the next chip down. Note this does not clear the
+              conflict case entirely - conflicts are stamped symmetrically, so the lower chip of
+              a pair now opens over the partner above it. No placement clears both on a stacked
+              list; removing it needs a design change, not a prop (#3290). */}
           {isTruncated && (
             <Tooltip
               size="sm"
+              placement="top"
               title={`Content truncated${
                 truncationCap ? ` at ${truncationCap.toLocaleString()} chars` : ''
               } - the model saw a partial read of this source`}
@@ -252,7 +312,7 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             </Tooltip>
           )}
           {conflictTooltip && (
-            <Tooltip size="sm" title={conflictTooltip}>
+            <Tooltip size="sm" placement="top" title={conflictTooltip}>
               <ConflictIcon
                 data-testid="citable-conflict-badge"
                 // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
@@ -287,10 +347,19 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
 };
 
 /**
- * CitableSources - Displays a scrollable list of sources referenced in AI responses
- * Shows web search results, documents, datasets, and MCP tool results
+ * The sources a reply drew on: web results, documents, datasets and MCP tool results.
+ *
+ * A bare list, not a card. Each source carries the artifact frame itself, and wrapping
+ * framed rows in another frame read as a box of boxes.
+ *
+ * Bounded by COUNT rather than by height. It used to cap at 200px and scroll inside, which
+ * put a nested scroll region between the reply and the next turn - the reader had to find
+ * the inner scroller to reach a source the text cited. It uses the reply's own rounded
+ * Show More pill, not the bare control a code card carries - that one sits INSIDE an
+ * artifact frame, and this list has no frame of its own to sit in.
  */
-const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) => {
+const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
+  const [expanded, setExpanded] = useState(false);
   // Citables accumulate across multiple tool calls (e.g. several search_knowledge_base
   // invocations returning overlapping files), so the same source can appear more than
   // once. Dedupe by a stable identity before rendering - otherwise repeated ids produce
@@ -318,19 +387,11 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
     return null;
   }
 
+  const visible = expanded ? uniqueCitables : uniqueCitables.slice(0, COLLAPSED_COUNT);
+  const hiddenCount = uniqueCitables.length - COLLAPSED_COUNT;
+
   return (
-    <Box
-      sx={{
-        mt: 1.5,
-        mb: 1,
-        p: 1.5,
-        borderRadius: 'sm',
-        bgcolor: 'background.surface',
-        border: '1px solid',
-        borderColor: 'divider',
-      }}
-      data-testid="citable-sources"
-    >
+    <Box sx={{ mt: 1.5, mb: 1 }} data-testid="citable-sources">
       <Typography
         level="body-xs"
         sx={{
@@ -344,30 +405,11 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
         Sources ({uniqueCitables.length})
       </Typography>
 
-      <Stack
-        spacing={0.75}
-        sx={{
-          maxHeight,
-          overflowY: 'auto',
-          pr: 0.5, // Space for scrollbar
-          // Custom scrollbar styling
-          '&::-webkit-scrollbar': {
-            width: '6px',
-          },
-          '&::-webkit-scrollbar-track': {
-            bgcolor: 'background.level1',
-            borderRadius: '3px',
-          },
-          '&::-webkit-scrollbar-thumb': {
-            bgcolor: 'neutral.400',
-            borderRadius: '3px',
-            '&:hover': {
-              bgcolor: 'neutral.500',
-            },
-          },
-        }}
-      >
-        {uniqueCitables.map((source, index) => (
+      {/* The whole gap to the pill below. It does NOT add to the pill's own 8px top margin:
+          block-level siblings collapse to the larger of the two, so this value alone is what
+          shows. */}
+      <Stack spacing={1} sx={{ mb: '16px' }}>
+        {visible.map((source, index) => (
           <CitableSourceItem
             key={source.id || source.url || index}
             source={source}
@@ -375,6 +417,14 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
           />
         ))}
       </Stack>
+
+      <ExpandCollapseButton
+        needsTruncation={hiddenCount > 0}
+        isExpanded={expanded}
+        onToggle={() => setExpanded(v => !v)}
+        collapsedLabel={`Show ${hiddenCount} More`}
+        testId="citable-sources-show-more-btn"
+      />
     </Box>
   );
 };

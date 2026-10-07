@@ -10,6 +10,7 @@
  */
 
 import { systemSecretRepository } from '@bike4mind/database';
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { clearSecretCache, resolveSecret } from '@server/managers/systemSecretsManager';
@@ -24,7 +25,7 @@ function maskSecretValue(value: string | undefined): string {
   return '****' + value.slice(-4);
 }
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     try {
       if (!req.user?.isAdmin) {

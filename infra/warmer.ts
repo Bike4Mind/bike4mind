@@ -48,7 +48,7 @@ export function createHandlerWarmer(
     enabled,
     function: {
       vpc: lambdaVpc,
-      handler: 'apps/client/server/cron/warmer.dispatch',
+      handler: 'apps/workers/src/cron/warmer.dispatch',
       runtime: 'nodejs24.x',
       timeout,
       environment: {

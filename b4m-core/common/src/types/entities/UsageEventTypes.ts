@@ -55,8 +55,8 @@ export const UsageEvent = z.object({
   ownerType: z.enum(CreditHolderType),
   sessionId: z.string().optional(),
   /**
-   * Data lake this call is 1:1 attributable to (ingestion embeds only - a query
-   * embedding can span multiple lakes and is never attributed here). Unset for
+   * Data lake this call is 1:1 attributable to (ingestion embeds and research-run judge calls -
+   * a query embedding can span multiple lakes and is never attributed here). Unset for
    * every other feature/call.
    */
   dataLakeId: z.string().optional(),
@@ -618,12 +618,15 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
   sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean>;
 
   /**
-   * One data lake's ledgered spend (ingestion embeds only, see `dataLakeId` on
-   * UsageEvent) rolled up by day, model, and feature, over the trailing N days
+   * One data lake's ledgered spend (ingestion embeds and research-run judge calls, see
+   * `dataLakeId` on UsageEvent) rolled up by day, model, and feature, over the trailing N days
    * (default 30). Same $facet shape as `ownerUsageSummary` minus byMember - a lake
    * is just a different $match key over the same event set, but the owner-facing
    * spend view has no use for raw per-uploader userIds. Powers the owner-facing
    * data-lake spend view.
    */
   lakeUsageSummary(dataLakeId: string, days?: number): Promise<ILakeUsageSummary>;
+
+  /** Lifetime USD COGS of research spend attributed to one data lake (feature: 'operations'). */
+  lakeResearchLifetimeUsd(dataLakeId: string): Promise<number>;
 }

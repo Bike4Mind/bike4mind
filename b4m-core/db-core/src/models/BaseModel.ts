@@ -1,4 +1,10 @@
-import { ConcurrencyConflictError, IBaseRepository, IMongoDocument } from '@bike4mind/common';
+import {
+  ConcurrencyConflictError,
+  IBaseRepository,
+  IMongoDocument,
+  RepositoryPatch,
+  RepositoryUpdateOptions,
+} from '@bike4mind/common';
 import mongoose from 'mongoose';
 import { convertId } from '../utils/mongo';
 
@@ -88,8 +94,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * fabricated id. Same choice, for the same reason, as `usableObjectIds` in ../utils/mongo.
    *
    * Both misses report `null`. The row-not-found path used to resolve `undefined` while claiming
-   * `T | null`, so a caller narrowing with `!== null` (queueHandlers/emailBatch.ts) got past the
-   * guard and dereferenced it; two different miss values out of one method would be worse.
+   * `T | null`, so a caller narrowing with `!== null` (apps/workers/src/queueHandlers/emailBatch.ts)
+   * got past the guard and dereferenced it; two different miss values out of one method would be worse.
    */
   async findById(id: string) {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
@@ -104,8 +110,13 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    *
    * `options` is forwarded to `findOneAndUpdate` except for the reserved `unset` key; see
    * UNSET_OPTION for why clearing a field needs it.
+   *
+   * On a softDeletePlugin model a soft-deleted doc is skipped: the tombstone silently wins and this
+   * resolves `null`. Pass `{ includeDeleted: true }` to write to it.
    */
-  async update(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
+  update(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
+  update(data: RepositoryPatch<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
+  async update(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null> {
     if (!data.id) {
       throw new Error('id is required');
     }
@@ -124,8 +135,13 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * HAZARD for callers: a function that calls `updateGuarded` on the SAME in-memory doc twice without
    * refreshing it between calls makes the second call carry a stale `__v` and throw. Capture the
    * returned (version-bumped) doc between writes: `doc = await repo.updateGuarded(doc)`.
+   *
+   * On a softDeletePlugin model a doc soft-deleted after the read resolves `null`, not a conflict:
+   * the tombstone silently wins. Pass `{ includeDeleted: true }` to write to it.
    */
-  async updateGuarded(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
+  updateGuarded(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
+  updateGuarded(data: RepositoryPatch<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null>;
+  async updateGuarded(data: Partial<T>, options?: RepositoryUpdateOptions<T>): Promise<T | null> {
     if (!data.id) {
       throw new Error('id is required');
     }
@@ -200,6 +216,8 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     // past ours. Only the race is worth surfacing; a genuine not-found keeps `update`'s null contract.
     if (versioned) {
       const existsQuery = this.model.exists(idFilter as mongoose.FilterQuery<T>);
+      // A write that may reach a tombstone must also see one here, or a race on it reads as not-found.
+      if (queryOptions.includeDeleted) existsQuery.setOptions({ includeDeleted: true });
       if (this._txn) existsQuery.session(this._txn);
       if (await existsQuery) {
         throw new ConcurrencyConflictError(this.model.modelName, { filter: idFilter });
@@ -207,10 +225,17 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     }
     return null;
   }
-  async updateMany(filter: Record<string, unknown>, data: Partial<T>, options?: Record<string, unknown>) {
+  async updateMany(filter: Record<string, unknown>, data: Partial<T>, options?: RepositoryUpdateOptions<T>) {
     // Last-writer-wins, like `update`: a `$set` with no version precondition. There is no bulk
-    // guarded variant - `updateGuarded` is per-document by design.
-    const query = this.model.updateMany(filter, { $set: data }, options);
+    // guarded variant - `updateGuarded` is per-document by design. Honours the reserved `unset` option.
+    // On a softDeletePlugin model tombstones are silently skipped unless `options` carries
+    // `includeDeleted: true`.
+    const { setData, unsetOperand, queryOptions } = splitUnsetOption(data as Record<string, unknown>, options);
+    const query = this.model.updateMany(
+      filter,
+      (unsetOperand ? { $set: setData, $unset: unsetOperand } : { $set: setData }) as mongoose.UpdateQuery<T>,
+      queryOptions
+    );
     // See `_plainUpdate` above: explicit `.session(null)` would defeat ALS propagation.
     if (this._txn) {
       query.session(this._txn);

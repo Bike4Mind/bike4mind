@@ -4,8 +4,21 @@ import type { ILogger } from '@bike4mind/observability';
 
 const mockEncodeOrdinary = vi.fn();
 const mockFree = vi.fn();
-const mockEncodingForModel = vi.fn();
+const mockGetEncodingNameForModel = vi.fn();
 const mockGetEncoding = vi.fn();
+
+// A slice of tiktoken's real table. Anything else throws, as tiktoken does for every non-OpenAI id.
+const KNOWN_ENCODINGS: Record<string, string> = {
+  'gpt-4': 'cl100k_base',
+  'gpt-3.5-turbo': 'cl100k_base',
+  'gpt-4o': 'o200k_base',
+  'gpt-5': 'o200k_base',
+};
+const lookupEncodingName = (model: string) => {
+  const encoding = KNOWN_ENCODINGS[model];
+  if (!encoding) throw new Error(`Invalid model: ${model}`);
+  return encoding;
+};
 
 // Reaching `encode` at all is the bug: it rejects untrusted text carrying a special-token literal.
 // Failing here names the regression, instead of leaving it to surface as a zeroed billing estimate.
@@ -23,7 +36,7 @@ const mockEncoder = {
 };
 
 vi.mock('tiktoken', () => ({
-  encoding_for_model: mockEncodingForModel,
+  get_encoding_name_for_model: mockGetEncodingNameForModel,
   get_encoding: mockGetEncoding,
 }));
 
@@ -41,7 +54,7 @@ describe('TiktokenTokenizer', () => {
       error: vi.fn(),
     };
 
-    mockEncodingForModel.mockReturnValue(mockEncoder);
+    mockGetEncodingNameForModel.mockImplementation(lookupEncodingName);
     mockGetEncoding.mockReturnValue(mockEncoder);
     mockEncodeOrdinary.mockReturnValue(new Uint32Array([1, 2, 3])); // Mock 3 tokens
 
@@ -74,48 +87,81 @@ describe('TiktokenTokenizer', () => {
       expect(mockEncodeOrdinary).toHaveBeenNthCalledWith(2, 'world');
     });
 
-    it('should use model-specific encoder when model ID is provided', async () => {
-      await tokenizer.countTokens('test', 'gpt-4');
+    it('should use the encoding tiktoken maps the model to', async () => {
+      await tokenizer.countTokens('test', 'gpt-4o');
 
-      expect(mockEncodingForModel).toHaveBeenCalledWith('gpt-4');
-      expect(mockGetEncoding).not.toHaveBeenCalled();
+      expect(mockGetEncodingNameForModel).toHaveBeenCalledWith('gpt-4o');
+      expect(mockGetEncoding).toHaveBeenCalledWith('o200k_base');
     });
 
-    it('should fallback to configured encoding when model-specific encoder fails', async () => {
-      mockEncodingForModel.mockImplementationOnce(() => {
-        throw new Error('Model not supported');
-      });
-
-      const result = await tokenizer.countTokens('test', 'unsupported-model');
+    it('should count a model tiktoken cannot map with the fallback encoding, without a warning', async () => {
+      const result = await tokenizer.countTokens('test', 'global.anthropic.claude-sonnet-5');
 
       expect(result).toBe(3);
-      expect(mockEncodingForModel).toHaveBeenCalledWith('unsupported-model');
       expect(mockGetEncoding).toHaveBeenCalledWith('cl100k_base');
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to create encoder for model unsupported-model'),
-        expect.any(Error)
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        'No tiktoken encoding for model global.anthropic.claude-sonnet-5; counting with cl100k_base'
       );
+    });
+
+    // The unknown-model set is module-level, so these ids must not be reused by any other test.
+    it('should note an unmapped model once per process, across tokenizer instances', async () => {
+      const otherTokenizer = new TiktokenTokenizer({ logger: mockLogger });
+
+      await tokenizer.countTokens('a', 'voyage-3');
+      await tokenizer.countTokens('b', 'voyage-3');
+      await otherTokenizer.countTokens('c', 'voyage-3');
+      await tokenizer.countTokens('d', 'nomic-embed-text');
+
+      const unmappedNotes = vi
+        .mocked(mockLogger.debug)
+        .mock.calls.filter(([message]) => String(message).startsWith('No tiktoken encoding'));
+      expect(unmappedNotes).toEqual([
+        ['No tiktoken encoding for model voyage-3; counting with cl100k_base'],
+        ['No tiktoken encoding for model nomic-embed-text; counting with cl100k_base'],
+      ]);
+      const voyageLookups = mockGetEncodingNameForModel.mock.calls.filter(([model]) => model === 'voyage-3');
+      expect(voyageLookups).toHaveLength(1);
+      expect(tokenizer.getCacheStats().keys).toEqual(['cl100k_base']);
+
+      otherTokenizer.clearCache();
+    });
+
+    it('should resolve a point release tiktoken does not list to its family encoding', async () => {
+      await tokenizer.countTokens('test', 'gpt-5.4-mini');
+
+      expect(mockGetEncodingNameForModel).toHaveBeenNthCalledWith(1, 'gpt-5.4-mini');
+      expect(mockGetEncodingNameForModel).toHaveBeenLastCalledWith('gpt-5');
+      expect(mockGetEncoding).toHaveBeenCalledWith('o200k_base');
+      expect(mockLogger.debug).not.toHaveBeenCalledWith(expect.stringContaining('No tiktoken encoding'));
+    });
+
+    it('should share one encoder between models with the same encoding', async () => {
+      await tokenizer.countTokens('a', 'gpt-4o');
+      await tokenizer.countTokens('b', 'gpt-5');
+
+      expect(mockGetEncoding).toHaveBeenCalledTimes(1);
+      expect(tokenizer.getCacheStats().keys).toEqual(['o200k_base']);
     });
 
     it('should cache encoders and reuse them by default', async () => {
       await tokenizer.countTokens('test1', 'gpt-4');
-      expect(mockEncodingForModel).toHaveBeenCalledTimes(1);
+      expect(mockGetEncoding).toHaveBeenCalledTimes(1);
 
-      // Second call with same model should use cached encoder
       await tokenizer.countTokens('test2', 'gpt-4');
-      expect(mockEncodingForModel).toHaveBeenCalledTimes(1); // Still only called once
-      expect(mockEncodeOrdinary).toHaveBeenCalledTimes(2); // But the text is encoded twice
+      expect(mockGetEncoding).toHaveBeenCalledTimes(1);
+      expect(mockEncodeOrdinary).toHaveBeenCalledTimes(2);
     });
 
     it('should not cache when caching is disabled', async () => {
       const noCacheTokenizer = new TiktokenTokenizer({ enableCaching: false, logger: mockLogger });
 
       await noCacheTokenizer.countTokens('test1', 'gpt-4');
-      expect(mockEncodingForModel).toHaveBeenCalledTimes(1);
+      expect(mockGetEncoding).toHaveBeenCalledTimes(1);
 
-      // Second call should create encoder again
       await noCacheTokenizer.countTokens('test2', 'gpt-4');
-      expect(mockEncodingForModel).toHaveBeenCalledTimes(2); // Called twice
+      expect(mockGetEncoding).toHaveBeenCalledTimes(2);
 
       noCacheTokenizer.clearCache();
     });
@@ -174,9 +220,9 @@ describe('TiktokenTokenizer', () => {
     });
 
     it('should use model-specific encoder for encoding', async () => {
-      await tokenizer.encodeTokens('test', 'gpt-4');
+      await tokenizer.encodeTokens('test', 'gpt-4o');
 
-      expect(mockEncodingForModel).toHaveBeenCalledWith('gpt-4');
+      expect(mockGetEncoding).toHaveBeenCalledWith('o200k_base');
     });
   });
 
@@ -193,9 +239,9 @@ describe('TiktokenTokenizer', () => {
     it('decodes through the same model-specific encoder encodeTokens uses', async () => {
       mockDecode.mockReturnValue(new TextEncoder().encode('test'));
 
-      await tokenizer.decodeTokens([1], 'gpt-4');
+      await tokenizer.decodeTokens([1], 'gpt-4o');
 
-      expect(mockEncodingForModel).toHaveBeenCalledWith('gpt-4');
+      expect(mockGetEncoding).toHaveBeenCalledWith('o200k_base');
     });
 
     it('refuses to decode once shutting down', async () => {
@@ -208,7 +254,7 @@ describe('TiktokenTokenizer', () => {
   describe('clearCache', () => {
     it('should free all encoders and clear cache', async () => {
       await tokenizer.countTokens('test1', 'gpt-4');
-      await tokenizer.countTokens('test2', 'gpt-3.5-turbo');
+      await tokenizer.countTokens('test2', 'gpt-4o');
 
       const statsBefore = tokenizer.getCacheStats();
       expect(statsBefore.size).toBeGreaterThan(0);
@@ -239,23 +285,20 @@ describe('TiktokenTokenizer', () => {
 
   describe('warmUpCache', () => {
     it('should pre-load encoders for specified models', async () => {
-      await tokenizer.warmUpCache(['gpt-4', 'gpt-3.5-turbo']);
+      await tokenizer.warmUpCache(['gpt-4', 'gpt-3.5-turbo', 'gpt-4o']);
 
       const stats = tokenizer.getCacheStats();
-      expect(stats.size).toBe(2);
-      expect(stats.keys).toContain('gpt-4');
-      expect(stats.keys).toContain('gpt-3.5-turbo');
+      expect(stats.keys.sort()).toEqual(['cl100k_base', 'o200k_base']);
     });
 
     it('should handle errors during warm up', async () => {
-      mockEncodingForModel.mockImplementationOnce(() => {
-        throw new Error('Model not supported');
+      mockGetEncoding.mockImplementationOnce(() => {
+        throw new Error('WASM init failed');
       });
 
-      // Should not throw, just log warning
-      await expect(tokenizer.warmUpCache(['unsupported-model'])).resolves.toBeUndefined();
+      await expect(tokenizer.warmUpCache(['gpt-4'])).resolves.toBeUndefined();
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to create encoder for model unsupported-model'),
+        expect.stringContaining('Failed to warm up cache for model gpt-4'),
         expect.any(Error)
       );
     });

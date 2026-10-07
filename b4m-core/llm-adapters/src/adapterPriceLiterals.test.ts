@@ -1,6 +1,6 @@
 import { ChatModels } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { adapterPriceTiers, staticPriceBackends } from './adapterPriceLiterals';
+import { adapterModelIds, adapterPriceTiers, staticPriceBackends } from './adapterPriceLiterals';
 
 describe('adapterPriceTiers', () => {
   it('carries the cache rate a feed never publishes, which is the whole reason it exists', async () => {
@@ -73,5 +73,15 @@ describe('staticPriceBackends', () => {
     );
 
     expect(backends.filter((_, i) => !pricesText[i]).map(backend => backend.constructor.name)).toEqual(['AWSBackend']);
+  });
+});
+
+describe('adapterModelIds', () => {
+  it('lists the ids of every static adapter table, text or not', async () => {
+    const ids = await adapterModelIds();
+    const tables = await Promise.all(staticPriceBackends().map(backend => backend.getModelInfo()));
+
+    expect(ids.has(ChatModels.GPT5_2)).toBe(true);
+    expect(ids.size).toBe(new Set(tables.flat().map(model => String(model.id))).size);
   });
 });

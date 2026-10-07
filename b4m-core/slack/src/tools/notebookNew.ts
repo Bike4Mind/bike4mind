@@ -35,6 +35,7 @@ export async function notebookNew(params: NotebookNewParams): Promise<NotebookNe
     sessionName: notebookName,
     ability,
     logger,
+    origin: { channel: 'slack' },
   });
 
   const slackSettings = user.slackSettings || {};

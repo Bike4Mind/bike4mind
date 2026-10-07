@@ -56,7 +56,7 @@ interface CreateApiKeyBody {
 /**
  * Screen an admin-supplied lake binding against the TARGET user.
  *
- * The binding is a CEILING, never a grant: pages/api/sessions/create.ts requires the key's list to
+ * The binding is a CEILING, never a grant: pages/api/v1/sessions/index.ts requires the key's list to
  * contain the lake AND independently re-checks the acting user's live manage rights, and the read
  * path re-derives those every turn (dataLakeService.filterStillManagedLakes). So an id the target
  * cannot manage escalates nothing - it just makes the binding fail to narrow anything, which is

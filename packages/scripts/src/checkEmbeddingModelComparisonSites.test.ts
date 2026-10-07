@@ -191,10 +191,10 @@ const isCommentLine = (text: string) => /^\s*(\/\/|\/\*|\*)/.test(text);
  * and absent in CI, so grepping them would make this test's result depend on whether a developer
  * has them installed.
  *
- * The three roots mirror the checkNoRawS3Client precedent and cover every source tree today
- * (`apps/` holds only `client`; blueprints/data/docs/docs-site/infra/scripts/selfhost contain no
- * embeddingModel). A NEW top-level workspace directory would be invisible here - add it to the
- * grep if one appears.
+ * The roots mirror the checkNoRawS3Client precedent and cover every source tree today
+ * (`apps/` holds `client` and `workers`; blueprints/data/docs/docs-site/infra/scripts/selfhost
+ * contain no embeddingModel). A NEW top-level workspace directory would be invisible here - add
+ * it to the grep if one appears.
  */
 function findComparisonSites(): { location: string; path: string; text: string }[] {
   const out = execSync(
@@ -202,7 +202,7 @@ function findComparisonSites(): { location: string; path: string; text: string }
     // below do the real selecting, and a case-sensitive grep here would silently starve them.
     'grep -rn -E "[eE]mbeddingModel" --include="*.ts" --include="*.tsx" --include="*.mts" --include="*.cts" ' +
       '--exclude-dir=node_modules --exclude-dir=premium --exclude-dir=dist --exclude-dir=.next ' +
-      'apps/client b4m-core packages || true',
+      'apps/client apps/workers b4m-core packages || true',
     { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }
   );
 

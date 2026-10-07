@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
+  // Order log: 'enter'/'exit' bracket the transaction, other entries are pushed by the stubs inside it.
+  tx: [] as string[],
+  touchIfStable: vi.fn(),
   dismissTaxonomySuggestion: vi.fn(),
   toAccessContext: vi.fn(),
+  batchFindById: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as apply-taxonomy.test.ts).
@@ -18,8 +22,16 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () => () => {} }));
 vi.mock('@bike4mind/database', () => ({
-  dataLakeRepository: {},
-  dataLakeBatchRepository: {},
+  withTransaction: async (fn: () => unknown) => {
+    h.tx.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.tx.push('exit');
+    }
+  },
+  dataLakeRepository: { touchIfStable: h.touchIfStable },
+  dataLakeBatchRepository: { findById: h.batchFindById },
   dataLakeAccessGrantRepository: {
     listByLake: vi.fn().mockResolvedValue([]),
     listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -52,7 +64,9 @@ const run = (batchId: string, res: unknown, user?: { id: string; isAdmin: boolea
 describe('POST /api/data-lakes/batches/[batchId]/dismiss-taxonomy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.tx.length = 0;
     h.dismissTaxonomySuggestion.mockResolvedValue({ success: true });
+    h.batchFindById.mockResolvedValue({ id: 'b1', dataLakeId: 'lake-1' });
     h.toAccessContext.mockImplementation((req: { user: { id: string; isAdmin: boolean } }) =>
       Promise.resolve({ userId: req.user.id, isAdmin: req.user.isAdmin })
     );
@@ -68,5 +82,29 @@ describe('POST /api/data-lakes/batches/[batchId]/dismiss-taxonomy', () => {
       expect.anything()
     );
     expect(json).toHaveBeenCalledWith({ success: true });
+  });
+
+  it("runs the service inside the transaction, then touches the batch's lake last", async () => {
+    h.dismissTaxonomySuggestion.mockImplementation(async () => {
+      h.tx.push('service');
+      return { success: true };
+    });
+    h.touchIfStable.mockImplementation(async () => {
+      h.tx.push('touch');
+      return true;
+    });
+    const { res } = makeRes();
+    await run('b1', res);
+
+    expect(h.tx).toEqual(['enter', 'service', 'touch', 'exit']);
+    expect(h.touchIfStable).toHaveBeenCalledWith('lake-1');
+  });
+
+  it('touches nothing when the service refuses', async () => {
+    h.dismissTaxonomySuggestion.mockRejectedValue(new Error('no permission'));
+    const { res } = makeRes();
+
+    await expect(run('b1', res)).rejects.toThrow(/no permission/);
+    expect(h.touchIfStable).not.toHaveBeenCalled();
   });
 });

@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import menuItemClasses from '@mui/joy/MenuItem/menuItemClasses';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeLakePicker from './DataLakeLakePicker';
-import type { ManageableDataLakeConfig } from '@bike4mind/common';
+import { UNSEARCHABLE_LAKE_REASON } from './lakeRetrievability';
+import { DRAFT_LAKE_TOOLTIP } from './lakeVisibility';
+import { DATA_LAKES, type ManageableDataLakeConfig } from '@bike4mind/common';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -237,6 +239,127 @@ describe('DataLakeLakePicker', () => {
     expect(screen.getByTestId('datalake-lake-picker-owner-icon-b')).toBeInTheDocument();
   });
 
+  it('gives the owner marker an accessible name without an svg title', () => {
+    renderPicker({
+      lakes: [
+        lake({ id: 'b', name: 'Theirs', isOwn: false, ownerDisplayName: 'Dana' }),
+        lake({ id: 'c', name: 'Unknown', isOwn: false }),
+      ],
+    });
+    openMenu();
+
+    const named = screen.getByRole('img', { name: 'Owned by Dana' });
+    expect(named.querySelector('title')).toBeNull();
+    const fallback = screen.getByRole('img', { name: 'Owned by another user' });
+    expect(fallback.querySelector('title')).toBeNull();
+  });
+
+  it('names the unit on file counts, so they never read as the footer lake count', () => {
+    renderPicker({
+      lakes: [lake({ id: 'a', name: 'Mine' }), lake({ id: 'b', name: 'Also mine' })],
+      lakeFileCounts: { 'datalake:a': 1 },
+      totalFileCount: 255,
+    });
+
+    expect(screen.getByTestId('datalake-lake-picker-count')).toHaveTextContent('255 files');
+    openMenu();
+    expect(screen.getByTestId('datalake-lake-picker-all-count')).toHaveTextContent('255 files');
+    expect(screen.getByTestId('datalake-lake-picker-group-own')).toHaveTextContent('files');
+    expect(screen.getByLabelText('1 file')).toHaveTextContent('1');
+    expect(screen.getByTestId('datalake-lake-picker-lake-count')).toHaveTextContent('2 lakes');
+  });
+
+  it('groups lakes by owner, own first, then other owners by name, unresolved owners last', () => {
+    renderPicker({
+      lakes: [
+        lake({ id: 'z', name: 'Fallback', isOwn: false }),
+        lake({ id: 'b', name: 'Zed test lake', isOwn: false, ownerDisplayName: 'Zed', ownerUserId: 'u-zed' }),
+        lake({ id: 'a', name: 'Mine' }),
+        lake({
+          id: 'c',
+          name: 'Dana corpus',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-dana',
+          ownerUsername: 'dana',
+        }),
+        lake({
+          id: 'd',
+          name: 'Dana notes',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-dana',
+          ownerUsername: 'dana',
+        }),
+      ],
+    });
+    openMenu();
+
+    const order = screen
+      .getAllByTestId(/^datalake-lake-picker-(group-.+|lake-[a-z])$/)
+      .map(el => el.getAttribute('data-testid')?.replace('datalake-lake-picker-', ''));
+    expect(order).toEqual([
+      'group-own',
+      'lake-a',
+      'group-owner:u-dana',
+      'lake-c',
+      'lake-d',
+      'group-owner:u-zed',
+      'lake-b',
+      'group-unknown',
+      'lake-z',
+    ]);
+    // Headers stay out of the menu's arrow-key order.
+    expect(screen.getByTestId('datalake-lake-picker-group-own')).toHaveAttribute('role', 'none');
+    // A display name only one owner holds gets no username suffix.
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:u-dana')).not.toHaveTextContent('(');
+  });
+
+  it('separates two owners who share a display name, telling them apart by username', () => {
+    renderPicker({
+      lakes: [
+        lake({
+          id: 'c',
+          name: 'Corpus',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-1',
+          ownerUsername: 'dana7',
+        }),
+        lake({
+          id: 'd',
+          name: 'Notes',
+          isOwn: false,
+          ownerDisplayName: 'Dana',
+          ownerUserId: 'u-2',
+          ownerUsername: 'dana42',
+        }),
+      ],
+    });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:u-1')).toHaveTextContent('Owned by Dana (dana7)');
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:u-2')).toHaveTextContent('Owned by Dana (dana42)');
+    const order = screen
+      .getAllByTestId(/^datalake-lake-picker-(group-.+|lake-[a-z])$/)
+      .map(el => el.getAttribute('data-testid')?.replace('datalake-lake-picker-', ''));
+    expect(order).toEqual(['group-owner:u-2', 'lake-d', 'group-owner:u-1', 'lake-c']);
+  });
+
+  it('drops a group whose lakes the filter hides', () => {
+    renderPicker({
+      lakes: [
+        ...Array.from({ length: 7 }, (_, i) => lake({ id: `m${i}`, name: `Mine ${i}` })),
+        lake({ id: 'b', name: 'Theirs', isOwn: false, ownerDisplayName: 'Dana' }),
+      ],
+    });
+    openMenu();
+    fireEvent.change(screen.getByTestId('datalake-lake-picker-search'), { target: { value: 'theirs' } });
+
+    expect(screen.queryByTestId('datalake-lake-picker-group-own')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-group-owner:Dana')).toBeInTheDocument();
+  });
+
   it('only offers the filter box once the list is long enough to need one', () => {
     const few = Array.from({ length: 7 }, (_, i) => lake({ id: `l${i}`, name: `Lake ${i}` }));
     const { unmount } = renderPicker({ lakes: few });
@@ -336,5 +459,74 @@ describe('DataLakeLakePicker', () => {
     const labelColor = label ? getComputedStyle(label).color : '';
     expect(labelColor).toMatch(/variant-outlinedColor/i);
     expect(labelColor).not.toMatch(/text-tertiary/i);
+  });
+});
+
+describe('DataLakeLakePicker - unsearchable lakes', () => {
+  const lakes = [
+    lake({ id: 'a', name: 'Mine', retrievable: true }),
+    lake({ id: 'b', name: 'Unlabeled' }),
+    lake({ id: 'c', name: 'Private', retrievable: false, status: 'active', canPreauthorize: true }),
+  ];
+
+  it('marks only an explicit retrievable === false row', () => {
+    renderPicker({ lakes });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-unsearchable-c')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-a')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-lake-picker-unsearchable-b')).not.toBeInTheDocument();
+  });
+
+  it('explains the marker on hover', async () => {
+    renderPicker({ lakes });
+    openMenu();
+
+    fireEvent.mouseOver(screen.getByTestId('datalake-lake-picker-unsearchable-c'));
+    await waitFor(() =>
+      expect(screen.getByRole('tooltip')).toHaveTextContent(
+        'Chat cannot search this lake with your current access. You can still browse it.'
+      )
+    );
+    expect(UNSEARCHABLE_LAKE_REASON).toBe(
+      'Chat cannot search this lake with your current access. You can still browse it.'
+    );
+  });
+
+  it('keeps an unsearchable row selectable, since selection also scopes the browse tree', () => {
+    const onChange = vi.fn();
+    renderPicker({ lakes, onChange });
+    openMenu();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-c'));
+    expect(onChange).toHaveBeenCalledWith(['c']);
+  });
+});
+
+describe('DataLakeLakePicker - draft marker', () => {
+  it('gives a labelled draft the draft reason, not an access reason its owner would misread', async () => {
+    renderPicker({ lakes: [lake({ id: 'd', name: 'My draft', status: 'draft', retrievable: false })] });
+    openMenu();
+
+    fireEvent.mouseOver(screen.getByTestId('datalake-lake-picker-unsearchable-d'));
+    await waitFor(() => expect(screen.getByRole('tooltip')).toHaveTextContent(DRAFT_LAKE_TOOLTIP));
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent(UNSEARCHABLE_LAKE_REASON);
+  });
+
+  it('marks draft and status-less user lakes, not built-ins', () => {
+    renderPicker({
+      lakes: [
+        lake({ id: 'd', name: 'Drafty', status: 'draft' }),
+        lake({ id: 'a', name: 'Live', status: 'active' }),
+        lake({ id: 'n', name: 'Legacy', status: undefined }),
+        lake({ id: DATA_LAKES[0].id, name: 'Builtin', status: undefined }),
+      ],
+    });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-draft-chip-d')).toHaveTextContent('Draft');
+    expect(screen.queryByTestId('datalake-lake-picker-draft-chip-a')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-lake-picker-draft-chip-n')).toBeInTheDocument();
+    expect(screen.queryByTestId(`datalake-lake-picker-draft-chip-${DATA_LAKES[0].id}`)).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import {
   fabFileRepository,
 } from '@bike4mind/database';
 import { sessionService } from '@bike4mind/services';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
@@ -14,6 +15,7 @@ import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
+import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 
 const ContinueRequestSchema = z.object({
   sessionId: z.string().refine(isValidObjectId, {
@@ -91,12 +93,14 @@ const handler = baseApi()
             // call site has a user but no request. See resolveRetrievalLakeScopeForUser.
             resolveLakeAccess: async () =>
               (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(req.user!),
-          }
+          },
+          { origin: resolveSessionOrigin(req) }
         );
 
         // Skip if notebookId already changed by a concurrent request
         const updateResult = await questMasterPlanRepository.atomicUpdateNotebookId(
           planId,
+          userId,
           existingPlan.notebookId, // expected current value (placeholder)
           newSession.id // new value
         );
@@ -120,13 +124,14 @@ const handler = baseApi()
         }
       }
 
-      // Auto-resume if paused
-      if (existingPlan.state === 'paused') {
-        existingPlan.state = 'active';
-        await questMasterPlanRepository.update(existingPlan);
-      }
-
       const plan = await questMasterPlanRepository.continueInSession(planId, actualSessionId, userId);
+
+      // Auto-resume if paused. Gated and conditional on the stored state, so neither a revoke since
+      // continueInSession nor a concurrent archive can be overwritten by the stale read.
+      if (plan.state === 'paused') {
+        const resumed = await questMasterPlanRepository.resumeIfPaused(planId, userId);
+        if (resumed) plan.state = resumed.state;
+      }
 
       const contextMessage = await questRepository.create({
         sessionId: actualSessionId,
@@ -147,6 +152,14 @@ const handler = baseApi()
         },
       });
     } catch (error: unknown) {
+      // continueInSession re-checks access in its write, so a revoke or delete since the check above
+      // surfaces here; a placeholder session created for it was already cleaned up as a lost race.
+      if (error instanceof ForbiddenError) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+      if (error instanceof NotFoundError) {
+        return res.status(404).json({ error: 'Quest plan not found' });
+      }
       console.error('Error continuing quest plan:', error);
       // Return generic error to prevent information leakage
       res.status(500).json({ error: 'Failed to continue quest plan' });

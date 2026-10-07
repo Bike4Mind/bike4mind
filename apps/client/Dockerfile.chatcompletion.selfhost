@@ -36,15 +36,17 @@ COPY apps/client/scripts ./apps/client/scripts
 #     present before it runs or the install ENOENTs.
 COPY patches ./patches
 
-# 2) Install the client workspace + all workspace deps INCLUDING devDeps (tsx). No --prod.
-RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
+# 2) Install the client and workers workspaces + all workspace deps INCLUDING devDeps (tsx).
+#    No --prod. Workers is here because compose.selfhost.yaml's `worker` service reuses this
+#    image and runs apps/workers/src/selfhost/main.ts.
+RUN pnpm install --frozen-lockfile --filter @bike4mind/client... --filter @bike4mind/workers...
 
 # 3) Source.
 COPY . .
 
 # 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
 #    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
-RUN pnpm turbo build --filter=@bike4mind/client^...
+RUN pnpm turbo build --filter=@bike4mind/client^... --filter=@bike4mind/workers^...
 
 ENV NODE_ENV=production
 ENV B4M_SELF_HOST=true

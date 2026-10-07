@@ -144,6 +144,8 @@ describe('buildDefaultOrchestrationProfile', () => {
       'lattice_add_entity',
       'lattice_set_value',
       'lattice_create_rule',
+      'create_data_lake',
+      'save_content_to_data_lake',
     ]);
     expect(profile.maxIterations).toEqual({ quick: 5, medium: 15, very_thorough: 30 });
     expect(profile.defaultThoroughness).toBe('medium');

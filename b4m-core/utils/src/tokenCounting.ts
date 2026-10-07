@@ -1,5 +1,32 @@
-import type { TiktokenModel, Tiktoken } from 'tiktoken';
+import type { TiktokenEncoding, TiktokenModel, Tiktoken } from 'tiktoken';
 import { type ILogger } from '@bike4mind/observability';
+
+/**
+ * Model ids tiktoken has no mapping for (Claude, Gemini, other vendors' embedding models). These are
+ * expected, not faults, so each is noted once per process at debug level. Module-level rather than
+ * per instance because several tokenizers live side by side (chat, KB search, embeddings, media).
+ */
+const modelsWithoutEncoding = new Set<string>();
+
+/**
+ * tiktoken matches exact ids only, and its table trails OpenAI's releases: `gpt-5.4-mini` is
+ * unknown while `gpt-5` maps to o200k_base. Retry with trailing `-`/`.` segments stripped so a new
+ * point release resolves to its family's encoding instead of silently counting with cl100k.
+ */
+function lookupByFamilyPrefix(
+  lookupEncodingName: (model: TiktokenModel) => TiktokenEncoding,
+  modelId: string
+): TiktokenEncoding | undefined {
+  const segments = modelId.split(/(?=[-.])/);
+  for (let length = segments.length; length > 0; length--) {
+    try {
+      return lookupEncodingName(segments.slice(0, length).join('') as TiktokenModel);
+    } catch {
+      // Not in tiktoken's table; try the next shorter prefix.
+    }
+  }
+  return undefined;
+}
 
 /**
  * Interface for different tokenizer implementations
@@ -32,6 +59,7 @@ export interface TokenizerOptions {
  * fab-pipeline's chunker/embedding service and the CLI TokenCounter use the same call for this reason.
  */
 export class TiktokenTokenizer implements ITokenizer {
+  /** Keyed by encoding name, so models sharing an encoding (gpt-4o, gpt-5, o3) share one WASM encoder. */
   private encoderCache = new Map<string, Tiktoken>();
   private isShuttingDown = false;
   private logger: ILogger;
@@ -114,37 +142,47 @@ export class TiktokenTokenizer implements ITokenizer {
    * @private
    */
   private async getEncoder(modelId?: string, logger: ILogger = this.logger): Promise<Tiktoken> {
-    const { encoding_for_model, get_encoding } = await import('tiktoken');
+    const { get_encoding, get_encoding_name_for_model } = await import('tiktoken');
 
-    const cacheKey = modelId || this.fallbackEncoding;
+    const encodingName = this.resolveEncodingName(get_encoding_name_for_model, modelId, logger);
 
-    if (this.enableCaching && this.encoderCache.has(cacheKey)) {
-      return this.encoderCache.get(cacheKey)!;
+    const cached = this.enableCaching ? this.encoderCache.get(encodingName) : undefined;
+    if (cached) {
+      return cached;
     }
 
-    let encoder: Tiktoken;
-    try {
-      if (modelId) {
-        encoder = encoding_for_model(modelId as TiktokenModel);
-        logger.debug(`Created tiktoken encoder for model: ${modelId}`);
-      } else {
-        encoder = get_encoding(this.fallbackEncoding as any);
-        logger.debug(`Created tiktoken encoder with ${this.fallbackEncoding} encoding`);
-      }
+    const encoder = get_encoding(encodingName);
+    logger.debug(`Created tiktoken encoder with ${encodingName} encoding`);
 
-      if (this.enableCaching) {
-        this.encoderCache.set(cacheKey, encoder);
-      }
-    } catch (error) {
-      logger.warn(`Failed to create encoder for model ${modelId}, falling back to ${this.fallbackEncoding}:`, error);
-      encoder = get_encoding(this.fallbackEncoding as any);
-
-      if (this.enableCaching) {
-        this.encoderCache.set(this.fallbackEncoding, encoder);
-      }
+    if (this.enableCaching) {
+      this.encoderCache.set(encodingName, encoder);
     }
 
     return encoder;
+  }
+
+  /**
+   * Map a model id to its tiktoken encoding, or to the fallback for ids tiktoken does not know.
+   * tiktoken only maps OpenAI ids, so every Claude/Gemini id lands on the fallback by design.
+   */
+  private resolveEncodingName(
+    lookupEncodingName: (model: TiktokenModel) => TiktokenEncoding,
+    modelId: string | undefined,
+    logger: ILogger
+  ): TiktokenEncoding {
+    const fallback = this.fallbackEncoding as TiktokenEncoding;
+    if (!modelId || modelsWithoutEncoding.has(modelId)) {
+      return fallback;
+    }
+
+    const encodingName = lookupByFamilyPrefix(lookupEncodingName, modelId);
+    if (encodingName) {
+      return encodingName;
+    }
+
+    modelsWithoutEncoding.add(modelId);
+    logger.debug(`No tiktoken encoding for model ${modelId}; counting with ${fallback}`);
+    return fallback;
   }
 
   /**

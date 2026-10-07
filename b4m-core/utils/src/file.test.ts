@@ -67,6 +67,17 @@ describe('resolveSupportedMimeType', () => {
     });
   });
 
+  // Regression: the Mermaid preview card's "Save as file" upload sent
+  // `<name>_<ts>.mmd` as text/plain and was refused outright because `.mmd` was
+  // missing from the extension table (BadRequestError "File type .mmd is not
+  // supported"), even though the claimed type was already a supported one.
+  it('accepts a Mermaid diagram source file (.mmd) claimed as text/plain', () => {
+    expect(resolveSupportedMimeType('diagram_123.mmd', 'text/plain')).toEqual({
+      mimeType: SupportedFabFileMimeTypes.TXT_PLAIN,
+      supported: true,
+    });
+  });
+
   it('treats config files (ini/env/conf) as supported plain text', () => {
     expect(resolveSupportedMimeType('app.ini', '').supported).toBe(true);
     expect(resolveSupportedMimeType('local.env', '').supported).toBe(true);

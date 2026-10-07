@@ -34,6 +34,7 @@ import {
   scopedSettingsRepository,
   usageEventRepository,
 } from '@bike4mind/database';
+import { lakeWriteToolDb } from '@server/dataLakes/lakeWriteToolDb';
 import { NotFoundError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
@@ -69,7 +70,7 @@ let cachedDbConnection: typeof mongoose.connection | null = null;
 
 const staticOptionsLogger = new Logger({ metadata: { handler: 'questProcessor' } });
 
-const getStaticOptions = () => {
+export const getStaticOptions = () => {
   if (cachedStaticOptions) {
     staticOptionsLogger.debug('Reusing cached static ChatCompletion options');
     return cachedStaticOptions;
@@ -137,6 +138,7 @@ const getStaticOptions = () => {
       imageModerationIncidents: imageModerationIncidentRepository,
       lakeAccessEvents: lakeAccessEventRepository,
       scopedSettings: scopedSettingsRepository,
+      ...lakeWriteToolDb,
     },
     storage: getFilesStorage(),
     imageGenerateStorage: getGeneratedImageStorage(),

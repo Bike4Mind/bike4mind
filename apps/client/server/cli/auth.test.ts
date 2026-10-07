@@ -13,7 +13,10 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {},
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  // Real `userService.accountBlockReasons` drives the account-state gate; the rest of the barrel
+  // loads alongside it (its db/config deps are mocked here).
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   // Real kill-switch + token-type comparisons so the tests exercise actual enforcement (not stubs).
   isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
   isTokenTypeAcceptable: (t: unknown, expected: string) => t === undefined || t === expected,
@@ -54,6 +57,7 @@ import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
+const desktopKey = `rate-limit:ws-auth:desktop:${userId}`;
 const HOUR_MS = 60 * 60_000;
 
 describe('checkRateLimit (JWT per-user rate limiter)', () => {
@@ -135,6 +139,56 @@ describe('checkRateLimit (JWT per-user rate limiter)', () => {
         await checkRateLimit(userId, 'cli');
       }
       await expect(checkRateLimit(userId, 'cli')).rejects.toThrow(/Rate limit exceeded/);
+    });
+
+    // Seeded rather than looped: the boundary is the only interesting call, and 6000 serial
+    // awaits to reach it cost more than they prove.
+    const seedDesktop = (value: number) => cacheStore.set(desktopKey, { value, expiresAt: Date.now() + 3_600_000 });
+
+    it('carries the desktop app to 6000, where source api alone would stop at 100', async () => {
+      seedDesktop(5999);
+      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).resolves.toBeUndefined();
+      await expect(checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' })).rejects.toThrow(
+        /Rate limit exceeded/
+      );
+    });
+
+    it('counts the desktop app on its own bucket, so a busy desktop cannot lock the CLI out', async () => {
+      seedDesktop(5999);
+      await checkRateLimit(userId, 'api', { client: 'b4m-desktop/0.1.0' });
+
+      // The raised ceiling must not be spent on the counter the CLI and every other JWT surface
+      // read, or a desktop session past 1000 would exhaust that user's CLI budget.
+      expect(cacheStore.get(key)).toBeUndefined();
+      await expect(checkRateLimit(userId, 'cli')).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1);
+    });
+
+    it('keeps the 100 cap for any other API client', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, 'api', { client: 'my-script/1.0' });
+      }
+      await expect(checkRateLimit(userId, 'api', { client: 'my-script/1.0' })).rejects.toThrow(/Rate limit exceeded/);
+    });
+  });
+
+  describe('buckets', () => {
+    it('keeps a bucketed counter apart from the shared one, in both directions', async () => {
+      // A CLI session at 1000 on the shared counter must not spend the tools budget.
+      for (let i = 0; i < 1000; i++) {
+        await checkRateLimit(userId, 'cli');
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).resolves.toBeUndefined();
+      expect(cacheStore.get(key)!.value).toBe(1000);
+      expect(cacheStore.get(`rate-limit:ws-auth:tools:${userId}`)!.value).toBe(1);
+    });
+
+    it('applies the source cap to the bucketed counter', async () => {
+      for (let i = 0; i < 100; i++) {
+        await checkRateLimit(userId, undefined, { bucket: 'tools' });
+      }
+      await expect(checkRateLimit(userId, undefined, { bucket: 'tools' })).rejects.toThrow(/Rate limit exceeded/);
+      expect(cacheStore.has(key)).toBe(false);
     });
   });
 

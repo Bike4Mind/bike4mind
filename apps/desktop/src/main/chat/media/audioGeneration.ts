@@ -37,7 +37,12 @@ export interface AudioDeps {
  */
 export async function synthesizeSpeech(request: Omit<TTSRequest, 'encoding'>, deps: AudioDeps): Promise<AudioOutcome> {
   const response = await deps.client.synthesizeSpeech(request);
-  const stored = await deps.store.save(deps.sessionId, Buffer.from(response.audio, 'base64'), response.contentType);
+  // Audio over the server's response ceiling comes back as a signed storage URL instead of inline.
+  const audio =
+    response.delivery === 'url'
+      ? (await deps.client.fetchGenerated(response.url)).bytes
+      : Buffer.from(response.audio, 'base64');
+  const stored = await deps.store.save(deps.sessionId, audio, response.contentType);
 
   const substituted = !!response.fallbackFrom && !!response.provider && response.fallbackFrom !== response.provider;
 

@@ -7,12 +7,14 @@ import {
   IUserRepository,
   Permission,
   IFriendshipModelAdapter,
+  IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
 import { addCredits } from '../creditService/addCredits';
 import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
+import { entersBlockedState } from './accountState';
 
 export const adminUpdateUserSchema = updateUserSchema.extend({
   id: z.string(),
@@ -63,6 +65,8 @@ export interface AdminUpdateUserAdapters {
       update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
     };
     friendship: IFriendshipModelAdapter;
+    // Required: a ban, dispute or suspension must deactivate the user's API keys.
+    userApiKeys: Pick<IUserApiKeyRepository, 'deactivateAllByUserId'>;
     /**
      * Optional: when provided, a `currentCredits` change is routed through the
      * audited credit ledger (addCredits/subtractCredits) instead of a raw
@@ -118,14 +122,27 @@ export async function adminUpdateUser(
   }
 
   // Route a `currentCredits` change through the audited ledger when the adapter
-  // is wired. The ledger runs before every write below, so a failure aborts with
-  // nothing persisted; its atomic `$inc` is the sole owner of the balance.
+  // is wired; its atomic `$inc` is the sole owner of the balance. The ledger runs
+  // before every other write, but this function is not atomic on its own (callers
+  // wrap it in a transaction):
+  // - a ledger failure can still leave a CreditTransaction row for credits never
+  //   applied (addCredits/subtractCredits write the row before the `$inc`);
+  // - a failure after the ledger leaves the balance committed and skips the org
+  //   membership move, the doc write, the moderation transition, and the API-key
+  //   deactivation.
   //
   // `moderationStatus`/`creditReason`/`creditDelta` are handled out-of-band (a dedicated
   // repo call, the CreditTransaction record, and the ledger respectively) - pull them out
   // so they never land as stray top-level fields on the user doc.
   const previousBalance = user.currentCredits ?? 0;
   const { moderationStatus, creditReason, creditDelta: signedDelta, ...baseParams } = params;
+  // Which moderation statuses block (only `suspended`) lives in accountState.ts, shared with the
+  // Stripe dispute path and the client use-time gate.
+  const enteringBlockedState = entersBlockedState(user, {
+    isBanned: params.isBanned ?? user.isBanned,
+    disputePending: params.disputePending ?? user.disputePending,
+    moderation: { status: moderationStatus ?? user.moderation?.status },
+  });
   // A signed `creditDelta` is applied verbatim (no interim-spend refund). Absolute
   // `currentCredits` falls back to delta-from-snapshot.
   const rawDelta =
@@ -161,10 +178,25 @@ export async function adminUpdateUser(
     (writeData as { currentCredits?: number }).currentCredits = previousBalance + creditDelta;
   }
 
-  // Audited credit adjustment: runs BEFORE any persistence (org membership, the
-  // user-doc write, the moderation transition) so a ledger failure leaves nothing
-  // half-written. Records the actor, delta, resulting balance, and reason as a
-  // generic_add / generic_deduct CreditTransaction.
+  // Validate the org move before the ledger so an unknown org cannot leave a
+  // committed balance behind; the membership writes themselves stay after it.
+  let currentOrg: IOrganizationDocument | null = null;
+  let newOrg: IOrganizationDocument | null = null;
+  if (params.organizationId && user.organizationId !== params.organizationId) {
+    if (user.organizationId) {
+      currentOrg = await db.organizations.findById(user.organizationId);
+      if (!currentOrg) {
+        throw new Error('Organization not found');
+      }
+    }
+    newOrg = await db.organizations.findById(params.organizationId);
+    if (!newOrg) {
+      throw new Error('Organization not found');
+    }
+  }
+
+  // Records the actor, delta, resulting balance, and reason as a generic_add /
+  // generic_deduct CreditTransaction (ordering and failure modes: see above).
   if (auditCreditChange && db.creditTransactions) {
     const note = creditReason?.trim() || undefined;
     // Best-effort resulting balance predicted from the read snapshot. The atomic $inc
@@ -208,28 +240,16 @@ export async function adminUpdateUser(
     }
   }
 
-  if (!!params.organizationId && user.organizationId !== params.organizationId) {
-    if (user.organizationId) {
-      const currentOrg = await db.organizations.findById(user.organizationId);
-      if (!currentOrg) {
-        throw new Error('Organization not found');
-      }
+  if (currentOrg) {
+    const remainingUsers = currentOrg.users.filter(userDetail => userDetail.userId !== user.id);
+    await db.organizations.update({ id: currentOrg.id, users: remainingUsers });
+  }
 
-      const remainingUsers = currentOrg.users.filter(userDetail => userDetail.userId !== user.id);
-      await db.organizations.update({ id: currentOrg.id, users: remainingUsers });
-    }
+  if (newOrg) {
+    await sendFriendRequestsToOrgMembers(userId, newOrg, db);
 
-    if (params.organizationId) {
-      const newOrg = await db.organizations.findById(params.organizationId);
-      if (!newOrg) {
-        throw new Error('Organization not found');
-      }
-
-      await sendFriendRequestsToOrgMembers(userId, newOrg, db);
-
-      const updatedUsers = [...newOrg.users, { userId: user.id, permissions: [Permission.read] }];
-      await db.organizations.update({ id: newOrg.id, users: updatedUsers });
-    }
+    const updatedUsers = [...newOrg.users, { userId: user.id, permissions: [Permission.read] }];
+    await db.organizations.update({ id: newOrg.id, users: updatedUsers });
   }
 
   await db.users.update(writeData);
@@ -241,6 +261,11 @@ export async function adminUpdateUser(
       throttledUntil:
         moderationStatus === 'throttled' ? new Date(Date.now() + MODERATION_POLICY.throttleDurationMs) : null,
     });
+  }
+
+  // Leaving the state later does not reactivate keys; the user mints new ones.
+  if (enteringBlockedState) {
+    await db.userApiKeys.deactivateAllByUserId(params.id);
   }
 
   const finalUser = await db.users.findById(params.id);

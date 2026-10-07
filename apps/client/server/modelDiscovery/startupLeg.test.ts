@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe('the driver-env gate', () => {
-  // server/worker/main.ts registers the recurring discovery task only when this
+  // apps/workers/src/selfhost/main.ts registers the recurring discovery task only when this
   // is true, so an unflagged self-host schedules nothing and reaches no network.
   it('answers no for an unset or non-"true" flag, and yes only for "true"', () => {
     expect(isDiscoveryDriver()).toBe(true);

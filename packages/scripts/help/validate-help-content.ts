@@ -24,6 +24,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { DOCS_ROOT, loadHelpArticles, type LoadedHelpArticle } from './loadHelpArticles.js';
+import { isDirectInvocation } from '../utils/isDirectInvocation.js';
 import { resolveRelativePath, stripMarkdownFormatting, toAnchor, VIDEO_EXTENSIONS, isYouTubeUrl } from './utils.js';
 
 export type FindingType = 'frontmatter' | 'link' | 'anchor' | 'image' | 'media';
@@ -489,7 +490,7 @@ async function main(): Promise<void> {
 }
 
 // Only run when invoked directly (not when imported by tests)
-if (process.argv[1] && process.argv[1].endsWith('validate-help-content.ts')) {
+if (isDirectInvocation(import.meta.url)) {
   main().catch(error => {
     console.error('Failed to validate help content:', error);
     process.exit(1);

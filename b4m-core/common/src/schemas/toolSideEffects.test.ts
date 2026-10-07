@@ -56,6 +56,8 @@ describe('tool side-effect declarations', () => {
       'music_generation',
       'audio_generation',
       'excel_generation',
+      'create_data_lake',
+      'save_content_to_data_lake',
       'blog_publish',
       'delegate_to_agent',
       'send_slack_message',

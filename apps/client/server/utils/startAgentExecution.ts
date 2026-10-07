@@ -23,6 +23,7 @@ import {
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { apiKeyExecutionFields, type ApiKeyCredential } from '@server/dataLakes/dataLakeScopes';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import {
   dispatchAgentExecution,
@@ -39,7 +40,7 @@ import { isHeadlessConnection } from '@server/utils/headlessConnection';
  *
  * Pruned rather than left to grow: an entry past the TTL can no longer suppress a
  * sweep, so keeping it buys nothing. It matters now that this runs in the frontend
- * server as well as the WebSocket Lambda - the longer-lived and higher-cardinality of
+ * server as well as the WebSocket handler - the longer-lived and higher-cardinality of
  * the two, where the map would otherwise hold one entry per distinct caller for the
  * life of the container.
  */
@@ -77,7 +78,7 @@ export type StartAgentExecutionInput = {
    * Back-reference stored on the AgentExecution doc. Historically the caller has no
    * authored Quest at dispatch time, so the WebSocket client passes the sessionId and
    * the run is grouped under its notebook. The Quest this function creates below is a
-   * different id and is forwarded to the Lambda separately.
+   * different id and is forwarded to the executor separately.
    */
   questId: string;
   query: string;
@@ -101,6 +102,11 @@ export type StartAgentExecutionInput = {
    * never does.
    */
   enabledToolsAreAmbient?: boolean;
+  /**
+   * The authenticating API key (`req.apiKeyInfo`), never a request body. The persisted
+   * `scopeDeniedTools` and `apiKeyId` are both derived from it here so a door cannot forward one without the other.
+   */
+  apiKeyInfo?: ApiKeyCredential;
   maxIterations?: number;
   messageFileIds?: string[];
   sessionFabFileIds?: string[];
@@ -133,7 +139,7 @@ export type StartAgentExecutionResult =
       reason: StartAgentExecutionFailureReason;
       /** Caller-safe message; already phrased for an end user. */
       message: string;
-      /** Set only for `dispatch_failed` - the doc exists but the Lambda never started. */
+      /** Set only for `dispatch_failed` - the doc exists but dispatch acceptance was not confirmed. */
       executionId?: string;
     };
 
@@ -167,8 +173,8 @@ export async function startAgentExecution(
   }
 
   // Sweep stale active executions before counting - `pending` / `running` /
-  // `continuing` / `awaiting_permission` / `paused` that the executor Lambda never
-  // finished (SQS handoff dropped, Lambda crashed, SST live-lambda tunnel
+  // `continuing` / `awaiting_permission` / `paused` that the executor never
+  // finished (SQS handoff dropped, executor crashed, SST live-lambda tunnel
   // disconnected, user closed the tab on a permission card). Accumulating those locks
   // the user out of new runs. Mongoose `updatedAt` slipping past the threshold is the
   // cleanest "this is dead" signal - a healthy run writes the doc on every step.
@@ -237,8 +243,8 @@ export async function startAgentExecution(
 
   // Resolved BEFORE anything is created: an unlinked executor is a deployment gap,
   // and failing here leaves no orphan AgentExecution/Quest behind for a run that was
-  // never going to start. The name comes from a different SST link depending on which
-  // Lambda we are in - see resolveAgentExecutorFunctionName.
+  // never going to start. Hosted function names come from different SST links depending
+  // on the calling Lambda - see resolveAgentExecutorFunctionName.
   let executorTarget;
   try {
     executorTarget = resolveAgentExecutorTarget();
@@ -288,11 +294,12 @@ export async function startAgentExecution(
     // A headless caller's explicit tool list is the approval; it must not be second-guessed by a
     // stale interactive-session denial (deny is checked first in classifyToolPermission).
     deniedTools: isHeadlessConnection(input.connectionId) ? [] : (remembered?.deniedTools ?? []),
+    ...apiKeyExecutionFields(input.apiKeyInfo),
     iterationBilling: [],
     totalCreditsUsed: 0,
     lambdaInvocationCount: 1,
     childExecutionIds: [],
-    // Snapshot the forwarded context on the doc so continuation Lambdas
+    // Snapshot the forwarded context on the doc so continuation invocations
     // reconstruct the same first-iteration materialization.
     messageFileIds: input.messageFileIds,
     sessionFabFileIds: input.sessionFabFileIds,
@@ -333,7 +340,7 @@ export async function startAgentExecution(
     const linkedQuestId = quest.id;
     persistedQuestId = linkedQuestId;
     // Persisted on the execution doc (not just forwarded in the start payload below) so a
-    // resumed/checkpointed Lambda invocation still has the real Quest id available for
+    // resumed/checkpointed executor invocation still has the real Quest id available for
     // lake-access audit rows - the start payload only carries it on the first invocation. Never
     // read `execution.questId` for this purpose; that field holds the sessionId (see its own doc
     // comment). Best-effort, same as the Quest write above.
@@ -353,9 +360,11 @@ export async function startAgentExecution(
 
   logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
-  // Invoke the Agent Executor Lambda (async - don't wait for completion). If the
-  // invoke throws (throttle, IAM, network), tear down the dispatch-time Quest so we
-  // don't leak a `pending` bubble with no reply and no iteration trace. The
+  // Invoke the agent executor (async - don't wait for completion). If dispatch is
+  // refused (a Lambda invoke error, or an HTTP `AgentExecutorRejectedError`), tear down
+  // the dispatch-time Quest so we don't leak a `pending` bubble with no reply and no
+  // iteration trace. An HTTP failure that is not a rejection (network, timeout, 5xx)
+  // leaves acceptance unconfirmed, so it keeps the Quest and returns early. Either way the
   // AgentExecution doc lingers as `pending`; the stale-active sweep above reaps it on
   // the next start by the same user.
   try {

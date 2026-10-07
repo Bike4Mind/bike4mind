@@ -47,4 +47,45 @@ describe('QuestModel.getMostRecentChatHistory', () => {
 
     expect(history.map(m => m.prompt)).toEqual(['newer', 'older']);
   });
+
+  // Regression lock for the same reason as fabFileIds above: suggestedChoices was missing from
+  // the projection, so withStoredChoices (b4m-core/utils) never saw stored choices to re-attach.
+  it('returns suggestedChoices so history can re-attach a turn choices block', async () => {
+    await Quest.create(
+      makeQuest({
+        prompt: 'pick one',
+        reply: 'Here are your options.',
+        suggestedChoices: {
+          options: [
+            { label: 'Option A', description: 'Do the first thing.' },
+            { label: 'Option B', description: 'Do the second thing.' },
+          ],
+        },
+      })
+    );
+
+    const [msg] = await questRepository.getMostRecentChatHistory('session-1', 10);
+
+    expect(msg).toBeDefined();
+    expect(msg.suggestedChoices?.options).toEqual([
+      { label: 'Option A', description: 'Do the first thing.' },
+      { label: 'Option B', description: 'Do the second thing.' },
+    ]);
+  });
+
+  // Regression lock, same inclusion-mode trap as above: pinned is typed on IChatHistoryItemDocument
+  // but was missing from the projection, so every caller would have read undefined.
+  it('returns the persisted pinned value for pinned and unpinned rows', async () => {
+    await Quest.create(makeQuest({ prompt: 'older', pinned: true, timestamp: new Date(1_000) }));
+    await Quest.create(makeQuest({ prompt: 'newer', timestamp: new Date(2_000) }));
+
+    const history = await questRepository.getMostRecentChatHistory('session-1', 10);
+
+    // 'newer' reads back false because Quest.create stores the schema default; the read is .lean(),
+    // so a row written before the field existed would still read undefined.
+    expect(history.map(m => [m.prompt, m.pinned])).toEqual([
+      ['newer', false],
+      ['older', true],
+    ]);
+  });
 });

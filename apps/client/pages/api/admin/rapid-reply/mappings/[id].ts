@@ -1,6 +1,6 @@
 import { rapidReplyMappingRepository } from '@bike4mind/database/ai';
 import { rapidReplyAuditLogRepository } from '@bike4mind/database/ai';
-import { RapidReplyResponseStylesCommon } from '@bike4mind/common';
+import { ApiKeyScope, RapidReplyResponseStylesCommon } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -24,7 +24,7 @@ const updateBodySchema = z.object({
   maxLatency: z.number().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

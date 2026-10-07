@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
-import { createFabFile, type CreateFabFileAdapters } from './create';
+import { createFabFile, createFabFileSchema, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
 // after the user lookup - before any settings/storage adapter is touched - so
@@ -53,6 +53,27 @@ describe('createFabFile — unsupported file-type gating', () => {
   });
 });
 
+describe('createFabFile - reserved key prefix', () => {
+  // exports/ in the fab-file bucket is reaped after 1 day, so a durable file stored there would
+  // be deleted while its FabFile record survives.
+  it.each(['exports', 'exports/', 'exports/nested', 'generated-audio-offload', 'generated-audio-offload/nested'])(
+    'rejects prefix %j',
+    async prefix => {
+      const deps = adapters();
+      await expect(
+        createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix }, deps)
+      ).rejects.toThrow(/reserved/);
+      expect(deps.storage.upload).not.toHaveBeenCalled();
+      expect(deps.db.fabFiles.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['curated-notebooks', 'modals', 'exportsx'])('still accepts prefix %j', prefix => {
+    const parsed = createFabFileSchema.safeParse({ ...base, fileName: 'notes.txt', mimeType: 'text/plain', prefix });
+    expect(parsed.success).toBe(true);
+  });
+});
+
 describe('createFabFile - extension-first MIME resolution', () => {
   // Same user/storage stubs as adapters() above, but with fabFiles.create echoing
   // back the built data (so these cases can assert on the persisted mimeType) and
@@ -76,6 +97,19 @@ describe('createFabFile - extension-first MIME resolution', () => {
     );
 
     expect(created.mimeType).toBe(SupportedFabFileMimeTypes.SH);
+  });
+
+  // Regression: the Mermaid preview card's disk-icon "Save as Mermaid file" upload sent
+  // `<name>_<ts>.mmd` as text/plain and was refused with "File type .mmd is not supported"
+  // because `.mmd` was missing from the extension table.
+  it('accepts a Mermaid diagram source file (.mmd) saved as text/plain', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'flowchart_1234567890.mmd', mimeType: 'text/plain' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
   });
 
   // Inverted deliberately: a digit tail used to be exempted as a date/version fragment, which
@@ -559,6 +593,28 @@ describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () =>
       { name: 'datalake:project-docs', strength: 1 },
       { name: 'proj:onboarding', strength: 1 },
     ]);
+  });
+
+  // The upload and Slack doors record no membership event, so diffLakeMembership reads the join
+  // time off this stamp; a create that inherited an older time would count as having sat through.
+  it('stamps createdAt at the moment of a lake create', async () => {
+    vi.useFakeTimers({ now: new Date('2026-06-10T12:00:00Z'), toFake: ['Date'] });
+    try {
+      const result = await createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:project-docs', strength: 1 }],
+        },
+        mockAdapters()
+      );
+
+      expect(result.createdAt).toEqual(new Date('2026-06-10T12:00:00Z'));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('leaves a create with no tags at all untouched (no dataLakes round trip)', async () => {

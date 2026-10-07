@@ -15,10 +15,7 @@ import React, {
   ComponentProps,
 } from 'react';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { useTheme } from '@mui/joy/styles';
 import { createMarkdownComponents } from './markdown/markdownComponents';
-import { getMarkdownSyntaxTheme, type PrismStyle } from './markdown/syntaxTheme';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -30,7 +27,8 @@ import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import QuoteActions from './QuoteActions';
 import { link } from './MarkdownLink';
 import { PromptReplyProps, ReplyContainerProps } from './types/UserPromptTypes';
-import { CopyCodeButton } from './CopyCodeButton';
+import CodeBlockHeader from './CodeBlockHeader';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import ThoughtBubbles from './ThoughtBubbles';
 import CodeArtifactPreviewCard from '../GenAI/CodeArtifactPreviewCard';
 import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
@@ -69,6 +67,8 @@ import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor
 import CitableSources from './CitableSources';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import ReplyChoiceButtons from './ReplyChoiceButtons';
+import ReplyAccessories from './ReplyAccessories';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
@@ -138,11 +138,10 @@ const LocationMapInReply: FC<{ content: string }> = ({ content }) => {
   return <LocationMap content={content} placesById={placesById} replyComplete={replyComplete} />;
 };
 
-// Markdown `code` component: handles inline artifacts in code blocks. The
-// Prism theme is closed over rather than read from a hook here, because the
-// caller already resolves the color scheme and this function deliberately
-// stays a plain render helper.
-export const createCodeComponent = (syntaxTheme: PrismStyle) => {
+// Markdown `code` component: handles inline artifacts in code blocks. Takes no arguments -
+// HighlightedCode resolves the syntax theme from a hook of its own, so this stays a plain
+// render helper with nothing to close over.
+export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
@@ -437,19 +436,9 @@ export const createCodeComponent = (syntaxTheme: PrismStyle) => {
     // Inline code or short snippet
     if (inline || lineCount <= 10) {
       return !inline ? (
-        <Box sx={{ position: 'relative' }}>
-          <CopyCodeButton code={codeContent} language={language} />
-          <SyntaxHighlighter
-            // @ts-ignore - ignoring style prop type issue
-            style={syntaxTheme}
-            customStyle={{ paddingTop: '32px' }}
-            language={language}
-            PreTag="div"
-            {...props}
-          >
-            {codeContent}
-          </SyntaxHighlighter>
-        </Box>
+        <CodeBlockHeader code={codeContent} language={language}>
+          <HighlightedCode code={codeContent} language={language} />
+        </CodeBlockHeader>
       ) : (
         // Bare <code>: observatory.css owns the inline-code skin, and a hardcoded
         // sx here would only lose to it on specificity while reading as live.
@@ -621,6 +610,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         pendingAction={messageData.pendingAction}
         attachmentList={messageData.attachmentList}
         navigationIntents={messageData.navigationIntents}
+        suggestedChoices={messageData.suggestedChoices}
         attachmentNotices={messageData.attachmentNotices}
         attachmentDelivery={messageData.attachmentDelivery}
         uiSideEffects={messageData.uiSideEffects}
@@ -1171,6 +1161,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   pendingAction,
   attachmentList,
   navigationIntents,
+  suggestedChoices,
   attachmentNotices,
   attachmentDelivery,
   uiSideEffects,
@@ -1267,10 +1258,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // as a bare semantic tag and is styled by observatory.css.
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
-  // palette.mode rather than useColorScheme(), which can report 'system'.
-  const replyTheme = useTheme();
-  const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
-  const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
+  const codeComponent = useMemo(() => createCodeComponent(), []);
   const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
 
   const cleanReply = useMemo(() => {
@@ -1448,6 +1436,20 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // the reply body rather than under it - which also means a reply that is nothing
   // BUT suggestions still needs the body to exist to hold them.
   const navSuggestions = completed && navigationIntents && navigationIntents.length > 0 ? navigationIntents : null;
+  // Choices need a persisted turn in a session: a click records the pick against both ids.
+  const choiceButtons =
+    completed && suggestedChoices?.options.length && messageId && currentSessionId ? (
+      <ReplyChoiceButtons questId={messageId} sessionId={currentSessionId} suggestedChoices={suggestedChoices} />
+    ) : null;
+  // One row for both, shared by the two render paths below so they cannot drift.
+  const replyActions =
+    navSuggestions || choiceButtons ? (
+      <NavigationButtons
+        navigationIntents={navSuggestions ?? []}
+        leading={choiceButtons}
+        label={choiceButtons ? 'Your call' : undefined}
+      />
+    ) : null;
 
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
@@ -1533,11 +1535,12 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {showSyntaxHighlight ? (
         <>
-          <SyntaxHighlighter style={syntaxTheme}>{processedContent || cleanReply}</SyntaxHighlighter>
+          <HighlightedCode code={processedContent || cleanReply} />
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
-          {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
+          {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
+          {replyActions}
         </>
       ) : (
         <>
@@ -1556,7 +1559,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               <MementoIndicator mementoIds={promptMeta.context.mementoIds} />
             </Box>
           )}
-          {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
           {isEditMode && onEdit ? (
             <EditModeContent
               content={processedContent || cleanReply}
@@ -1811,7 +1813,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       </>
                     )}
 
-                    {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
+                    {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
+                    {replyActions}
                   </Typography>
                 </Box>
               )}
@@ -1821,6 +1824,15 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
+
+      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
+          above it means reading forward to the marker and then scrolling BACK past the answer
+          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+          above pushed text the reader had already started reading down the page.
+
+          After the expand control, which belongs to the reply body it truncates, and before
+          artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact

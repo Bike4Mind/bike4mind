@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Avatar from '@mui/joy/Avatar';
+import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Divider from '@mui/joy/Divider';
 import IconButton from '@mui/joy/IconButton';
@@ -8,9 +9,9 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
-import { ChevronIcon } from '../chat/icons';
+import { ChevronIcon, GearIcon, SignOutIcon, UserIcon } from '../chat/icons';
+import { NavItem } from '../chat/SessionList';
 import { RuntimeInfo } from '../components/RuntimeInfo';
-import { EnvironmentPicker } from './EnvironmentPicker';
 
 /** Two letters for the avatar. Falls back to one, then to nothing, rather than to a stray '?'. */
 function initials(name: string): string {
@@ -30,8 +31,20 @@ function initials(name: string): string {
  *
  * The blocked states still surface here, because nothing else in the chat UI would explain why
  * replies suddenly stop working.
+ *
+ * The environment LABEL stays even though the picker that sets it moved to Settings: it is a
+ * readout, and which deployment a reply came from is worth a line under the name whether or not
+ * anyone is about to change it.
  */
-export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
+export function SignedInPanel({
+  state,
+  status,
+  onOpenSettings,
+}: {
+  state: AuthState;
+  status?: ReactNode;
+  onOpenSettings?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
   const user = state.user;
@@ -102,45 +115,53 @@ export function SignedInPanel({ state, status }: { state: AuthState; status?: Re
       </Stack>
 
       {open && (
-        <Stack spacing={1} data-testid="account-menu">
-          {/* First in the menu because it is the only entry that goes anywhere: the balance in
-              the composer says what is left, and this is where it says where it went. */}
-          <Button
-            size="sm"
-            variant="soft"
-            color="neutral"
-            onClick={() => void navigate({ to: '/profile' })}
-            data-testid="account-profile-btn"
-          >
-            Profile
-          </Button>
+        <Stack spacing={0.25} data-testid="account-menu">
+          {/* The strip above shows whatever the account calls itself, which for most users is a
+              nickname. The address is what they would recognise on an invoice. */}
+          {user?.email && user.email !== displayName && (
+            <Typography
+              level="body-xs"
+              textColor="text.tertiary"
+              noWrap
+              sx={{ px: 1, pb: 0.5 }}
+              data-testid="account-menu-email"
+            >
+              {user.email}
+            </Typography>
+          )}
 
-          <Button
-            size="sm"
-            variant="soft"
-            color="neutral"
+          {/* Rows rather than full-width buttons: these are places to go, and a stack of solid
+              blocks reads as a stack of commands. Same component the nav above the list uses,
+              so the sidebar has one row shape from top to bottom. */}
+          <NavItem
+            icon={<UserIcon />}
+            label="Profile"
+            onClick={() => void navigate({ to: '/profile' })}
+            testId="account-profile-btn"
+          />
+
+          {/* The server moved to Settings, and this is where anyone who remembers it being in
+              here will come back to. One row rather than a copy of the picker: two live
+              controls for one setting is how they drift apart. */}
+          {onOpenSettings && (
+            <NavItem icon={<GearIcon />} label="Settings" onClick={onOpenSettings} testId="account-settings-btn" />
+          )}
+
+          <Divider sx={{ my: 0.5 }} />
+
+          <NavItem
+            icon={<SignOutIcon />}
+            label="Sign out"
             loading={state.busy === 'signing-out'}
             onClick={() => void window.b4m.auth.signOut()}
-            data-testid="auth-signout-btn"
-          >
-            Sign out
-          </Button>
+            testId="auth-signout-btn"
+          />
 
-          <Divider />
+          <Divider sx={{ my: 0.5 }} />
 
-          {/* The server lives here rather than in the composer's chip row because it is
-              app-wide, not session-scoped - which is also why the scope is said out loud:
-              the one thing the picker's own caption cannot tell you is how far it reaches.
-              It is a choice of backend, never of where the agent runs; this app's agent is
-              the Electron main process and has nowhere else to go. */}
-          <Typography level="body-xs" textColor="text.tertiary">
-            Every conversation in this app talks to one server.
-          </Typography>
-          <EnvironmentPicker state={state} />
-
-          <Divider />
-
-          <RuntimeInfo />
+          <Box sx={{ px: 1, pt: 0.5 }}>
+            <RuntimeInfo />
+          </Box>
         </Stack>
       )}
     </Stack>

@@ -115,6 +115,58 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    * would be hiding the only fact that matters here: why the owner changed without anyone asking.
    */
   'membership-succession',
+  /**
+   * A producer-proposed source cleared the acquisition queue (#1671) into the lake, recorded under
+   * whichever rung reviewed it. Split from `decline-proposal`/`restore-proposal` below for the same
+   * reason `grant-access`/`revoke-access` are split from each other: one uniform action per verb the
+   * reviewer actually took, rather than a status field the reader would have to re-derive.
+   */
+  'approve-proposal',
+  /** The reviewer's decline of a proposed source. See `approve-proposal`. */
+  'decline-proposal',
+  /**
+   * Undoes a decline, putting the tombstone back in the pending queue (`restoreDataLakeProposal`).
+   * Deliberately its own literal, not `restore` above - that one is the unrelated lake-undelete
+   * action, and collapsing the two would render as the same label for two different things a
+   * reviewer never confuses in the product.
+   */
+  'restore-proposal',
+  /**
+   * A saved research run configuration (#1682) was created, edited or removed. One action per verb
+   * a curator actually took, matching the proposal-review split above - not a status field the
+   * reader would have to re-derive.
+   */
+  'create-research-config',
+  'update-research-config',
+  'delete-research-config',
+  /**
+   * A research run was queued from a saved configuration. Recorded at REQUEST time (the human who
+   * clicked Run), split from `complete-research-run` below because the two happen at unrelated
+   * times - a run can sit `queued`/`running` for a while before either finishing or failing.
+   */
+  'start-research-run',
+  /**
+   * A queued run reached an outcome (completed OR failed - the value carries which, see
+   * `researchRunChange`). Recorded from the background executor, which has no human actor behind
+   * it - always under the `system` rung (the same rung `membership-succession` stamps, and the
+   * retired `auto-activate` did), but unlike `membership-succession` there is no principal at all
+   * here, not even a triggering user kept alongside the forced rung.
+   */
+  'complete-research-run',
+  /**
+   * The lake was created. Its `changes` are the initial configuration, recorded as unset -> value,
+   * so the history starts where the lake did rather than at its first edit.
+   */
+  'create',
+  /**
+   * An upload batch settled (see `uploadBatchChange`). One row per BATCH, never per file: per-file
+   * moves live in LakeMembershipChangeEvent, whose volume this history is not built to carry.
+   * Recorded from the guarded batch finalize, the cancel route and the stuck-batch reconciler, at
+   * most once per batch (`claimUploadHistory`), attributed to the batch's uploader. Not recorded:
+   * a batch the client marks `failed` (nothing landed) and batches cancelled by a lake archive or
+   * delete cascade (the archive/delete row covers those).
+   */
+  'upload-files',
 ] as const;
 export type LakeConfigChangeAction = (typeof LAKE_CONFIG_CHANGE_ACTIONS)[number];
 
@@ -134,6 +186,7 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   slug: 'audited',
   description: 'audited',
   systemPrompt: 'audited',
+  injectPromptForReaders: 'audited',
   preferredSystemPromptId: 'audited',
   groundingMode: 'audited',
   requiredPassageTokenTarget: 'audited',
@@ -164,6 +217,8 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   lastInconsistencyScanAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
+  purgeClaimId: 'excluded',
+  purgeStartedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',
   lakeMemoryCursor: 'excluded',
   // The purge itself is audited as its own event (LAKE_MEMORY_PURGED); a config row for the fence
@@ -173,6 +228,10 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   // a config change, and auditing them would put document excerpts in the config history.
   inconsistencyReport: 'excluded',
   inconsistencyComputedAt: 'excluded',
+  // Run bookkeeping, not an operator choice - the same class as lakeMemoryExtractionAt above.
+  modelInconsistencyRunAt: 'excluded',
+  // Connect-flow bookkeeping the server sets and clears, never an operator edit.
+  pendingConnector: 'excluded',
 } as const satisfies Record<keyof IDataLake, 'audited' | 'excluded'>;
 
 /** The audited keys as a precise literal union, derived from the map so the two cannot drift. */
@@ -219,15 +278,65 @@ export const LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER = 'effectiveOwnerUserId';
  */
 export const LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT = 'accessGrant';
 
+/**
+ * A DERIVED field, like the two above: the reviewed row lives in `DataLakeProposal`, never on the
+ * lake document, so `diffLakeConfig` can never see it. Its value carries the source url (see
+ * `proposalReviewChange`), because the action alone (`approve-proposal`/`decline-proposal`/
+ * `restore-proposal`) says WHAT a reviewer decided but not WHICH queued source it was decided on.
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW = 'proposalReview';
+
+/**
+ * A DERIVED field, like the three above: a saved research configuration lives in its own
+ * `DataLakeResearchConfig` collection, never on the lake document, so `diffLakeConfig` can never
+ * see it. Its value carries the config's name (see `researchConfigChange`).
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG = 'researchConfig';
+
+/**
+ * A DERIVED field for a research run's lifecycle (started -> completed/failed), which lives in its
+ * own `DataLakeResearchRun` collection. Its value carries the run's own QUERY - not the config's
+ * name, since the background executor that records the outcome half only ever has the run's
+ * levers snapshot, never the config document - and which lifecycle point it reached (see
+ * `researchRunChange`).
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN = 'researchRun';
+
+/**
+ * A DERIVED field for a finished upload batch, which lives in `DataLakeBatch`. Its value carries the
+ * batch's file counts (see `uploadBatchChange`).
+ */
+export const LAKE_CONFIG_DERIVED_FIELD_UPLOAD = 'upload';
+
+/**
+ * The derived fields that record an EVENT rather than a setting's move: their `before` is always
+ * unset and the whole content is the `after` value. A consumer renders the value alone; a
+ * "not set -> ..." framing would describe a prior state that never existed.
+ */
+export const LAKE_CONFIG_EVENT_VALUE_FIELDS: readonly LakeConfigChangeField[] = [
+  LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN,
+  LAKE_CONFIG_DERIVED_FIELD_UPLOAD,
+];
+
 export const LAKE_CONFIG_CHANGE_FIELDS: readonly LakeConfigChangeField[] = [
   ...LAKE_CONFIG_DOCUMENT_FIELDS,
   LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER,
   LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT,
+  LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG,
+  LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN,
+  LAKE_CONFIG_DERIVED_FIELD_UPLOAD,
 ];
 export type LakeConfigChangeField =
   | LakeConfigDocumentField
   | typeof LAKE_CONFIG_DERIVED_FIELD_EFFECTIVE_OWNER
-  | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT;
+  | typeof LAKE_CONFIG_DERIVED_FIELD_ACCESS_GRANT
+  | typeof LAKE_CONFIG_DERIVED_FIELD_PROPOSAL_REVIEW
+  | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_CONFIG
+  | typeof LAKE_CONFIG_DERIVED_FIELD_RESEARCH_RUN
+  | typeof LAKE_CONFIG_DERIVED_FIELD_UPLOAD;
 
 /**
  * Compile-time pin: every field `UpdateDataLakeRequestInput` can write MUST be audited. Without it

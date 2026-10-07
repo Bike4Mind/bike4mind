@@ -9,8 +9,9 @@ import {
   withTransaction,
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { userService } from '@bike4mind/services';
-import { ApiKeyScope, redactUserSecretsForSelf } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError, redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 import * as z from 'zod';
@@ -112,7 +113,7 @@ const handler = baseApi().put(
       // middleware here would pull the whole auth/ability/model chain into a route that
       // needs one field off the request.
       if (req.apiKeyInfo && !req.apiKeyInfo.scopes.includes(ApiKeyScope.ADMIN)) {
-        return res.status(403).json({ error: 'Insufficient API key permissions' });
+        throw new ForbiddenError('Insufficient API key permissions', { required_scopes: [ApiKeyScope.ADMIN] });
       }
 
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
@@ -157,6 +158,7 @@ const handler = baseApi().put(
             users: userRepository,
             organizations: Organization,
             friendship: friendshipRepository,
+            userApiKeys: userApiKeyRepository,
             // Audits admin `currentCredits` changes as CreditTransactions.
             creditTransactions: creditTransactionRepository,
           },

@@ -27,6 +27,7 @@ const makeAgent = (ownerId = 'owner'): IAgent =>
 
 // An expired FabFile so the refresh path is reached; vary owner and global-read to probe the gate.
 const expiredFile = (userId: string, isGlobalRead = false) => ({
+  id: 'file-1',
   filePath: 'abc.png',
   userId,
   isGlobalRead,
@@ -57,9 +58,11 @@ describe('refreshAgentAvatarUrls access gate', () => {
     const [agent] = await refreshAgentAvatarUrls([makeAgent('owner')], 'owner'); // owner === owner
     expect(agent.visual?.portraitUrl).toBe('https://signed.example/new.png');
     expect(h.update).toHaveBeenCalledTimes(1);
-    expect(h.update).toHaveBeenCalledWith(
-      expect.objectContaining({ fileUrl: 'https://signed.example/new.png', userId: 'owner' })
-    );
+    expect(h.update).toHaveBeenCalledWith({
+      id: 'file-1',
+      fileUrl: 'https://signed.example/new.png',
+      fileUrlExpireAt: expect.any(Date),
+    });
   });
 
   it('refuses to sign a foreign private file the agent portrait points at (exploit)', async () => {

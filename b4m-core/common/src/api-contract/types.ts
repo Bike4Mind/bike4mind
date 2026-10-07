@@ -28,7 +28,7 @@ export type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete';
  */
 export type AuthMode = 'apiKeyOrJwt' | 'jwtOnly' | 'public';
 
-export type ResponseSpec = {
+type ResponseSpecFields = {
   description: string;
   /**
    * Shape of the response body. OMIT for a raw, non-JSON body (e.g. the audio
@@ -86,9 +86,23 @@ export type ResponseSpec = {
   bespokeErrorShape?: string;
 };
 
+type BodyFields = 'schema' | 'contentType' | 'example' | 'alsoReturns';
+
+export type ResponseSpec =
+  | (ResponseSpecFields & { noBody?: never })
+  | (Omit<ResponseSpecFields, BodyFields> & {
+      /**
+       * The status carries no body at all (e.g. a `303` whose payload is the
+       * `Location` header), so the spec publishes no `content` for it; a
+       * schema-less status is otherwise documented as an opaque binary body.
+       */
+      noBody: true;
+    } & { [K in BodyFields]?: never });
+
 /** curl/JS/Python sample body for the docs (attached as x-codeSamples). */
 export type CodeSample = {
-  body: unknown;
+  /** Omit when the operation declares no request body: the samples only send one when it does. */
+  body?: unknown;
   authToken: string;
   streaming?: boolean;
 };
@@ -103,7 +117,7 @@ export type CodeSample = {
  * already excuses that rule per-RESPONSE, so a contract-wide version would only
  * ever be the blunter way to say the same thing.
  */
-export type ConventionRule = 'status-table' | 'scope-required' | 'version-root';
+export type ConventionRule = 'status-table' | 'scope-required' | 'version-root' | 'pagination';
 
 /**
  * Exemptions from {@link ConventionRule}, each carrying WHY.
@@ -124,6 +138,8 @@ export type ConventionExemptions = {
   'status-table'?: Readonly<Record<number, string>>;
   'scope-required'?: string;
   'version-root'?: string;
+  /** Why this GET's array `data` response is not cursor-paginated. */
+  pagination?: string;
 };
 
 export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
@@ -174,11 +190,11 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    *
    * Values arrive as `string` (or `string[]` for a repeated key): use
    * `z.coerce.number()` for numbers, and never `z.coerce.boolean()` for a flag
-   * (`Boolean('false') === true`) - see `queryBool` in `schemas/query.ts`. A
-   * required `z.coerce.number()` field genuinely 422s on a missing value at
-   * runtime, but zod-to-openapi documents it as optional/nullable regardless
-   * (see `registerContract.test.ts`) - a spec-accuracy gap in that dependency,
-   * not in validation.
+   * (`Boolean('false') === true`) - see `queryBool` in `schemas/query.ts`.
+   * `registerContract` corrects zod-to-openapi's own required/nullable derivation
+   * for a bare `z.coerce.*` field before registration (see `undoCoercionForOpenApi`
+   * in `registerContract.ts`), so the generated spec matches the real runtime
+   * guarantee - see `registerContract.test.ts`.
    *
    * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
    * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate

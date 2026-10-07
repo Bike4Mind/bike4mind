@@ -9,6 +9,7 @@ import {
 } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
+import { computeKeyDigest, keyDigestMatches } from './keyDigest';
 
 interface ValidateUserApiKeyAdapters {
   db: {
@@ -25,6 +26,7 @@ export interface ValidationResult {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  expiresAt?: Date;
   productId?: string;
   /** Billing target of the key. Organization -> usage bills `organizationId`'s pool. */
   billingOwnerType?: ApiKeyBillingOwnerType;
@@ -71,6 +73,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     keyId: apiKey.id,
     scopes: apiKey.scopes,
     rateLimit: apiKey.rateLimit,
+    expiresAt: apiKey.expiresAt,
     productId: apiKey.productId,
     billingOwnerType: apiKey.billingOwnerType,
     organizationId: apiKey.organizationId,
@@ -108,8 +111,12 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'not_found' };
   }
 
-  // Verify the hash
-  const isHashValid = await bcrypt.compare(key, apiKey.keyHash);
+  // Verify the secret. A key with a stored digest is checked by constant-time
+  // SHA-256 compare only - the digest is authoritative, so a mismatch never falls
+  // through to bcrypt. Keys minted before the digest existed fall back to the
+  // bcrypt keyHash and get a digest backfilled below.
+  const storedDigest = apiKey.keyDigest;
+  const isHashValid = storedDigest ? keyDigestMatches(key, storedDigest) : await bcrypt.compare(key, apiKey.keyHash);
   if (!isHashValid) {
     return { isValid: false, reason: 'invalid_hash' };
   }
@@ -121,10 +128,23 @@ export const validateUserApiKey = async (
   // (fire and forget). Only heal a VALID key - matches the original ordering (gates
   // first) so an expired/disabled key isn't rewritten on every rejected request.
   // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
+  // Both heals pass the keyHash this request validated against, so a rotation that commits during
+  // the bcrypt compare above makes them no-ops instead of reviving the rotated-away key.
   if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
-    db.userApiKeys.update(apiKey).catch(err => {
+    db.userApiKeys.healKeyPrefix(apiKey.id, keyPrefix, apiKey.keyHash).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
+    });
+  }
+
+  // Backfill the fast-path digest for a pre-digest key (fire and forget), same
+  // valid-only rule as the prefix heal, so existing keys migrate on first use
+  // without a rotation sweep.
+  if (!storedDigest && result.isValid) {
+    const keyDigest = computeKeyDigest(key);
+    apiKey.keyDigest = keyDigest;
+    db.userApiKeys.setKeyDigest(apiKey.id, keyDigest, apiKey.keyHash).catch(err => {
+      Logger.globalInstance.warn('Failed to backfill API key digest:', err);
     });
   }
 

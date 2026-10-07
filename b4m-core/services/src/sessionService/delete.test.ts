@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { deleteSession } from './delete';
 import {
   createMockSessionRepository,
@@ -45,6 +45,7 @@ describe('sessionService - delete', () => {
     // The cascade now also reaches session.knowledgeIds, since a grant this session minted can sit
     // on a file uploaded somewhere else entirely.
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findToolGeneratedBySessionId as Mock).mockResolvedValue([]);
     adapters = {
       db: {
         sessions: mockSessionRepo,
@@ -54,6 +55,28 @@ describe('sessionService - delete', () => {
         sessionAgentConfigs: mockSessionAgentConfigRepo,
       },
     };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('tombstones the session with only { id, deletedAt }', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const session = { id: sessionId, userId: ownerId, name: 'kept off the write', deletedAt: null };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockSessionRepo.update).toHaveBeenCalledTimes(1);
+    expect((mockSessionRepo.update as Mock).mock.calls[0][0]).toStrictEqual({
+      id: sessionId,
+      deletedAt: new Date('2026-01-01T00:00:00Z'),
+    });
   });
 
   it('throws NotFoundError when the session does not exist for this user', async () => {
@@ -75,6 +98,21 @@ describe('sessionService - delete', () => {
 
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-owned']);
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
+  });
+
+  it('deletes the files an in-chat tool generated in the session along with it', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const generated = { id: 'file-generated', userId: ownerId, fileSize: 10, users: [] };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockFabFileRepo.findToolGeneratedBySessionId as Mock).mockResolvedValue([generated]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockFabFileRepo.findToolGeneratedBySessionId).toHaveBeenCalledWith(sessionId);
+    expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-generated']);
   });
 
   // Otherwise the owner's storage stays counted for files that no longer exist until an admin
@@ -187,7 +225,8 @@ describe('sessionService - delete', () => {
           { userId: ownerId, permissions: ['read'], projectId: 'project-a' },
           { userId: 'third-party', permissions: ['read'] },
         ],
-      })
+      }),
+      { includeDeleted: true }
     );
   });
 
@@ -211,7 +250,8 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] })
+      expect.objectContaining({ id: 'file-shared-in', users: [carolsDirectShare] }),
+      { includeDeleted: true }
     );
   });
 
@@ -255,7 +295,8 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-elsewhere', users: [] })
+      expect.objectContaining({ id: 'file-elsewhere', users: [] }),
+      { includeDeleted: true }
     );
   });
 
@@ -301,7 +342,8 @@ describe('sessionService - delete', () => {
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith([]);
     // ...only the grant this session minted on it is dropped.
     expect(mockFabFileRepo.updateGuarded).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'file-shared-in', users: [] })
+      expect.objectContaining({ id: 'file-shared-in', users: [] }),
+      { includeDeleted: true }
     );
   });
 });

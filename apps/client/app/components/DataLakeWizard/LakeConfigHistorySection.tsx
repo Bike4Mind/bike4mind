@@ -1,7 +1,11 @@
 import React from 'react';
 import { Alert, Box, Chip, CircularProgress, Sheet, Stack, Table, Typography } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy';
+import { LAKE_CONFIG_EVENT_VALUE_FIELDS } from '@bike4mind/common';
 import type {
+  DataLakeGroundingMode,
+  DataLakeOrigin,
+  DataLakeStatus,
   LakeConfigChangeAction,
   LakeConfigChangeField,
   LakeConfigHistoryEntry,
@@ -32,12 +36,17 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   organizationId: 'Organization',
   isPublic: 'Public',
   auditQueryTextEnabled: 'Query-text auditing',
+  injectPromptForReaders: 'Prompt for readers',
   lakeMemoryEnabled: 'Lake memory',
   status: 'Status',
   origin: 'Origin',
   createdByUserId: 'Created by',
   effectiveOwnerUserId: 'Owner',
   accessGrant: 'Access grant',
+  proposalReview: 'Proposal review',
+  researchConfig: 'Research configuration',
+  researchRun: 'Research run',
+  upload: 'Upload',
 };
 
 /** Total, for the same reason as FIELD_LABEL. */
@@ -62,6 +71,54 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   // matched 'Ownership transferred' would read as a deliberate handover an owner could go looking
   // for in vain.
   'membership-succession': 'Ownership passed on (creator left the org)',
+  'approve-proposal': 'Proposal approved',
+  'decline-proposal': 'Proposal declined',
+  'restore-proposal': 'Proposal restored',
+  'create-research-config': 'Research configuration created',
+  'update-research-config': 'Research configuration updated',
+  'delete-research-config': 'Research configuration deleted',
+  'start-research-run': 'Research run started',
+  'complete-research-run': 'Research run finished',
+  create: 'Data lake created',
+  'upload-files': 'Files uploaded',
+};
+
+/**
+ * Total over DataLakeStatus. Matches the wording the rest of the lake UI uses - an `active` lake is
+ * "Published" there (the promote action, the draft notices), so the raw enum would read as a
+ * different state.
+ */
+const STATUS_LABEL: Record<DataLakeStatus, string> = {
+  draft: 'Draft',
+  active: 'Published',
+  archiving: 'Archiving',
+  archived: 'Archived',
+  unarchiving: 'Unarchiving',
+  restoring: 'Restoring',
+  deleting: 'Deleting',
+  deleted: 'Deleted',
+  purging: 'Purging',
+};
+
+/** Total. Matches the settings modal's pickers, minus its "(recommended)" hint, which is advice
+ *  for choosing a mode and reads oddly in a record of one. */
+const GROUNDING_MODE_LABEL: Record<DataLakeGroundingMode, string> = {
+  retrieve: 'Retrieve',
+  inline: 'Inline into the prompt',
+  'auto-by-size': 'Auto (decide by size)',
+};
+
+/** Total. Matches the settings modal's origin picker. */
+const ORIGIN_LABEL: Record<DataLakeOrigin, string> = {
+  curated: 'Curated',
+  'connector-fed': 'Connector-fed',
+};
+
+/** The enum-valued fields whose stored values render through a label map. */
+const ENUM_VALUE_LABEL: Partial<Record<LakeConfigChangeField, Record<string, string>>> = {
+  status: STATUS_LABEL,
+  groundingMode: GROUNDING_MODE_LABEL,
+  origin: ORIGIN_LABEL,
 };
 
 /**
@@ -79,8 +136,17 @@ const RUNG_LABEL: Record<LakeManageRung, { label: string; color: ColorPalettePro
   system: { label: 'System', color: 'neutral' },
 };
 
+// The zone is printed because other lake surfaces (Spend) group by UTC day, so an unlabelled local
+// time invites a reader to line the two up wrongly.
 const fmtDateTime = (d: Date | string): string =>
-  new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  new Date(d).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
 
 const fmtDate = (d: Date | string): string => new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' });
 
@@ -125,12 +191,31 @@ export function describeLakeConfigFingerprint(change: LakeConfigHistoryFingerpri
   return `replaced (${before.length} -> ${after.length} chars)`;
 }
 
-/** The right-hand cell for one changed field, per arm of the discriminated union. */
 /** The fields whose values are user ids - the only ones a name lookup may be applied to. Must stay
  *  in sync with IDENTITY_VALUE_FIELDS in assembleLakeConfigHistory, which decides what gets
  *  resolved server-side; a field listed here but not there simply renders its raw id. */
 const IDENTITY_VALUE_FIELDS = new Set<LakeConfigChangeField>(['effectiveOwnerUserId', 'createdByUserId']);
 
+const EVENT_VALUE_FIELDS = new Set<LakeConfigChangeField>(LAKE_CONFIG_EVENT_VALUE_FIELDS);
+
+const isUnset = (value: LakeConfigLiteralValue | undefined): boolean =>
+  value === undefined || value === null || value === '';
+
+/**
+ * A stored value, with enum fields mapped to their UI label. Unknown values degrade to the raw
+ * value; `Object.hasOwn` keeps a stored string like `constructor` from resolving to a prototype member.
+ */
+const describeFieldValue = (
+  field: LakeConfigChangeField,
+  value: LakeConfigLiteralValue | undefined,
+  names?: Record<string, string>
+): string => {
+  const labels = ENUM_VALUE_LABEL[field];
+  if (labels && typeof value === 'string' && Object.hasOwn(labels, value)) return labels[value];
+  return describeLakeConfigValue(value, names);
+};
+
+/** The right-hand cell for one changed field, per arm of the discriminated union. */
 export function describeLakeConfigChange(
   change: LakeConfigHistoryFieldChange,
   userNames?: Record<string, string>
@@ -140,7 +225,12 @@ export function describeLakeConfigChange(
   }
   const names = IDENTITY_VALUE_FIELDS.has(change.field) ? userNames : undefined;
   const clipped = change.truncated ? ' (clipped)' : '';
-  return `${describeLakeConfigValue(change.before, names)} -> ${describeLakeConfigValue(change.after, names)}${clipped}`;
+  const before = describeFieldValue(change.field, change.before, names);
+  const after = describeFieldValue(change.field, change.after, names);
+  if (EVENT_VALUE_FIELDS.has(change.field)) return `${after}${clipped}`;
+  if (isUnset(change.before) && !isUnset(change.after)) return `set to ${after}${clipped}`;
+  if (!isUnset(change.before) && isUnset(change.after)) return `cleared (was ${before})${clipped}`;
+  return `${before} -> ${after}${clipped}`;
 }
 
 /**
@@ -151,14 +241,18 @@ export function describeLakeConfigChange(
  * WHOLE history table down; the honest fallback is to show the raw stored value.
  */
 const rungLabel = (rung: LakeManageRung): { label: string; color: ColorPaletteProp } =>
-  RUNG_LABEL[rung] ?? { label: rung, color: 'neutral' };
+  Object.hasOwn(RUNG_LABEL, rung) ? RUNG_LABEL[rung] : { label: rung, color: 'neutral' };
 
-const fieldLabel = (field: LakeConfigChangeField): string => FIELD_LABEL[field] ?? field;
+const fieldLabel = (field: LakeConfigChangeField): string =>
+  Object.hasOwn(FIELD_LABEL, field) ? FIELD_LABEL[field] : field;
 
-const actionLabel = (action: LakeConfigChangeAction): string => ACTION_LABEL[action] ?? action;
+const actionLabel = (action: LakeConfigChangeAction): string =>
+  Object.hasOwn(ACTION_LABEL, action) ? ACTION_LABEL[action] : action;
 
 function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNames: Record<string, string> }) {
   const rung = rungLabel(entry.manageRung);
+  const who = entry.principalName ?? entry.principalId;
+  const whoKind = `${entry.principalKind}${entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}`;
   return (
     <tr data-testid="datalake-config-history-row">
       <td>
@@ -167,11 +261,15 @@ function ChangeRow({ entry, userNames }: { entry: LakeConfigHistoryEntry; userNa
           {actionLabel(entry.action)}
         </Typography>
       </td>
+      {/* Joy tables are fixed-layout, so an unresolved id (one unbreakable token) would paint over
+          the next column. Truncate instead; `title` keeps the full value. Same cell as the access
+          history's HistoryRow in DataLakeAccessModal. */}
       <td>
-        <Typography level="body-sm">{entry.principalName ?? entry.principalId}</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">
-          {entry.principalKind}
-          {entry.onBehalfOfUserId ? ` (for ${entry.onBehalfOfName ?? entry.onBehalfOfUserId})` : ''}
+        <Typography level="body-sm" noWrap title={who} data-testid="datalake-config-history-who">
+          {who}
+        </Typography>
+        <Typography level="body-xs" textColor="text.tertiary" noWrap title={whoKind}>
+          {whoKind}
         </Typography>
       </td>
       <td>

@@ -78,6 +78,9 @@ export interface IOAuthClientDocument extends IMongoDocument {
 
 export interface IOAuthClientRepository extends IBaseRepository<IOAuthClientDocument> {
   findByClientId(clientId: string): Promise<IOAuthClientDocument | null>;
+  /** Batch lookup -- returns a map keyed by clientId. Includes inactive clients (no isActive filter)
+   *  so callers listing a user's grants show the real name even after a client is deactivated. */
+  findByClientIds(clientIds: string[]): Promise<Map<string, IOAuthClientDocument>>;
   verifyClientSecret(clientId: string, secret: string): Promise<IOAuthClientDocument | null>;
 }
 
@@ -153,6 +156,11 @@ class OAuthClientRepository extends BaseRepository<IOAuthClientDocument> impleme
 
   findByClientId(clientId: string) {
     return this.model.findOne({ clientId, isActive: true }).exec();
+  }
+
+  async findByClientIds(clientIds: string[]): Promise<Map<string, IOAuthClientDocument>> {
+    const docs = await this.model.find({ clientId: { $in: clientIds } }).exec();
+    return new Map(docs.map(d => [d.clientId, d]));
   }
 
   async verifyClientSecret(clientId: string, secret: string): Promise<IOAuthClientDocument | null> {

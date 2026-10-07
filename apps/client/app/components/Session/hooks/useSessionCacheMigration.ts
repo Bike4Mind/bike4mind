@@ -34,7 +34,9 @@ import { useChatInput } from '@client/app/hooks/useChatInput';
  *   - `['sessions', id]`          - the session document
  *
  * Also clears the persisted `drafts[tmpId]` entry (useChatInput / localStorage)
- * in `migrateSession`, since that draft's lifecycle ends with the tmpId.
+ * in `migrateSession`, since that draft's lifecycle ends with the tmpId, and
+ * re-pins a pending briefcase launch from tmpId to realId (useProgrammaticSubmit
+ * holds launches while the current session is optimistic).
  */
 export type UseSessionCacheMigrationReturn = {
   /**
@@ -75,7 +77,10 @@ export function useSessionCacheMigration(): UseSessionCacheMigrationReturn {
       // harmless cruft, but without this it accumulates in the persisted drafts
       // map. Cleared here (rather than at send) so both resolve paths - the
       // session.created WS message and the send-response fallback - cover it.
-      useChatInput.getState().clearDraft(tmpId);
+      const chatInput = useChatInput.getState();
+      chatInput.clearDraft(tmpId);
+      const launch = chatInput.programmaticLaunch;
+      if (launch?.sessionId === tmpId) chatInput.setProgrammaticLaunch({ ...launch, sessionId: realId });
     },
     [queryClient]
   );

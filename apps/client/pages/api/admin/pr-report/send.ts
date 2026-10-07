@@ -12,6 +12,7 @@
  * admin gating, body validation, acting-identity audit logging, and send dedupe.
  */
 
+import { ApiKeyScope } from '@bike4mind/common';
 import { Request } from 'express';
 import { z } from 'zod';
 
@@ -34,7 +35,7 @@ const sendBodySchema = z.object({
 
 type SendBody = z.infer<typeof sendBodySchema>;
 
-const handler = baseApi().post<Request<{}, {}, SendBody>>(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post<Request<{}, {}, SendBody>>(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

@@ -1,3 +1,4 @@
+import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ensureAdmin, BadRequestError } from '@server/utils/errors';
 import { dlqReplayLogRepository } from '@bike4mind/database';
@@ -30,7 +31,7 @@ const QuerySchema = z.object({
  *
  * Returns DLQ replay history with optional filters.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   ensureAdmin(req.user?.isAdmin);
 
   const result = QuerySchema.safeParse(req.query);
