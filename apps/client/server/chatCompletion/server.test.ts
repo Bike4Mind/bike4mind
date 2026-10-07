@@ -308,19 +308,37 @@ describe('ChatCompletion SIGTERM drain', () => {
 
 describe('ChatCompletion drain window vs ECS stopTimeout', () => {
   // infra/ imports SST globals ($app, aws), so it cannot be imported into a node test - scan the
-  // source instead. The margin is the whole point: the drain timer starts after SIGTERM and ECS
-  // sends SIGKILL at stopTimeout, so a window equal to stopTimeout can never fire and the
-  // drain-expiry error LiveOps relies on would be unreachable.
+  // source instead. The drain timer starts after SIGTERM and ECS sends SIGKILL at stopTimeout, so
+  // a window equal to stopTimeout can never fire and the drain-expiry error is unreachable.
   const infraSource = readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), '../../../../infra/chatCompletion.ts'),
     'utf8'
   );
 
   it('keeps DRAIN_TIMEOUT_MS at least 5s under the ECS stopTimeout', () => {
-    const matches = [...infraSource.matchAll(/stopTimeout\s*=\s*(\d+)/g)];
+    // Anchored to the assignment (`def.stopTimeout = N`), not a bare `stopTimeout = N`, so a
+    // matching literal left behind in a comment cannot satisfy the guard.
+    const matches = [...infraSource.matchAll(/def\.stopTimeout\s*=\s*(\d+)/g)];
     expect(matches).toHaveLength(1);
     const stopTimeoutMs = Number(matches[0][1]) * 1000;
     expect(DRAIN_TIMEOUT_MS).toBeLessThanOrEqual(stopTimeoutMs - 5_000);
+  });
+});
+
+describe('ChatCompletion Dockerfile PID 1', () => {
+  // `pnpm exec` exits on SIGTERM without waiting for its child, and PID 1 exiting SIGKILLs the
+  // namespace, so server.ts's drain would never run. The image must exec the runtime directly.
+  const dockerfileSource = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../Dockerfile.chatcompletion'),
+    'utf8'
+  );
+
+  it('execs the runtime directly, not a package-manager wrapper', () => {
+    const cmdLine = dockerfileSource.match(/^CMD\s+(.+)$/m)?.[1];
+    expect(cmdLine).toBeDefined();
+    // JSON.parse also enforces exec (array) form: a shell-form `CMD pnpm ...` is not a JSON array.
+    const cmd = JSON.parse(cmdLine!) as string[];
+    expect(cmd[0]).not.toMatch(/\b(pnpm|npm|npx|yarn|corepack)\b/);
   });
 });
 

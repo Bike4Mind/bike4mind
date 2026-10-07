@@ -36,15 +36,11 @@ import { registerEmbedRoutes } from './external/embedRoute';
 const PORT = Number(process.env.PORT) || 8788;
 const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
-// How long SIGTERM lets in-flight work finish before the process exits. Deliberately ~10s
-// UNDER the ECS task `stopTimeout` (infra/chatCompletion.ts): ECS sends SIGKILL at stopTimeout
-// and this timer only starts after SIGTERM, so a window equal to stopTimeout can never fire -
-// the drain-expiry error below would be unreachable, and a deploy would cut off quests silently.
-// The margin is what lets that error log before SIGKILL. NOTE: work still running past this
-// window (e.g. a multi-minute deep-research generation) is still cut off by a deploy/scale-in
-// SIGTERM - see the PR description's trade-off note. The container removes the cold-start +
-// 15-min Lambda ceiling for the steady-state path; it does not make shutdown-time cancellation
-// free.
+// How long SIGTERM lets in-flight work finish before the process exits: ~10s under the ECS task
+// `stopTimeout` (infra/chatCompletion.ts) so the drain-expiry error below can log before SIGKILL -
+// a window equal to stopTimeout starts after SIGTERM and can never fire. The margin is pinned by
+// server.test.ts; work still running when the window closes (e.g. a multi-minute deep-research
+// generation) is still cut off. Requires tsx to be PID 1 (see Dockerfile.chatcompletion).
 export const DRAIN_TIMEOUT_MS = 110_000;
 
 // In-flight processing promises, tracked so SIGTERM can drain before exit. Both route

@@ -64,5 +64,8 @@ ENV PORT=8080
 EXPOSE 8080
 WORKDIR /app/apps/client
 
-# tsx resolves the @server/* and @/* path aliases from apps/client/tsconfig.json (cwd here).
-CMD ["pnpm", "exec", "tsx", "server/chatCompletion/server.ts"]
+# PID 1 is tsx itself, never `pnpm exec tsx`: pnpm exits on SIGTERM without waiting for its
+# child, and PID 1 exiting SIGKILLs the namespace - the drain in server.ts would never run.
+# tsx forwards SIGTERM to the script and waits. Resolves @server/* and @/* from
+# apps/client/tsconfig.json (cwd here).
+CMD ["./node_modules/.bin/tsx", "server/chatCompletion/server.ts"]
