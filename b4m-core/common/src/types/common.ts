@@ -179,7 +179,7 @@ export function isStorableFabFileMimeType(mimeType: string | null | undefined): 
 }
 
 /**
- * Reasoning effort levels for OpenAI reasoning models (O1, O3, GPT-5 series)
+ * Reasoning effort levels, read by OpenAI reasoning models (O1, O3, GPT-5 series), Kimi K3 and DeepSeek
  * Controls the tradeoff between response speed and reasoning depth/quality
  *
  * @see https://platform.openai.com/docs/guides/reasoning
