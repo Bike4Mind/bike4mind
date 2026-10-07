@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   connFindByDataLakeIdAny: vi.fn(),
   countByGitHubConnectionIdInDataLake: vi.fn(async () => 3),
   requestGitHubLakeDisconnect: vi.fn(),
+  buildGitHubLakeAuthorizeUrl: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -33,13 +34,18 @@ vi.mock('@server/middlewares/featureFlag', () => ({ requireFeatureEnabled: () =>
 vi.mock('@bike4mind/database/infra', () => ({ organizationRepository: { findById: h.orgFindById } }));
 vi.mock('@server/utils/resolveActiveOrg', () => ({ resolveActiveOrg: vi.fn() }));
 vi.mock('@server/integrations/github/dataLake/lakeAppClient', () => ({ getGitHubLakeAppConfig: vi.fn() }));
-vi.mock('@server/integrations/github/dataLake/githubLakeConnection', () => ({
-  buildGitHubLakeAuthorizeUrl: vi.fn(),
-  requestGitHubLakeDisconnect: h.requestGitHubLakeDisconnect,
-  requireGitHubLakeAppConfig: vi.fn(),
-  resolveConnectableLake: vi.fn(),
-  toGitHubLakeConnectionResponse: (conn: { id: string }, fileCount: number) => ({ id: conn.id, fileCount }),
-}));
+// resolveConnectableLake is the REAL one: it is the connect route's org gate, and stubbing it would
+// leave the POST refusal for an appointed admin unproven.
+vi.mock('@server/integrations/github/dataLake/githubLakeConnection', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/integrations/github/dataLake/githubLakeConnection')>();
+  return {
+    buildGitHubLakeAuthorizeUrl: h.buildGitHubLakeAuthorizeUrl,
+    requestGitHubLakeDisconnect: h.requestGitHubLakeDisconnect,
+    requireGitHubLakeAppConfig: vi.fn(),
+    resolveConnectableLake: actual.resolveConnectableLake,
+    toGitHubLakeConnectionResponse: (conn: { id: string }, fileCount: number) => ({ id: conn.id, fileCount }),
+  };
+});
 vi.mock('@bike4mind/database', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/database')>();
   return {
@@ -107,6 +113,12 @@ describe('/api/data-lakes/[id]/github-connection - appointed org admin', () => {
     const { res } = makeRes();
     await expect(run(makeReq('GET', STRANGER), res)).rejects.toThrow(/not found/i);
     expect(h.connFindByDataLakeIdAny).not.toHaveBeenCalled();
+  });
+
+  it('POST (connect) still 404s an appointed admin through the real gate and never builds an authorize URL', async () => {
+    const { res } = makeRes();
+    await expect(run(makeReq('POST', APPOINTED_ADMIN), res)).rejects.toThrow(/not found/i);
+    expect(h.buildGitHubLakeAuthorizeUrl).not.toHaveBeenCalled();
   });
 
   it('DELETE still 404s an appointed admin and never queues a disconnect', async () => {
