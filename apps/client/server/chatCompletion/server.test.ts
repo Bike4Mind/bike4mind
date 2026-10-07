@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import { spendCapExceededError } from '@bike4mind/common';
+import { InsufficientCreditsError } from '@bike4mind/services/llm';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
@@ -63,8 +65,10 @@ vi.mock('@bike4mind/services', () => ({
   categorizeToolError: mockCategorizeToolError,
 }));
 
-vi.mock('@bike4mind/services/llm', async () => {
+vi.mock('@bike4mind/services/llm', async importOriginal => {
   const { z } = await import('zod');
+  const { isOperatorFault, InsufficientCreditsError } =
+    await importOriginal<typeof import('@bike4mind/services/llm')>();
   return {
     QuestStartBodySchema: z.object({
       questId: z.string(),
@@ -73,7 +77,8 @@ vi.mock('@bike4mind/services/llm', async () => {
       message: z.string().min(1),
     }),
     resolveQuestErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
-    isOperatorFault: (error: unknown) => !(error as { code?: string } | null)?.code,
+    isOperatorFault,
+    InsufficientCreditsError,
   };
 });
 
@@ -105,7 +110,10 @@ vi.mock('@bike4mind/observability', () => ({
   },
 }));
 
-vi.mock('@bike4mind/utils', () => ({ registerProcessErrorHandlers: vi.fn() }));
+vi.mock('@bike4mind/utils', async importOriginal => ({
+  ...(await importOriginal<typeof import('@bike4mind/utils')>()),
+  registerProcessErrorHandlers: vi.fn(),
+}));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
 import { createApp, drainInFlight } from './server';
@@ -555,7 +563,6 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
     expect(errorMsg).toMatchObject({ requestId: REQUEST_ID });
 
     await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
-    expect(mockCategorizeToolError).toHaveBeenCalledWith('model exploded');
     expect(mockEmitMetrics.mock.calls[0][1]).toContainEqual(
       expect.objectContaining({ name: 'ProcessingFailed', dimensions: { Stage: 'test', Surface: 'cli-ws' } })
     );
@@ -564,9 +571,7 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
   it('does not count a billing rejection on the cli-ws surface', async () => {
     authAsApiKeyUser();
     mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
-    mockExecuteCompletion.mockRejectedValue(
-      Object.assign(new Error('out of credits'), { code: 'insufficient_credits' })
-    );
+    mockExecuteCompletion.mockRejectedValue(new InsufficientCreditsError('out of credits', 'insufficient_credits'));
 
     await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
     await waitForAction('cli_completion_error');
@@ -576,17 +581,7 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
   it('does not count a spend-cap rejection on the cli-ws surface', async () => {
     authAsApiKeyUser();
     mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
-    mockExecuteCompletion.mockRejectedValue(Object.assign(new Error('cap hit'), { code: 'spend_cap_exceeded' }));
-
-    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
-    await waitForAction('cli_completion_error');
-    expect(mockEmitMetrics).not.toHaveBeenCalled();
-  });
-
-  it('does not count a spend-cap rejection on the cli-ws surface', async () => {
-    authAsApiKeyUser();
-    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
-    mockExecuteCompletion.mockRejectedValue(Object.assign(new Error('cap hit'), { code: 'spend_cap_exceeded' }));
+    mockExecuteCompletion.mockRejectedValue(spendCapExceededError('cap hit'));
 
     await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
     await waitForAction('cli_completion_error');

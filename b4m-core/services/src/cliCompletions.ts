@@ -1,4 +1,5 @@
 import {
+  CHAT_MODELS,
   ChatModels,
   IMessage,
   CompletionInfo,
@@ -258,7 +259,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   });
 
   if (!llm) {
-    throw new BadRequestError(`Failed to create LLM backend for model: ${model}`);
+    // Only an id outside the static catalog is caller input. A catalogued model with no backend
+    // means the platform key is missing or its model listing failed: an operator fault that must stay counted.
+    const message = `Failed to create LLM backend for model: ${model}`;
+    throw CHAT_MODELS.includes(model as ChatModels) ? new Error(message) : new BadRequestError(message);
   }
 
   llm.currentModel = model;

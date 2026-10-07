@@ -34,15 +34,23 @@ const datum = (dimensions: Record<string, string>) => ({
 });
 
 describe('emitProcessingFailed', () => {
-  it.each(['/process', 'cli-sse', 'cli-ws', 'embed'] as const)(
-    'emits the alarm rollup, the ErrorClass breakdown and the %s Surface breakdown',
+  it('emits the Stage, ErrorClass and Surface series for /process', async () => {
+    await emitProcessingFailed('/process', new Error('429 Too Many Requests'));
+
+    expect(mockCategorizeToolError).toHaveBeenCalledWith('429 Too Many Requests');
+    expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_CLOUDWATCH_NAMESPACE, [
+      datum({ Stage: 'test' }),
+      datum({ Stage: 'test', ErrorClass: 'rate_limit' }),
+      datum({ Stage: 'test', Surface: '/process' }),
+    ]);
+  });
+
+  it.each(['cli-sse', 'cli-ws', 'embed'] as const)(
+    'emits only the Stage+Surface series on %s, leaving the /process series untouched',
     async surface => {
       await emitProcessingFailed(surface, new Error('429 Too Many Requests'));
 
-      expect(mockCategorizeToolError).toHaveBeenCalledWith('429 Too Many Requests');
       expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_CLOUDWATCH_NAMESPACE, [
-        datum({ Stage: 'test' }),
-        datum({ Stage: 'test', ErrorClass: 'rate_limit' }),
         datum({ Stage: 'test', Surface: surface }),
       ]);
     }
@@ -63,7 +71,7 @@ describe('emitProcessingFailed', () => {
   });
 
   it('classifies a non-Error throw by its string form', async () => {
-    await emitProcessingFailed('embed', 'a raw string failure');
+    await emitProcessingFailed('/process', 'a raw string failure');
     expect(mockCategorizeToolError).toHaveBeenCalledWith('a raw string failure');
   });
 

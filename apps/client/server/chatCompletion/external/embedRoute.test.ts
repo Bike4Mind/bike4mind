@@ -542,6 +542,24 @@ describe('POST /api/embed/chat', () => {
     );
   });
 
+  it('still hands a real fault to the metric helper when it lands after the visitor aborted', async () => {
+    mockExecuteCompletion.mockImplementation(
+      ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise((_, reject) => abortSignal.addEventListener('abort', () => reject(new Error('mongo unreachable'))))
+    );
+    const client = new AbortController();
+    const res = await post(CHAT, {}, client.signal);
+    await res.body?.getReader().read();
+    client.abort();
+
+    await vi.waitFor(() =>
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith(
+        'embed',
+        expect.objectContaining({ message: 'mongo unreachable' })
+      )
+    );
+  });
+
   it('classifies a mid-stream credit-reservation failure on the SSE frame (.code carrier)', async () => {
     mockExecuteCompletion.mockRejectedValue(
       new MockInsufficientCreditsError('org out of credits', 'insufficient_credits')

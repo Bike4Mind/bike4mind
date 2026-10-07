@@ -248,7 +248,6 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
           });
         } catch (error) {
           logger.error('[CLI_WS_HTTP] Completion error:', error);
-          // A billing rejection (out of credits, spend cap) is the caller's state, not a service fault.
           track(emitProcessingFailed('cli-ws', error));
 
           // The 202 is long gone - the error must reach the CLI over the WebSocket.
