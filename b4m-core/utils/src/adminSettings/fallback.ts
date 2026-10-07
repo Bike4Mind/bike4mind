@@ -50,6 +50,18 @@ function isTransientAwsSdkError(error: Error): boolean {
   return TRANSIENT_AWS_SDK_ERROR_NAMES.has(error.name);
 }
 
+// Must match the lowercased error the Anthropic backend throws on a stop_reason: 'refusal'.
+const SAFETY_REFUSAL_MESSAGE = 'safety classifier refusal';
+
+/**
+ * Whether the error is a model's safety-classifier refusal that the backend surfaced as a
+ * throw so the completion loop falls back. The refused attempt never settles on its own, so
+ * callers use this to record it as a 'refusal' UsageEvent.
+ */
+export function isSafetyRefusalError(error: Error): boolean {
+  return error.message.toLowerCase().includes(SAFETY_REFUSAL_MESSAGE);
+}
+
 /**
  * Error types that should trigger fallback attempts
  */
@@ -114,7 +126,7 @@ export function shouldTriggerFallback(error: Error): boolean {
     // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
     // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
     // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
-    'safety classifier refusal',
+    SAFETY_REFUSAL_MESSAGE,
   ];
 
   return fallbackTriggers.some(trigger => message.includes(trigger));

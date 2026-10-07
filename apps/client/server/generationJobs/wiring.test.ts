@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IGenerationJobDocument, VideoProviderId } from '@bike4mind/common';
 
 const { queueLink, getSourceQueueUrl, sendToQueue } = vi.hoisted(() => ({
@@ -32,7 +32,15 @@ vi.mock('@bike4mind/auth', async importOriginal => {
 });
 vi.mock('@server/utils/sqs', () => ({ sendToQueue }));
 
-import { enqueueGenerationJob, getVideoJobDeps, selectProviderKey, toJobUpdate, usableApiKey } from './wiring';
+import { createVideoProviderRegistry } from '@bike4mind/utils/videoProviders';
+import {
+  buildProviders,
+  enqueueGenerationJob,
+  getVideoJobDeps,
+  selectProviderKey,
+  toJobUpdate,
+  usableApiKey,
+} from './wiring';
 
 const baseJob = {
   id: 'job1',
@@ -56,11 +64,36 @@ describe('usableApiKey', () => {
   it('maps the expired sentinel to null so it never reaches a provider call', () => {
     expect(usableApiKey('expired')).toBeNull();
   });
+
+  it.each(['your-api-key', 'REPLACE_ME', 'not-configured', '   '])(
+    'maps a placeholder (%j) to null, as model discovery does',
+    raw => {
+      expect(usableApiKey(raw)).toBeNull();
+    }
+  );
 });
 
 describe('provider key selection', () => {
   it('gives the test provider a fixed key without consulting stored keys', () => {
     expect(selectProviderKey('test', {} as never)).toBe('test-key');
+  });
+
+  it('maps gemini-omni to the Gemini key', () => {
+    expect(selectProviderKey('gemini-omni', { gemini: 'g-key' } as never)).toBe('g-key');
+    expect(usableApiKey(selectProviderKey('gemini-omni', { gemini: null } as never))).toBeNull();
+  });
+
+  it('maps veo to the same Gemini key as gemini-omni', () => {
+    expect(selectProviderKey('veo', { gemini: 'g-key' } as never)).toBe('g-key');
+    expect(usableApiKey(selectProviderKey('veo', { gemini: null } as never))).toBeNull();
+    expect(usableApiKey(selectProviderKey('veo', { gemini: 'your-api-key' } as never))).toBeNull();
+  });
+
+  it('maps xai to the xAI chat key, so placeholder and expiry checks apply unchanged', () => {
+    expect(selectProviderKey('xai', { xai: 'x-key' } as never)).toBe('x-key');
+    expect(usableApiKey(selectProviderKey('xai', { xai: null } as never))).toBeNull();
+    expect(usableApiKey(selectProviderKey('xai', { xai: 'your-api-key' } as never))).toBeNull();
+    expect(usableApiKey(selectProviderKey('xai', { xai: 'expired' } as never))).toBeNull();
   });
 
   it('throws for a provider id with no mapping', () => {
@@ -137,5 +170,25 @@ describe('enqueueGenerationJob queue URL resolution', () => {
     });
     await expect(enqueueGenerationJob('job3', 5)).rejects.toThrow('Missing source queue URL');
     expect(sendToQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildProviders', () => {
+  afterEach(() => {
+    delete process.env.ENABLE_TEST_VIDEO_PROVIDER;
+  });
+
+  it('registers Gemini Omni, xAI and Veo unconditionally, Gemini first', () => {
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo']);
+  });
+
+  it('adds the test provider only when enabled', () => {
+    process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
+    expect(buildProviders().map(provider => provider.id)).toEqual(['gemini-omni', 'xai', 'veo', 'test']);
+  });
+
+  it('builds a registry the catalog-owner check accepts', () => {
+    process.env.ENABLE_TEST_VIDEO_PROVIDER = 'true';
+    expect(() => createVideoProviderRegistry(buildProviders())).not.toThrow();
   });
 });

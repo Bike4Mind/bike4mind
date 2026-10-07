@@ -1,0 +1,26 @@
+{
+  "scenario": "invalid-param.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: the live-probed {code, error} envelope with a hyphenated invalid-argument code; the message wording is assumed. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "a lighthouse",
+          "duration": 2,
+          "aspect_ratio": "1:7",
+          "resolution": "480p"
+        }
+      },
+      "response": {
+        "status": 400,
+        "headers": { "content-type": "application/json" },
+        "body": { "code": "invalid-argument", "error": "Invalid aspect_ratio: 1:7" }
+      }
+    }
+  ]
+}

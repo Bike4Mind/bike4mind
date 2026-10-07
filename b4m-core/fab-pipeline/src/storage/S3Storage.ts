@@ -59,7 +59,8 @@ export class S3Storage extends BaseStorage {
   async upload(
     input: string | Buffer,
     destination: string,
-    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>
+    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body'>,
+    abortSignal?: AbortSignal
   ): Promise<string> {
     let content: Buffer | Readable | string;
 
@@ -87,6 +88,7 @@ export class S3Storage extends BaseStorage {
       }),
       {
         requestTimeout: 300000, // 5 minute timeout
+        abortSignal,
       }
     );
 

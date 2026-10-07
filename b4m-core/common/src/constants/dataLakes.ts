@@ -561,6 +561,12 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   pendingConnector?: DataLakePendingConnector;
   /**
+   * Whether a GitHub lake connection row (enabled or not) is bound to this lake, read flag-free as
+   * apps/client/server/dataLakes/assertLakeConnectorFree.ts does. Present only alongside
+   * `pendingConnector`, and only when the list route wires the lookup; absent means unknown.
+   */
+  hasGitHubConnection?: boolean;
+  /**
    * Lifetime embedding-spend meter (see IDataLake.embeddingSpendMicroUsd). EDITOR-ONLY, same
    * gate as the fields above: a reader gets none of a lake's financial telemetry. ALWAYS present
    * (defaulted to 0, never omitted) when the caller can manage this lake, even with zero spend -
@@ -883,3 +889,9 @@ export function getDataLakeTags(
 ): string[] {
   return getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys).map(dl => dl.datalakeTag);
 }
+
+/**
+ * Name a lake created by the connector-first GitHub flow carries until a repository binds, when the
+ * bind renames it to the repository's owner/repo - but only if the name is still exactly this.
+ */
+export const GITHUB_LAKE_PLACEHOLDER_NAME = 'New GitHub data lake';

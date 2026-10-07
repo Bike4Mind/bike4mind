@@ -1,16 +1,18 @@
-import { IMAGE_MODELS, ImageModels, VIDEO_MODELS, VideoModels } from '../models';
+import { IMAGE_MODELS, ImageModels } from '../models';
 import { EXTENDED_GPT_IMAGE_QUALITIES, OPENAI_IMAGE_MODELS, type ExtendedGptImageQuality } from '../schemas/openai';
 import { GEMINI_IMAGE_MODELS, type GeminiImageModel } from '../schemas/gemini';
 import { BFL_IMAGE_MODELS, type BFLImageModel } from '../schemas/bfl';
 import { normalizeEntitlementKey } from '../constants/dataLakes';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
+import { VIDEO_MODEL_IDS, type VideoModelId } from '../video/catalog';
 
 export const isImageModel = (model: string): model is ImageModels => {
   return IMAGE_MODELS.includes(model as ImageModels);
 };
 
-export const isVideoModel = (model: string): model is VideoModels => {
-  return VIDEO_MODELS.includes(model as VideoModels);
+// Public export with callers outside this repo: keep it when the video catalog changes.
+export const isVideoModel = (model: string): model is VideoModelId => {
+  return (VIDEO_MODEL_IDS as readonly string[]).includes(model);
 };
 
 type GptImageModelId = (typeof OPENAI_IMAGE_MODELS)[number];

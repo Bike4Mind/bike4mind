@@ -569,40 +569,12 @@ export const supportedSpeechToTextModels = z.enum(SpeechToTextModels);
 export type SpeechToTextModelName = z.infer<typeof supportedSpeechToTextModels>;
 
 /**
- * Video Models
- */
-export enum VideoModels {
-  SORA_2 = 'sora-2',
-  SORA_2_PRO = 'sora-2-pro',
-}
-
-export const VIDEO_MODELS = Object.values(VideoModels);
-export const supportedVideoModels = z.enum(VideoModels);
-export type VideoModelName = z.infer<typeof supportedVideoModels>;
-
-/**
- * Video size constraints and options for Sora
- */
-export const VIDEO_SIZE_CONSTRAINTS = {
-  SORA: {
-    durations: [4, 8, 12] as const,
-    sizes: ['720x1280', '1280x720', '1024x1792', '1792x1024'] as const,
-    defaultDuration: 4,
-    defaultSize: '720x1280' as const,
-  },
-} as const;
-
-export type SoraDuration = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.durations)[number];
-export type SoraVideoSize = (typeof VIDEO_SIZE_CONSTRAINTS.SORA.sizes)[number];
-
-/**
  * All supported models
  */
 export const supportedModels = z.enum({
   ...ChatModels,
   ...ImageModels,
   ...SpeechToTextModels,
-  ...VideoModels,
 });
 
 export type ModelName = z.infer<typeof supportedModels>;
@@ -745,6 +717,17 @@ type PricingInfo = {
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
 
+/** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
+export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+  const thresholds = Object.keys(model.pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const threshold of thresholds) {
+    if (tokens <= threshold) return threshold;
+  }
+  return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
+};
+
 /**
  * Compute USD cost for a text model call.
  *
@@ -776,18 +759,7 @@ export const getTextModelCost = (
     return cost;
   };
 
-  const thresholds: number[] = Object.keys(model.pricing)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  const tierForTokens = (tokens: number): number | null => {
-    for (const threshold of thresholds) {
-      if (tokens <= threshold) return threshold;
-    }
-    return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
-  };
-
-  const tier = tierForTokens(inputTokens);
+  const tier = pricingTierForTokens(model, inputTokens);
   if (tier === null) return alarmIfUnpriced(0);
 
   // Guard against a malformed or non-tiered pricing map (e.g. a flat

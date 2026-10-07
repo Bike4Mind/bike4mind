@@ -14,6 +14,7 @@ import {
 } from '@bike4mind/common';
 import {
   ProviderSubmitError,
+  ProviderOutputUnavailableError,
   VideoOutputTooLargeError,
   type ProviderJobHandle,
   type ProviderOutput,
@@ -22,9 +23,8 @@ import {
   type VideoProviderContext,
 } from '@bike4mind/utils/videoProviders';
 import { releaseCreditHold, settleCreditHold, type CreditLedgerEntry } from '../creditService/creditHold';
-import { EXPIRED_KEY_SENTINEL } from '../modelDiscoveryService/credentials';
 import type { GenerationJobHandler, GenerationJobStepContext, StepResult } from '../generationJobs/types';
-import type { VideoJobDeps } from './types';
+import { isUsableApiKey, type VideoJobDeps } from './types';
 
 const FEATURE_LABEL = 'video generation';
 
@@ -73,7 +73,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     { signal }: GenerationJobStepContext
   ): Promise<VideoProviderContext | null> => {
     const apiKey = await deps.resolveApiKey(job.payload.providerId, job.requestedBy);
-    if (!apiKey || apiKey === EXPIRED_KEY_SENTINEL) return null;
+    if (!isUsableApiKey(apiKey)) return null;
     return { apiKey, logger: deps.logger, now: () => deps.now(), signal };
   };
 
@@ -86,7 +86,9 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
     try {
       const caps = getVideoModelCapabilities(request.model);
       if (!caps) throw new Error(`Video model ${request.model} is no longer in the catalog`);
-      const billed = billedVideoRequest(caps, request, job.payload.reportedDurationSeconds);
+      // A billed block has no output to measure, so it is charged at the requested duration.
+      const reported = job.state === 'succeeded' ? job.payload.reportedDurationSeconds : undefined;
+      const billed = billedVideoRequest(caps, request, reported);
       return { billed, credits: estimateVideoCostCredits(caps, billed), usd: estimateVideoCostUsd(caps, billed) };
     } catch (error) {
       deps.logger.error('video_job_estimate_failed', { jobId: job.id, model: request.model, error });
@@ -123,6 +125,8 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         creditsCharged: charged,
         costUsd: usd,
         durationSeconds: billed.durationSeconds,
+        // A billed block spent real money but delivered nothing; 'refusal' keeps it out of the successes.
+        status: job.state === 'blocked' ? 'refusal' : 'ok',
       });
     } catch (error) {
       deps.logger.error('video_job_record_usage_failed', { jobId: job.id, creditsCharged: charged, error });
@@ -182,8 +186,13 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         return { next: 'running', payload: { ...job.payload, providerHandle } };
       } catch (error) {
         // The engine treats any submit throw as an unknown outcome (orphaned_submit). Only a definitive provider
-        // rejection created nothing, so only that one comes back as a retry. See GenerationJobHandler.submit.
+        // rejection created nothing, so only that one comes back as a retry, or as a failure when resubmitting
+        // the same request cannot help (ProviderSubmitError.retryable). See GenerationJobHandler.submit.
         if (!(error instanceof ProviderSubmitError) || !error.definitive) throw error;
+        if (!error.retryable) {
+          deps.logger.warn('video provider rejected the submit for good', { jobId: job.id, message: error.message });
+          return fail('provider_error', error.message, error.raw);
+        }
         deps.logger.warn('video provider rejected the submit; retrying', { jobId: job.id, message: error.message });
         return { next: 'retry', reason: error.message };
       }
@@ -218,6 +227,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
             next: 'blocked',
             error: { code: 'content_blocked', message: 'The provider declined this request under its content policy' },
             rawProviderError: result.raw,
+            ...(result.billed && { payload: { ...job.payload, billedBlock: true } }),
           };
         case 'failed':
           return result.retryable
@@ -239,6 +249,10 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         bytes = await providerFor(job).fetchOutput(payload.providerOutput, ctx);
       } catch (error) {
         if (error instanceof VideoOutputTooLargeError) return fail('output_too_large', error.message);
+        // Retention ran out (or the file was purged): another attempt cannot fetch it.
+        if (error instanceof ProviderOutputUnavailableError) {
+          return fail('provider_error', 'The provider no longer has the generated video', { status: error.status });
+        }
         throw error;
       }
       const contentType = payload.providerOutput.contentType ?? 'video/mp4';
@@ -254,6 +268,7 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
         bytes,
         contentType,
         prompt: payload.request.prompt,
+        signal: context.signal,
       });
       let output: VideoJobOutput;
       if (files.saved) {
@@ -261,7 +276,12 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       } else {
         deps.logger.warn('video saved outside Files', { jobId: job.id, reason: files.reason });
         const key = `generated-video/${job.ownerId}/${job.id}.${extensionFor(contentType)}`;
-        const { s3Key } = await deps.saveToGeneratedBucket({ key, bytes, contentType });
+        const { s3Key } = await deps.saveToGeneratedBucket({
+          key,
+          bytes,
+          contentType,
+          signal: context.signal,
+        });
         output = { location: 'generated', s3Key, ...common };
       }
       return { next: 'succeeded', payload: { ...withoutProviderOutput(payload), output } };
@@ -279,8 +299,10 @@ export function createVideoJobHandler(deps: VideoJobDeps): GenerationJobHandler 
       await provider.cancel(handle, ctx);
     },
 
+    // Reads only the committed job, so the sweep's recovery of an unhandled terminal job settles or releases alike.
     async onTerminal(job) {
-      if (job.state === 'succeeded') await settle(job);
+      const charged = job.state === 'succeeded' || (job.state === 'blocked' && job.payload.billedBlock === true);
+      if (charged) await settle(job);
       else await release(job);
     },
   };
