@@ -976,6 +976,17 @@ describe('planCatalogWrites', () => {
       expect(second.rows).toEqual([]);
     });
 
+    it('replaces the wording when the denial is no longer a price one, even with no aggregator running', () => {
+      const second = plan({
+        resolveDispatch: dispatchable,
+        contributions: [provider],
+        base: asBase(afterLoneQuote().rows),
+        policy: 'manual',
+      });
+
+      expect(second.rows[0].patch).toMatchObject({ autoDisabledReason: 'discovered, awaiting admin approval' });
+    });
+
     it('drops the wording once an aggregator ran and still quoted nothing', () => {
       const second = plan({
         resolveDispatch: dispatchable,
