@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Self-host signs Bedrock with the dedicated BEDROCK_AWS_* pair, never the default chain (which
- * would pick up the MinIO AWS_* pair first); hosted keeps the default chain. Both client
+ * would pick up the MinIO AWS_* pair first), and without that pair rejects instead of signing;
+ * hosted keeps the default chain. Both client
  * construction sites are covered, since updateClientForModel rebuilds the client per model.
  */
 
@@ -64,6 +65,19 @@ describe('Bedrock client credentials', () => {
         secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
         sessionToken: 'session-token',
       });
+    }
+  });
+
+  it('rejects on self-host without BEDROCK_AWS_* instead of signing with the MinIO pair', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.stubEnv('AWS_ACCESS_KEY_ID', 'minioadmin');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'minioadminpass');
+    vi.stubEnv('BEDROCK_AWS_ACCESS_KEY_ID', '');
+    vi.stubEnv('BEDROCK_AWS_SECRET_ACCESS_KEY', '');
+
+    for (const config of await buildClients()) {
+      expect(config.credentials).toBeTypeOf('function');
+      await expect((config.credentials as () => Promise<unknown>)()).rejects.toThrow(/BEDROCK_AWS_ACCESS_KEY_ID/);
     }
   });
 });

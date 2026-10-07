@@ -125,6 +125,17 @@ function isAbortError(err: unknown): boolean {
   return err.message.includes('aborted');
 }
 
+// Self-host without BEDROCK_AWS_* must not fall back to the default chain, which would sign with
+// the MinIO AWS_* pair. Rejecting per request (not at construction) keeps eager construction safe.
+const BEDROCK_UNCONFIGURED = {
+  credentials: () =>
+    Promise.reject(
+      new Error(
+        'Bedrock is not configured on this self-host install: set BEDROCK_AWS_ACCESS_KEY_ID and BEDROCK_AWS_SECRET_ACCESS_KEY'
+      )
+    ),
+};
+
 export abstract class BaseBedrockBackend implements ICompletionBackend {
   private _options: BedrockOptions;
   protected _bedrockRuntime: BedrockRuntimeClient;
@@ -148,7 +159,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     };
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
-      ...(bedrockClientCredentials() ?? {}),
+      ...(bedrockClientCredentials() ?? BEDROCK_UNCONFIGURED),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
@@ -216,7 +227,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
     // Always create a fresh client to avoid stale credentials in warm Lambdas
     this._bedrockRuntime = new BedrockRuntimeClient({
       region: this._options.region,
-      ...(bedrockClientCredentials() ?? {}),
+      ...(bedrockClientCredentials() ?? BEDROCK_UNCONFIGURED),
       ...BEDROCK_RETRY_CONFIG,
       requestHandler: BEDROCK_REQUEST_HANDLER,
     });
