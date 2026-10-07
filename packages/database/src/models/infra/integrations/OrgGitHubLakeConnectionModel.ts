@@ -74,6 +74,7 @@ const OrgGitHubLakeConnectionSchema = new Schema<IOrgGitHubLakeConnectionDocumen
     activeIngestBatchId: { type: String },
     ingestClaimToken: { type: String },
     disconnectRequestedAt: { type: Date },
+    reconcileCheckedAt: { type: Date },
   },
   {
     timestamps: true,
@@ -95,6 +96,9 @@ OrgGitHubLakeConnectionSchema.index({ targetDataLakeId: 1 }, { unique: true, nam
 OrgGitHubLakeConnectionSchema.index({ installationId: 1 }, { name: 'org_gh_lake_conn_installation_id' });
 
 OrgGitHubLakeConnectionSchema.index({ organizationId: 1 }, { name: 'org_gh_lake_conn_org_id' });
+
+// The scheduled reconcile's oldest-checked-first scan.
+OrgGitHubLakeConnectionSchema.index({ reconcileCheckedAt: 1 }, { name: 'org_gh_lake_conn_reconcile_checked' });
 
 export interface IOrgGitHubLakeConnectionModel extends Model<IOrgGitHubLakeConnectionDocument & IMongoDocument> {}
 
@@ -288,6 +292,32 @@ class OrgGitHubLakeConnectionRepository
   async recordLastError(id: string, lastError: string): Promise<boolean> {
     const res = await this.model.updateOne({ _id: id }, { $set: { lastError: redactLastError(lastError) } });
     return res.matchedCount > 0;
+  }
+
+  async findDueForReconcile(limit: number): Promise<(IOrgGitHubLakeConnectionDocument & IMongoDocument)[]> {
+    if (limit <= 0) return [];
+    // Oldest-checked, not oldest-synced: lastSyncedAt only moves on a successful sync, so idle or failing
+    // repos would head every batch and starve the rest past the cap. Missing reconcileCheckedAt sorts first.
+    return this.model
+      .find({
+        ...NOT_DISABLED,
+        disconnectRequestedAt: { $in: [null] },
+        $or: [
+          { status: { $in: ['connected', null] } },
+          ...staleSyncClaimClauses().map(clause => ({ status: 'syncing', ...clause })),
+        ],
+      })
+      .sort({ reconcileCheckedAt: 1, _id: 1 })
+      .limit(limit);
+  }
+
+  async markReconcileChecked(ids: readonly string[], at: Date): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: [...ids] } },
+      { $set: { reconcileCheckedAt: at } },
+      { timestamps: false }
+    );
   }
 }
 

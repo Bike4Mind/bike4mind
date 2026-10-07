@@ -421,6 +421,63 @@ describe('OrgGitHubLakeConnectionModel - recordLastError', () => {
   });
 });
 
+describe('OrgGitHubLakeConnectionModel - reconcile selection', () => {
+  let seq = 0;
+  const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000);
+  const add = async (fields: Record<string, unknown> = {}) => {
+    seq += 1;
+    const { id } = await repo.create({ ...base, repositoryId: 1000 + seq, targetDataLakeId: `lake-r${seq}` });
+    if (Object.keys(fields).length > 0)
+      await OrgGitHubLakeConnection.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: fields });
+    return id;
+  };
+  const dueIds = async (limit = 50) => (await repo.findDueForReconcile(limit)).map(c => String(c.id));
+
+  it('includes connected, legacy unset status, and stale syncing claims (both windows)', async () => {
+    const connected = await add();
+    const legacy = await add();
+    await OrgGitHubLakeConnection.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(legacy) },
+      { $unset: { status: '' } }
+    );
+    const staleUnchained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(21) });
+    const staleChained = await add({ status: 'syncing', syncClaimedAt: minutesAgo(61), activeIngestBatchId: 'b1' });
+    expect((await dueIds()).sort()).toEqual([connected, legacy, staleUnchained, staleChained].sort());
+  });
+
+  it('excludes disabled, disconnecting, live syncing, and error connections', async () => {
+    await add({ enabled: false });
+    await add({ disconnectRequestedAt: new Date() });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(5) });
+    await add({ status: 'syncing', syncClaimedAt: minutesAgo(30), activeIngestBatchId: 'b1' });
+    await add({ status: 'error' });
+    expect(await dueIds()).toEqual([]);
+  });
+
+  it('orders never-checked first, then oldest checked, and honors the limit', async () => {
+    const recent = await add({ reconcileCheckedAt: minutesAgo(1) });
+    const old = await add({ reconcileCheckedAt: minutesAgo(60) });
+    const never = await add();
+    expect(await dueIds()).toEqual([never, old, recent]);
+    expect(await dueIds(2)).toEqual([never, old]);
+    expect(await dueIds(0)).toEqual([]);
+  });
+
+  it('markReconcileChecked stamps only the given ids and leaves updatedAt untouched', async () => {
+    const a = await add();
+    const b = await add();
+    const before = await repo.findById(a);
+    const at = new Date('2026-10-01T00:00:00Z');
+    await repo.markReconcileChecked([a], at);
+    const after = await repo.findById(a);
+    expect(after?.reconcileCheckedAt).toEqual(at);
+    expect(after?.updatedAt).toEqual(before?.updatedAt);
+    expect((await repo.findById(b))?.reconcileCheckedAt).toBeUndefined();
+    await expect(repo.markReconcileChecked([], at)).resolves.toBeUndefined();
+    expect(await dueIds()).toEqual([b, a]);
+  });
+});
+
 describe('isGitHubLakeSyncClaimLive', () => {
   const now = Date.parse('2026-09-28T12:00:00Z');
   const minutesAgo = (m: number) => new Date(now - m * 60_000);
