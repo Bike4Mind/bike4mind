@@ -109,6 +109,7 @@
     "@node-saml/passport-saml": "^5.1.0",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/rest": "^22.0.1",
+    "@simplewebauthn/browser": "^14.0.0",
     "@slack/oauth": "^3.0.5",
     "@slack/web-api": "^7.19.0",
     "@stripe/react-stripe-js": "^6.7.0",
