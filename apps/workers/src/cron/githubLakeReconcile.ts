@@ -40,7 +40,7 @@ export const RETRY_COOLDOWN_MS = 6 * 60 * 60_000;
 export const RUN_BUDGET_MS = 4 * 60_000;
 
 // Each check is up to three GitHub calls; a modest window keeps one installation's budget from
-// draining in a burst while still finishing MAX_CHECKS_PER_RUN well inside the cron's timeout.
+// draining in a burst; RUN_BUDGET_MS bounds the run as a whole.
 const CHECK_CONCURRENCY = 10;
 
 export type GitHubLakeReconcileResult = {
@@ -155,7 +155,7 @@ export async function runGitHubLakeReconcile({
       return 'failed';
     }
     // A stale 'syncing' claim is enqueued even on an unchanged HEAD: the ingest's claimForSync takes the
-    // stale claim over and releases it, which is the only thing that returns the connection to 'connected'.
+    // stale claim over and releases it, and with HEAD unchanged no push will arrive to do that.
     if (head === conn.lastSyncedCommitSha && conn.status !== 'syncing') return 'unchanged';
     return enqueue(conn, head);
   };
