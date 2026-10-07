@@ -5,7 +5,11 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { WhatsNewConfigService } from '@client/services/whatsNewConfigService';
 import { apiKeyService } from '@bike4mind/services';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
-import { sanitizeContentForLLM, extractJsonFromResponse, WhatsNewModalSchema } from './whatsNewGeneration.utils';
+import {
+  sanitizeContentForLLM,
+  extractJsonFromResponse,
+  WhatsNewModalSchema,
+} from '@server/whatsNew/whatsNewGeneration.utils';
 import { WHATS_NEW_VALIDATION_LIMITS } from '@bike4mind/common';
 
 // Mock dependencies

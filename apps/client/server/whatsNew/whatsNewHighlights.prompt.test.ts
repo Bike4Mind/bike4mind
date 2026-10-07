@@ -182,8 +182,7 @@ Better context understanding`;
     it('should include context block with timestamp', () => {
       const blocks = createSlackBlocks(sampleHighlights, sampleDateRange);
       const contextBlock = blocks.find(b => b.type === 'context') as
-        | { type: string; elements?: Array<{ text?: string }> }
-        | undefined;
+        { type: string; elements?: Array<{ text?: string }> } | undefined;
       expect(contextBlock).toBeDefined();
       expect(contextBlock?.elements?.[0]?.text).toContain('Auto-generated');
     });
