@@ -770,8 +770,6 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
 | POST | /api/ai/barkeep-chat | Tavern AI barkeep conversation |
 | POST | /api/ai/tavern-conversation | Tavern NPC conversation |
-| POST | /api/ai/v1/completions | Streaming completions (custom SSE contract, not OpenAI-compatible) |
-| GET | /api/ai/v1/tools | List available tools |
 | POST | /api/ai/optimize-input | Optimize/rewrite user input |
 | POST | /api/ai/refineText | Refine and improve text |
 | POST | /api/ai/rapid-reply | Quick contextual reply generation |

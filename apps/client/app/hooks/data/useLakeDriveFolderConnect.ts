@@ -1,19 +1,30 @@
 import { toast } from 'sonner';
+import { useUser } from '@client/app/contexts/UserContext';
+import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import { useConnectDriveFolderToLake } from '@client/app/hooks/data/googleDrive';
 import { useDriveFolderPicker } from '@client/app/hooks/data/useDriveFolderPicker';
+import { saveDriveConnectHandoff } from '@client/app/utils/driveConnectHandoff';
 import { getServerErrorField } from '@client/app/utils/error';
 
 /**
  * Pick a Drive folder and bind it to an existing lake straight away, toasting the outcome. Shared by
  * DriveConnectAction and FinishSourceConnectBanner. A user with no linked Google account is sent to
- * Google's consent screen by the picker (see useDriveFolderPicker); the Drive callback route lands on
- * the home page, so they reopen the lake and pick from there.
+ * Google's consent screen by the picker (see useDriveFolderPicker); a handoff saved for that attempt
+ * lets the Drive callback route reopen this lake in the manager, where they pick the folder.
  */
 export function useLakeDriveFolderConnect(lakeId: string) {
   const connect = useConnectDriveFolderToLake();
 
   const { openFolderPicker, isPicking } = useDriveFolderPicker({
     busy: connect.isPending,
+    onBeforeRedirect: authUrl => {
+      const userId = useUser.getState().currentUser?.id;
+      if (!userId) return;
+      saveDriveConnectHandoff(
+        { kind: 'lake', userId, organizationId: activeOrgId() ?? null, dataLakeId: lakeId },
+        authUrl
+      );
+    },
     onPicked: folder =>
       connect.mutate(
         { dataLakeId: lakeId, ...folder },
