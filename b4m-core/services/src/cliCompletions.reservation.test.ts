@@ -39,10 +39,40 @@ const OPENAI_CACHED_MODEL_INFO = {
 } as unknown as ModelInfo;
 
 const BEDROCK_MODEL_ID = 'reservation-test-bedrock';
+// Explicit cache_read: the exclusion under test must come from the backend, not a missing rate.
+const CACHE_READ_PRICING = { 200_000: { input: 5 / 1_000_000, output: 25 / 1_000_000, cache_read: 0.5 / 1_000_000 } };
 const BEDROCK_MODEL_INFO = {
   ...MODEL_INFO,
   id: BEDROCK_MODEL_ID,
   backend: ModelBackend.Bedrock,
+  pricing: CACHE_READ_PRICING,
+} as unknown as ModelInfo;
+
+const GEMINI_MODEL_ID = 'reservation-test-gemini';
+const GEMINI_MODEL_INFO = {
+  ...MODEL_INFO,
+  id: GEMINI_MODEL_ID,
+  backend: ModelBackend.Gemini,
+  pricing: CACHE_READ_PRICING,
+} as unknown as ModelInfo;
+
+const XAI_MODEL_ID = 'reservation-test-xai';
+const XAI_MODEL_INFO = {
+  ...MODEL_INFO,
+  id: XAI_MODEL_ID,
+  backend: ModelBackend.XAI,
+  pricing: CACHE_READ_PRICING,
+} as unknown as ModelInfo;
+
+// Literal rates (per token) so the tier test asserts a figure not derived from getTextModelCost.
+const TIERED_MODEL_ID = 'reservation-test-tiered';
+const TIERED_MODEL_INFO = {
+  ...MODEL_INFO,
+  id: TIERED_MODEL_ID,
+  pricing: {
+    50_000: { input: 1 / 1_000_000, output: 2 / 1_000_000 },
+    200_000: { input: 10 / 1_000_000, output: 20 / 1_000_000 },
+  },
 } as unknown as ModelInfo;
 
 // Same pricing, but reasoning tokens bill inside the output budget, so this one must
@@ -69,6 +99,9 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => ({
     OPENAI_MODEL_INFO,
     OPENAI_CACHED_MODEL_INFO,
     BEDROCK_MODEL_INFO,
+    GEMINI_MODEL_INFO,
+    XAI_MODEL_INFO,
+    TIERED_MODEL_INFO,
   ]),
   getLlmByModel: vi.fn(() => ({
     currentModel: '',
@@ -187,14 +220,14 @@ describe('executeCompletion - pre-flight reservation size', () => {
       { role: 'user' as const, content: text(8_000) },
     ];
 
-    it('prices a conversation flagged at the last assistant message at read for the prefix, plain for the tail', async () => {
+    it('prices a conversation flagged at the last assistant message at read before it, write for it, plain for the tail', async () => {
       const { db, users } = buildDb();
       await executeCompletion({ ...roundParams, db, messages: toolLoop(true) });
 
-      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 8_000, OUTPUT, 60_000, 0, 68_000));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 8_000, OUTPUT, 30_000, 30_000));
       const uncached = usdToCredits(getTextModelCost(MODEL_INFO, 68_000, OUTPUT));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
-      expect(expected).toBeLessThan(uncached * 0.6);
+      expect(expected).toBeLessThan(uncached);
     });
 
     it('prices the flagged tail at cache_write when the rolling breakpoint rides the newest message', async () => {
@@ -203,7 +236,7 @@ describe('executeCompletion - pre-flight reservation size', () => {
       messages[3] = { ...messages[3], cache: true } as (typeof messages)[number];
       await executeCompletion({ ...roundParams, db, messages });
 
-      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 60_000, 8_000, 68_000));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 0, OUTPUT, 30_000, 38_000));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
@@ -213,7 +246,7 @@ describe('executeCompletion - pre-flight reservation size', () => {
       messages[0] = { ...messages[0], cache: true } as (typeof messages)[number];
       await executeCompletion({ ...roundParams, db, messages });
 
-      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 58_000, OUTPUT, 10_000, 0, 68_000));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 58_000, OUTPUT, 10_000, 0));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
@@ -222,12 +255,39 @@ describe('executeCompletion - pre-flight reservation size', () => {
       const messages = [
         { role: 'user' as const, content: text(20_000), cache: true },
         { role: 'assistant' as const, content: text(30_000) },
-        { role: 'system' as const, content: text(8_000) },
+        { role: 'system' as const, content: text(8_000), cache: true },
       ];
       await executeCompletion({ ...roundParams, db, messages });
 
-      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 38_000, OUTPUT, 20_000, 0, 58_000));
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 30_000, OUTPUT, 28_000, 0));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('breaks at the last flagged non-system message: a flagged system message mid-array does not cover the history', async () => {
+      const { db, users } = buildDb();
+      const messages = [
+        { role: 'user' as const, content: text(20_000) },
+        { role: 'assistant' as const, content: text(30_000) },
+        { role: 'user' as const, content: text(10_000) },
+        { role: 'assistant' as const, content: text(20_000) },
+        { role: 'system' as const, content: text(5_000), cache: true },
+        { role: 'user' as const, content: text(5_000) },
+      ];
+      await executeCompletion({ ...roundParams, db, messages });
+
+      const expected = usdToCredits(getTextModelCost(MODEL_INFO, 85_000, OUTPUT, 5_000, 0));
+      const historyAsRead = usdToCredits(getTextModelCost(MODEL_INFO, 5_000, OUTPUT, 80_000, 0));
+      expect(expected).not.toBe(historyAsRead);
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
+    });
+
+    it('selects the pricing tier from the total input, not the uncached remainder', async () => {
+      const { db, users } = buildDb();
+      await executeCompletion({ ...roundParams, model: TIERED_MODEL_ID, db, messages: toolLoop(true) });
+
+      // 68k total is in the 200k tier ($10/M in, $20/M out); read 0.1x, write 1.25x. The 8k plain tail alone would pick the 50k tier.
+      const usd = 10e-6 * 8_000 + 20e-6 * OUTPUT + 10e-6 * 0.1 * 30_000 + 10e-6 * 1.25 * 30_000;
+      expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -usdToCredits(usd));
     });
 
     it('prices the first round (no assistant message) fully uncached', async () => {
@@ -250,11 +310,15 @@ describe('executeCompletion - pre-flight reservation size', () => {
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
-    it('leaves a flagged Bedrock conversation uncached: this path never enables Bedrock caching', async () => {
+    it.each([
+      ['Bedrock (this path never enables its caching)', BEDROCK_MODEL_ID, BEDROCK_MODEL_INFO],
+      ['Gemini (not an auto-caching backend)', GEMINI_MODEL_ID, GEMINI_MODEL_INFO],
+      ['xAI (its adapter reports no cache reads)', XAI_MODEL_ID, XAI_MODEL_INFO],
+    ])('leaves a %s conversation uncached despite a published cache_read', async (_name, id, info) => {
       const { db, users } = buildDb();
-      await executeCompletion({ ...roundParams, model: BEDROCK_MODEL_ID, db, messages: toolLoop(true) });
+      await executeCompletion({ ...roundParams, model: id, db, messages: toolLoop(true) });
 
-      const expected = usdToCredits(getTextModelCost(BEDROCK_MODEL_INFO, 68_000, OUTPUT));
+      const expected = usdToCredits(getTextModelCost(info, 68_000, OUTPUT));
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
     });
 
@@ -275,7 +339,7 @@ describe('executeCompletion - pre-flight reservation size', () => {
         messages: toolLoop(false),
       });
 
-      const expected = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 8_000, OUTPUT, 60_000, 0, 68_000));
+      const expected = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 38_000, OUTPUT, 30_000, 0));
       const uncached = usdToCredits(getTextModelCost(OPENAI_CACHED_MODEL_INFO, 68_000, OUTPUT));
       expect(expected).toBeLessThan(uncached);
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);
@@ -292,7 +356,7 @@ describe('executeCompletion - pre-flight reservation size', () => {
       await executeCompletion({ ...baseParams, model: REASONING_MODEL_ID, db, messages });
 
       const output = reservationOutputTokens(MAX_TOKENS, true);
-      const expected = usdToCredits(getTextModelCost(REASONING_MODEL_INFO, 0, output, 58_000, 10_000, 68_000));
+      const expected = usdToCredits(getTextModelCost(REASONING_MODEL_INFO, 0, output, 18_000, 50_000));
       const uncached = usdToCredits(getTextModelCost(REASONING_MODEL_INFO, 68_000, output));
       expect(expected).toBeLessThan(uncached);
       expect(users.incrementCredits).toHaveBeenNthCalledWith(1, 'user1', -expected);

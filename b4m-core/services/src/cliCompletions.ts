@@ -5,6 +5,7 @@ import {
   type ModelInfo,
   CompletionInfo,
   getTextModelCost,
+  pricingTierForTokens,
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
@@ -154,14 +155,15 @@ function estimateInputTokens(messages: IMessage[]): number {
 }
 
 /**
- * Backends whose server caches prompt prefixes without a client flag and whose adapters report
- * the hits; they only get the cache rate when the catalog publishes an explicit cache_read
- * (the default 0.1x multiplier is Anthropic's). Gemini and Ollama publish none; Bedrock's
- * cache_control is gated on options.cacheStrategy.enableCaching, which this path never sets.
+ * Backends whose server caches prompt prefixes without a client flag; they only get the cache
+ * rate when the catalog publishes an explicit cache_read (the default 0.1x multiplier is
+ * Anthropic's). Must stay in sync with the adapters that report cache reads into settlement
+ * (those calling `splitCacheInclusiveInput`): xAI's adapter does not, so settlement bills its
+ * full input. Gemini and Ollama publish no cache_read; Bedrock's cache_control is gated on
+ * options.cacheStrategy.enableCaching, which this path never sets.
  */
 const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
   ModelBackend.OpenAI,
-  ModelBackend.XAI,
   ModelBackend.Kimi,
   ModelBackend.DeepSeek,
 ]);
@@ -172,13 +174,20 @@ const AUTO_CACHING_BACKENDS: ReadonlySet<ModelBackend> = new Set([
  * from the provider's prompt cache at a fraction of the input rate, so pricing it uncached
  * over-reserves by an order of magnitude and refuses users who can afford many real rounds.
  *
- * Billing rule: a cache read can only cover what an earlier round wrote, i.e. messages up to
- * the last assistant message, and Anthropic reads only up to the last `cache: true` breakpoint.
- * So messages [0, min(lastFlagged, lastAssistant)] bill at cache_read; messages after that up
- * to the last flagged one bill at cache_write (the new breakpoint writes them); everything else
- * is plain input. Auto-caching backends read everything up to the last assistant message.
- * A conversation with no assistant message yet has nothing cached, so it stays fully uncached.
- * If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges actual usage.
+ * Billing rule: a cache read can only cover what an earlier round wrote, which ended before the
+ * last assistant message. Anthropic hoists every system message into the `system` param ahead of
+ * the conversation, so system messages are their own leading segment: read when one is flagged
+ * (or a conversation breakpoint follows them) and an assistant turn exists. Conversation
+ * (non-system) messages read up to min(last flagged, message before the last assistant); from
+ * there to the last flagged one they bill at cache_write (the new breakpoint writes them, the
+ * last assistant message included); the rest is plain input. Auto-caching backends read the
+ * system messages and the conversation up to the message before the last assistant, and bill the
+ * rest plain. A conversation with no assistant message yet has nothing cached, so it stays fully
+ * uncached. If the provider misses (cache TTL lapsed) the real cost is higher; settlement charges
+ * actual usage.
+ *
+ * The pricing tier comes from the total input, since a request's tier is set by its whole prompt
+ * and not by the uncached remainder.
  */
 function estimateReservationUsd(
   modelInfo: ModelInfo,
@@ -187,44 +196,44 @@ function estimateReservationUsd(
   estimatedOutputTokens: number
 ): number {
   const uncachedUsd = getTextModelCost(modelInfo, estimatedInputTokens, estimatedOutputTokens);
+  if (!messages.some(m => m.role === 'assistant')) return uncachedUsd;
 
-  const lastAssistantIndex = messages.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
-  if (lastAssistantIndex < 0) return uncachedUsd;
+  const system = messages.filter(m => m.role === 'system');
+  const conversation = messages.filter(m => m.role !== 'system');
+  const lastAssistantIndex = conversation.reduce((last, m, i) => (m.role === 'assistant' ? i : last), -1);
 
+  let systemIsRead: boolean;
   let readEnd: number;
   let writeEnd = -1;
   if (modelInfo.backend === ModelBackend.Anthropic) {
-    const lastFlagged = messages.reduce((last, m, i) => (m.cache === true ? i : last), -1);
-    if (lastFlagged < 0) return uncachedUsd;
-    readEnd = Math.min(lastFlagged, lastAssistantIndex);
+    const lastFlagged = conversation.reduce((last, m, i) => (m.cache === true ? i : last), -1);
+    systemIsRead = lastFlagged >= 0 || system.some(m => m.cache === true);
+    if (!systemIsRead) return uncachedUsd;
+    readEnd = Math.min(lastFlagged, lastAssistantIndex - 1);
     writeEnd = lastFlagged;
   } else {
-    const lowestTier = Object.keys(modelInfo.pricing)
-      .map(Number)
-      .sort((a, b) => a - b)[0];
-    const publishesCacheRead = lowestTier !== undefined && modelInfo.pricing[lowestTier]?.cache_read !== undefined;
+    const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
+    const publishesCacheRead = tier !== null && modelInfo.pricing[tier]?.cache_read !== undefined;
     if (!AUTO_CACHING_BACKENDS.has(modelInfo.backend) || !publishesCacheRead) return uncachedUsd;
-    readEnd = lastAssistantIndex;
+    systemIsRead = true;
+    readEnd = lastAssistantIndex - 1;
   }
 
-  let readTokens = 0;
+  const systemTokens = estimateInputTokens(system);
+  let readTokens = systemIsRead ? systemTokens : 0;
   let writeTokens = 0;
-  let plainTokens = 0;
-  messages.forEach((m, i) => {
+  let plainTokens = systemIsRead ? 0 : systemTokens;
+  conversation.forEach((m, i) => {
     const tokens = estimateInputTokens([m]);
     if (i <= readEnd) readTokens += tokens;
     else if (i <= writeEnd) writeTokens += tokens;
     else plainTokens += tokens;
   });
 
-  return getTextModelCost(
-    modelInfo,
-    plainTokens,
-    estimatedOutputTokens,
-    readTokens,
-    writeTokens,
-    readTokens + writeTokens + plainTokens
-  );
+  const tier = pricingTierForTokens(modelInfo, estimatedInputTokens);
+  const tieredModel =
+    tier === null ? modelInfo : ({ ...modelInfo, pricing: { [tier]: modelInfo.pricing[tier] } } as ModelInfo);
+  return getTextModelCost(tieredModel, plainTokens, estimatedOutputTokens, readTokens, writeTokens);
 }
 
 /**
