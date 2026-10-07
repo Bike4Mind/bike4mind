@@ -172,7 +172,6 @@ export default function DataLakeExplorer({
   // Attach files to the current session's workbench (#836).
   const { currentSessionId, currentSession } = useSessions();
   const setLakeScope = useSetLakeScope();
-  const libraryFiles = useSetIncludeLibraryFiles();
   // Lake scope chosen BEFORE there is a session to write it to: /new defers creation to the first
   // message, and useCreateDataLakeSession reads this store to create the session already scoped.
   const pendingLakeTags = usePendingLakeScope(s => s.lakeTags);
@@ -276,6 +275,8 @@ export default function DataLakeExplorer({
     isError: lakesError,
     refetch: refetchLakes,
   } = useGetDataLakesWithRetrievability(currentSessionId);
+  const lakeFileTagPrefixes = useMemo(() => lakes?.map(l => l.fileTagPrefix) ?? [], [lakes]);
+  const libraryFiles = useSetIncludeLibraryFiles(lakeFileTagPrefixes);
   const removeFile = useRemoveFileFromDataLake(deleteTarget?.lake.id ?? null);
   const currentUserId = useUser(s => s.currentUser?.id);
   const canDeleteFile = useCallback((file: IFabFileDocument) => resolveManageableLake(file, lakes) != null, [lakes]);

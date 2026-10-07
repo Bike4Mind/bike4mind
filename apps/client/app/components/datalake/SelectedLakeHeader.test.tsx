@@ -147,10 +147,17 @@ describe('SelectedLakeHeader', () => {
     expect(screen.queryByTestId('datalake-selected-lake-source')).not.toBeInTheDocument();
   });
 
-  it('carries only lake actions, leaving the lake state to the scope strip', () => {
-    renderHeader({ status: 'draft', retrievable: false });
+  it('shows the visibility and prefix the strip lacks, leaving draft and not-searched state to it', () => {
+    renderHeader({
+      status: 'draft',
+      retrievable: false,
+      fileTagPrefix: 'acme:',
+      isPublic: false,
+      organizationId: 'org-1',
+    });
+    expect(screen.getByTestId('datalake-selected-lake-visibility')).toHaveTextContent('Organization');
+    expect(screen.getByTestId('datalake-selected-lake-prefix')).toHaveTextContent('acme:');
     expect(screen.queryByTestId('datalake-selected-draft-chip')).not.toBeInTheDocument();
     expect(screen.queryByTestId('datalake-selected-lake-unsearchable')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('datalake-selected-lake-prefix')).not.toBeInTheDocument();
   });
 });

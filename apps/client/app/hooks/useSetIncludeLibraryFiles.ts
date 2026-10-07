@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { toast } from 'sonner';
-import { DATALAKE_TAG_PREFIX, effectiveIncludeLibraryFiles } from '@bike4mind/common';
+import { effectiveIncludeLibraryFiles, libraryFlagForScope, retrievalTagsNameALake } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
 
@@ -11,14 +11,18 @@ import { useUpdateSession } from '@client/app/hooks/data/sessions';
  *
  * Like useSetLakeScope: optimistic on the cached session, one PUT carrying only the flag, rolled
  * back on failure. `isPending` lets the chip refuse a second click, so two in-flight writes cannot
- * roll back out of order.
+ * roll back out of order. `lakeFileTagPrefixes` are the caller's lakes' prefixes, so a prefix-named
+ * lake reads as named here exactly as it does on the server (sessionNamesALake).
  */
-export default function useSetIncludeLibraryFiles() {
+export default function useSetIncludeLibraryFiles(lakeFileTagPrefixes: readonly (string | undefined)[] = []) {
   const { currentSession, setCurrentSession } = useSessions();
   const { mutate: updateSession, isPending } = useUpdateSession();
 
-  const namesALake = !!currentSession?.retrievalTags?.some(tag => tag.startsWith(DATALAKE_TAG_PREFIX));
-  const included = effectiveIncludeLibraryFiles(currentSession?.includeLibraryFiles, namesALake);
+  const namesALake = retrievalTagsNameALake(currentSession?.retrievalTags, lakeFileTagPrefixes);
+  const included = effectiveIncludeLibraryFiles(
+    currentSession ? libraryFlagForScope(currentSession) : undefined,
+    namesALake
+  );
 
   const toggle = useCallback(() => {
     if (!currentSession || isPending) return;

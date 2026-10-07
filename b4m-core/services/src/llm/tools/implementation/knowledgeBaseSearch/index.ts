@@ -665,9 +665,11 @@ async function trySemanticKbSearch(
     // files), and falling through to the metadata-only keyword arm would lose content search over
     // it entirely. Left intact for the genuinely lake-less caller so their behaviour is unchanged.
     if (dataLakeTags.length === 0 && !context.suppressLakeArms) return NO_SEMANTIC_RESULT;
-    // Library off: only lake arms may match. With none, the keyword arm reports the empty corpus
-    // (an ownership query with zero arms would throw on restrictToDataLake).
+    // Library off: only lake arms and the chat's own attachments may match. With neither, the
+    // keyword arm reports the empty corpus (an ownership query with zero arms would throw on
+    // restrictToDataLake).
     const excludesLibrary = await sessionExcludesLibrary(context);
+    const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []) : [];
 
     const ceiling = resolvePassageCeiling(bounds.rawMaxResults, bounds.defaultResults, budgets.kbResultTokenBudget);
     // Widen the candidate pool when either adaptive knob is on: minScore is re-applied CLIENT-side
@@ -678,7 +680,13 @@ async function trySemanticKbSearch(
     const topK = Math.max(ceiling, adaptive ? KB_SEARCH_MAX_RESULTS : 0, KB_SEARCH_CANDIDATE_FLOOR);
 
     const lakeMemberships = lakeMembershipsFrom(lakes);
-    if (excludesLibrary && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+    if (
+      excludesLibrary &&
+      !dataLakeTags.length &&
+      !dataLakeTagPrefixes.length &&
+      !lakeMemberships.length &&
+      !admitFileIds.length
+    ) {
       return NO_SEMANTIC_RESULT;
     }
     warnIfManyLakeMemberships(lakeMemberships, context.logger, 'search_knowledge_base:semantic');
@@ -699,6 +707,7 @@ async function trySemanticKbSearch(
         // falls to metadata-only keyword search - see ownFilesOnly.
         ownFilesOnly: context.suppressLakeArms === true && !excludesLibrary,
         restrictToDataLake: excludesLibrary,
+        admitFileIds,
         budgets,
         vectorSearchEnabled,
         // Per-lake supersession collapse - `lakes` is only ever an attribution source here, never a
@@ -822,10 +831,11 @@ async function trySemanticKbSearch(
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
-      // semanticDataLakeSearch's file search is a MIXED corpus (includeShared: true, no
-      // restrictToDataLake - collectScopedFiles ORs the caller's own/shared files in alongside
-      // the lake arms), same as the keyword arm below - a hit with no recoverable tag may be the
-      // caller's own private file, so this must NOT fall back to the full scope.
+      // semanticDataLakeSearch's file search can be a MIXED corpus (includeShared: true, and unless
+      // the library is off collectScopedFiles ORs the caller's own/shared files in alongside the
+      // lake arms; even off, attached files are admitted), same as the keyword arm below - a hit
+      // with no recoverable tag may be the caller's own private file, so this must NOT fall back to
+      // the full scope.
       lakeIds: attributeAccessedLakeIds(
         ranked.map(r => r.fileTags),
         lakes,
@@ -1409,7 +1419,14 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             keywordArmOriginLakes = lakeViewComplete === false ? undefined : lakes;
             const lakeMemberships = lakeMembershipsFrom(lakes);
             const excludesLibrary = await sessionExcludesLibrary(context);
-            if (excludesLibrary && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+            const admitFileIds = excludesLibrary ? (context.attachedFileIds ?? []) : [];
+            if (
+              excludesLibrary &&
+              !dataLakeTags.length &&
+              !dataLakeTagPrefixes.length &&
+              !lakeMemberships.length &&
+              !admitFileIds.length
+            ) {
               await context.statusUpdate({
                 promptMeta: {
                   retrieval: {
@@ -1453,6 +1470,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                 lakeMemberships, // Dynamic-lake arms, each anchored to that lake's creator
                 restrictToDataLake: excludesLibrary,
+                admitFileIds,
                 excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
                 // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
                 ...(context.retrievalFilter ?? {}),

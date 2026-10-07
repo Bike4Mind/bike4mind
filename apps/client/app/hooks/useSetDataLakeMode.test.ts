@@ -61,14 +61,25 @@ describe('useSetDataLakeMode', () => {
     expect(updateSession).toHaveBeenCalledWith({ id: 's1', forceKnowledgeRetrieval: true }, expect.anything());
   });
 
-  it('turning off: re-admits the library in a lake chat whose tags would keep it excluded', () => {
-    currentSession = { id: 's1', name: 'Chat', forceKnowledgeRetrieval: true, retrievalTags: ['datalake:acme'] };
-    const { result } = renderHook(() => useSetDataLakeMode());
+  it('off then on keeps an explicit My files OFF choice', () => {
+    currentSession = {
+      id: 's1',
+      name: 'Chat',
+      forceKnowledgeRetrieval: true,
+      retrievalTags: ['datalake:acme'],
+      includeLibraryFiles: false,
+    };
+    const { result, rerender } = renderHook(() => useSetDataLakeMode());
     act(() => result.current(false));
-    expect(updateSession).toHaveBeenCalledWith(
-      { id: 's1', forceKnowledgeRetrieval: false, includeLibraryFilesChoice: true },
-      expect.anything()
-    );
+    currentSession = setCurrentSession.mock.calls.at(-1)?.[0];
+    rerender();
+    act(() => result.current(true));
+    expect(updateSession.mock.calls.map(c => c[0])).toEqual([
+      { id: 's1', forceKnowledgeRetrieval: false },
+      { id: 's1', forceKnowledgeRetrieval: true },
+    ]);
+    expect(currentSession).toEqual(expect.objectContaining({ includeLibraryFiles: false }));
+    expect(setCurrentSession.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({ includeLibraryFiles: false }));
   });
 
   it('turning off: sends no library choice when the library is already included', () => {

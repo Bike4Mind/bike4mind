@@ -2758,11 +2758,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
 
     // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
     // Skipping is the whole handling: narrowing to nothing and running anyway would either search
-    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
-    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
-    // reads as a broken lake rather than a chosen scope. The model can still call
-    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
-    // reason (resolveSessionLakeAccess).
+    // the caller's entire personal library (`restrictToDataLake` follows sessionExcludesLibraryFiles,
+    // which is false here unless the library was turned off) or abstain through the `no_lakes` exit
+    // and stamp an outcome that reads as a broken lake rather than a chosen scope. The model can
+    // still call search_knowledge_base, whose lake arms are empty for the same reason
+    // (resolveSessionLakeAccess); it reads the caller's own files only while the library is on.
     //
     // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
     // attachment") assumes the session would otherwise ground on a lake, which is never true once

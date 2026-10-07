@@ -57,7 +57,7 @@ import {
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
-import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
+import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel, libraryFlagForScope } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import {
   getLlmByModel,
@@ -1611,7 +1611,7 @@ async function processExecution(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
-      sessionIncludeLibraryFiles: session.includeLibraryFiles,
+      sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -3438,7 +3438,7 @@ async function processSubagentDispatch(
       // opinion" and the agent searches every lake its owner can reach - the opposite of what a
       // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
       sessionLakeScopeExplicit: session.lakeScopeExplicit,
-      sessionIncludeLibraryFiles: session.includeLibraryFiles,
+      sessionIncludeLibraryFiles: libraryFlagForScope(session),
       // Without it a library-off session's delegated agent cannot open the files attached to it.
       attachedFileIds: session.knowledgeIds ?? [],
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already

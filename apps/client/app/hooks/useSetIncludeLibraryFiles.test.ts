@@ -50,6 +50,18 @@ describe('useSetIncludeLibraryFiles', () => {
     expect(updateSession.mock.calls[0][0]).toEqual({ id: 's1', includeLibraryFilesChoice: false });
   });
 
+  it('reads an unset flag as on in a plain chat whose lake tags came from an attached file', () => {
+    currentSession = { id: 's1', retrievalTags: ['datalake:research'] };
+    const { result } = renderHook(() => useSetIncludeLibraryFiles());
+    expect(result.current.included).toBe(true);
+  });
+
+  it('reads a lake named by its file-tag prefix as a lake, as the server does', () => {
+    currentSession = { id: 's1', retrievalTags: ['acme:'], forceKnowledgeRetrieval: true };
+    expect(renderHook(() => useSetIncludeLibraryFiles()).result.current.included).toBe(true);
+    expect(renderHook(() => useSetIncludeLibraryFiles(['acme:'])).result.current.included).toBe(false);
+  });
+
   it('rolls the session back and says so when the write fails', () => {
     const before = currentSession;
     const { result } = renderHook(() => useSetIncludeLibraryFiles());

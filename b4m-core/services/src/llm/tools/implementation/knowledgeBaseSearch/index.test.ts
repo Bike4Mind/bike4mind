@@ -3655,6 +3655,7 @@ describe('search_knowledge_base includeLibraryFiles', () => {
   }
 
   // Unset excludes whenever the session names a lake (with or without the sidecar); a set flag wins.
+  // Callers resolve the flag through libraryFlagForScope first, so derived-tag chats arrive as true.
   it.each([
     ['explicit lake, unset', ['datalake:mine'], true, undefined, true],
     ['explicit lake, off', ['datalake:mine'], true, false, true],
@@ -3688,6 +3689,51 @@ describe('search_knowledge_base includeLibraryFiles', () => {
     expect(ctx.statusUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ promptMeta: { retrieval: expect.objectContaining({ outcome: 'no_lakes' }) } })
     );
+  });
+
+  it("library off still searches the chat's attached files on both arms", async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({
+      sessionRetrievalTags: ['datalake:mine'],
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: ['att-1'],
+    });
+    await run(ctx);
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      restrictToDataLake: true,
+      admitFileIds: ['att-1'],
+    });
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: ['att-1'] });
+  });
+
+  it('library on admits nothing extra, since the base arms already cover attachments', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(oneLake);
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    await run(makeFlagContext({ sessionIncludeLibraryFiles: true, attachedFileIds: ['att-1'] }));
+
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({ restrictToDataLake: false, admitFileIds: [] });
+  });
+
+  it('an all-lakes personal-corpus chat with the library off searches its attachments, not an empty corpus', async () => {
+    semanticDataLakeSearchMock.mockResolvedValueOnce({ results: [], scan: undefined, alternateModelsEmbedded: [] });
+    const ctx = makeFlagContext({
+      suppressLakeArms: true,
+      sessionIncludeLibraryFiles: false,
+      attachedFileIds: ['att-1'],
+    });
+    const out = await run(ctx);
+
+    expect(out).not.toBe(LIBRARY_OFF_NO_LAKE_MESSAGE);
+    expect(semanticDataLakeSearchMock.mock.calls[0][0]).toMatchObject({
+      restrictToDataLake: true,
+      ownFilesOnly: false,
+      admitFileIds: ['att-1'],
+    });
+    const searchMock = ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>;
+    expect(searchMock.mock.calls[0]?.[5]).toMatchObject({ restrictToDataLake: true, admitFileIds: ['att-1'] });
   });
 
   it('library off wins over a personal-corpus session: nothing is searched', async () => {

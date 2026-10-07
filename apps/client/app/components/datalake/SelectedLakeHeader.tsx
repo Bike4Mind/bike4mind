@@ -1,8 +1,8 @@
-import { Box, Button, Stack, Tooltip } from '@mui/joy';
+import { Box, Button, Chip, Stack, Tooltip } from '@mui/joy';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import LakeSourceConnectActions from '@client/app/components/DataLakeWizard/steps/LakeSourceConnectActions';
-import { canConnectLakeDrive } from '@client/app/components/datalake/lakeVisibility';
+import { canConnectLakeDrive, lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import { toWizardTargetLake, useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
 
@@ -13,9 +13,10 @@ import type { RetrievabilityLabeledDataLake } from '@bike4mind/common';
  * every surface but the wizard.
  *
  * Sits under DataLakeLakePicker and ActiveLakeScopeStrip inside the in-chat tree card, so it is laid
- * out for that card's width (#1943). It carries ACTIONS only: the lake's name, draft and
- * not-searched state live on the strip, so nothing about the lake is shown twice. Rendered only
- * when a specific lake is scoped, so the default all-lakes view spends no vertical room on it.
+ * out for that card's width (#1943). The lake's name, draft and not-searched state live on the
+ * strip; this header adds its visibility and file-tag prefix, which the strip does not show, plus
+ * the lake actions. Rendered only when a specific lake is scoped, so the default all-lakes view
+ * spends no vertical room on it.
  *
  * Lifecycle (archive / delete / purge / settings) is deliberately NOT duplicated here - it stays
  * in the manager panel, and Configure deep-links there with this lake preselected. A second set
@@ -35,6 +36,27 @@ export default function SelectedLakeHeader({ lake }: { lake: RetrievabilityLabel
       data-testid="datalake-selected-lake-header"
       sx={{ px: '12px', pt: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}
     >
+      <Stack direction="row" alignItems="center" gap={0.5} flexWrap="wrap">
+        <Chip
+          size="sm"
+          variant="outlined"
+          color="neutral"
+          sx={{ fontSize: '11px' }}
+          data-testid="datalake-selected-lake-visibility"
+        >
+          {lakeVisibilityLabel(lake)}
+        </Chip>
+        <Chip
+          size="sm"
+          variant="soft"
+          color="neutral"
+          sx={{ fontSize: '11px' }}
+          data-testid="datalake-selected-lake-prefix"
+        >
+          {lake.fileTagPrefix}
+        </Chip>
+      </Stack>
+
       <Stack direction="row" gap={0.5} flexWrap="wrap">
         {lake.canManage && (
           <Button

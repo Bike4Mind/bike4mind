@@ -34,7 +34,7 @@ import {
   fabFileRepository,
   organizationRepository,
 } from '@bike4mind/database';
-import { KnowledgeType, type CitableSource } from '@bike4mind/common';
+import { KnowledgeType, libraryFlagForScope, type CitableSource } from '@bike4mind/common';
 import { KnowledgeRetrievalFeature, b4mTools } from '@bike4mind/services/llm';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -97,6 +97,7 @@ afterAll(async () => {
 interface SessionShape {
   retrievalTags?: string[];
   lakeScopeExplicit?: boolean;
+  forceKnowledgeRetrieval?: boolean;
   includeLibraryFiles?: boolean;
   attachedFileIds?: string[];
 }
@@ -126,7 +127,7 @@ async function forcedRetrievalCitables(s: SessionShape): Promise<string[]> {
     undefined,
     s.lakeScopeExplicit ?? false,
     undefined,
-    s.includeLibraryFiles
+    libraryFlagForScope(s)
   );
   const embeddingFactory = {
     createEmbeddingService: () => ({ generateEmbedding: async () => [1, 0] }),
@@ -148,7 +149,7 @@ function toolContext(s: SessionShape, sink: { citables: CitableSource[] }) {
     db: { fabfiles: fabFileRepository, dataLakes: dataLakeRepository, organizations: organizationRepository },
     sessionRetrievalTags: s.retrievalTags,
     sessionLakeScopeExplicit: s.lakeScopeExplicit,
-    sessionIncludeLibraryFiles: s.includeLibraryFiles,
+    sessionIncludeLibraryFiles: libraryFlagForScope(s),
     attachedFileIds: s.attachedFileIds,
     statusUpdate: async (u: { promptMeta?: { citables?: CitableSource[] } }) => {
       if (u.promptMeta?.citables) sink.citables.push(...u.promptMeta.citables);
@@ -177,7 +178,8 @@ describe('includeLibraryFiles against real Mongo', () => {
     ['explicit lake, off', { retrievalTags: [LAKE_TAG], lakeScopeExplicit: true, includeLibraryFiles: false }, 'lake'],
     ['all lakes, off', { retrievalTags: [], includeLibraryFiles: false }, 'lake'],
     ['explicit lake, on', { retrievalTags: [LAKE_TAG], lakeScopeExplicit: true, includeLibraryFiles: true }, 'both'],
-    ['legacy lake chat, unset', { retrievalTags: [LAKE_TAG] }, 'lake'],
+    ['legacy lake chat, unset', { retrievalTags: [LAKE_TAG], forceKnowledgeRetrieval: true }, 'lake'],
+    ['plain chat with an attached lake file, unset', { retrievalTags: [LAKE_TAG] }, 'both'],
     ['plain chat, unset', {}, 'both'],
   ])('%s: forced retrieval and search_knowledge_base cite the %s corpus', async (_, session, expected) => {
     const want = expected === 'lake' ? [lakeFileId] : both();

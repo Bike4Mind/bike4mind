@@ -348,6 +348,8 @@ export interface SemanticDataLakeSearchParams {
    * existing caller keeps the mixed corpus described on `collectScopedFiles`.
    */
   restrictToDataLake?: boolean;
+  /** Attached file ids admitted beside the lake arms under `restrictToDataLake` (still access-checked). */
+  admitFileIds?: string[];
   /**
    * One membership arm per SCOPED dynamic lake, each anchored to THAT lake's creator (see
    * `lakeMembershipsFrom`) - replaces the old caller-anchored `scopedTagPrefixes` prefix match, so
@@ -863,6 +865,7 @@ async function collectScopedFiles(args: {
   dataLakeTagPrefixes: string[];
   lakeMemberships: DataLakeMembershipScope[];
   restrictToDataLake: boolean;
+  admitFileIds?: string[];
   retrievalFilter: RetrievalExclusionOptions;
   maxFiles: number;
   filePageSize: number;
@@ -898,7 +901,7 @@ async function collectScopedFiles(args: {
         dataLakeTags: args.dataLakeTags,
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
         lakeMemberships: args.lakeMemberships,
-        ...(args.restrictToDataLake ? { restrictToDataLake: true } : {}),
+        ...(args.restrictToDataLake ? { restrictToDataLake: true, admitFileIds: args.admitFileIds } : {}),
         excludeContent: true,
         // supersededInLakes is select:false by default; this walk is the lake-scoped collapse's
         // own read, so it opts back in - see FabFileModel.executeSearch.
@@ -1611,6 +1614,7 @@ async function lakeScopedSearch(
     dataLakeTagPrefixes,
     lakeMemberships = [],
     restrictToDataLake = false,
+    admitFileIds,
     retrievalFilter = {},
     ownFilesOnly = false,
     logger,
@@ -1633,6 +1637,7 @@ async function lakeScopedSearch(
     dataLakeTagPrefixes,
     lakeMemberships,
     restrictToDataLake,
+    admitFileIds,
     retrievalFilter,
     maxFiles: budgets.maxFiles,
     filePageSize: budgets.filePageSize,

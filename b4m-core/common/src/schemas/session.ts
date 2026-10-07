@@ -68,9 +68,11 @@ export const SessionUpdateRequestSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Whether a lake-scoped session also grounds on your own library (files you own, or that are ' +
-        'shared with you or your groups) alongside its lakes. Omit to leave it unchanged; while never ' +
-        'set, the library is excluded only when the session names a lake.'
+      'Whether the session grounds on your own library (files you own, or that are shared with you ' +
+        'or your groups) alongside its lakes. `false` confines retrieval to lake content and the ' +
+        "session's attached files, including when every lake is in scope. Omit to leave it unchanged; " +
+        'while never set, the library is excluded only when a lake was picked for the session (Data ' +
+        'Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file.'
     ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
@@ -122,7 +124,7 @@ export const SessionResponseSchema = z.object({
   includeLibraryFiles: z
     .boolean()
     .optional()
-    .describe('Whether a lake-scoped session also grounds on your own library. Absent when never set.'),
+    .describe('Whether the session grounds on your own library alongside its lakes. Absent when never set.'),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which

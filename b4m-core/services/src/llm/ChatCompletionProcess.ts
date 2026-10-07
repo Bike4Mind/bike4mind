@@ -246,6 +246,7 @@ import {
   ELISION_WARNING,
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
   DATA_LAKE_TOOL_NAMES,
+  libraryFlagForScope,
 } from '@bike4mind/common';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 
@@ -2238,7 +2239,7 @@ export class ChatCompletionProcess {
         session.lakeScopeExplicit,
         vettedPreauthorizedLakeIds,
         vetReaderConsentDatalakeTags(session, this.user.id),
-        session.includeLibraryFiles
+        libraryFlagForScope(session)
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -2954,7 +2955,7 @@ export class ChatCompletionProcess {
         // not inherit the owner's consent to the reader opt-in prompt-injection arm.
         sessionReaderConsentDatalakeTags: vetReaderConsentDatalakeTags(session, this.user.id),
         sessionLakeScopeExplicit: session.lakeScopeExplicit,
-        sessionIncludeLibraryFiles: session.includeLibraryFiles,
+        sessionIncludeLibraryFiles: libraryFlagForScope(session),
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,

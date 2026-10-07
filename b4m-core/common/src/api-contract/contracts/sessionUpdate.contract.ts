@@ -25,7 +25,8 @@ export const sessionUpdateContract = defineEndpoint({
     'is gated by these session fields, not by the chat request. `lakeScope` narrows that ' +
     'retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or ' +
     'send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` ' +
-    'sets whether a lake-scoped session also grounds on your own library. Authenticate with an API key ' +
+    'sets whether the session grounds on your own library alongside its lakes; `false` confines it to ' +
+    'lake content (plus its attached files) even when every lake is in scope. Authenticate with an API key ' +
     '(`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every ' +
     'member of every project containing this session by default (see `propagateToProjects`), ' +
     'and that sharing cannot be undone through the UI.',

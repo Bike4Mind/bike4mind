@@ -1239,6 +1239,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTags?: string[]; // Include files tagged with these datalake: meta-tags
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
+      admitFileIds?: string[]; // With restrictToDataLake: attached files admitted beside the lake arms, still access-checked
       /**
        * One arm per lake's membership scope, matching the whole-lake writes exactly. Server-
        * supplied only: each scope names the creator whose OWNED files its prefix arm matches, so

@@ -1,5 +1,4 @@
 import { toast } from 'sonner';
-import { DATALAKE_TAG_PREFIX, effectiveIncludeLibraryFiles } from '@bike4mind/common';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
 import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
@@ -22,13 +21,10 @@ export default function useSetDataLakeMode() {
   return (next: boolean) => {
     setEnabled(next);
     if (!currentSession) return;
-    // ON defaults the caller's library off unless they already chose; OFF re-admits it when the
-    // lake tags a lake chat keeps would otherwise leave it excluded from the knowledge tools.
-    const { includeLibraryFiles, retrievalTags } = currentSession;
-    const namesALake = !!retrievalTags?.some(tag => tag.startsWith(DATALAKE_TAG_PREFIX));
-    let libraryChoice: boolean | undefined;
-    if (next && includeLibraryFiles === undefined) libraryChoice = false;
-    if (!next && !effectiveIncludeLibraryFiles(includeLibraryFiles, namesALake)) libraryChoice = true;
+    // ON defaults the caller's library off only when they never chose; OFF writes nothing, so a
+    // later ON finds their choice intact. With the flag unset, OFF alone re-admits the library
+    // (libraryFlagForScope keys on Data Lakes mode).
+    const libraryChoice = next && currentSession.includeLibraryFiles === undefined ? false : undefined;
     const libraryPatch = libraryChoice === undefined ? {} : { includeLibraryFiles: libraryChoice };
     setCurrentSession({ ...currentSession, forceKnowledgeRetrieval: next, ...libraryPatch });
     // Send ONLY the flipped field. Echoing the whole cached session would make the server

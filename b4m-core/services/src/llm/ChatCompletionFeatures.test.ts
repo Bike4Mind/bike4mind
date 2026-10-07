@@ -19,6 +19,7 @@ import {
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
+  libraryFlagForScope,
   SettingScopeLevel,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
@@ -4080,38 +4081,47 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
 
     // Forced retrieval and the knowledge tools must answer "is the library excluded?" identically,
     // or a turn grounds lake-only while the tool the model calls re-admits the library.
-    it.each([
-      ['a legacy lake chat (named lake, no lakeScopeExplicit)', ['datalake:acme'], true],
-      ['a lake named by its file-tag prefix', ['acme:'], true],
-      ['a plain chat', [], false],
-      ['a content-tag session', ['legal:review'], false],
-    ])('forced retrieval and the knowledge tools agree for %s with the flag unset', async (_, tags, excluded) => {
-      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
-      await build(ctx, tags as string[], undefined).getContextMessages(
-        makeQuest(),
-        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
-        'anything'
-      );
-      const ownerAccess = {
-        dataLakeTags: [LAKE_DOC.datalakeTag],
-        dataLakeTagPrefixes: [],
-        scopedTagPrefixes: [LAKE_DOC.fileTagPrefix],
-        lakes: [{ ...LAKE_DOC, membership: { kind: 'owned' }, source: 'dynamic' }],
-      } as unknown as ResolvedLakeAccessSet;
-      const toolExcludes = await sessionExcludesLibrary({ sessionRetrievalTags: tags as string[] } as ToolContext, () =>
-        Promise.resolve(ownerAccess)
-      );
+    // Tags derived from attaching a lake file carry no pick marker, so they never exclude.
+    const picked = { forceKnowledgeRetrieval: true };
+    it.each<[string, string[], Parameters<typeof libraryFlagForScope>[0], boolean]>([
+      ['a legacy lake chat (named lake, Data Lakes mode on)', ['datalake:acme'], picked, true],
+      ['a lake picked in the picker', ['datalake:acme'], { lakeScopeExplicit: true }, true],
+      ['a lake named by its file-tag prefix', ['acme:'], picked, true],
+      ['a plain chat with an attached lake file (derived tags)', ['datalake:acme'], {}, false],
+      ['a plain chat', [], picked, false],
+      ['a content-tag session', ['legal:review'], picked, false],
+    ])(
+      'forced retrieval and the knowledge tools agree for %s with the flag unset',
+      async (_, tags, session, excluded) => {
+        const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+        const flag = libraryFlagForScope(session);
+        await build(ctx, tags, flag).getContextMessages(
+          makeQuest(),
+          embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+          'anything'
+        );
+        const ownerAccess = {
+          dataLakeTags: [LAKE_DOC.datalakeTag],
+          dataLakeTagPrefixes: [],
+          scopedTagPrefixes: [LAKE_DOC.fileTagPrefix],
+          lakes: [{ ...LAKE_DOC, membership: { kind: 'owned' }, source: 'dynamic' }],
+        } as unknown as ResolvedLakeAccessSet;
+        const toolExcludes = await sessionExcludesLibrary(
+          { sessionRetrievalTags: tags, sessionIncludeLibraryFiles: flag } as ToolContext,
+          () => Promise.resolve(ownerAccess)
+        );
 
-      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
-        'viewer-1',
-        '',
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.objectContaining({ restrictToDataLake: excluded })
-      );
-      expect(toolExcludes).toBe(excluded);
-    });
+        expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+          'viewer-1',
+          '',
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.objectContaining({ restrictToDataLake: excluded })
+        );
+        expect(toolExcludes).toBe(excluded);
+      }
+    );
 
     it('abstains as no_lakes for an all-lakes session excluding the library with no lake to reach', async () => {
       const ctx = makeCtx({ dataLakes: [] });

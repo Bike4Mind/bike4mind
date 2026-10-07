@@ -1,4 +1,4 @@
-import { effectiveIncludeLibraryFiles } from '@bike4mind/common';
+import { effectiveIncludeLibraryFiles, retrievalTagsNameALake } from '@bike4mind/common';
 import type { getDynamicDataLakeAccess } from './getDynamicDataLakeTags';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
@@ -32,9 +32,10 @@ export type ResolvedLakeAccessSet = Awaited<ReturnType<typeof getDynamicDataLake
  * then type-check against `never` and hide a real error.
  */
 export function sessionNamesALake(access: ResolvedLakeAccessSet, sessionRetrievalTags: string[] | undefined): boolean {
-  if (!sessionRetrievalTags?.length) return false;
-  if (datalakeTagsFrom(sessionRetrievalTags).length > 0) return true;
-  return access.lakes.some(lake => !!lake.fileTagPrefix && sessionRetrievalTags.includes(lake.fileTagPrefix));
+  return retrievalTagsNameALake(
+    sessionRetrievalTags,
+    access.lakes.map(lake => lake.fileTagPrefix)
+  );
 }
 
 /**
@@ -42,7 +43,8 @@ export function sessionNamesALake(access: ResolvedLakeAccessSet, sessionRetrieva
  * "+ My files" chip off). The ONE derivation forced retrieval (KnowledgeRetrievalFeature) and every
  * knowledge tool (resolveSessionLakeAccess.ts sessionExcludesLibrary) share: unset excludes exactly
  * when the session names a lake, which is the same predicate the narrowing uses. `access` is the
- * caller's PRE-narrowing lake access (it only matters for prefix-named lakes).
+ * caller's PRE-narrowing lake access (it only matters for prefix-named lakes). Callers pass the
+ * flag through libraryFlagForScope, so tags derived from an attached file never exclude.
  */
 export function sessionExcludesLibraryFiles(
   includeLibraryFiles: boolean | undefined,
