@@ -28,6 +28,14 @@ describe('libraryFlagForScope', () => {
   it('an explicit flag wins', () => {
     expect(libraryFlagForScope({ includeLibraryFiles: false })).toBe(false);
     expect(libraryFlagForScope({ includeLibraryFiles: true, forceKnowledgeRetrieval: true })).toBe(true);
+    expect(libraryFlagForScope({ includeLibraryFiles: false, forceKnowledgeRetrieval: true })).toBe(false);
+  });
+
+  it('Data Lakes mode OFF includes the library over a stored false, which ON then restores', () => {
+    const off = { includeLibraryFiles: false, lakeScopeExplicit: true, forceKnowledgeRetrieval: false };
+    expect(libraryFlagForScope(off)).toBe(true);
+    expect(libraryFlagForScope({ ...off, forceKnowledgeRetrieval: true })).toBe(false);
+    expect(libraryFlagForScope({ lakeScopeExplicit: true, forceKnowledgeRetrieval: false })).toBe(true);
   });
 
   it('unset in a chat whose lake tags were only derived from an attachment includes the library', () => {

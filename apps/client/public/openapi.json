@@ -888,7 +888,7 @@
           },
           "includeLibraryFiles": {
             "type": "boolean",
-            "description": "Whether a lake-scoped session also grounds on your own library. Absent when never set."
+            "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
           },
           "lastUsedModel": {
             "type": [
@@ -973,7 +973,7 @@
           },
           "includeLibraryFiles": {
             "type": "boolean",
-            "description": "Whether a lake-scoped session also grounds on your own library. Absent when never set."
+            "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
           },
           "lastUsedModel": {
             "type": [
@@ -1058,7 +1058,7 @@
           },
           "includeLibraryFiles": {
             "type": "boolean",
-            "description": "Whether a lake-scoped session also grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. Omit to leave it unchanged; while never set, the library is excluded only when the session names a lake."
+            "description": "Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content and the session's attached files, including when every lake is in scope. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on."
           },
           "propagateToProjects": {
             "type": "boolean",
@@ -4184,7 +4184,7 @@
           },
           "includeLibraryFiles": {
             "type": "boolean",
-            "description": "Whether a lake-scoped session also grounds on your own library. Absent when never set."
+            "description": "Whether the session grounds on your own library alongside its lakes. Absent when never set."
           },
           "lastUsedModel": {
             "type": [
@@ -7825,7 +7825,7 @@
       "put": {
         "operationId": "updateSession",
         "summary": "Update a session",
-        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether a lake-scoped session also grounds on your own library. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. `includeLibraryFiles` sets whether the session grounds on your own library alongside its lakes; `false` confines it to lake content (plus its attached files) even when every lake is in scope, and is set aside (library included) while `forceKnowledgeRetrieval` is `false`. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
         "tags": [
           "Sessions"
         ],

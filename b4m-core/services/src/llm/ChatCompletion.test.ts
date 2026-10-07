@@ -624,7 +624,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toEqual(['datalake:x']);
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toEqual(['datalake:x']);
     });
 
     it('forced-retrieval door: withholds retrievalTags when the acting user is not the session owner', async () => {
@@ -635,7 +636,8 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       const call = (service as any).buildOptimizedFeatures.mock.calls[0];
-      expect(call[call.length - 1]).toBeUndefined();
+      // Reader-consent tags sit just before the trailing includeLibraryFiles argument.
+      expect(call[call.length - 2]).toBeUndefined();
     });
 
     it('tool door: forwards sessionReaderConsentDatalakeTags only when the acting user owns the session', async () => {

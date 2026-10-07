@@ -72,7 +72,9 @@ export const SessionUpdateRequestSchema = z.object({
         'or your groups) alongside its lakes. `false` confines retrieval to lake content and the ' +
         "session's attached files, including when every lake is in scope. Omit to leave it unchanged; " +
         'while never set, the library is excluded only when a lake was picked for the session (Data ' +
-        'Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file.'
+        'Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. ' +
+        'While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value ' +
+        'applies again once it is turned back on.'
     ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -

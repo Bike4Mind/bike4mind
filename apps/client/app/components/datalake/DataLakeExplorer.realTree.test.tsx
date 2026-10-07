@@ -69,6 +69,9 @@ vi.mock('@client/app/components/layouts/Notebook', () => ({
 }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => vi.fn() }));
 vi.mock('@client/app/hooks/useSetLakeScope', () => ({ default: () => vi.fn() }));
+vi.mock('@client/app/hooks/useSetIncludeLibraryFiles', () => ({
+  default: () => ({ included: false, isPending: false, toggle: vi.fn() }),
+}));
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() } }));
 
 const lakes = [

@@ -22,7 +22,7 @@ export default function useSetDataLakeMode() {
     setEnabled(next);
     if (!currentSession) return;
     // ON defaults the caller's library off only when they never chose; OFF writes nothing, so a
-    // later ON finds their choice intact. With the flag unset, OFF alone re-admits the library
+    // later ON finds their choice intact. OFF alone re-admits the library whatever the flag says
     // (libraryFlagForScope keys on Data Lakes mode).
     const libraryChoice = next && currentSession.includeLibraryFiles === undefined ? false : undefined;
     const libraryPatch = libraryChoice === undefined ? {} : { includeLibraryFiles: libraryChoice };

@@ -30,12 +30,15 @@ export function retrievalTagsNameALake(
  * sessions exclude the library) only when the user actually picked a lake: a deliberate selection
  * (`lakeScopeExplicit`) or Data Lakes mode (`forceKnowledgeRetrieval`, which every lake-start path
  * sets). Tags derived from attaching a lake file to a plain chat carry neither, so it keeps its library.
+ * Data Lakes mode turned OFF (`forceKnowledgeRetrieval === false`) includes the library whatever the
+ * stored flag says; the flag is kept, not rewritten, so turning the mode back ON restores that choice.
  */
 export function libraryFlagForScope(session: {
   includeLibraryFiles?: boolean;
   lakeScopeExplicit?: boolean;
   forceKnowledgeRetrieval?: boolean;
 }): boolean | undefined {
+  if (session.forceKnowledgeRetrieval === false) return true;
   if (session.includeLibraryFiles !== undefined) return session.includeLibraryFiles;
   return session.lakeScopeExplicit || session.forceKnowledgeRetrieval ? undefined : true;
 }
