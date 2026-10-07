@@ -674,6 +674,17 @@ type PricingInfo = {
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
 
+/** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
+export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
+  const thresholds = Object.keys(model.pricing)
+    .map(Number)
+    .sort((a, b) => a - b);
+  for (const threshold of thresholds) {
+    if (tokens <= threshold) return threshold;
+  }
+  return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
+};
+
 /**
  * Compute USD cost for a text model call.
  *
@@ -705,18 +716,7 @@ export const getTextModelCost = (
     return cost;
   };
 
-  const thresholds: number[] = Object.keys(model.pricing)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  const tierForTokens = (tokens: number): number | null => {
-    for (const threshold of thresholds) {
-      if (tokens <= threshold) return threshold;
-    }
-    return thresholds.length > 0 ? thresholds[thresholds.length - 1] : null;
-  };
-
-  const tier = tierForTokens(inputTokens);
+  const tier = pricingTierForTokens(model, inputTokens);
   if (tier === null) return alarmIfUnpriced(0);
 
   // Guard against a malformed or non-tiered pricing map (e.g. a flat
