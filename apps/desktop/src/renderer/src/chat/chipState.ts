@@ -22,6 +22,8 @@ export interface ChipDescription {
 export interface ChipRowState {
   /** True when no project has been chosen. The folder chip is then the picker, not a readout. */
   unset: boolean;
+  /** True once the session has run here and its grounding is fixed; see `describeChipRow`. */
+  locked: boolean;
   folder: ChipDescription;
   branch: ChipDescription;
   worktree: ChipDescription;
@@ -34,6 +36,19 @@ export interface ChipRowState {
 }
 
 const CHOOSE_FOLDER_FIRST = 'Choose a project folder first - branches belong to a repository.';
+
+/**
+ * Why a bound chip is locked. One sentence, repeated on every control it applies to, because
+ * each one is read on its own hover.
+ *
+ * The lock is a different refusal from `busy` and has to read as one. Busy is timing - the same
+ * change works once the reply ends - while this one never clears: the transcript above already
+ * describes commands that ran somewhere, and repointing the session would leave it claiming a
+ * folder that work never happened in.
+ */
+const IN_USE =
+  'This conversation has already run here. Start a new session to work somewhere else - ' +
+  'moving this one would leave its transcript describing work done in a folder it no longer names.';
 
 /** What the branch list turned out to be for the chosen folder; see useBranches. */
 export interface BranchLookup {
@@ -60,10 +75,23 @@ const READING_BRANCH = '...';
  * session was not on. It is still the user's choice and still what a spawned child inherits;
  * it is just not evidence of anything, so it labels nothing.
  */
-export function describeChipRow(project: ChatProject | null, branches: BranchLookup): ChipRowState {
+export function describeChipRow(
+  project: ChatProject | null,
+  branches: BranchLookup,
+  /**
+   * True once this conversation has a message or a tool run behind it.
+   *
+   * The lock is on first USE rather than on creation. Freezing at creation would trap a user who
+   * picked the wrong folder and noticed immediately, and it buys nothing: a transcript can only
+   * start lying about where work happened once work has happened. Before that the chips are how
+   * a session gets bound at all.
+   */
+  inUse = false
+): ChipRowState {
   if (!project) {
     return {
       unset: true,
+      locked: false,
       folder: {
         label: 'Choose a folder',
         tooltip: 'Pick the folder this conversation works in. Nothing can run until you do.',
@@ -86,26 +114,38 @@ export function describeChipRow(project: ChatProject | null, branches: BranchLoo
 
   return {
     unset: false,
-    folder: { label: project.name, tooltip: project.directory, enabled: true },
+    locked: inUse,
+    folder: {
+      label: project.name,
+      tooltip: inUse ? `${project.directory}\n\n${IN_USE}` : project.directory,
+      enabled: !inUse,
+    },
     branch: {
       label: branchLabel(branches),
-      tooltip: branchTooltip(project, branches),
+      // Still clickable when locked: the menu is where the branch this session is on, and the
+      // reason it cannot change, are both readable.
+      tooltip: inUse ? `${branchTooltip(project, branches)}\n\n${IN_USE}` : branchTooltip(project, branches),
       enabled: true,
     },
     worktree: {
       label: 'worktree',
-      tooltip: relocated
-        ? `Runs in the worktree at ${project.workingDirectory}`
-        : 'Run this session in its own git worktree for the branch, beside the project',
-      enabled: branches.isRepository,
+      tooltip: inUse ? `${worktreeTooltip(project, relocated)}\n\n${IN_USE}` : worktreeTooltip(project, relocated),
+      enabled: branches.isRepository && !inUse,
     },
     addContext: {
       label: 'Add a context folder',
-      tooltip: 'Add a folder this session may read',
-      enabled: true,
+      tooltip: inUse ? IN_USE : 'Add a folder this session may read',
+      enabled: !inUse,
     },
-    branchNotice: branchNotice(project, branches),
+    branchNotice: inUse ? IN_USE : branchNotice(project, branches),
   };
+}
+
+/** Where the session runs, and - once it is in a worktree - which branch that worktree is on. */
+function worktreeTooltip(project: ChatProject, relocated: boolean): string {
+  if (!relocated) return 'Run this session on its own branch, cut from the one picked, in its own git worktree';
+  const on = project.workspaceBranch ? ` on ${project.workspaceBranch}` : '';
+  return `Runs in the worktree at ${project.workingDirectory}${on}`;
 }
 
 /** The branch the session is on, or an admission that there is not one to show. */
@@ -141,7 +181,15 @@ function branchTooltip(project: ChatProject, { checkedOut, isRepository }: Branc
  */
 function branchNotice(project: ChatProject, { isRepository, count, checkedOut }: BranchLookup): string | null {
   if (count === 0) return isRepository ? 'This repository has no branches yet.' : 'Not a git repository.';
-  if (project.workspace) return null;
+  if (project.workspace) {
+    // The worktree-on sentence after the branch became a base: picking `main` means "start from
+    // main", not "work on main". Said here because the two readings differ by an entire branch,
+    // and the one the user arrives with is the wrong one.
+    return (
+      'With worktree on, the branch you pick is the BASE: this session gets a new branch cut ' +
+      'from it, in a worktree of its own. The branch you pick is never checked out here.'
+    );
+  }
   const stays = checkedOut ? ` ${project.workingDirectory} stays on ${checkedOut}.` : '';
   return (
     `Picking a branch records it for this session; nothing is checked out.${stays} ` +

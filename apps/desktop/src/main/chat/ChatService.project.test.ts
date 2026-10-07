@@ -5,7 +5,8 @@ import type { BackgroundProcessInfo } from '@shared/chat';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
-import { git } from './project/git';
+import { git, listWorktrees } from './project/git';
+import { appWorktreeRoot } from './project/workspace';
 import type { AccessStore } from './tools/AccessStore';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 
@@ -110,7 +111,7 @@ describe('ChatService.updateProject', () => {
     return created.session.id;
   }
 
-  it('turning the worktree on moves the working directory into the container', async () => {
+  it("turning the worktree on moves the working directory into the app's own directory", async () => {
     const { container, main } = await repository('alpha');
     const id = await codeSession(main);
 
@@ -121,8 +122,80 @@ describe('ChatService.updateProject', () => {
     expect(project).toMatchObject({
       branch: 'feat/chips',
       workspace: true,
-      workingDirectory: join(container, 'feat+chips'),
+      // A name that is not a branch yet names the session's own branch rather than a base.
+      workspaceBranch: 'feat/chips',
+      workingDirectory: join(appWorktreeRoot(container), 'feat+chips'),
     });
+  });
+
+  /**
+   * The chosen branch is a base, so the session is given one of its own and the user's `main/`
+   * folder - which is what `main` used to resolve to - is never written to or adopted.
+   */
+  it('cuts the session its own branch when an existing one is picked', async () => {
+    const { container, main } = await repository('alpha-base');
+    const id = await codeSession(main);
+
+    expect(await service.updateProject({ sessionId: id, branch: 'main', workspace: true })).toMatchObject({ ok: true });
+
+    const project = (await service.getSession(id))?.project;
+    expect(project?.branch).toBe('main');
+    expect(project?.workspaceBranch).toMatch(/^b4m\//);
+    expect(project?.workingDirectory).not.toBe(main);
+    expect(project?.workingDirectory.startsWith(`${appWorktreeRoot(container)}/`)).toBe(true);
+  });
+
+  /**
+   * The severe one at this user's volume: a project re-read that cut another branch every time
+   * would leave a worktree per restart.
+   */
+  it('re-resolves an unchanged binding to the worktree it already has', async () => {
+    const { main } = await repository('alpha-again');
+    const id = await codeSession(main);
+    await service.updateProject({ sessionId: id, branch: 'main', workspace: true });
+    const first = (await service.getSession(id))?.project;
+
+    await service.updateProject({ sessionId: id, branch: 'main', workspace: true });
+
+    expect((await service.getSession(id))?.project).toMatchObject({
+      workspaceBranch: first?.workspaceBranch,
+      workingDirectory: first?.workingDirectory,
+    });
+    expect((await listWorktrees(main)).filter(entry => entry.branch?.startsWith('b4m/'))).toHaveLength(1);
+  });
+
+  /**
+   * Sessions stored before the app cut branches of its own ran ON the branch they recorded.
+   * Deriving a fresh one for them would abandon a worktree with work in it.
+   */
+  it('adopts the worktree a session saved before this change is already in', async () => {
+    const { container, main } = await repository('alpha-legacy');
+    const id = await codeSession(main);
+    await service.updateProject({ sessionId: id, branch: 'feat/legacy', workspace: true });
+    const legacy = join(appWorktreeRoot(container), 'feat+legacy');
+
+    await service.updateProject({ sessionId: id, branch: 'feat/legacy', workspace: true });
+
+    expect((await service.getSession(id))?.project?.workingDirectory).toBe(legacy);
+  });
+
+  /**
+   * With the toggle off nothing is checked out and nothing is created, which is the path
+   * chipState calls out: the recorded branch names where the session runs only by coincidence.
+   */
+  it('creates nothing at all with the worktree toggle off', async () => {
+    const { main } = await repository('alpha-off');
+    const id = await codeSession(main);
+    const before = await listWorktrees(main);
+
+    expect(await service.updateProject({ sessionId: id, branch: 'main' })).toMatchObject({ ok: true });
+
+    expect((await service.getSession(id))?.project).toMatchObject({
+      branch: 'main',
+      workspace: false,
+      workingDirectory: main,
+    });
+    expect(await listWorktrees(main)).toEqual(before);
   });
 
   it('turning it back off returns the session to the project directory', async () => {
@@ -178,7 +251,7 @@ describe('ChatService.updateProject', () => {
 
   it('leaves the session alone when the worktree cannot be prepared', async () => {
     const { container, main } = await repository('eta');
-    await mkdir(join(container, 'feat+chips'), { recursive: true });
+    await mkdir(join(appWorktreeRoot(container), 'feat+chips'), { recursive: true });
 
     const id = await codeSession(main);
     const result = await service.updateProject({ sessionId: id, branch: 'feat/chips', workspace: true });
@@ -245,13 +318,20 @@ describe('starting a second session in a project whose main worktree moved', () 
     return { service, main };
   }
 
-  it('fails when the sibling binding is carried across', async () => {
+  /**
+   * This used to fail: `main` resolved to <container>/main, the folder that had since been
+   * checked out onto another branch, and the refusal was the app declining to clobber it. The
+   * collision is gone now that nothing the app creates shares a parent with the user's folders.
+   */
+  it('gives the session its own worktree rather than colliding with the moved checkout', async () => {
     const { service, main } = await serviceOn();
 
     const result = await service.createCodeSession({ directory: main, branch: 'main', workspace: true });
 
-    expect(result).toMatchObject({ ok: false });
-    expect(result.ok === false && result.error).toContain('is a git worktree holding the branch');
+    expect(result).toMatchObject({ ok: true });
+    const project = result.ok ? (await service.getSession(result.session.id))?.project : null;
+    expect(project?.workingDirectory).not.toBe(main);
+    expect(project?.workspaceBranch).toMatch(/^b4m\//);
   });
 
   it('succeeds carrying the folder alone, and the session starts with no branch', async () => {
@@ -270,14 +350,14 @@ describe('starting a second session in a project whose main worktree moved', () 
     });
   });
 
-  it('still refuses when the user picks that branch deliberately on the new session', async () => {
+  it('isolates the same choice made deliberately on the new session', async () => {
     const { service, main } = await serviceOn();
     const created = await service.createCodeSession({ directory: main });
     if (!created.ok) throw new Error(created.error);
 
     const result = await service.updateProject({ sessionId: created.session.id, branch: 'main', workspace: true });
 
-    expect(result).toMatchObject({ ok: false });
-    expect(result.ok === false && result.error).toContain('is a git worktree holding the branch');
+    expect(result).toMatchObject({ ok: true });
+    expect((await service.getSession(created.session.id))?.project?.workingDirectory).not.toBe(main);
   });
 });

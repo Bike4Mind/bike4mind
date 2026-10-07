@@ -196,11 +196,28 @@ function logDownstream(channel: string, payload: unknown): void {
   });
 }
 
+/**
+ * Where every picker in this file opens.
+ *
+ * Read from Electron rather than taken from a caller: a starting folder is the one dialog
+ * input a crafted prompt could otherwise aim, and the grant picker below is the only way the
+ * tools' reach is widened. It sets the first view and nothing else - the user still drives the
+ * dialog, and cancelling still grants nothing.
+ *
+ * Home rather than a guess at something more relevant: with no defaultPath at all macOS falls
+ * back to whatever NSOpenPanel last remembered, which is how the folder picker came to open in
+ * Downloads for a user who had never pointed a project there.
+ */
+function pickerStart(): string {
+  return app.getPath('home');
+}
+
 /** The OS folder picker, parented to the window that asked when there is one. */
 async function pickDirectory(sender: WebContents): Promise<string | null> {
   const window = BrowserWindow.fromWebContents(sender);
   const properties: ('openDirectory' | 'createDirectory')[] = ['openDirectory', 'createDirectory'];
-  const picked = await (window ? dialog.showOpenDialog(window, { properties }) : dialog.showOpenDialog({ properties }));
+  const options = { properties, defaultPath: pickerStart() };
+  const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
   return picked.canceled || picked.filePaths.length === 0 ? null : picked.filePaths[0];
 }
 
@@ -432,9 +449,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatPickAttachments, async (event, sessionId: string) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     const properties: ('openFile' | 'multiSelections')[] = ['openFile', 'multiSelections'];
-    const picked = await (window
-      ? dialog.showOpenDialog(window, { properties })
-      : dialog.showOpenDialog({ properties }));
+    const options = { properties, defaultPath: pickerStart() };
+    const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     if (picked.canceled || picked.filePaths.length === 0) return { attachments: [], rejected: [] };
     return attachments.add(
       sessionId,
@@ -557,9 +573,8 @@ export function registerChat(auth: AuthService): RegisteredChat {
   // drives is what stops a crafted prompt from widening the tools' reach on its own.
   ipcMain.handle(IPC_CHANNELS.toolsGrantAccess, async event => {
     const window = BrowserWindow.fromWebContents(event.sender);
-    const picked = await (window
-      ? dialog.showOpenDialog(window, { properties: ['openDirectory'] })
-      : dialog.showOpenDialog({ properties: ['openDirectory'] }));
+    const options = { properties: ['openDirectory' as const], defaultPath: pickerStart() };
+    const picked = await (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
     if (picked.canceled || picked.filePaths.length === 0) return { roots: await access.list() };
     return { roots: await access.grant(picked.filePaths[0]) };
   });

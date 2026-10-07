@@ -723,9 +723,23 @@ export interface ChatProject {
   directory: string;
   /** Basename of `directory`, for the group header. */
   name: string;
+  /**
+   * The branch the user picked. With `workspace` on it is the BASE the session's own branch is
+   * cut from, not the branch anything checks out; with it off nothing checks out at all.
+   */
   branch: string;
-  /** True when the session runs in its own git worktree for `branch` rather than in `directory`. */
+  /** True when the session runs in its own git worktree cut from `branch` rather than in `directory`. */
   workspace: boolean;
+  /**
+   * The branch the app cut for this session's worktree, once it has one.
+   *
+   * Recorded rather than re-derived because deriving it again would cut a SECOND branch: the
+   * name carries a random suffix, so nothing about the session reproduces it. Handing it back
+   * to resolveWorkspace is what makes a restart, or any re-read of the project, land in the
+   * worktree this session already has. Absent with `workspace` off, and on sessions stored
+   * before the app cut branches of its own.
+   */
+  workspaceBranch?: string;
   /**
    * Where this session's tools actually run: the worktree when `workspace` is on, and
    * `directory` when it is off. Always granted to the tools for this session.

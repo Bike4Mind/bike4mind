@@ -559,13 +559,15 @@ export class ChatService {
     const branch = (request.branch ?? '').trim();
 
     let workingDirectory = directory;
+    let workspaceBranch: string | undefined;
     let reusedWorkspace = false;
     let workspaceOutcome: WorkspaceOutcome | undefined;
     if (request.workspace) {
       if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
       try {
-        const resolved = await resolveWorkspace(directory, branch);
+        const resolved = await resolveWorkspace(directory, { base: branch });
         workingDirectory = resolved.workingDirectory;
+        workspaceBranch = resolved.branch;
         reusedWorkspace = resolved.outcome === 'reused';
         workspaceOutcome = resolved.outcome;
       } catch (err) {
@@ -579,6 +581,7 @@ export class ChatService {
         name: await projectDisplayName(directory),
         branch,
         workspace: request.workspace === true,
+        ...(workspaceBranch ? { workspaceBranch } : {}),
         workingDirectory,
         contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
       },
@@ -636,17 +639,38 @@ export class ChatService {
     const branch = (request.branch ?? (movedProject ? '' : (current?.branch ?? ''))).trim();
     const workspace = request.workspace ?? current?.workspace ?? false;
 
+    // The session's own branch is carried forward only while the base it was cut from is still
+    // the one chosen: re-resolving must land in the worktree this session already has, while
+    // picking a DIFFERENT base is a request for a different one. Dropping it is what tells
+    // resolveWorkspace to cut afresh.
+    const keepsBase = !movedProject && branch === (current?.branch ?? '');
+    // A session stored before the app cut branches of its own ran ON the branch it recorded.
+    // Adopting that keeps its worktree rather than abandoning it for a freshly cut one.
+    const alreadyRelocated = current?.workspace === true && current.workingDirectory !== current.directory;
     let workingDirectory = directory;
+    let workspaceBranch = keepsBase
+      ? (current?.workspaceBranch ?? (alreadyRelocated ? current?.branch : undefined))
+      : undefined;
     let workspaceOutcome: WorkspaceOutcome | undefined;
     if (workspace) {
       if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
       try {
-        const resolved = await resolveWorkspace(directory, branch);
+        const resolved = await resolveWorkspace(directory, {
+          base: branch,
+          branch: workspaceBranch,
+          name: session.title,
+        });
         workingDirectory = resolved.workingDirectory;
+        workspaceBranch = resolved.branch;
         workspaceOutcome = resolved.outcome;
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
       }
+    } else {
+      // The worktree is left exactly where it is, registered and unharmed; the session simply
+      // stops claiming it. Keeping the name would re-adopt it the moment the toggle went back on
+      // with a different base chosen.
+      workspaceBranch = undefined;
     }
 
     const updated = await this.deps.store.setProject(request.sessionId, {
@@ -654,6 +678,7 @@ export class ChatService {
       name: movedProject || !current ? await projectDisplayName(directory) : current.name,
       branch,
       workspace,
+      ...(workspaceBranch ? { workspaceBranch } : {}),
       workingDirectory,
       // Folders granted for the old project are dropped with it: they were chosen as context
       // for that codebase, and silently carrying them into another one widens the tools' reach
@@ -718,7 +743,12 @@ export class ChatService {
     let workingDirectory = project.directory;
     if (project.workspace && project.branch) {
       try {
-        workingDirectory = (await resolveWorkspace(project.directory, project.branch)).workingDirectory;
+        // The session's own branch when it has one, and the recorded branch for a session
+        // stored before the app cut its own: repair must find what is already there, never
+        // cut something new.
+        workingDirectory = (
+          await resolveWorkspace(project.directory, { branch: project.workspaceBranch || project.branch })
+        ).workingDirectory;
       } catch (err) {
         this.deps.logger.warn(
           `Could not repair the bare working directory: ${err instanceof Error ? err.message : 'unknown'}`
@@ -2386,6 +2416,10 @@ export class ChatService {
           // Local placement carries the parent's flag across unchanged: a child sharing a parent
           // that is itself in a worktree IS in a worktree, and the chip must not say otherwise.
           workspace: workspace !== null || project.workspace,
+          // Its own worktree branch, or the parent's when it shares the parent's checkout.
+          // Without it a re-resolution would cut a second branch rather than find this one.
+          ...(workspace ? { workspaceBranch: workspace.branch } : {}),
+          ...(!workspace && project.workspaceBranch ? { workspaceBranch: project.workspaceBranch } : {}),
           workingDirectory: workspace?.workingDirectory ?? project.workingDirectory,
           contextDirectories: [...project.contextDirectories],
         },
@@ -2453,7 +2487,9 @@ export class ChatService {
       };
     }
 
-    const parentBranch = project.branch.trim();
+    // The branch the parent is actually ON, which with a worktree is the one the app cut for
+    // it rather than the base it recorded.
+    const parentBranch = (project.workspaceBranch || project.branch).trim();
     if (wanted === parentBranch) {
       return {
         ok: false,
@@ -2476,8 +2512,10 @@ export class ChatService {
         };
       }
 
-      const resolved = await resolveWorkspace(project.directory, wanted);
-      return { ok: true, branch: wanted, workingDirectory: resolved.workingDirectory };
+      // Named exactly, not derived: the approval card showed this name to the user and the row
+      // reports it back, so the branch the child lands on has to be the one they approved.
+      const resolved = await resolveWorkspace(project.directory, { branch: wanted });
+      return { ok: true, branch: resolved.branch, workingDirectory: resolved.workingDirectory };
     } catch (err) {
       const detail = err instanceof Error ? err.message : 'unknown error';
       return { ok: false, reason: 'branch', message: `The worktree could not be created: ${detail}` };
@@ -3014,8 +3052,12 @@ function projectPreamble(project: ChatProject): string[] {
     'path resolves against it.',
   ];
   if (project.workspace && project.workingDirectory !== project.directory) {
+    // The branch the app cut, not the base the user picked: a model told the base would propose
+    // commands against a branch this checkout is not on.
+    const on = project.workspaceBranch || project.branch;
+    const from = project.workspaceBranch && project.branch ? ` cut from ${project.branch}` : '';
     lines.push(
-      `That is a git worktree for the branch ${project.branch}, not the main checkout. Work there:`,
+      `That is a git worktree for the branch ${on}${from}, not the main checkout. Work there:`,
       'changes made in the project directory itself would be on a different branch.'
     );
   } else if (project.branch) {

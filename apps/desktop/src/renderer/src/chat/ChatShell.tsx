@@ -593,6 +593,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               project={conversation.session.project ?? null}
               binding={conversation.project}
               settledTurns={conversation.settledTurns}
+              inUse={conversation.messages.length > 0}
             />
           )}
 

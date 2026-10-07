@@ -220,3 +220,67 @@ describe('the branch chip against what git answers', () => {
     expect(label()).toBe('feat/chips');
   });
 });
+
+/**
+ * A session that has run commands in one folder must not be repointed at another: the transcript
+ * above would then describe work done somewhere the session no longer claims. The lock is on
+ * first use rather than on creation, so a user who picked the wrong folder can still fix it.
+ */
+describe('the chip row once the session has run here', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const inspectProject = vi.fn();
+
+  async function show(inUse: boolean): Promise<void> {
+    await act(async () =>
+      root.render(<SessionChips project={project()} binding={binding} settledTurns={0} inUse={inUse} />)
+    );
+    await act(async () => undefined);
+  }
+
+  /** Joy puts `disabled` on the control it renders inside the chip, not on the tagged node. */
+  const disabled = (testid: string): boolean => {
+    const node = host.querySelector(`[data-testid="${testid}"]`);
+    if (!node) throw new Error(`no ${testid} in the row`);
+    return node.hasAttribute('disabled') || !!node.querySelector('button[disabled], input[disabled]');
+  };
+
+  beforeEach(() => {
+    inspectProject.mockReset();
+    inspectProject.mockResolvedValue(inspection());
+    (window as unknown as { b4m: unknown }).b4m = { chat: { inspectProject } };
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it('leaves every control editable while nothing has run yet', async () => {
+    await show(false);
+
+    expect(disabled('session-chip-project')).toBe(false);
+    expect(disabled('session-chip-worktree-toggle')).toBe(false);
+    expect(disabled('session-chip-add-context')).toBe(false);
+  });
+
+  it('locks the folder, worktree and context controls once it has', async () => {
+    await show(true);
+
+    expect(disabled('session-chip-project')).toBe(true);
+    expect(disabled('session-chip-worktree-toggle')).toBe(true);
+    expect(disabled('session-chip-add-context')).toBe(true);
+  });
+
+  /** A lock, not a blank: the row still says which branch the session is on. */
+  it('keeps the branch readable and its menu open so the reason can be read', async () => {
+    await show(true);
+
+    const button = host.querySelector('[data-testid="session-chip-branch-btn"]');
+    expect(button?.textContent).toBe('main');
+    expect(button?.hasAttribute('disabled')).toBe(false);
+  });
+});

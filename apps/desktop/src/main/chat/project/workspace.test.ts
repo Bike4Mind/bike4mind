@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -12,7 +12,7 @@ import {
   projectDisplayName,
   unusableProjectReason,
 } from './git';
-import { resolveWorkspace, worktreeFolderName } from './workspace';
+import { appWorktreeRoot, resolveWorkspace, worktreeFolderName } from './workspace';
 
 /**
  * Real git repositories in a temp directory rather than a mocked child_process: the whole
@@ -22,7 +22,7 @@ import { resolveWorkspace, worktreeFolderName } from './workspace';
  * The fixture is the user's own layout - <container>/.bare beside <container>/main - because
  * that is what decides where a worktree lands. An ordinary clone is covered separately below.
  */
-async function bareLayoutRepository(): Promise<{ container: string; main: string }> {
+async function bareLayoutRepository(): Promise<{ container: string; main: string; source: string }> {
   // realpath because on macOS tmpdir() is a symlink into /private and git reports resolved paths.
   const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-project-')));
 
@@ -49,7 +49,7 @@ async function bareLayoutRepository(): Promise<{ container: string; main: string
   // plain folder rather than about the layout that confuses them.
   await writeFile(join(container, '.git'), 'gitdir: ./.bare\n', 'utf8');
 
-  return { container, main };
+  return { container, main, source };
 }
 
 describe('worktreeFolderName', () => {
@@ -123,12 +123,26 @@ describe('a worktree container is not a checkout', () => {
 
   it('refuses the container as a project and names the checkouts inside it', async () => {
     const { container, main } = await bareLayoutRepository();
-    await resolveWorkspace(main, 'feat/one');
+    await git(main, ['worktree', 'add', '--quiet', '-b', 'feat/one', join(container, 'feat+one')]);
 
     const reason = await unusableProjectReason(container);
     expect(reason).toMatch(/not a checkout/i);
     expect(reason).toContain('main');
     expect(reason).toContain('feat+one');
+  });
+
+  /**
+   * The containment guard this app's own nesting now depends on: a worktree under
+   * <container>/.b4m/worktrees is not a folder anyone picks, and listing it would send the user
+   * off to point a session at one.
+   */
+  it('leaves the app own worktrees out of the folders it names', async () => {
+    const { container, main } = await bareLayoutRepository();
+    const resolved = await resolveWorkspace(main, { base: 'main' });
+
+    const reason = await unusableProjectReason(container);
+    expect(reason).toContain('main');
+    expect(reason).not.toContain(worktreeFolderName(resolved.branch));
   });
 
   it('lets a checkout, an ordinary clone and a plain folder through', async () => {
@@ -147,60 +161,121 @@ describe('a worktree container is not a checkout', () => {
 describe('resolveWorkspace', () => {
   let container: string;
   let main: string;
+  let root: string;
 
   beforeEach(async () => {
     ({ container, main } = await bareLayoutRepository());
+    root = appWorktreeRoot(container);
   });
 
-  it('creates the worktree inside the container, never as a ../ sibling', async () => {
-    const resolved = await resolveWorkspace(main, 'feat/thing');
+  it('creates the worktree in the app own directory, never as a ../ sibling', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'main' });
 
     expect(resolved.outcome).toBe('created');
-    expect(resolved.workingDirectory).toBe(join(container, 'feat+thing'));
-    // The guard that matters: the path stays under the project's own container, so nothing is
+    expect(resolved.workingDirectory).toBe(join(root, worktreeFolderName(resolved.branch)));
+    // The guard that matters: the path stays under the project own container, so nothing is
     // scattered beside unrelated projects.
     expect(resolved.workingDirectory.startsWith(`${container}/`)).toBe(true);
   });
 
-  it('creates the branch when it does not exist yet', async () => {
-    const resolved = await resolveWorkspace(main, 'feat/brand-new');
+  /**
+   * The collision the nesting exists to make impossible: <container>/main is the user primary
+   * checkout, and the app used to resolve the branch `main` straight onto it.
+   */
+  it('never lands on a folder the user named', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'main' });
 
-    const head = (await git(resolved.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
-    expect(head).toBe('feat/brand-new');
-  });
-
-  it('checks out an existing branch rather than refusing it', async () => {
-    await git(main, ['branch', 'feat/already']);
-    const resolved = await resolveWorkspace(main, 'feat/already');
-
-    expect(resolved.outcome).toBe('created');
-    expect((await git(resolved.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('feat/already');
-  });
-
-  it('reuses a worktree that already exists for that branch instead of failing', async () => {
-    const first = await resolveWorkspace(main, 'feat/twice');
-    const second = await resolveWorkspace(main, 'feat/twice');
-
-    expect(second).toEqual({ workingDirectory: first.workingDirectory, outcome: 'reused' });
-    expect((await listWorktrees(main)).filter(entry => entry.branch === 'feat/twice')).toHaveLength(1);
+    expect(resolved.workingDirectory).not.toBe(main);
+    expect(join(container, 'main')).toBe(main);
   });
 
   /**
-   * git allows a branch in exactly one worktree, so picking the branch the main checkout is on
-   * has to resolve TO the main checkout. The caller surfaces the resolved path, so this never
-   * silently claims an isolation it did not get.
+   * Part of the same change: the chosen branch is a BASE. Picking one that is already checked
+   * out somewhere used to hand back that checkout, so "worktree" claimed an isolation the
+   * session did not get - and `main` is both the likeliest pick and always already checked out.
    */
-  it('resolves the main checkout when its own branch is chosen', async () => {
-    const resolved = await resolveWorkspace(main, 'main');
+  it('cuts a new branch from the chosen one rather than checking it out', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'main', name: 'Fix the login form' });
 
-    expect(resolved).toEqual({ workingDirectory: main, outcome: 'reused' });
+    expect(resolved.branch).toMatch(/^b4m\/fix-the-login-form-[0-9a-f]{6}$/);
+    expect(resolved.branch).not.toBe('main');
+    expect((await git(resolved.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe(resolved.branch);
+    // Same commit as the base, which is what "start from main" means.
+    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(
+      (await git(main, ['rev-parse', 'main'])).trim()
+    );
+  });
+
+  it('names the branch after the session even when the base is a feature branch', async () => {
+    await git(main, ['branch', 'feat/base']);
+    const resolved = await resolveWorkspace(main, { base: 'feat/base', name: 'Second pass' });
+
+    expect(resolved.branch).toMatch(/^b4m\/second-pass-[0-9a-f]{6}$/);
+    expect((await git(resolved.workingDirectory, ['merge-base', '--is-ancestor', 'feat/base', 'HEAD'])).trim()).toBe(
+      ''
+    );
+  });
+
+  it('falls back to a generated name when the session has no usable title', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'main' });
+
+    expect(resolved.branch).toMatch(/^b4m\/session-[0-9a-f]{6}$/);
+  });
+
+  it('gives two sessions on the same base two different worktrees', async () => {
+    const first = await resolveWorkspace(main, { base: 'main', name: 'Same title' });
+    const second = await resolveWorkspace(main, { base: 'main', name: 'Same title' });
+
+    expect(second.branch).not.toBe(first.branch);
+    expect(second.workingDirectory).not.toBe(first.workingDirectory);
+  });
+
+  /**
+   * The other half of the one rule: a name that is NOT a branch is the user naming their own,
+   * not a base. Typing it in the chip menu still creates it.
+   */
+  it('creates a typed name that names no branch, rather than deriving one', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'feat/brand-new' });
+
+    expect(resolved.branch).toBe('feat/brand-new');
+    expect((await git(resolved.workingDirectory, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()).toBe('feat/brand-new');
+  });
+
+  it('does not track the base it forked from', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'main' });
+
+    await expect(git(resolved.workingDirectory, ['config', `branch.${resolved.branch}.merge`])).rejects.toThrow();
+  });
+
+  /**
+   * The whole point of handing `branch` back out: without it every restart and every re-read of
+   * a project would cut another branch, which at this user volume is a worktree an hour.
+   */
+  it('re-resolves to the same worktree when given the branch it cut', async () => {
+    const first = await resolveWorkspace(main, { base: 'main', name: 'Idempotent' });
+    const second = await resolveWorkspace(main, { base: 'main', branch: first.branch, name: 'Idempotent' });
+
+    expect(second).toEqual({ workingDirectory: first.workingDirectory, branch: first.branch, outcome: 'reused' });
+    expect((await listWorktrees(main)).filter(entry => entry.branch?.startsWith('b4m/'))).toHaveLength(1);
+  });
+
+  it('re-creates the worktree for a recorded branch whose folder was removed', async () => {
+    const first = await resolveWorkspace(main, { base: 'main' });
+    await rm(first.workingDirectory, { recursive: true, force: true });
+    await git(main, ['worktree', 'prune']);
+
+    const again = await resolveWorkspace(main, { base: 'main', branch: first.branch });
+
+    expect(again).toEqual({ workingDirectory: first.workingDirectory, branch: first.branch, outcome: 'created' });
   });
 
   it('refuses a path already occupied by something that is not a worktree', async () => {
-    await mkdir(join(container, 'feat+taken'), { recursive: true });
-    await writeFile(join(container, 'feat+taken', 'notes.txt'), 'mine\n', 'utf8');
+    await mkdir(join(root, 'feat+taken'), { recursive: true });
+    await writeFile(join(root, 'feat+taken', 'notes.txt'), 'mine\n', 'utf8');
 
-    await expect(resolveWorkspace(main, 'feat/taken')).rejects.toThrow(/already exists but is not a git worktree/);
+    await expect(resolveWorkspace(main, { base: 'feat/taken' })).rejects.toThrow(
+      /already exists but is not a git worktree/
+    );
   });
 
   /**
@@ -209,35 +284,99 @@ describe('resolveWorkspace', () => {
    * `mv` a directory git is tracking.
    */
   it('names the branch a worktree at that path is actually on', async () => {
-    const occupied = await resolveWorkspace(main, 'agent/one');
+    const occupied = await resolveWorkspace(main, { branch: 'agent/one' });
     await git(occupied.workingDirectory, ['checkout', '--quiet', '-b', 'fix/one']);
 
-    await expect(resolveWorkspace(main, 'agent/one')).rejects.toThrow(/is a git worktree holding the branch fix\/one/);
-    await expect(resolveWorkspace(main, 'agent/one')).rejects.not.toThrow(/is not a git worktree/);
+    await expect(resolveWorkspace(main, { branch: 'agent/one' })).rejects.toThrow(
+      /is a git worktree holding the branch fix\/one/
+    );
+    await expect(resolveWorkspace(main, { branch: 'agent/one' })).rejects.not.toThrow(/is not a git worktree/);
   });
 
   it('points at git worktree move rather than telling the user to move it aside', async () => {
-    const occupied = await resolveWorkspace(main, 'agent/two');
+    const occupied = await resolveWorkspace(main, { branch: 'agent/two' });
     await git(occupied.workingDirectory, ['checkout', '--quiet', '-b', 'fix/two']);
 
-    await expect(resolveWorkspace(main, 'agent/two')).rejects.toThrow(/git worktree move/);
+    await expect(resolveWorkspace(main, { branch: 'agent/two' })).rejects.toThrow(/git worktree move/);
   });
 
   it('reports a detached worktree as such rather than as a branch', async () => {
-    const occupied = await resolveWorkspace(main, 'agent/three');
+    const occupied = await resolveWorkspace(main, { branch: 'agent/three' });
     await git(occupied.workingDirectory, ['checkout', '--quiet', '--detach', 'HEAD']);
 
-    await expect(resolveWorkspace(main, 'agent/three')).rejects.toThrow(/holding a detached HEAD/);
+    await expect(resolveWorkspace(main, { branch: 'agent/three' })).rejects.toThrow(/holding a detached HEAD/);
   });
 
   it('reuses a worktree registered for the branch even at an unexpected path', async () => {
     const elsewhere = join(container, 'somewhere-else');
     await git(main, ['worktree', 'add', '--quiet', '-b', 'feat/elsewhere', elsewhere]);
 
-    expect(await resolveWorkspace(main, 'feat/elsewhere')).toEqual({
+    expect(await resolveWorkspace(main, { branch: 'feat/elsewhere' })).toEqual({
       workingDirectory: elsewhere,
+      branch: 'feat/elsewhere',
       outcome: 'reused',
     });
+  });
+});
+
+/**
+ * A long-lived local `main` drifts hundreds of commits behind origin/main without anyone
+ * noticing, and a branch cut from it starts life needing a merge nobody asked for.
+ *
+ * An ordinary clone rather than the layout above: `clone --bare` writes no refs/remotes, so the
+ * bare fixture has no origin/main to prefer and could not tell the two answers apart.
+ */
+describe('resolveWorkspace choosing what to fork from', () => {
+  async function clonedRepository(): Promise<{ repo: string; origin: string }> {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-clone-')));
+    const origin = join(root, 'origin.git');
+    await mkdir(origin, { recursive: true });
+    await git(origin, ['init', '--bare', '--initial-branch=main', '--quiet']);
+
+    const repo = join(root, 'repo');
+    await git(root, ['clone', '--quiet', origin, repo]);
+    await git(repo, ['config', 'user.email', 'test@example.com']);
+    await git(repo, ['config', 'user.name', 'Test']);
+    await writeFile(join(repo, 'README.md'), 'hello\n', 'utf8');
+    await git(repo, ['add', '.']);
+    await git(repo, ['commit', '--quiet', '-m', 'first']);
+    await git(repo, ['push', '--quiet', '-u', 'origin', 'main']);
+    return { repo, origin };
+  }
+
+  it('forks from the remote base when the local one is behind it', async () => {
+    const { repo } = await clonedRepository();
+    await writeFile(join(repo, 'later.txt'), 'later\n', 'utf8');
+    await git(repo, ['add', '.']);
+    await git(repo, ['commit', '--quiet', '-m', 'second']);
+    await git(repo, ['push', '--quiet', 'origin', 'main']);
+    // The stale local ref: origin has the commit, this checkout no longer does.
+    await git(repo, ['reset', '--quiet', '--hard', 'HEAD~1']);
+    // Dropped so the answer can only come from the fetch, which is the half that matters on a
+    // machine where origin/main has moved since this checkout last looked.
+    await git(repo, ['update-ref', '-d', 'refs/remotes/origin/main']);
+
+    const resolved = await resolveWorkspace(repo, { base: 'main' });
+
+    expect((await git(repo, ['rev-parse', 'main'])).trim()).not.toBe(
+      (await git(repo, ['rev-parse', 'origin/main'])).trim()
+    );
+    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(
+      (await git(repo, ['rev-parse', 'origin/main'])).trim()
+    );
+  });
+
+  it('keeps local commits the remote has not seen', async () => {
+    const { repo } = await clonedRepository();
+    await writeFile(join(repo, 'unpushed.txt'), 'mine\n', 'utf8');
+    await git(repo, ['add', '.']);
+    await git(repo, ['commit', '--quiet', '-m', 'unpushed']);
+
+    const resolved = await resolveWorkspace(repo, { base: 'main' });
+
+    expect((await git(resolved.workingDirectory, ['rev-parse', 'HEAD'])).trim()).toBe(
+      (await git(repo, ['rev-parse', 'main'])).trim()
+    );
   });
 });
 
@@ -260,19 +399,16 @@ describe('resolveWorkspace when git lists the bare repo as a checkout', () => {
     expect(paths).toEqual([main]);
   });
 
-  it('reuses the worktree already holding the chosen branch', async () => {
-    expect(await resolveWorkspace(main, 'main')).toEqual({ workingDirectory: main, outcome: 'reused' });
-  });
+  it('creates a new branch in the app directory, not in .bare and not on the main checkout', async () => {
+    const resolved = await resolveWorkspace(main, { base: 'main' });
 
-  it('creates a new branch inside the container, not in .bare', async () => {
-    const resolved = await resolveWorkspace(main, 'fix/new-thing');
-
-    expect(resolved).toEqual({ workingDirectory: join(container, 'fix+new-thing'), outcome: 'created' });
+    expect(resolved.workingDirectory).toBe(join(appWorktreeRoot(container), worktreeFolderName(resolved.branch)));
+    expect(resolved.outcome).toBe('created');
   });
 });
 
 describe('resolveWorkspace in an ordinary clone', () => {
-  it('puts the worktree beside the checkout, which is where the shell helper puts it too', async () => {
+  async function plainClone(): Promise<string> {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b4m-plain-')));
     const repo = join(root, 'repo');
     await mkdir(repo, { recursive: true });
@@ -282,10 +418,26 @@ describe('resolveWorkspace in an ordinary clone', () => {
     await writeFile(join(repo, 'README.md'), 'hello\n', 'utf8');
     await git(repo, ['add', '.']);
     await git(repo, ['commit', '--quiet', '-m', 'first']);
+    return repo;
+  }
 
-    const resolved = await resolveWorkspace(repo, 'feat/inside');
+  /**
+   * git-common-dir is <repo>/.git here, so the container IS the repository. Under the old flat
+   * layout every app worktree was therefore an untracked sibling folder in the repo root.
+   */
+  it('nests the worktree in the app own directory rather than the repo root', async () => {
+    const repo = await plainClone();
+    const resolved = await resolveWorkspace(repo, { base: 'main' });
 
-    // git-common-dir is <repo>/.git here, so the container is <repo> itself.
-    expect(resolved.workingDirectory).toBe(join(repo, 'feat+inside'));
+    expect(resolved.workingDirectory).toBe(join(appWorktreeRoot(repo), worktreeFolderName(resolved.branch)));
+  });
+
+  it('ignores its own directory without touching the repo gitignore', async () => {
+    const repo = await plainClone();
+    await resolveWorkspace(repo, { base: 'main' });
+
+    expect(await readFile(join(repo, '.b4m', '.gitignore'), 'utf8')).toBe('*\n');
+    expect((await git(repo, ['status', '--porcelain'])).trim()).toBe('');
+    await expect(stat(join(repo, '.gitignore'))).rejects.toThrow();
   });
 });

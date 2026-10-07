@@ -121,18 +121,22 @@ function ProjectChip({ binding }: { binding: ChipBinding }) {
   const { folder, unset } = binding.chips;
   return (
     <Tooltip title={folder.tooltip} size="sm" variant="soft" placement="top-start">
-      <Chip
-        size="sm"
-        variant={unset ? 'soft' : 'outlined'}
-        color={unset ? 'primary' : 'neutral'}
-        disabled={binding.busy}
-        startDecorator={<FolderIcon />}
-        onClick={() => void binding.pickDirectory()}
-        sx={chipSx}
-        data-testid="session-chip-project"
-      >
-        {folder.label}
-      </Chip>
+      {/* Wrapped for the same reason as the worktree toggle below: a disabled Chip takes no
+          pointer events, so the reason it is locked would be unreadable on the chip it is about. */}
+      <Box sx={{ display: 'flex' }}>
+        <Chip
+          size="sm"
+          variant={unset ? 'soft' : 'outlined'}
+          color={unset ? 'primary' : 'neutral'}
+          disabled={binding.busy || !folder.enabled}
+          startDecorator={<FolderIcon />}
+          onClick={() => void binding.pickDirectory()}
+          sx={chipSx}
+          data-testid="session-chip-project"
+        >
+          {folder.label}
+        </Chip>
+      </Box>
     </Tooltip>
   );
 }
@@ -156,7 +160,7 @@ function BranchChip({
   branches: readonly string[];
 }) {
   const [filter, setFilter] = useState('');
-  const { branch: branchChip, worktree, branchNotice, unset } = binding.chips;
+  const { branch: branchChip, worktree, branchNotice, unset, locked } = binding.chips;
 
   const matches = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -165,7 +169,7 @@ function BranchChip({
   }, [branches, filter]);
 
   const typed = filter.trim();
-  const canCreate = !unset && !!typed && !branches.includes(typed);
+  const canCreate = !unset && !locked && !!typed && !branches.includes(typed);
   // The pill's own label, so the marked entry is the branch the chip claims rather than the
   // one recorded at creation; 'no branch' matches nothing, which is the intended miss.
   const onNow = branchChip.label;
@@ -199,7 +203,7 @@ function BranchChip({
           {/* Always rendered, never conditional: Joy re-registers its menu items when the
               children change and pulls focus onto the first one, which would take the caret out
               of the filter box the moment a typed name stopped matching an existing branch. */}
-          {!unset && (
+          {!unset && !locked && (
             <MenuItem
               disabled={!canCreate}
               onClick={() => void binding.setBranch(typed)}
@@ -214,6 +218,7 @@ function BranchChip({
           {matches.map(entry => (
             <MenuItem
               key={entry}
+              disabled={locked}
               selected={entry === onNow}
               onClick={() => void binding.setBranch(entry)}
               data-testid="session-chip-branch-option"
@@ -403,11 +408,18 @@ export function SessionChips({
   project,
   binding,
   settledTurns,
+  inUse = false,
 }: {
   project: ChatProject | null;
   binding: ProjectBindingController;
   /** Monotonic count of replies this window has watched end; see useBranches. */
   settledTurns: number;
+  /**
+   * True once this conversation has anything in its transcript, which is when its grounding
+   * stops being editable. A boolean rather than the messages themselves: the row re-renders on
+   * every streamed chunk, and a length is the only thing about them it needs.
+   */
+  inUse?: boolean;
 }) {
   const { branches, isRepository, checkedOut } = useBranches(
     project?.directory ?? null,
@@ -415,8 +427,8 @@ export function SessionChips({
     settledTurns
   );
   const chips = useMemo(
-    () => describeChipRow(project, { isRepository, count: branches.length, checkedOut }),
-    [project, isRepository, branches.length, checkedOut]
+    () => describeChipRow(project, { isRepository, count: branches.length, checkedOut }, inUse),
+    [project, isRepository, branches.length, checkedOut, inUse]
   );
   const bound = useMemo(() => ({ ...binding, chips }), [binding, chips]);
 
