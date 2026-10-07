@@ -21,10 +21,10 @@ permissions:
   contents: write
   pull-requests: write
 
-# Body-only edits get their own group: they skip, so letting them cancel an in-flight
+# Body-only edits (no title or base change) get their own group: they skip, so letting them cancel an in-flight
 # generate run would leave the PR without its changeset.
 concurrency:
-  group: changeset-${{ github.event.pull_request.number }}${{ github.event.action == 'edited' && !github.event.changes.title && '-body-edit' || '' }}
+  group: changeset-${{ github.event.pull_request.number }}${{ github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base && '-body-edit' || '' }}
   cancel-in-progress: true
 
 env:
@@ -42,7 +42,7 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Skip body-only edits
-        if: github.event.action == 'edited' && !github.event.changes.title
+        if: github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
         run: echo "SKIP=true" >> "$GITHUB_ENV"
 
       - name: Generate App token
@@ -72,24 +72,24 @@ jobs:
           git config user.email "b4m-release-bot[bot]@users.noreply.github.com"
 
       - name: Skip if last commit is from bot
-        if: env.SKIP != 'true' && github.event.action == 'synchronize'
-        # Only the bot's own push needs skipping (it would loop). A title edit on a
-        # bot-authored head must still regenerate, or the old bump level ships.
+        if: env.SKIP != 'true' && github.event.action == 'synchronize' && github.actor == 'bike4mind-release-bot[bot]'
+        # Only the bot's own push needs skipping (it would loop). Keyed on the pushing actor, not the
+        # tip's author: a rebase keeps the bot as author of a commit a human pushed.
         run: |
-          LAST_AUTHOR=$(git log -1 --format='%an')
-          if [ "$LAST_AUTHOR" = "b4m-release-bot[bot]" ]; then
-            echo "::notice::Last commit is from bot. Skipping to prevent loop."
-            echo "SKIP=true" >> "$GITHUB_ENV"
-          fi
+          echo "::notice::Push is from the release bot. Skipping to prevent loop."
+          echo "SKIP=true" >> "$GITHUB_ENV"
 
       - name: Generate changeset
         if: env.SKIP != 'true'
         env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
+          EVENT_TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          # Generate from the live title: a re-run of an old run carries a stale title in its payload.
+          PR_TITLE=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .title 2>/dev/null || true)
+          export PR_TITLE="${PR_TITLE:-$EVENT_TITLE}"
           # Run main's copies of the changeset scripts, never the PR head's: a branch cut before
           # they existed has none, and PR-head code stays out of the gate. The head copy is only
           # a bootstrap for a file main does not have yet. Keep in sync with semantic-pr-title.yml.

@@ -129,7 +129,7 @@ jobs:
             fi
           done
 
-          MSG="The PR head does not carry the changeset the Auto Changeset workflow generates for this title and diff (.changeset/pr-${PR_NUMBER}.md is missing, stale or has the wrong bump or packages). If the bot pushed a commit just now, ignore this: the new head is checked separately. Otherwise, any one of: re-run the latest failed \"Auto Changeset\" run (Re-run failed jobs) or push a commit; if you changed the title, save it again; run 'pnpm changeset' for a manual override; or delete .changeset/pr-${PR_NUMBER}.md in your own commit to opt out."
+          MSG="The PR head does not carry the changeset the Auto Changeset workflow generates for this title and diff (.changeset/pr-${PR_NUMBER}.md is missing, stale or has the wrong bump or packages). If the bot pushed a commit just now, ignore this: the new head is checked separately. Otherwise, any one of: push a commit to re-run the bot (an empty one works: git commit --allow-empty -m 'chore: regenerate changeset'); if the latest \"Auto Changeset\" run failed rather than skipped, Re-run failed jobs on it; run 'pnpm changeset' for a manual override; or delete .changeset/pr-${PR_NUMBER}.md in your own commit to opt out."
           echo "::error::$MSG"
           printf '### Changeset mismatch\n\n%s\n' "$MSG" >> "$GITHUB_STEP_SUMMARY"
           exit 1
