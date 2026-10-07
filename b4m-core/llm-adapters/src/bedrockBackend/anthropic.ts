@@ -25,7 +25,7 @@ import { BaseBedrockBackend } from './base';
 import { getCachingAdapter } from '../caching/adapters';
 import { systemContentToText } from '../systemContent';
 import { DispatchModel } from '../dispatchModel';
-import { buildThinkingParams } from '../thinkingParams';
+import { buildThinkingParams, resolveAnthropicEffort } from '../thinkingParams';
 import { toAnthropicContent } from '../anthropicContent';
 import { appendIdentityReminder, buildIdentityReminder } from '../identityReminder';
 
@@ -852,7 +852,11 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
           : (options.thinking?.budget_tokens ?? 16000);
-        const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
+        const effort = resolveAnthropicEffort({
+          questMaster: isQuestMaster,
+          anthropicEffort: options.anthropicEffort,
+          reasoningEffort: options.reasoningEffort,
+        });
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, maxTokens, effort);
 

@@ -325,8 +325,12 @@ export type ChatModelName = z.infer<typeof supportedChatModels>;
 export const isGeminiModelId = (model: string): boolean => model.startsWith('gemini');
 
 /**
- * Models that support the reasoning_effort parameter.
+ * Models that support OpenAI's `reasoning_effort` request parameter.
  * o1-preview and o1-mini do NOT support reasoning_effort.
+ *
+ * OpenAI only. Anthropic's effort control is a different wire field on a different
+ * API - see `ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS` below, which explains why a Claude
+ * id added here would silently contradict `NO_TEMPERATURE_MODELS`.
  */
 export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.O1,
@@ -344,6 +348,41 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_6_SOL,
   ChatModels.GPT5_6_LUNA,
   ChatModels.GPT5_6_TERRA,
+]);
+
+/**
+ * Claude models that accept Anthropic's `output_config: { effort }` control, whose
+ * levels are 'low' | 'medium' | 'high' | 'xhigh' | 'max'.
+ *
+ * NOT `REASONING_SUPPORTED_MODELS` above, and the two must never be merged. That set
+ * is OpenAI's `reasoning_effort` REQUEST PARAMETER: a different wire field, on a
+ * different API, with a different vocabulary ('none'/'minimal' exist there and have
+ * no Anthropic meaning; 'max' exists here and is not an OpenAI level). Confusing the
+ * two is what left Claude effort unwired in the first place.
+ *
+ * Adding a Claude id to `REASONING_SUPPORTED_MODELS` instead of here would be actively
+ * wrong, not merely imprecise: `FIXED_TEMPERATURE_MODELS` is built by spreading that
+ * set, so the id would be marked temperature=1 while also sitting in
+ * `NO_TEMPERATURE_MODELS`, which is the stronger and correct claim for these models -
+ * they reject temperature outright with a 400. It would also break the documented
+ * invariant on `REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS` and change what the
+ * gates in `openaiBackend.ts` and `thinkingParams.ts` decide. The two sets are
+ * disjoint by design; `models.effortSets.test.ts` pins that.
+ *
+ * Membership is exactly the adaptive-thinking surface (`thinkingStyle: 'adaptive'`),
+ * which is also what the Claude half of `NO_TEMPERATURE_MODELS` lists - effort and the
+ * absent sampling knobs are two halves of the same API surface.
+ */
+export const ANTHROPIC_OUTPUT_CONFIG_EFFORT_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_4_7_OPUS,
+  ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
+  ChatModels.CLAUDE_4_8_OPUS,
+  ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
+  ChatModels.CLAUDE_5_SONNET,
+  ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS,
 ]);
 
 /**
@@ -436,6 +475,10 @@ export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
  *  - chat-latest variants that enforce this constraint
  *  - GPT-5.5, which rejects custom temperature even though it does not expose
  *    reasoning controls
+ *
+ * Derived from `REASONING_SUPPORTED_MODELS`, which is why that set is OpenAI-only:
+ * temperature=1 is the wrong claim for a Claude model, which rejects the parameter
+ * outright (`NO_TEMPERATURE_MODELS`).
  */
 export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ...Array.from(REASONING_SUPPORTED_MODELS),
