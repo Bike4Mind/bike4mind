@@ -244,9 +244,9 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: researchEngineQueueDLQ,
   },
   {
-    label: 'whats-new-generation',
-    displayName: "What's New Generation",
-    application: 'WhatsNewGeneration',
+    label: 'release-notes',
+    displayName: 'Release Notes',
+    application: 'ReleaseNotes',
     sourceQueue: 'whatsNewGenerationQueue',
     queue: whatsNewGenerationQueueDLQ,
   },
