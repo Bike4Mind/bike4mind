@@ -213,6 +213,15 @@ const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promis
 };
 
 /**
+ * API-key turns must not start billed video jobs: that would bypass the video-generations contract's
+ * scope check and rate limit, so only session-authenticated turns are offered the tool.
+ */
+export const getVideoToolConfigResolver = (apiKeyId: string | undefined, userId: string) =>
+  apiKeyId
+    ? undefined
+    : () => buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() });
+
+/**
  * Quest Processor - shared processing core.
  *
  * Runs a single chat-completion quest end-to-end (load user/session, assemble
@@ -224,15 +233,6 @@ const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promis
  * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
-/**
- * API-key turns must not start billed video jobs: that would bypass the video-generations contract's
- * scope check and rate limit, so only session-authenticated turns are offered the tool.
- */
-export const getVideoToolConfigResolver = (apiKeyId: string | undefined, userId: string) =>
-  apiKeyId
-    ? undefined
-    : () => buildVideoToolConfig(userId, { availability: getVideoJobDeps(), createDeps: getCreateVideoJobDeps() });
-
 export async function processQuest(params: z.infer<typeof QuestStartBodySchema>, logger: Logger): Promise<void> {
   const handlerStartTime = Date.now();
   logger.debug('Quest processor start');
