@@ -1,7 +1,13 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import type { ContextTelemetry, AnomaliesTelemetry } from '@bike4mind/common';
-import { buildAnalysisPrompt, extractAnalysisJson, formatIssueBody, type LLMAnalysis } from './telemetryAnalysis';
+import {
+  buildAnalysisPrompt,
+  extractAnalysisJson,
+  formatIssueBody,
+  generateRuleBasedAnalysis,
+  type LLMAnalysis,
+} from './telemetryAnalysis';
 import {
   GROWTH_RATIO_CEILING,
   SMALL_INPUT_MS_CEILING,
@@ -72,6 +78,34 @@ function createTestTelemetry(overrides: { anomalies?: Partial<AnomaliesTelemetry
     subagents: [],
   };
 }
+
+describe('generateRuleBasedAnalysis TTFVT findings', () => {
+  // A frozen turn sets slowFirstToken with no firstTokenTime; the old code read that as 0ms
+  // and emitted "Slow time to first token: 0.0s", inverting the finding's meaning.
+  it('reports a never-rendered turn, not 0.0s', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = { totalResponseTimeMs: 20_000, firstChunkTimeMs: 500 };
+    telemetry.anomalies = { ...telemetry.anomalies, slowFirstToken: true };
+
+    const findings = generateRuleBasedAnalysis(telemetry).findings.join('\n');
+
+    expect(findings).toContain('no visible token ever rendered');
+    expect(findings).not.toContain('0.0s');
+    expect(findings).not.toContain('Slow time to first token');
+  });
+
+  it('reports a slow measured turn in seconds with the SLO target', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = { totalResponseTimeMs: 20_000, firstTokenTimeMs: 12_000 };
+    telemetry.anomalies = { ...telemetry.anomalies, slowFirstToken: true };
+
+    const findings = generateRuleBasedAnalysis(telemetry).findings.join('\n');
+
+    expect(findings).toContain('Slow time to first token: 12.0s');
+    expect(findings).toContain('SLO target: 5.0s');
+    expect(findings).not.toContain('never rendered');
+  });
+});
 
 describe('formatIssueBody', () => {
   it('escapes LLM analysis text written into the issue body', () => {
@@ -154,6 +188,55 @@ describe('buildAnalysisPrompt token distribution', () => {
     const prompt = buildAnalysisPrompt(telemetry);
 
     expect(prompt).toContain('- Lake Retrieval: 0 (0.0%)');
+  });
+});
+
+// formatTtfvtSeconds feeds three renderer call sites; the rule-based finding is covered above.
+// These pin the two prompt/issue-body lines so a mutant that reverts either to the old N/A/0.0s
+// text cannot survive on the rule-based test alone.
+describe('TTFVT rendering in buildAnalysisPrompt and formatIssueBody', () => {
+  function promptFor(performance: ContextTelemetry['performance']): string {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = performance;
+    return buildAnalysisPrompt(telemetry);
+  }
+
+  function bodyFor(performance: ContextTelemetry['performance']): string {
+    const telemetry = createTestTelemetry();
+    telemetry.performance = performance;
+    return formatIssueBody(telemetry);
+  }
+
+  it('buildAnalysisPrompt prints a measured TTFVT in seconds', () => {
+    expect(promptFor({ totalResponseTimeMs: 5000, firstTokenTimeMs: 12_000 })).toContain('Time to First Token: 12.00s');
+  });
+
+  it('buildAnalysisPrompt prints never-rendered, not N/A, for a streamed-but-invisible turn', () => {
+    const prompt = promptFor({ totalResponseTimeMs: 5000, firstChunkTimeMs: 500 });
+
+    expect(prompt).toContain('Time to First Token: never rendered (streamed, nothing visible)');
+    expect(prompt).not.toContain('Time to First Token: N/A');
+    expect(prompt).toMatch(/First Token Time Target: [^\n]*\| This entry: never rendered/);
+  });
+
+  it('buildAnalysisPrompt prints N/A only when neither stamp was recorded', () => {
+    expect(promptFor({ totalResponseTimeMs: 5000 })).toContain('Time to First Token: N/A');
+  });
+
+  it('formatIssueBody prints the measured TTFVT line', () => {
+    expect(bodyFor({ totalResponseTimeMs: 5000, firstTokenTimeMs: 12_000 })).toContain(
+      '- **Time to First Token:** 12.00s'
+    );
+  });
+
+  it('formatIssueBody prints never-rendered for a streamed-but-invisible turn', () => {
+    expect(bodyFor({ totalResponseTimeMs: 5000, firstChunkTimeMs: 500 })).toContain(
+      '- **Time to First Token:** never rendered (streamed, nothing visible)'
+    );
+  });
+
+  it('formatIssueBody omits the TTFVT line when neither stamp was recorded', () => {
+    expect(bodyFor({ totalResponseTimeMs: 5000 })).not.toContain('Time to First Token');
   });
 });
 
