@@ -94,14 +94,14 @@ export function useLakeDriveConnection(dataLakeId?: string, enabled = true) {
 /**
  * Whether the caller may connect, re-sync or disconnect the lake's Drive folder. The status read also
  * admits an appointed org admin, who can see the connection but not operate it, so the controls key
- * off this. Shares useLakeDriveConnection's query; a payload without the flag reads as `true`.
+ * off this. Shares useLakeDriveConnection's query; a payload without the flag reads as `false`, so a dropped field fails closed.
  */
 export function useLakeDriveCanManage(dataLakeId?: string, enabled = true) {
   const options = useLakeDriveConnectionOptions(dataLakeId, enabled);
-  return useQuery({ ...options, select: response => response.canManage !== false });
+  return useQuery({ ...options, select: response => response.canManage === true });
 }
 
-type LakeDriveConnectionResponse = { connection: LakeDriveConnection | null; canManage?: boolean };
+type LakeDriveConnectionResponse = { connection: LakeDriveConnection | null; canManage: boolean };
 
 function useLakeDriveConnectionOptions(dataLakeId: string | undefined, enabled: boolean) {
   const queryClient = useQueryClient();
