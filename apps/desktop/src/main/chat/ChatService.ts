@@ -559,22 +559,8 @@ export class ChatService {
     if (unusable) return { ok: false, error: unusable };
     const branch = (request.branch ?? '').trim();
 
-    let workingDirectory = directory;
-    let workspaceBranch: string | undefined;
-    let reusedWorkspace = false;
-    let workspaceOutcome: WorkspaceOutcome | undefined;
-    if (request.workspace) {
-      if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
-      try {
-        const resolved = await resolveWorkspace(directory, { base: branch });
-        workingDirectory = resolved.workingDirectory;
-        workspaceBranch = resolved.branch;
-        reusedWorkspace = resolved.outcome === 'reused';
-        workspaceOutcome = resolved.outcome;
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
-      }
-    }
+    // Only the choice is recorded; see `ensureWorkspace` for when the worktree is actually cut.
+    if (request.workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
 
     const session = await this.deps.store.create(model, {
       project: {
@@ -582,14 +568,12 @@ export class ChatService {
         name: await projectDisplayName(directory),
         branch,
         workspace: request.workspace === true,
-        ...(workspaceBranch ? { workspaceBranch } : {}),
-        workingDirectory,
+        workingDirectory: directory,
         contextDirectories: (request.contextDirectories ?? []).map(entry => resolve(entry)),
       },
     });
 
-    this.startDependencyInstall(session.id, workingDirectory, workspaceOutcome);
-    return { ok: true, session, ...(reusedWorkspace ? { reusedWorkspace } : {}) };
+    return { ok: true, session };
   }
 
   /**
@@ -644,42 +628,30 @@ export class ChatService {
     // the one chosen: re-resolving must land in the worktree this session already has, while
     // picking a DIFFERENT base is a request for a different one. Dropping it is what tells
     // resolveWorkspace to cut afresh.
+    // The session's own branch is carried forward only while the base it was cut from is still
+    // the one chosen: picking a DIFFERENT base is a request for a different worktree, and
+    // dropping the name is what leaves the next turn to cut one.
     const keepsBase = !movedProject && branch === (current?.branch ?? '');
     // A session stored before the app cut branches of its own ran ON the branch it recorded.
     // Adopting that keeps its worktree rather than abandoning it for a freshly cut one.
     const alreadyRelocated = current?.workspace === true && current.workingDirectory !== current.directory;
-    let workingDirectory = directory;
-    let workspaceBranch = keepsBase
+    const workspaceBranch = keepsBase
       ? (current?.workspaceBranch ?? (alreadyRelocated ? current?.branch : undefined))
       : undefined;
-    let workspaceOutcome: WorkspaceOutcome | undefined;
-    if (workspace) {
-      if (!branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
-      try {
-        const resolved = await resolveWorkspace(directory, {
-          base: branch,
-          branch: workspaceBranch,
-          name: session.title,
-        });
-        workingDirectory = resolved.workingDirectory;
-        workspaceBranch = resolved.branch;
-        workspaceOutcome = resolved.outcome;
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
-      }
-    } else {
-      // The worktree is left exactly where it is, registered and unharmed; the session simply
-      // stops claiming it. Keeping the name would re-adopt it the moment the toggle went back on
-      // with a different base chosen.
-      workspaceBranch = undefined;
-    }
+
+    if (workspace && !branch) return { ok: false, error: 'Pick a branch for the workspace to run on.' };
+    // Nothing is created here and nothing is shelled out to: a session that already has its
+    // worktree keeps it, and one that does not gets it on its first turn - see `ensureWorkspace`.
+    // A worktree the session stops claiming is left registered and unharmed where it is.
+    const keepsWorktree = workspace && !!workspaceBranch && !!current;
+    const workingDirectory = keepsWorktree ? current.workingDirectory : directory;
 
     const updated = await this.deps.store.setProject(request.sessionId, {
       directory,
       name: movedProject || !current ? await projectDisplayName(directory) : current.name,
       branch,
       workspace,
-      ...(workspaceBranch ? { workspaceBranch } : {}),
+      ...(keepsWorktree && workspaceBranch ? { workspaceBranch } : {}),
       workingDirectory,
       // Folders granted for the old project are dropped with it: they were chosen as context
       // for that codebase, and silently carrying them into another one widens the tools' reach
@@ -687,17 +659,51 @@ export class ChatService {
       contextDirectories: movedProject ? [] : (current?.contextDirectories ?? []),
     });
     if (!updated) return { ok: false, error: 'This conversation is no longer available.' };
-    this.startDependencyInstall(request.sessionId, workingDirectory, workspaceOutcome);
     return { ok: true, session: updated };
   }
 
+  /**
+   * Cut this session's worktree, if it has asked for one and does not have it yet.
+   *
+   * Deferred to the first turn rather than done when the toggle is ticked. Until something
+   * runs there is nothing to isolate, and cutting on the tick meant a branch and a folder per
+   * change of mind: a user who ticked the box, looked at the branch list and picked a
+   * different base left a worktree behind for the one they rejected. It also lines creation up
+   * with the chip lock, which freezes the binding at the same moment and for the same reason -
+   * before the first turn the choice is still the user's to change, after it the transcript
+   * depends on it.
+   *
+   * `name` seeds the branch slug and is the turn's own prompt, because at this point the
+   * session is still called 'New chat': resolving against the title is what produced a
+   * container full of b4m+new-chat-* folders. The prompt is the first description of the work
+   * that exists.
+   *
+   * Idempotent, and free once done: a session already in its worktree is a field comparison
+   * rather than a git call, which is what keeps this off the cost of every later turn.
+   */
+  private async ensureWorkspace(session: ChatSession, name: string): Promise<{ error: string } | null> {
+    const project = session.project;
+    if (!project?.workspace || project.workingDirectory !== project.directory) return null;
+
+    try {
+      const resolved = await resolveWorkspace(project.directory, { base: project.branch, name });
+      const moved: ChatProject = {
+        ...project,
+        workspaceBranch: resolved.branch,
+        workingDirectory: resolved.workingDirectory,
+      };
+      await this.deps.store.setProject(session.id, moved);
+      session.project = moved;
+      this.startDependencyInstall(session.id, resolved.workingDirectory, resolved.outcome);
+      return null;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : 'Could not prepare the workspace.' };
+    }
+  }
+
   /** Fire and forget: an install must never hold up, or fail, creating the session. */
-  private startDependencyInstall(
-    sessionId: string,
-    workingDirectory: string,
-    outcome: WorkspaceOutcome | undefined
-  ): void {
-    if (!this.deps.dependencies || !outcome) return;
+  private startDependencyInstall(sessionId: string, workingDirectory: string, outcome: WorkspaceOutcome): void {
+    if (!this.deps.dependencies) return;
     this.deps.dependencies.maybeStart({ sessionId, workingDirectory, outcome }).catch(err => {
       this.deps.logger.warn(`Dependency install did not start: ${err instanceof Error ? err.message : 'unknown'}`);
     });
@@ -1044,6 +1050,17 @@ export class ChatService {
     const attached = await this.resolveAttachments(sessionId, attachments);
     const refusal = this.refuseUnreadableImages(reconciled.model, attached);
     if (refusal) return { ok: false, error: refusal };
+
+    // The turn is what a worktree exists for, so this is where one gets made.
+    //
+    // Last of the refusals and first of the work: every way this turn could still be turned
+    // away - unknown skill, typed ahead of a live reply, signed out, an image the model cannot
+    // read - has had its say, so nothing is cut for a turn that does not happen. And it is
+    // still ahead of the prompt being stored, for the reason createCodeSession resolved before
+    // writing the session: a worktree that cannot be made must refuse the turn rather than
+    // leave a prompt in the thread with no reply coming.
+    const workspaceFailure = await this.ensureWorkspace(existing, prompt);
+    if (workspaceFailure) return { ok: false, error: workspaceFailure.error };
 
     // The skill's body becomes the turn, and `skill` records which one so the thread can show
     // "/review src/foo.ts" rather than the page of instructions that was actually sent.
