@@ -249,6 +249,11 @@ vi.mock('@client/app/hooks/useSetLakeScope', () => ({
     sessionState.listeners.forEach(listener => listener());
   },
 }));
+// Its persist logic is covered in useSetIncludeLibraryFiles.test; mocked to keep this harness QueryClient-free.
+const { libraryToggle } = vi.hoisted(() => ({ libraryToggle: { included: false, toggle: vi.fn() } }));
+vi.mock('@client/app/hooks/useSetIncludeLibraryFiles', () => ({
+  default: () => ({ included: libraryToggle.included, isPending: false, toggle: libraryToggle.toggle }),
+}));
 vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success: toastSuccess } }));
 
 // Stub the tree so we can trigger the row actions deterministically and read the highlight
@@ -403,7 +408,7 @@ describe('DataLakeExplorer chat-first surface', () => {
     renderExplorer();
 
     expect(lakesHookSessionIds).toContain('sess-1');
-    expect(screen.getByTestId('datalake-selected-lake-unsearchable')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-active-scope-unsearchable-lake-1')).toBeInTheDocument();
   });
 
   it('renders chatSlot in the right pane', () => {
@@ -810,6 +815,32 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     // Add files is a manage capability; Configure deep-links the manager either way.
     expect(screen.getByTestId('datalake-selected-lake-addfiles-btn')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-selected-lake-manage-btn')).toBeInTheDocument();
+  });
+
+  it('names a single scoped lake on the strip once, beside a My files toggle, with actions below', () => {
+    libraryToggle.toggle.mockClear();
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(screen.getByTestId('datalake-active-scope-chip-lake-1')).toHaveTextContent('Lake A');
+    // Removing the only lake would widen the scope to every lake.
+    expect(screen.queryByTestId('datalake-active-scope-remove-lake-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-selected-lake-header')).not.toHaveTextContent('Lake A');
+
+    const myFiles = screen.getByTestId('datalake-active-scope-myfiles-chip');
+    expect(myFiles).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(myFiles);
+    expect(libraryToggle.toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the all-lakes scope with its My files choice and no Clear once a session exists', () => {
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-active-scope-all')).toHaveTextContent('All data lakes');
+    expect(screen.getByTestId('datalake-active-scope-myfiles-chip')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-active-scope-clear-btn')).not.toBeInTheDocument();
   });
 
   // Clicked, not just asserted present: the strip's handlers come from the wizard store, so a
