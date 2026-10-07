@@ -8,14 +8,14 @@ import {
 import { FabFile, Session, User, withTransaction } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
-import { chargeImportedKnowledgeStorage, claimStorageCharge } from './storageCharge';
+import { chargeStampedKnowledgeStorage, claimStorageCharge, stampImportedKnowledgeRows } from './storageCharge';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
 /**
  * The import's quota gate reads `currentStorageSize`, and nothing on the import path used to charge
  * it, so every import measured against the same headroom. Drives the REAL service (built dist - run
- * `pnpm --filter @bike4mind/services build` first) against a replica set, since the charge joins the
+ * `pnpm --filter @bike4mind/services build` first) against a replica set, since the row stamp joins the
  * import's transaction.
  */
 
@@ -47,8 +47,9 @@ afterEach(async () => {
 
 // Raw insert: the import only reads the two quota fields, and the full schema's required fields
 // are irrelevant here.
+const BASELINE_BYTES = 100_000;
 const seedUser = () =>
-  User.collection.insertOne({ _id: USER_ID, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: 0 });
+  User.collection.insertOne({ _id: USER_ID, storageLimit: STORAGE_LIMIT_MB, currentStorageSize: BASELINE_BYTES });
 
 const storedSize = async () => (await User.collection.findOne({ _id: USER_ID }))?.currentStorageSize;
 
@@ -103,13 +104,17 @@ const makeService = () =>
     generateId: () => new mongoose.Types.ObjectId().toString(),
   } as never);
 
-/** One import as notebookImportComplete runs it: the import and its charge in one transaction. */
-const importAndCharge = (name: string) =>
-  withTransaction(async session => {
-    const result = await makeService().importNotebooks(USER, payload(name) as never, OPTIONS as never);
-    await chargeImportedKnowledgeStorage(USER, result.importedKnowledgeFilePaths ?? [], session);
-    return result;
+/** One import as notebookImportComplete runs it: stamp in the transaction, debit after commit. */
+const importAndCharge = async (name: string) => {
+  let stamp: Date | undefined;
+  const result = await withTransaction(async session => {
+    const imported = await makeService().importNotebooks(USER, payload(name) as never, OPTIONS as never);
+    stamp = await stampImportedKnowledgeRows(USER, imported.importedKnowledgeFilePaths ?? [], session);
+    return imported;
   });
+  await chargeStampedKnowledgeStorage(USER, result.importedKnowledgeFilePaths ?? [], stamp as Date);
+  return result;
+};
 
 describe('notebook import storage charge', () => {
   it('does not admit a second import that only fit the headroom the first one spent', async () => {
@@ -122,7 +127,7 @@ describe('notebook import storage charge', () => {
     expect(second.importedAttachments).toBe(0);
     expect(second.warnings?.join(' ')).toMatch(/storage limit/);
     expect(await FabFile.countDocuments({ userId: USER })).toBe(1);
-    expect(await storedSize()).toBe(FILE_BYTES);
+    expect(await storedSize()).toBe(BASELINE_BYTES + FILE_BYTES);
   });
 
   it('leaves the S3 event for the imported upload nothing to charge', async () => {
@@ -158,12 +163,13 @@ describe('notebook import storage charge', () => {
     await expect(
       withTransaction(async session => {
         const result = await makeService().importNotebooks(USER, payload('rolled') as never, OPTIONS as never);
-        await chargeImportedKnowledgeStorage(USER, result.importedKnowledgeFilePaths ?? [], session);
+        await stampImportedKnowledgeRows(USER, result.importedKnowledgeFilePaths ?? [], session);
         throw new Error('abort');
       })
     ).rejects.toThrow('abort');
 
-    expect(await storedSize()).toBe(0);
+    expect(await storedSize()).toBe(BASELINE_BYTES);
+    expect(await FabFile.countDocuments({ userId: USER })).toBe(0);
   });
 
   it("never charges another user's row that shares a path", async () => {
@@ -173,6 +179,6 @@ describe('notebook import storage charge', () => {
       { userId: other, fileName: 'x', mimeType: 'text/plain', fileSize: 5, filePath: 'knowledge/x', type: 'FILE' },
     ]);
 
-    expect(await withTransaction(session => chargeImportedKnowledgeStorage(USER, ['knowledge/x'], session))).toBe(0);
+    expect(await chargeStampedKnowledgeStorage(USER, ['knowledge/x'], new Date())).toBe(0);
   });
 });

@@ -436,9 +436,11 @@ export interface IFabFile {
   moderationClaimedAt?: Date;
 
   /**
-   * Upload time of the bytes last charged to the owner's `currentStorageSize`. Advanced by
-   * compare-and-set, so an upload is charged once whether the S3 ObjectCreated handler or a notebook
-   * import charges it (apps/client/server/s3/storageCharge.ts). Absent on rows that predate it.
+   * Compare-only watermark for charging `currentStorageSize`: an S3 event is charged only if its
+   * time is newer. Advanced by compare-and-set, so an upload is charged once whether the ObjectCreated
+   * handler or a notebook import charges it (apps/client/server/s3/storageCharge.ts). Imported rows
+   * store the import's stamp time, not the upload time, so do not read it as one. Absent on rows that
+   * predate it.
    */
   storageChargedAt?: Date;
 

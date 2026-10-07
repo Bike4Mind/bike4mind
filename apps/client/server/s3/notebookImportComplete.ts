@@ -21,7 +21,7 @@ import {
 } from '@bike4mind/database';
 import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
 import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
-import { chargeImportedKnowledgeStorage } from '@server/s3/storageCharge';
+import { chargeStampedKnowledgeStorage, stampImportedKnowledgeRows } from '@server/s3/storageCharge';
 import { buildKnowledgeModerationDeps } from '@server/s3/knowledgeModerationDeps';
 import { withContext } from '@server/s3/utils';
 import type { ClientSession, FilterQuery } from 'mongoose';
@@ -210,6 +210,7 @@ const processNotebookImport = async (
   logger: Logger,
   importHistoryJobId: string
 ) => {
+  let importStamp: Date | undefined;
   const result = await withTransaction(async session => {
     const s3 = new S3Storage(bucket);
     // Hoisted out of the try so the catch below can reach the paths THIS attempt uploaded. It has
@@ -321,9 +322,7 @@ const processNotebookImport = async (
         throw new Error(`Imported no notebooks: ${result.errors.join('; ')}`);
       }
 
-      // Last write before the job is marked complete, so the user document is held for as short a
-      // window as possible - see chargeImportedKnowledgeStorage.
-      await chargeImportedKnowledgeStorage(userId, result.importedKnowledgeFilePaths ?? [], session);
+      importStamp = await stampImportedKnowledgeRows(userId, result.importedKnowledgeFilePaths ?? [], session);
 
       await markImportComplete(importHistoryJobId, userId, {
         processedItems: result.importedNotebooks + result.importedMessages,
@@ -384,6 +383,18 @@ const processNotebookImport = async (
   // does. Keyed by filePath. Attacker-supplied bytes, so this is not optional - it is the moderation
   // gate imports would otherwise skip.
   const filePaths = result.importedKnowledgeFilePaths ?? [];
+  if (filePaths.length && importStamp) {
+    // Best-effort like the scan below: a failure leaves the rows stamped but uncharged, so it is
+    // logged rather than thrown, which would flip the committed import to failed.
+    try {
+      await chargeStampedKnowledgeStorage(userId, filePaths, importStamp);
+    } catch (chargeErr) {
+      logger.error('Post-commit storage charge failed; quota under-counts this import', {
+        userId,
+        error: chargeErr,
+      });
+    }
+  }
   if (filePaths.length) {
     // Best-effort and strictly post-commit: the import already succeeded and told the user. A
     // failure here must NOT propagate - the outer dispatch catch would then flip the committed,
