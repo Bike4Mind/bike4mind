@@ -38,12 +38,22 @@ export type LambdaRateLimit = (ctx: {
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
 /**
+ * An auth throw that declares 403 (authenticated but forbidden, e.g. a suspended
+ * account) keeps it; anything else - plain Errors included - is a 401. Duck-typed
+ * rather than `instanceof HTTPError` so a second copy of @bike4mind/common in the
+ * bundle can't silently turn a 403 into a 401.
+ */
+function authFailureStatus(error: unknown): 401 | 403 {
+  return (error as { statusCode?: unknown } | null)?.statusCode === 403 ? 403 : 401;
+}
+
+/**
  * AWS Lambda Function URL adapter for an {@link EndpointContract} - the transport
  * used for public endpoints the Next.js API can't serve (SST dev + Function URLs +
  * CloudFront had socket hang-ups; see cli/tools.ts).
  *
  * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
- * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401, via resolveContractAuth
+ * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401/403, via resolveContractAuth
  * so every JWT/API-key gate matches the rest of the app), optional rate limiting
  * (429, via `options.rateLimit`), contract validation (422 - the pattern's uniform
  * validation gate), JSON response shaping, and turning a thrown handler error into a
@@ -109,7 +119,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
       try {
         auth = await resolveContractAuth(event.headers ?? {}, contract);
       } catch (error) {
-        return json(401, {
+        return json(authFailureStatus(error), {
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,
         });
