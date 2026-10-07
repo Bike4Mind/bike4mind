@@ -39,7 +39,10 @@ const isInternalReference = (core: string): boolean =>
  * sentence punctuation stays.
  */
 export function scrubCustomerText(text: string): string {
+  // Zero-width format characters and "# 123" would otherwise split a reference across tokens.
   const out = text
+    .replace(/\p{Cf}/gu, '')
+    .replace(/#\s+(?=\d)/g, '#')
     .split(/(\s+)/)
     .map(token => {
       let start = 0;
@@ -58,9 +61,19 @@ export function scrubCustomerText(text: string): string {
     .trim();
 }
 
+// Compares letters and digits only, so "A.C.M.E", "Ac-me" and "A C M E" all match a denylisted "acme".
+const foldForDenylist = (text: string): string =>
+  text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '');
+
 const findDenied = (text: string, denylist: string[]): string | undefined => {
-  const lower = text.toLowerCase();
-  return denylist.find(term => lower.includes(term));
+  const folded = foldForDenylist(text);
+  return denylist.find(term => {
+    const foldedTerm = foldForDenylist(term);
+    return foldedTerm.length > 0 && folded.includes(foldedTerm);
+  });
 };
 
 export type FinalizeResult = { kind: 'repair'; reasons: string[] } | { kind: 'ok'; note: ReleaseNote };

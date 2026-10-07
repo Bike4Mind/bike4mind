@@ -10,7 +10,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'video-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/videoGenerationDLQ',
   'generation-job': 'https://sqs.us-east-2.amazonaws.com/123456789/generationJobDLQ',
   'research-engine': 'https://sqs.us-east-2.amazonaws.com/123456789/researchEngineQueueDLQ',
-  'whats-new-generation': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
+  'release-notes': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewGenerationQueueDLQ',
   'whats-new-highlights': 'https://sqs.us-east-2.amazonaws.com/123456789/whatsNewHighlightsQueueDLQ',
   'notebook-curation': 'https://sqs.us-east-2.amazonaws.com/123456789/notebookCurationQueueDLQ',
   'agent-proactive-message': 'https://sqs.us-east-2.amazonaws.com/123456789/agentProactiveMessageQueueDLQ',

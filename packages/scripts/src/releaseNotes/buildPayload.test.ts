@@ -10,12 +10,14 @@ import {
   selectBackfillPairs,
 } from './buildPayload';
 
+const sha40 = (tag: string) => Buffer.from(tag).toString('hex').padEnd(40, '0').slice(0, 40);
+
 const release = (tag: string, createdAt: string): GitHubRelease => ({
   tag_name: tag,
   name: tag,
   body: '',
   created_at: createdAt,
-  target_commitish: `sha-${tag}`,
+  target_commitish: sha40(tag),
   html_url: `https://example.com/releases/${tag}`,
 });
 
@@ -132,7 +134,7 @@ describe('buildReleaseNotesPayload', () => {
         excerpt: '## Customer note New export.',
       },
     ]);
-    expect(payload).toMatchObject({ releaseTag: 'v1.0.0.2', deployedSha: 'sha-v1.0.0.2', previousTag: 'v1.0.0.1' });
+    expect(payload).toMatchObject({ releaseTag: 'v1.0.0.2', deployedSha: sha40('v1.0.0.2'), previousTag: 'v1.0.0.1' });
   });
 
   it('anchors deployedAt to enqueue time, not the release creation date', async () => {
@@ -152,6 +154,32 @@ describe('buildReleaseNotesPayload', () => {
     });
     expect(getCommitRange).not.toHaveBeenCalled();
     expect(payload.prs).toEqual([]);
+  });
+});
+
+describe('buildReleaseNotesPayload deployedSha', () => {
+  const deps = (resolve: (ref: string) => Promise<string>) => ({
+    getCommitRange: vi.fn(async () => []),
+    getPRSummary: vi.fn(async () => null),
+    resolveCommitSha: vi.fn(resolve),
+  });
+
+  it('resolves a branch-name target_commitish via the release tag', async () => {
+    const d = deps(async () => 'a'.repeat(40));
+    const payload = await buildReleaseNotesPayload(
+      { ...release('v1.0.0.2', '2026-01-02T00:00:00Z'), target_commitish: 'main' },
+      'v1.0.0.1',
+      d
+    );
+    expect(d.resolveCommitSha).toHaveBeenCalledWith('v1.0.0.2');
+    expect(payload.deployedSha).toBe('a'.repeat(40));
+  });
+
+  it('keeps a 40-hex target_commitish without calling GitHub', async () => {
+    const d = deps(async () => 'b'.repeat(40));
+    const payload = await buildReleaseNotesPayload(release('v1.0.0.2', '2026-01-02T00:00:00Z'), 'v1.0.0.1', d);
+    expect(d.resolveCommitSha).not.toHaveBeenCalled();
+    expect(payload.deployedSha).toBe(sha40('v1.0.0.2'));
   });
 });
 

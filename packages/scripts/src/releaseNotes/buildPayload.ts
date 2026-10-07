@@ -1,7 +1,7 @@
 import { SendMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import { RELEASE_NOTES_SCHEMA_VERSION, type ReleaseNotesJobPayload, type ReleaseNotesJobPr } from '@bike4mind/common';
 import { extractPRNumber } from '../generateChangelog';
-import type { GitHubCommit, GitHubRelease, PRSummary } from '../utils/githubApi';
+import { resolveCommitSha, type GitHubCommit, type GitHubRelease, type PRSummary } from '../utils/githubApi';
 
 export const PRODUCTION_TAG = /^v\d+\.\d+\.\d+\.\d+$/;
 export const EXCERPT_CHARS = 500;
@@ -66,6 +66,7 @@ export function capPayloadSize(payload: ReleaseNotesJobPayload, maxBytes = MAX_P
 export interface PayloadDeps {
   getCommitRange: (base: string, head: string) => Promise<GitHubCommit[]>;
   getPRSummary: (prNumber: number) => Promise<PRSummary | null>;
+  resolveCommitSha?: (ref: string) => Promise<string>;
 }
 
 /**
@@ -97,13 +98,18 @@ export async function buildReleaseNotesPayload(
     });
   }
 
+  // Releases created in the GitHub UI carry the target branch name, not a sha.
+  const deployedSha = /^[0-9a-f]{40}$/i.test(release.target_commitish)
+    ? release.target_commitish
+    : await (deps.resolveCommitSha ?? resolveCommitSha)(release.tag_name);
+
   return capPayloadSize({
     kind: 'release-notes',
     schemaVersion: RELEASE_NOTES_SCHEMA_VERSION,
     releaseTag: release.tag_name,
     releaseUrl: release.html_url,
     previousTag,
-    deployedSha: release.target_commitish,
+    deployedSha,
     deployedAt,
     prs,
   });

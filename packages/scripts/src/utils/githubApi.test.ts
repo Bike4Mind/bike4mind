@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getCommitRange } from './githubApi';
+import { getCommitRange, resolveCommitSha } from './githubApi';
 
 const commit = (n: number) => ({
   sha: `s${n}`,
@@ -48,5 +48,25 @@ describe('getCommitRange', () => {
 
     expect(result).toHaveLength(150);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('resolveCommitSha', () => {
+  beforeEach(() => {
+    vi.stubEnv('GITHUB_REPOSITORY', 'acme/repo');
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('returns the commit sha the ref points at', async () => {
+    const fetchMock = vi.fn(async (_url: string) => ({ ok: true, json: async () => ({ sha: 'f'.repeat(40) }) }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(resolveCommitSha('v1.0.0.2')).resolves.toBe('f'.repeat(40));
+    expect(fetchMock.mock.calls[0][0]).toContain('/repos/acme/repo/commits/v1.0.0.2');
   });
 });

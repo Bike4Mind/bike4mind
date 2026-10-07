@@ -317,6 +317,15 @@ export async function getPRSummary(prNumber: number): Promise<PRSummary | null> 
 }
 
 /**
+ * Resolve a ref (tag, branch or sha) to the commit sha it points at
+ */
+export async function resolveCommitSha(ref: string): Promise<string> {
+  const { owner, repo } = getRepoInfo();
+  const commit = await githubRequest<{ sha: string }>(`/repos/${owner}/${repo}/commits/${encodeURIComponent(ref)}`);
+  return commit.sha;
+}
+
+/**
  * List every release, following pagination (newest first, as GitHub returns them)
  */
 export async function listReleases(): Promise<GitHubRelease[]> {

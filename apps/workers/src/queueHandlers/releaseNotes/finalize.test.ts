@@ -36,6 +36,9 @@ describe('scrubCustomerText', () => {
     ['Changed apps/client/server/foo.ts behavior', 'Changed behavior'],
     ['Updated `src/utils/thing` code', 'Updated code'],
     ['Edited config.yaml/x.json now', 'Edited now'],
+    ['Fixed in # 123 today', 'Fixed in today'],
+    [`Fixed in #${String.fromCharCode(0x200b)}123 today`, 'Fixed in today'],
+    [`Resolves ENG-${String.fromCharCode(0x2060)}1234, finally`, 'Resolves, finally'],
   ])('scrubs %j', (input, expected) => {
     expect(scrubCustomerText(input)).toBe(expected);
   });
@@ -89,6 +92,28 @@ describe('finalizeReleaseNote', () => {
       kind: 'repair',
       reasons: ['the headline must not mention "falcon"', 'the summary must not mention "falcon"'],
     });
+  });
+
+  it.each(['Built for A C M E', 'Built for A.C.M.E', 'Built for Ac-me', 'Built for ACME_Corp'])(
+    'drops an item that spells a denylisted term with separators: %j',
+    text => {
+      const result = run(draft({ items: [item(text), item('Keep me.')] }), { embargoHours: 12, denylist: ['acme'] });
+
+      expect(result.kind === 'ok' && result.note.items).toEqual([item('Keep me.')]);
+    }
+  );
+
+  it('matches a multi-word denylist term regardless of its own spacing', () => {
+    const result = run(draft({ items: [item('Uses project-falcon now'), item('Keep me.')] }), {
+      embargoHours: 12,
+      denylist: ['Project Falcon'],
+    });
+
+    expect(result.kind === 'ok' && result.note.items).toEqual([item('Keep me.')]);
+  });
+
+  it('ignores denylist terms that hold no letters or digits', () => {
+    expect(run(draft(), { embargoHours: 12, denylist: ['--', '...'] }).kind).toBe('ok');
   });
 
   it('ignores blank denylist terms', () => {

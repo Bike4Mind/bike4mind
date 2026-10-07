@@ -28,7 +28,7 @@ vi.mock('./releaseNotes/generate', () => ({
 }));
 vi.stubGlobal('fetch', h.fetch);
 
-import { dispatch } from './releaseNotes';
+import { dispatch, GENERATION_BUDGET_MS } from './releaseNotes';
 
 const logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn(), updateMetadata: vi.fn() } as never as {
   warn: ReturnType<typeof vi.fn>;
@@ -111,6 +111,9 @@ describe('releaseNotes queue handler', () => {
   it('is a no-op when the setting has never been saved', async () => {
     setConfig(null);
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('disabled'));
+    expect(h.createCompleter).not.toHaveBeenCalled();
+    expect(h.upsertGenerated).not.toHaveBeenCalled();
   });
 
   it('stores the note, announces it in Slack and emits success metrics', async () => {
@@ -194,8 +197,8 @@ describe('releaseNotes queue handler', () => {
     const before = Date.now();
     await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
     const deadline = h.createCompleter.mock.calls[0][2];
-    expect(deadline - before).toBeGreaterThan(0);
-    expect(deadline - before).toBeLessThan(5 * 60 * 1000);
+    expect(deadline - before).toBeGreaterThan(GENERATION_BUDGET_MS - 1000);
+    expect(deadline - before).toBeLessThanOrEqual(GENERATION_BUDGET_MS + 5000);
   });
 
   it('emits a failure metric and rethrows when generation fails', async () => {

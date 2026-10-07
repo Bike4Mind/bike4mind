@@ -25,7 +25,7 @@ const SETTING_NAME = 'releaseNotesConfig';
 const MS_PER_HOUR = 60 * 60 * 1000;
 const TOKENS_PER_MILLION = 1_000_000;
 // Under the 5-minute Lambda timeout in infra/queues.ts, so a slow LLM still fails here and emits the Failure metric.
-const GENERATION_BUDGET_MS = 4 * 60 * 1000;
+export const GENERATION_BUDGET_MS = 4 * 60 * 1000;
 // Leaves the post inside the Lambda timeout after a full generation budget; a hang would retry and re-announce.
 const SLACK_TIMEOUT_MS = 15_000;
 
