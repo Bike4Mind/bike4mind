@@ -15,7 +15,7 @@ import {
 } from '@mui/joy';
 import type { ColorPaletteProp } from '@mui/joy/styles';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import type { IDiscoverySkippedSource } from '@bike4mind/common';
+import { ADAPTER_LITERAL_PRICE_SOURCE, type IDiscoverySkippedSource } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { AdminTab } from './adminSidebarConfig';
 import { useAdminModal } from './useAdminModal';
@@ -230,6 +230,36 @@ const Section: React.FC<{ title: string; children: React.ReactNode; sx?: object 
   </Sheet>
 );
 
+const PriceRowsTable: React.FC<{ rows: PlannedPriceRow[]; testId?: string }> = ({
+  rows,
+  testId = 'discovery-run-price-rows-table',
+}) => (
+  <Table size="sm" data-testid={testId}>
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>$/M in</th>
+        <th>$/M out</th>
+        <th>Sources</th>
+        <th>Note</th>
+      </tr>
+    </thead>
+    <tbody>
+      {/* Keyed by index as well: priceRows is a plain flatMap across convergence passes (see aggregate() in
+          runModelDiscovery.ts), so two rows for one modelId+unit are legitimate. */}
+      {rows.map((row, index) => (
+        <tr key={`${row.modelId}|${row.unit}|${index}`} data-testid={`discovery-run-price-row-${row.modelId}-${index}`}>
+          <td>{row.modelId}</td>
+          <td>{usdPerMTok(row.inputPerMTok)}</td>
+          <td>{usdPerMTok(row.outputPerMTok)}</td>
+          <td>{list(row.sources)}</td>
+          <td>{row.note}</td>
+        </tr>
+      ))}
+    </tbody>
+  </Table>
+);
+
 /**
  * One discovery run as the report behind the status card's change counts: which
  * models were flagged and, above all, WHY - the flag detail sentence used to
@@ -330,6 +360,14 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
             : []),
         ]
       : [];
+
+  // A truncated slice cannot be split truthfully: how many of the cut rows came from the build is unknown.
+  const priceRowsTruncated = (run?.detailTotals?.priceRows ?? 0) > (run?.priceRows.length ?? 0);
+  const isFromBuild = (row: PlannedPriceRow) => row.sources.includes(ADAPTER_LITERAL_PRICE_SOURCE);
+  const priceRowsFromBuild = priceRowsTruncated ? [] : (run?.priceRows ?? []).filter(isFromBuild);
+  const priceRowsRepriced = priceRowsTruncated
+    ? (run?.priceRows ?? [])
+    : (run?.priceRows ?? []).filter(row => !isFromBuild(row));
 
   const overrideCount = countLabel(run?.priceOverrides?.length ?? 0, run?.detailTotals?.priceOverrides);
 
@@ -457,44 +495,29 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                 </Section>
               )}
 
-              {run.priceRows.length > 0 && (
+              {priceRowsRepriced.length > 0 && (
                 <Section
                   title={
                     // Nothing was repriced on a run that wrote nothing, and an older
                     // run carries no mode to claim either way.
                     run.mode === 'write'
-                      ? `Repriced (${countLabel(run.priceRows.length, run.detailTotals?.priceRows)})`
-                      : `Price rows planned (${countLabel(run.priceRows.length, run.detailTotals?.priceRows)})`
+                      ? `Repriced (${countLabel(priceRowsRepriced.length, run.detailTotals?.priceRows)})`
+                      : `Price rows planned (${countLabel(priceRowsRepriced.length, run.detailTotals?.priceRows)})`
                   }
                 >
-                  <Table size="sm" data-testid="discovery-run-price-rows-table">
-                    <thead>
-                      <tr>
-                        <th>Model</th>
-                        <th>$/M in</th>
-                        <th>$/M out</th>
-                        <th>Sources</th>
-                        <th>Note</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {/* Keyed by index as well: priceRows is a plain flatMap across
-                          convergence passes (see aggregate() in runModelDiscovery.ts),
-                          so two rows for one modelId+unit are legitimate. */}
-                      {run.priceRows.map((row, index) => (
-                        <tr
-                          key={`${row.modelId}|${row.unit}|${index}`}
-                          data-testid={`discovery-run-price-row-${row.modelId}-${index}`}
-                        >
-                          <td>{row.modelId}</td>
-                          <td>{usdPerMTok(row.inputPerMTok)}</td>
-                          <td>{usdPerMTok(row.outputPerMTok)}</td>
-                          <td>{list(row.sources)}</td>
-                          <td>{row.note}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
+                  <PriceRowsTable rows={priceRowsRepriced} />
+                </Section>
+              )}
+
+              {priceRowsFromBuild.length > 0 && (
+                <Section
+                  title={
+                    run.mode === 'write'
+                      ? `Recorded from build (${priceRowsFromBuild.length})`
+                      : `Recorded from build, planned (${priceRowsFromBuild.length})`
+                  }
+                >
+                  <PriceRowsTable rows={priceRowsFromBuild} testId="discovery-run-build-price-rows-table" />
                 </Section>
               )}
 
