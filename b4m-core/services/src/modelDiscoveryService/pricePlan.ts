@@ -390,7 +390,9 @@ export function planPriceWrites(input: PricePlanInput): PricePlan {
   // A row of this kind tracks the build: without a row the read path bills the
   // live literal, so a stored copy that stopped matching it would pin billing to
   // an old build's price. Rewriting is gated on the note, never on a row some
-  // other owner wrote.
+  // other owner wrote. Only a write-mode discovery run refreshes it: the seeder
+  // keeps any row at or after its generatedAt, and the row is stamped with the
+  // run's start, so report and off modes leave a stale copy in force.
   const plannedIds = new Set(rows.map(row => row.modelId));
   for (const modelId of [...(input.adapterLadders?.keys() ?? [])].sort()) {
     const ladder = input.adapterLadders?.get(modelId);
