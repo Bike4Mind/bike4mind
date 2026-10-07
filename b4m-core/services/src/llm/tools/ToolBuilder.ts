@@ -957,7 +957,6 @@ export class ToolBuilder {
             await saveQuest(quest);
           }
           // image_generation / edit_image ride quest.images too (data is the path array).
-          // video_generation bills in createVideoJob, not here.
           if (toolName === 'image_generation' || toolName === 'edit_image') {
             this.deps.logger.info(`Tool ${toolName} finished with data: ${JSON.stringify(data)}`);
             const generatedPaths = Array.isArray(data) ? data : [data];
