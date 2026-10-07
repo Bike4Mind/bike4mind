@@ -127,12 +127,18 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
   const terminal = isTerminalVideoState(job.state);
   const output: VideoGeneration['output'] = job.state === 'succeeded' ? job.output : null;
   const failureMessage = job.error?.message ?? FAILURE_FALLBACK[job.state];
-  const statusLabel = cancel.isSuccess && !terminal ? 'Cancelling' : STATE_LABELS[job.state];
+  const isSettling = job.state === 'succeeded' && (!job.output || job.output.availability === 'pending_scan');
+  const statusLabel = (() => {
+    if (cancel.isSuccess && !terminal) return 'Cancelling';
+    if (isSettling) return job.output ? 'Checking' : 'Finishing';
+    return STATE_LABELS[job.state];
+  })();
+  const statusColor: ColorPaletteProp = isSettling ? 'primary' : STATE_COLORS[job.state];
 
   return (
     <Card variant="outlined" data-testid="video-job-card" data-job-id={job.id} sx={{ gap: 1 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
-        <Chip size="sm" variant="soft" color={STATE_COLORS[job.state]} data-testid="video-job-card-status">
+        <Chip size="sm" variant="soft" color={statusColor} data-testid="video-job-card-status">
           {statusLabel}
         </Chip>
         <Typography level="body-xs">
@@ -144,7 +150,7 @@ const VideoJobCard = ({ jobId }: { jobId: string }) => {
         {job.prompt}
       </Typography>
 
-      {!terminal && (
+      {(!terminal || isSettling) && (
         <Stack gap={0.5}>
           <LinearProgress
             data-testid="video-job-card-progress"

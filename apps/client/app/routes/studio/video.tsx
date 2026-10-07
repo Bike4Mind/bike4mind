@@ -3,8 +3,10 @@ import PageFrame from '@client/app/components/common/PageFrame';
 import VideoGallery from '@client/app/components/VideoStudio/VideoGallery';
 import VideoStudioForm from '@client/app/components/VideoStudio/VideoStudioForm';
 import { useCreateVideoGeneration, useVideoModels } from '@client/app/hooks/data/videoGenerations';
+import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 
 const VideoStudioPage = () => {
+  useDocumentTitle('Video Studio');
   const models = useVideoModels();
   const create = useCreateVideoGeneration();
 

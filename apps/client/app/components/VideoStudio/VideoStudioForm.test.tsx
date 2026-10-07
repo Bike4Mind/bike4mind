@@ -25,11 +25,14 @@ vi.mock('@client/app/hooks/agent/useImageBrowser', () => ({
 }));
 // The real modal is covered by its own test; here it only needs to hand an image back.
 vi.mock('@client/app/components/Agent/ImageBrowserModal', () => ({
-  default: ({ onApplyImage }: { onApplyImage: (file: IFabFileDocument) => void }) => (
-    <button
-      data-testid="mock-apply-image"
-      onClick={() => onApplyImage({ id: 'img-1', fileName: 'harbor.png' } as IFabFileDocument)}
-    />
+  default: ({ onApplyImage, emptyHint }: { onApplyImage: (file: IFabFileDocument) => void; emptyHint?: string }) => (
+    <>
+      <span data-testid="mock-empty-hint">{emptyHint}</span>
+      <button
+        data-testid="mock-apply-image"
+        onClick={() => onApplyImage({ id: 'img-1', fileName: 'harbor.png' } as IFabFileDocument)}
+      />
+    </>
   ),
 }));
 
@@ -141,6 +144,13 @@ describe('VideoStudioForm submit', () => {
       aspect_ratio: '16:9',
       resolution: '480p',
     });
+  });
+
+  it('tells a user with no library images how to get one', () => {
+    render(tree([rangeModel]));
+    expect(screen.getByTestId('mock-empty-hint')).toHaveTextContent(
+      'No images yet. Upload one in Files, then choose it here.'
+    );
   });
 
   it('needs an image in image to video and sends it', () => {

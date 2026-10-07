@@ -5,10 +5,12 @@ import type { CreateVideoGenerationBody } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({
-  models: {} as Record<string, unknown>,
+  mutate: vi.fn(),
+  useDocumentTitle: vi.fn(),
   mutate: vi.fn(),
 }));
 
+vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: h.useDocumentTitle }));
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({
   useVideoModels: () => h.models,
   useCreateVideoGeneration: () => ({ mutate: h.mutate, isPending: false }),
@@ -36,6 +38,12 @@ const renderPage = () =>
 beforeEach(() => vi.clearAllMocks());
 
 describe('VideoStudioPage', () => {
+  it('sets the tab title', () => {
+    h.models = { isPending: true, data: undefined };
+    renderPage();
+    expect(h.useDocumentTitle).toHaveBeenCalledWith('Video Studio');
+  });
+
   it('renders the form and the gallery when a model is usable', () => {
     h.models = { data: [rangeModel], isPending: false, isError: false };
     renderPage();

@@ -65,6 +65,21 @@ describe('VideoJobCard states', () => {
     expect(screen.queryByTestId('video-job-card-unavailable-note')).not.toBeInTheDocument();
   });
 
+  it('labels a scanning clip Checking, never Ready', () => {
+    showJob(succeeded(readyOutput({ availability: 'pending_scan', url: null, expires_at: null })));
+    render(card());
+    expect(screen.getByTestId('video-job-card-status')).toHaveTextContent('Checking');
+    expect(screen.getByTestId('video-job-card-status')).not.toHaveTextContent('Ready');
+    expect(screen.getByTestId('video-job-card-progress')).toBeInTheDocument();
+  });
+
+  it('labels a playable clip Ready', () => {
+    showJob(succeeded(readyOutput()));
+    render(card());
+    expect(screen.getByTestId('video-job-card-status')).toHaveTextContent('Ready');
+    expect(screen.queryByTestId('video-job-card-progress')).not.toBeInTheDocument();
+  });
+
   it('shows a queued job with Cancel', () => {
     showJob(videoJob({ state: 'pending' }));
     render(card());

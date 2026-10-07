@@ -264,7 +264,7 @@ const VideoStudioForm = ({ models, isSubmitting, onSubmit }: VideoStudioFormProp
         }}
         onSearch={() => void imageBrowser.fetchImageFiles(imageBrowser.imageSearch)}
         title="Choose an image to animate"
-        emptyHint="Upload images in Files to animate them here."
+        emptyHint="No images yet. Upload one in Files, then choose it here."
       />
     </Stack>
   );
