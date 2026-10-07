@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
+import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
 
 // SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
 // management endpoint the ws-completions route streams through.
@@ -216,15 +217,15 @@ describe('ChatCompletion /process', () => {
 
     await vi.waitFor(() => expect(mockEmitMetrics).toHaveBeenCalledTimes(1));
     expect(mockCategorizeToolError).toHaveBeenCalledWith('boom');
-    expect(mockEmitMetrics).toHaveBeenCalledWith('Lumina5/Quests', [
+    expect(mockEmitMetrics).toHaveBeenCalledWith(QUESTS_NAMESPACE, [
       expect.objectContaining({
-        name: 'ProcessingFailed',
+        name: QUEST_METRICS.ProcessingFailed,
         value: 1,
         unit: StandardUnit.Count,
         dimensions: { Stage: 'test' },
       }),
       expect.objectContaining({
-        name: 'ProcessingFailed',
+        name: QUEST_METRICS.ProcessingFailed,
         value: 1,
         unit: StandardUnit.Count,
         dimensions: { Stage: 'test', ErrorClass: 'internal_error' },
