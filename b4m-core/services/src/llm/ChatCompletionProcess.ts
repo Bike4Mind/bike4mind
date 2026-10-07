@@ -67,6 +67,7 @@ import {
   processUrlsFromPrompt,
   isOverloadedError,
   shouldTriggerFallback,
+  isSafetyRefusalError,
   stripAllToolBlocks,
   usdToCredits,
   usdToCreditsStochastic,
@@ -136,7 +137,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
-import { buildEarlyStopStamp, buildIncompleteAnswerNotice } from './earlyStopStamp';
+import { buildEarlyStopStamp, buildIncompleteAnswerNotice, usageEventStatusForFinish } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -4839,6 +4840,34 @@ export class ChatCompletionProcess {
               logger.error(lastError);
             }
             const isRetryableError = shouldTriggerFallback(lastError);
+            // A refused call throws rather than settles, so record it here, whether or not a
+            // fallback then answers. Same enforceCredits gate as the settlement row. Not billed:
+            // the user got no output, and the backend throws before reporting usage, so its
+            // tokens and COGS are unknown and left at 0.
+            if (adminSettingsEnforceCredits && isSafetyRefusalError(lastError)) {
+              this.db.usageEvents
+                ?.record({
+                  requestId: quest.id,
+                  userId: this.user.id,
+                  ownerId: this.reservedCreditsOwnerId || this.user.id,
+                  ownerType: this.reservedCreditsOwnerType,
+                  sessionId: quest.sessionId,
+                  feature: 'chat',
+                  provider: currentModel.backend,
+                  model: currentModel.id,
+                  source: 'web',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  cachedInputTokens: 0,
+                  cacheWriteTokens: 0,
+                  costUsd: 0,
+                  creditsCharged: 0,
+                  status: 'refusal',
+                })
+                .catch((usageEventError: unknown) => {
+                  logger.warn('Failed to record refusal usage event', usageEventError);
+                });
+            }
 
             logger.warn(
               `❌ [${Date.now() - processStartTime}ms] LLM completion failed with ${
@@ -5688,7 +5717,7 @@ export class ChatCompletionProcess {
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               // Not always 'ok': a turn we aborted as degenerate is priced like any other
               // (the provider tokens were really spent) but has to be findable for a refund.
-              status: earlyStopStamp?.usageEventStatus ?? 'ok',
+              status: usageEventStatusForFinish(providerStopReason),
               latencyMs: Date.now() - processStartTime,
             })
             .catch((usageEventError: unknown) => {
