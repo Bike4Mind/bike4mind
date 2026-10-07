@@ -27,6 +27,9 @@ export function useGetUserInvites(userId: string) {
   return useQuery({
     queryKey: ['invites', 'inbox'],
     queryFn: () => fetchUserInvites(userId),
+    // The `invites` websocket subscription (InboxContext) writes into this cache unfiltered, so
+    // expired invites must be dropped here as well as in the REST query.
+    select: invites => invites.filter(i => !i.expiresAt || new Date(i.expiresAt).getTime() > Date.now()),
     enabled: !!userId,
     staleTime: 1000 * 60 * 2, // 2 minutes - shorter cache for more responsive UX
     retry: 1,
