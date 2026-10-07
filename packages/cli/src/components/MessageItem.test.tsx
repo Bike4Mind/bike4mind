@@ -285,7 +285,7 @@ describe('MessageItem', () => {
       expect(frame).toContain('Result:');
     });
 
-    it.each([undefined, ''])('should omit the args row when toolInput is %j', toolInput => {
+    it.each([undefined, '', 0])('should omit the args row when toolInput is %j', toolInput => {
       const message = createMockMessage({
         role: 'assistant',
         content: 'Done',
@@ -304,6 +304,7 @@ describe('MessageItem', () => {
 
       expect(frame).toContain('Grep Search');
       expect(frame).not.toContain('\u2022');
+      expect(frame).not.toMatch(/Grep Search\s*0/);
     });
 
     it('should show thoughts by default', () => {
