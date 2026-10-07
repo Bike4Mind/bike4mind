@@ -13,12 +13,18 @@
 // advisory against an existing dependency does not turn every open PR red.
 // Unreadable or unrecognized base reports fail closed.
 //
+// Exit codes: 0 pass, 2 blocking advisories found, 1 anything else (unreadable
+// report or allowlist, unrecognized shape, unexpected error). audit-gate.yml's
+// audit-main job relies on 2 meaning "advisories" when filing the tracking issue.
+//
 // Usage: pnpm audit --json > report.json && PACKAGES_JSON_REPORT_PATH=report.json node scripts/audit-gate.mjs
 // Fix steps: CONTRIBUTING.md#fixing-a-dependency-advisory
 
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+export const ADVISORY_EXIT_CODE = 2;
 
 export const BLOCKED_SEVERITIES = new Set(['high', 'critical']);
 
@@ -163,7 +169,7 @@ async function main() {
     console.error(
       `To accept a new advisory, add its GHSA ID to scripts/audit-allowlist.json with a comment in the PR explaining why.\n`
     );
-    process.exit(1);
+    process.exit(ADVISORY_EXIT_CODE);
   }
 
   if (base === undefined) {
