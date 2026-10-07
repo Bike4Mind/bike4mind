@@ -7,6 +7,7 @@ type RouteHandler = (req: unknown, res: unknown) => unknown;
 
 const h = vi.hoisted(() => ({
   postHandler: null as null | RouteHandler,
+  baseApiOptions: undefined as unknown,
   cloneSession: vi.fn(),
   getRequestEntitlements: vi.fn(),
 }));
@@ -18,7 +19,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (options: unknown) => {
+      h.baseApiOptions = options;
+      return chain;
+    },
+  };
 });
 vi.mock('@server/entitlements', () => ({ getRequestEntitlements: h.getRequestEntitlements }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn() }));
@@ -47,6 +53,11 @@ describe('POST /api/sessions/[id]/clone - targetSurface', () => {
     vi.clearAllMocks();
     h.cloneSession.mockResolvedValue({ id: 'clone-1', name: 'Cloned', knowledgeIds: [], agentIds: [] });
     h.getRequestEntitlements.mockResolvedValue(['optihashi:pro']);
+  });
+
+  // Only API-key callers are scope-gated; JWT/browser callers (no req.apiKey, as below) clone as before.
+  it('requires notebooks:write from an API key', () => {
+    expect(h.baseApiOptions).toEqual({ requiredScopes: ['notebooks:write'] });
   });
 
   it('inherits when the body names no target', async () => {
