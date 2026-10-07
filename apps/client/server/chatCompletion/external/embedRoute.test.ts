@@ -520,7 +520,7 @@ describe('POST /api/embed/chat', () => {
     );
   });
 
-  it('does not count a visitor closing the tab mid-stream as a processing failure', async () => {
+  it('hands a visitor-abort rejection to the metric helper, which filters it as a non-fault', async () => {
     let rejected = false;
     mockExecuteCompletion.mockImplementation(
       ({ abortSignal }: { abortSignal: AbortSignal }) =>
@@ -537,8 +537,9 @@ describe('POST /api/embed/chat', () => {
     client.abort();
 
     await vi.waitFor(() => expect(rejected).toBe(true));
-    await new Promise(resolve => setImmediate(resolve));
-    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(mockEmitProcessingFailed).toHaveBeenCalledWith('embed', expect.objectContaining({ name: 'AbortError' }))
+    );
   });
 
   it('classifies a mid-stream credit-reservation failure on the SSE frame (.code carrier)', async () => {
@@ -550,7 +551,6 @@ describe('POST /api/embed/chat', () => {
     const text = await res.text();
     expect(text).toContain('"type":"error"');
     expect(text).toContain('"code":"insufficient_credits"');
-    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 
   it('classifies a mid-stream tagged 422 on the SSE frame (additionalInfo carrier)', async () => {

@@ -194,8 +194,6 @@ describe('POST /api/ai/v1/completions', () => {
     // Never prose in a content event: a caller reading only `text` would render the
     // billing failure as part of the assistant's reply.
     expect(frames(text).some(f => f.type === 'content' && String(f.text).includes('credits'))).toBe(false);
-    // The caller's balance, not a service fault: kept off the operator alarm.
-    expect(mockEmitProcessingFailed).not.toHaveBeenCalled();
   });
 
   // The case the classifier exists for: tokens already streamed, so neither a status

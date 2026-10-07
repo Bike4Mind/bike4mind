@@ -262,7 +262,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
     } catch (error) {
       logger.error('[CLI_LLM] Handler error', { error: error instanceof Error ? error.message : String(error) });
       // A billing rejection (out of credits, spend cap) is the caller's state, not a service fault.
-      if (!resolveQuestErrorCode(error)) track(emitProcessingFailed('cli-sse', error));
+      track(emitProcessingFailed('cli-sse', error));
 
       if (userId && body) {
         await logCompletionAnalytics({

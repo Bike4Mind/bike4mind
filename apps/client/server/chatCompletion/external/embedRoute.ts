@@ -573,11 +573,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       logger.error('[EMBED_CHAT] Handler error', {
         error: error instanceof Error ? error.message : String(error),
       });
-      // Neither a visitor closing the tab (aborts the run into this catch) nor a billing rejection
-      // of the owner org is a service fault.
-      if (!abortController.signal.aborted && !resolveQuestErrorCode(error)) {
-        track(emitProcessingFailed('embed', error));
-      }
+      track(emitProcessingFailed('embed', error));
       if (streaming) {
         // Classify billing/policy failures so the embedding client can branch on
         // `code` instead of parsing message text.

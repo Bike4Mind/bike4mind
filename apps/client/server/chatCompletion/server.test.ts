@@ -73,6 +73,7 @@ vi.mock('@bike4mind/services/llm', async () => {
       message: z.string().min(1),
     }),
     resolveQuestErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
+    isOperatorFault: (error: unknown) => !(error as { code?: string } | null)?.code,
   };
 });
 
@@ -566,6 +567,26 @@ describe('ChatCompletion /api/ai/v1/ws-completions', () => {
     mockExecuteCompletion.mockRejectedValue(
       Object.assign(new Error('out of credits'), { code: 'insufficient_credits' })
     );
+
+    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    await waitForAction('cli_completion_error');
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('does not count a spend-cap rejection on the cli-ws surface', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
+    mockExecuteCompletion.mockRejectedValue(Object.assign(new Error('cap hit'), { code: 'spend_cap_exceeded' }));
+
+    await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    await waitForAction('cli_completion_error');
+    expect(mockEmitMetrics).not.toHaveBeenCalled();
+  });
+
+  it('does not count a spend-cap rejection on the cli-ws surface', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
+    mockExecuteCompletion.mockRejectedValue(Object.assign(new Error('cap hit'), { code: 'spend_cap_exceeded' }));
 
     await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
     await waitForAction('cli_completion_error');
