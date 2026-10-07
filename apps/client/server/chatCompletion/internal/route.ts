@@ -117,9 +117,9 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       //
       // Two datums, same metric name: CloudWatch keys a custom metric by namespace + name + the
       // EXACT dimension set and never rolls one up into the other, so the Stage-only point is what
-      // the alarm below watches (a per-class dimension set would leave it permanently
-      // INSUFFICIENT_DATA) while the Stage+ErrorClass point drives the "which class is failing"
-      // dashboard breakdown. Neither double-counts the other since they are distinct series.
+      // the questProcessingFailures alarm in infra/alarms.ts watches (a per-class dimension set would
+      // leave it permanently INSUFFICIENT_DATA) while the Stage+ErrorClass point drives the "which
+      // class is failing" dashboard breakdown. Neither double-counts the other since they are distinct series.
       const stage = Resource.App.stage;
       const errorClass = categorizeToolError(errorMessage);
       // emitMetrics never rejects (it catches and console.error's internally), so track() only
