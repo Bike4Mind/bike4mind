@@ -25,6 +25,7 @@ import {
   type DesktopApi,
 } from '@shared/ipc';
 import type { UpdateState } from '@shared/update';
+import type { UsageWindowId } from '@shared/usage';
 
 // Written out one method per channel rather than a generic invoke(channel, ...args)
 // passthrough: a passthrough would let renderer code reach every handler main ever
@@ -60,6 +61,11 @@ const api: DesktopApi = {
   },
   account: {
     getCredits: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetCredits),
+    getProfile: () => ipcRenderer.invoke(IPC_CHANNELS.accountGetProfile),
+  },
+  usage: {
+    getHistory: (window: UsageWindowId, force?: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.usageGetHistory, window, force ?? false),
   },
   chat: {
     listModels: (force?: boolean) => ipcRenderer.invoke(IPC_CHANNELS.chatListModels, force ?? false),

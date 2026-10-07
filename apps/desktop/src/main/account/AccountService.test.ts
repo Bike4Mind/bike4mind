@@ -1,6 +1,6 @@
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import { describe, expect, it, vi } from 'vitest';
-import { AccountService, readBalance } from './AccountService';
+import { AccountService, readBalance, readPlan, readTier } from './AccountService';
 
 function service(get: ReturnType<typeof vi.fn>, signedIn = true) {
   return new AccountService({
@@ -63,5 +63,59 @@ describe('AccountService', () => {
     // No TTL: the next ask is a fresh read, because it only comes after a turn has spent.
     await account.credits();
     expect(get).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('readPlan', () => {
+  const plan = {
+    plan_name: 'Professional',
+    price_id: 'price_1',
+    interval: 'monthly',
+    current_period_ends_at: '2026-10-18T00:00:00.000Z',
+  };
+
+  it('reads the subscription the endpoint states', () => {
+    expect(readPlan({ subscription: plan })).toEqual({
+      name: 'Professional',
+      interval: 'monthly',
+      currentPeriodEndsAt: '2026-10-18T00:00:00.000Z',
+    });
+  });
+
+  // A row reading "renews Invalid Date" is worse than no row at all.
+  it('reports no plan at all rather than a half-stated one', () => {
+    expect(readPlan({ subscription: { ...plan, current_period_ends_at: 'soon' } })).toBeNull();
+    expect(readPlan({ subscription: { ...plan, interval: 'weekly' } })).toBeNull();
+    expect(readPlan({ subscription: { ...plan, plan_name: '' } })).toBeNull();
+    expect(readPlan({ subscription: null })).toBeNull();
+    expect(readPlan(null)).toBeNull();
+  });
+});
+
+describe('readTier', () => {
+  it('keeps a tier the ladder knows and discards anything else', () => {
+    expect(readTier({ tier: 'pro' })).toBe('pro');
+    expect(readTier({ tier: 'platinum' })).toBeNull();
+    expect(readTier({})).toBeNull();
+  });
+});
+
+describe('AccountService.profile', () => {
+  // `other` is a paying account whose plan this deployment cannot name. Collapsing it into the
+  // null plan would tell a paying customer they are on the free one.
+  it('keeps the tier when the server names no plan', async () => {
+    const get = vi.fn().mockResolvedValue({ credits: { balance: 10 }, tier: 'other', subscription: null });
+    await expect(service(get).profile()).resolves.toEqual({
+      credits: { balance: 10 },
+      plan: null,
+      tier: 'other',
+    });
+  });
+
+  it('reads balance and plan from one request, not two', async () => {
+    const get = vi.fn().mockResolvedValue({ credits: { balance: 10 }, tier: 'free', subscription: null });
+    const account = service(get);
+    await Promise.all([account.credits(), account.profile()]);
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,7 @@ import Divider from '@mui/joy/Divider';
 import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
+import { useNavigate } from '@tanstack/react-router';
 import type { AuthState } from '@shared/auth';
 import { ChevronIcon } from '../chat/icons';
 import { RuntimeInfo } from '../components/RuntimeInfo';
@@ -32,6 +33,7 @@ function initials(name: string): string {
  */
 export function SignedInPanel({ state, status }: { state: AuthState; status?: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const navigate = useNavigate();
   const user = state.user;
   const displayName = user?.nickname || user?.username || user?.email || user?.id || 'Signed in';
 
@@ -101,6 +103,18 @@ export function SignedInPanel({ state, status }: { state: AuthState; status?: Re
 
       {open && (
         <Stack spacing={1} data-testid="account-menu">
+          {/* First in the menu because it is the only entry that goes anywhere: the balance in
+              the composer says what is left, and this is where it says where it went. */}
+          <Button
+            size="sm"
+            variant="soft"
+            color="neutral"
+            onClick={() => void navigate({ to: '/profile' })}
+            data-testid="account-profile-btn"
+          >
+            Profile
+          </Button>
+
           <Button
             size="sm"
             variant="soft"

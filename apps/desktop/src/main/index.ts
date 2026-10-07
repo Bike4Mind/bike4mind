@@ -10,6 +10,7 @@ import { registerArtifactScheme } from './chat/artifacts/sandboxProtocol';
 import { registerMediaScheme } from './chat/media/protocol';
 import { isExternallyOpenable } from './externalLinks';
 import { registerUpdates } from './update';
+import { registerUsage } from './usage';
 import { appWindows } from './windows';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
@@ -104,6 +105,7 @@ void app.whenReady().then(async () => {
   // asks it whether encryption is available on its first access.
   const auth = registerAuth();
   registerAccount(auth);
+  registerUsage(auth);
   const { service: chat, background, mcp, browser } = registerChat(auth);
   closeAgentBrowsers = () => browser.closeAll();
 
