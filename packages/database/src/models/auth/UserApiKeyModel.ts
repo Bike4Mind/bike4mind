@@ -162,6 +162,41 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     });
   }
 
+  async createIfUnderCap(
+    doc: Parameters<IUserApiKeyRepository['create']>[0],
+    cap: number,
+    pool: ApiKeyCapPool
+  ): Promise<IUserApiKeyDocument | 'at_cap'> {
+    const created = await this.model.create(doc);
+    const userId = (doc as { userId: string }).userId; // any: IBaseRepository create param is opaque here
+    const activeFilter = {
+      userId,
+      status: ApiKeyStatus.ACTIVE,
+      $or: [{ expiresAt: { $gt: new Date() } }, { expiresAt: null }],
+      'metadata.createdFrom': pool === 'oauth-exchange' ? 'oauth-exchange' : { $ne: 'oauth-exchange' },
+    };
+    const count = await this.model.countDocuments(activeFilter);
+    if (count <= cap) return created;
+    // Over cap: keep the oldest `cap` keys so all concurrent callers agree on
+    // which keys survive without coordination (stable sort by createdAt, _id).
+    const survivors = await this.model
+      .find(activeFilter)
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(cap)
+      .select('_id')
+      .lean<{ _id: mongoose.Types.ObjectId }[]>()
+      .exec();
+    const survivorIds = new Set(survivors.map(s => String(s._id)));
+    if (!survivorIds.has(String(created._id))) {
+      await this.model.updateOne(
+        { _id: created._id, status: { $ne: ApiKeyStatus.DISABLED } },
+        { $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date(), revokedReason: 'cap_exceeded' } }
+      );
+      return 'at_cap';
+    }
+    return created;
+  }
+
   findByProductId(productId: string) {
     return this.model.find({ productId }).sort({ createdAt: -1 }).exec();
   }
