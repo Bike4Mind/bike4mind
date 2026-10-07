@@ -77,3 +77,5 @@ export {
   evaluateTier1Secrets,
   formatTier1DeployFailure,
 } from './tier1Secrets.js';
+export type { QuestMetricName } from './questMetricSpecs.js';
+export { QUESTS_NAMESPACE, QUEST_METRICS } from './questMetricSpecs.js';
