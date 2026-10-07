@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   search: {} as Record<string, unknown>,
   startConnect: vi.fn(),
   toastError: vi.fn(),
+  userId: 'user-1' as string | undefined,
+  orgId: 'org-1' as string | undefined,
 }));
 
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: h.apiGet } }));
@@ -17,8 +19,34 @@ vi.mock('@tanstack/react-router', () => ({
   useSearch: () => h.search,
 }));
 vi.mock('sonner', () => ({ toast: { error: h.toastError } }));
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: { getState: () => ({ currentUser: h.userId ? { id: h.userId } : null }) },
+}));
+vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => h.orgId }));
 
 import GoogleDriveCallbackPage from './callback';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { saveDriveConnectHandoff, takeDrivePickerResume } from '@client/app/utils/driveConnectHandoff';
+
+const saveWizardDraft = (authUrl = 'https://accounts.google.com/auth?state=signed-state') =>
+  saveDriveConnectHandoff(
+    {
+      kind: 'createWizard',
+      userId: 'user-1',
+      organizationId: 'org-1',
+      config: {
+        name: 'Research',
+        description: '',
+        tagPrefix: 'research',
+        requiredUserTag: '',
+        requiredEntitlement: '',
+        conflictResolution: 'skip',
+      },
+      autoDerivedTagPrefix: 'research',
+      optionalSteps: { preview: true, taxonomy: false },
+    },
+    authUrl
+  );
 
 const rejectWithCode = (code: string) => {
   const headers = new AxiosHeaders();
@@ -36,6 +64,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.search = { code: 'auth-code', state: 'signed-state' };
   h.startConnect.mockResolvedValue(undefined);
+  h.userId = 'user-1';
+  h.orgId = 'org-1';
+  sessionStorage.clear();
+  takeDrivePickerResume();
+  useDataLakeWizardStore.getState().resetWizard();
 });
 
 describe('GoogleDriveCallbackPage', () => {
@@ -142,5 +175,61 @@ describe('GoogleDriveCallbackPage', () => {
     expect(h.apiGet).not.toHaveBeenCalled();
     expect(h.toastError).toHaveBeenCalledWith('Google Drive connection cancelled.');
     expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+  });
+
+  describe('resuming the Create wizard', () => {
+    it('reopens the wizard with the saved config and asks for the folder picker', async () => {
+      saveWizardDraft();
+      h.apiGet.mockResolvedValue({ data: undefined });
+
+      render(<GoogleDriveCallbackPage />);
+
+      await waitFor(() => expect(useDataLakeWizardStore.getState().isOpen).toBe(true));
+      const wizard = useDataLakeWizardStore.getState();
+      expect(wizard.step).toBe('source');
+      expect(wizard.config.name).toBe('Research');
+      expect(wizard.config.tagPrefix).toBe('research');
+      expect(wizard.optionalSteps).toEqual({ preview: true, taxonomy: false });
+      expect(takeDrivePickerResume()).toBe(true);
+      expect(sessionStorage.getItem('b4m:drive-connect-handoff')).toBeNull();
+      expect(h.navigate).toHaveBeenCalledWith({ to: '/' });
+    });
+
+    it('does not resume when the connect failed, and leaves the draft for its own attempt', async () => {
+      saveWizardDraft();
+      rejectWithCode('GOOGLE_DRIVE_CONNECT_EXPIRED');
+
+      render(<GoogleDriveCallbackPage />);
+
+      await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+      expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
+      expect(takeDrivePickerResume()).toBe(false);
+    });
+
+    it('does not resume when consent was cancelled', async () => {
+      saveWizardDraft();
+      h.search = { error: 'access_denied' };
+
+      render(<GoogleDriveCallbackPage />);
+
+      expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
+      expect(takeDrivePickerResume()).toBe(false);
+    });
+
+    it.each([
+      ['another OAuth attempt', () => saveWizardDraft('https://accounts.google.com/auth?state=older-state')],
+      ['another user', () => ((h.userId = 'user-2'), saveWizardDraft())],
+      ['another account scope', () => ((h.orgId = undefined), saveWizardDraft())],
+      ['no signed-in user', () => ((h.userId = undefined), saveWizardDraft())],
+    ])('ignores a draft saved for %s', async (_label, arrange) => {
+      arrange();
+      h.apiGet.mockResolvedValue({ data: undefined });
+
+      render(<GoogleDriveCallbackPage />);
+
+      await waitFor(() => expect(h.navigate).toHaveBeenCalledWith({ to: '/' }));
+      expect(useDataLakeWizardStore.getState().isOpen).toBe(false);
+      expect(takeDrivePickerResume()).toBe(false);
+    });
   });
 });

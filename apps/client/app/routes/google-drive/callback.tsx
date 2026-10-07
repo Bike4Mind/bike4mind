@@ -1,10 +1,14 @@
 import { api } from '@client/app/contexts/ApiContext';
+import { useUser } from '@client/app/contexts/UserContext';
+import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import { startGoogleDriveConnect } from '@client/app/hooks/data/googleDrive';
+import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { consumeDriveConnectHandoff, requestDrivePickerResume } from '@client/app/utils/driveConnectHandoff';
 import { GOOGLE_DRIVE_CONNECT_ERROR } from '@client/shared/googleDriveConnectErrors';
 import { LinearProgress } from '@mui/joy';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { isAxiosError } from 'axios';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 
 const readStringParam = (search: Record<string, unknown>, key: 'code' | 'state' | 'error') => {
@@ -44,13 +48,38 @@ const reportConnectFailure = (error: unknown) => {
 };
 
 /**
- * Completes the Google Drive connection, then redirects home. Renders no UI of its own.
+ * Puts the user back where the connect started, when that surface saved a handoff for this exact
+ * OAuth attempt (see driveConnectHandoff). Today that is the Create wizard: reopen it with the
+ * typed-in config and have its Drive action open the folder picker.
+ */
+const resumeDriveConnect = (oauthState: string) => {
+  const userId = useUser.getState().currentUser?.id;
+  if (!userId) return;
+  const handoff = consumeDriveConnectHandoff({ userId, organizationId: activeOrgId() ?? null, oauthState });
+  if (handoff?.kind !== 'createWizard') return;
+  useDataLakeWizardStore.getState().openWizard();
+  useDataLakeWizardStore.setState({
+    step: 'source',
+    config: handoff.config,
+    autoDerivedTagPrefix: handoff.autoDerivedTagPrefix,
+    optionalSteps: handoff.optionalSteps,
+  });
+  requestDrivePickerResume();
+};
+
+/**
+ * Completes the Google Drive connection, then redirects home (resuming the surface that started it,
+ * if any). Renders no UI of its own.
  */
 const GoogleDriveCallbackPage = () => {
   const navigate = useNavigate();
   const search: Record<string, unknown> = useSearch({ strict: false });
+  // The code and state are single-use, so a StrictMode re-run must not spend them a second time.
+  const handled = useRef(false);
 
   useEffect(() => {
+    if (handled.current) return;
+    handled.current = true;
     const code = readStringParam(search, 'code');
     const state = readStringParam(search, 'state');
     const error = readStringParam(search, 'error');
@@ -69,9 +98,21 @@ const GoogleDriveCallbackPage = () => {
     api
       // Forward `state` so the API callback can verify the browser-binding nonce.
       .get(`/api/google-drive/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`)
-      .catch(reportConnectFailure)
-      .finally(() => {
+      .then(
+        () => true,
+        (e: unknown) => {
+          reportConnectFailure(e);
+          return false;
+        }
+      )
+      .then(connected => {
         navigate({ to: '/' });
+        if (!connected) return;
+        try {
+          resumeDriveConnect(state);
+        } catch (e) {
+          console.error('Could not resume the Google Drive connect:', e);
+        }
       });
   }, [search, navigate]);
 

@@ -58,6 +58,7 @@ const connected = (over: Partial<LakeDriveConnection> = {}): LakeDriveConnection
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('google', { picker: {} }); // the Picker API counts as loaded
   h.connection.current = null;
   h.isError.current = false;
 });

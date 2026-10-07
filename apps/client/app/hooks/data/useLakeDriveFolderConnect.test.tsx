@@ -25,6 +25,7 @@ type PickerArgs = { callbackFunction: (pick: { action: string; docs?: { id: stri
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal('google', { picker: {} }); // the Picker API counts as loaded
 });
 
 describe('useLakeDriveFolderConnect', () => {

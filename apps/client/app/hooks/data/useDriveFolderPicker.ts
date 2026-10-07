@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import useDrivePicker from 'react-google-drive-picker';
 import { api } from '@client/app/contexts/ApiContext';
@@ -6,6 +6,26 @@ import { useConfig } from '@client/app/hooks/data/settings';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
 export type PickedDriveFolder = { driveFolderId: string; folderName?: string };
+
+const PICKER_READY_POLL_MS = 250;
+const PICKER_READY_TIMEOUT_MS = 10_000;
+
+const isPickerApiLoaded = () => !!(window as { google?: { picker?: unknown } }).google?.picker;
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Resolves true once the Google Picker API has loaded, or false after the timeout. */
+async function waitForPickerApi(): Promise<boolean> {
+  if (isPickerApiLoaded()) return true;
+  for (let waited = 0; waited < PICKER_READY_TIMEOUT_MS; waited += PICKER_READY_POLL_MS) {
+    await sleep(PICKER_READY_POLL_MS);
+    if (isPickerApiLoaded()) {
+      await sleep(PICKER_READY_POLL_MS); // let the library's own loaded state render before calling it
+      return true;
+    }
+  }
+  return false;
+}
 
 function httpStatus(e: unknown): number | undefined {
   return (e as { response?: { status?: number } })?.response?.status;
@@ -23,18 +43,38 @@ function httpStatus(e: unknown): number | undefined {
  *
  * `busy` folds the caller's own in-flight work (e.g. a connect mutation) into the re-entrancy guard,
  * so a second picker can never open on top of the first.
+ *
+ * `onBeforeRedirect` runs just before either consent redirect, with the authorize URL, so a caller
+ * can save what the user was doing (see driveConnectHandoff). Best-effort: a throw never blocks it.
  */
 export function useDriveFolderPicker({
   onPicked,
   busy = false,
+  onBeforeRedirect,
 }: {
   onPicked: (folder: PickedDriveFolder) => void;
   busy?: boolean;
+  onBeforeRedirect?: (authUrl: string) => void;
 }): { openFolderPicker: () => Promise<void>; isPicking: boolean } {
   const { data: config } = useConfig();
   const googleClientId = config?.googleClientId;
   const [openPicker] = useDrivePicker();
+  // The library's openPicker silently no-ops until its own picker-loaded state flips, so after
+  // waiting for the API the call must go through the latest render's openPicker, not this closure's.
+  const openPickerRef = useRef(openPicker);
+  useEffect(() => {
+    openPickerRef.current = openPicker;
+  });
   const [isPicking, setIsPicking] = useState(false);
+
+  const redirectToConsent = (authUrl: string) => {
+    try {
+      onBeforeRedirect?.(authUrl);
+    } catch {
+      // saving the caller's draft is best-effort; the connect itself must still proceed
+    }
+    window.location.href = authUrl;
+  };
 
   const openFolderPicker = async () => {
     if (isPicking || busy) return; // re-entrancy guard: never open a second picker
@@ -50,7 +90,7 @@ export function useDriveFolderPicker({
         // come back and can then pick a folder. Any other error falls through to the outer catch.
         if (httpStatus(e) === 400) {
           const { data } = await api.post<{ authUrl: string }>('/api/google-drive/connect');
-          window.location.href = data.authUrl;
+          redirectToConsent(data.authUrl);
           return;
         }
         throw e;
@@ -58,7 +98,7 @@ export function useDriveFolderPicker({
 
       // Not connected / refresh failed: /token hands back an authUrl instead of a token.
       if (token.authUrl) {
-        window.location.href = token.authUrl;
+        redirectToConsent(token.authUrl);
         return;
       }
       if (!token.accessToken || !googleClientId) {
@@ -67,8 +107,14 @@ export function useDriveFolderPicker({
         return;
       }
 
+      if (!(await waitForPickerApi())) {
+        toast.error('Google Drive is still loading. Please try again.');
+        setIsPicking(false);
+        return;
+      }
+
       ensureGoogleDrivePickerStyles(); // keep the picker above the wizard modal (z-index 1400)
-      openPicker({
+      openPickerRef.current({
         clientId: googleClientId,
         developerKey: '',
         viewId: 'FOLDERS', // folder-first browse; the user selects a folder to ingest
