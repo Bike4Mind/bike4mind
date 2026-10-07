@@ -46,10 +46,11 @@ const handler = baseApi()
 
     // direct model update: BaseRepository.update() strips userId to avoid path
     // ambiguity with ShareableDocumentSchema, but DeviceAuthorization needs it set here.
-    // status: 'pending' guard makes this atomic: if two requests arrive for the same
-    // user_code, only the first findByIdAndUpdate matches and returns a document; the
-    // second returns null and skips the counter decrement, preventing a double-decrement.
-    const transitioned = await DeviceAuthorizationModel.findByIdAndUpdate(
+    // findOneAndUpdate with status:'pending' guard is atomic: a concurrent verify of the
+    // same user_code will see status:'approved'/'denied' and get null back, skipping the
+    // decrement and preventing a double-decrement. findByIdAndUpdate cannot carry extra
+    // filter fields -- Mongoose drops everything but _id.
+    const transitioned = await DeviceAuthorizationModel.findOneAndUpdate(
       { _id: authorization.id, status: 'pending' },
       {
         $set: {

@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 
 const h = vi.hoisted(() => ({
   findByUserCode: vi.fn(),
-  findByIdAndUpdate: vi.fn(async () => ({ id: 'auth-1' })), // non-null = transition fired
+  findOneAndUpdate: vi.fn(async () => ({ id: 'auth-1' })), // non-null = transition fired
   decrementCounter: vi.fn().mockResolvedValue(0),
 }));
 
@@ -33,7 +33,7 @@ vi.mock('@bike4mind/common', () => ({
 vi.mock('@bike4mind/database', () => ({
   cacheRepository: { decrementCounter: h.decrementCounter },
   deviceAuthorizationRepository: { findByUserCode: h.findByUserCode },
-  DeviceAuthorizationModel: { findByIdAndUpdate: h.findByIdAndUpdate },
+  DeviceAuthorizationModel: { findOneAndUpdate: h.findOneAndUpdate },
 }));
 
 import handler from '../verify';
@@ -115,7 +115,7 @@ describe('POST /api/oauth/device/verify live-pending counter decrement', () => {
 
   it('decrements the live-pending counter once when approving', async () => {
     (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
-    (h.findByIdAndUpdate as Mock).mockResolvedValue({ id: 'auth-1' });
+    (h.findOneAndUpdate as Mock).mockResolvedValue({ id: 'auth-1' });
 
     await callWith('approve');
 
@@ -124,17 +124,17 @@ describe('POST /api/oauth/device/verify live-pending counter decrement', () => {
 
   it('decrements the live-pending counter once when denying', async () => {
     (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
-    (h.findByIdAndUpdate as Mock).mockResolvedValue({ id: 'auth-1' });
+    (h.findOneAndUpdate as Mock).mockResolvedValue({ id: 'auth-1' });
 
     await callWith('deny');
 
     expect(h.decrementCounter).toHaveBeenCalledTimes(1);
   });
 
-  it('does not decrement when findByIdAndUpdate returns null (concurrent double-verify guard)', async () => {
+  it('does not decrement when findOneAndUpdate returns null (concurrent double-verify guard)', async () => {
     (h.findByUserCode as Mock).mockResolvedValue(pendingFor('b4m-cli'));
-    // null = another concurrent verify already transitioned the doc; $set on status:'pending' matched nothing
-    (h.findByIdAndUpdate as Mock).mockResolvedValue(null);
+    // null = another concurrent verify already transitioned the doc; status:'pending' guard matched nothing
+    (h.findOneAndUpdate as Mock).mockResolvedValue(null);
 
     await callWith('approve');
 

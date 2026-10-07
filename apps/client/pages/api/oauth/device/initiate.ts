@@ -26,13 +26,32 @@ const handler = baseApi({ auth: false })
     const { client_id: clientId } = InitiateRequestSchema.parse(req.body);
 
     // Global, not per-IP: IP headers are spoofable when the origin is reached directly.
-    // Sliding-window TTL of 30 min (3x auth TTL) keeps the key alive under sustained load
-    // and lets it self-heal if the reconciliation cron is ever delayed.
-    const { success: slotGranted } = await cacheRepository.incrementCounterConditional(
+    // Sliding-window TTL of 30 min (3x the 10-min auth TTL) keeps the key alive under sustained
+    // load and self-heals once all pending docs have been resolved or TTL-expired.
+    let { success: slotGranted } = await cacheRepository.incrementCounterConditional(
       LIVE_PENDING_COUNTER_KEY,
       MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
       30 * 60_000
     );
+
+    if (!slotGranted) {
+      // Counter may have drifted high from pending docs that expired without going through verify.
+      // Read the authoritative DB count, overwrite the cache, and retry once before refusing.
+      const trueCount = await deviceAuthorizationRepository.countPendingAndUnexpired();
+      if (trueCount < MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS) {
+        await cacheRepository.createOrUpdate({
+          key: LIVE_PENDING_COUNTER_KEY,
+          result: { count: trueCount },
+          expiresAt: new Date(Date.now() + 30 * 60_000),
+        });
+        ({ success: slotGranted } = await cacheRepository.incrementCounterConditional(
+          LIVE_PENDING_COUNTER_KEY,
+          MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS,
+          30 * 60_000
+        ));
+      }
+    }
+
     if (!slotGranted) {
       req.logger.warn(
         `[OAUTH_DEVICE_INITIATE] pending device authorization cap reached (${MAX_LIVE_PENDING_DEVICE_AUTHORIZATIONS}); returning 503`

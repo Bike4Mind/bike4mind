@@ -24,9 +24,10 @@ vi.mock('@server/utils/validators', () => ({ isLocalAppUrl: () => false }));
 vi.mock('@bike4mind/common', () => ({ OAUTH_DEVICE_CLIENT_IDS: ['b4m-cli', 'b4m-desktop'] }));
 
 const incrementCounterConditional = vi.hoisted(() => vi.fn());
-const repo = vi.hoisted(() => ({ create: vi.fn() }));
+const createOrUpdate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const repo = vi.hoisted(() => ({ create: vi.fn(), countPendingAndUnexpired: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
-  cacheRepository: { incrementCounterConditional },
+  cacheRepository: { incrementCounterConditional, createOrUpdate },
   deviceAuthorizationRepository: repo,
   digestDeviceCode: (c: string) => `digest:${c}`,
 }));
@@ -62,7 +63,9 @@ function request(ip = '203.0.113.1') {
 describe('POST /api/oauth/device/initiate live-pending cap', () => {
   beforeEach(() => {
     incrementCounterConditional.mockReset();
+    createOrUpdate.mockReset();
     repo.create.mockReset();
+    repo.countPendingAndUnexpired.mockReset();
   });
 
   it('creates an authorization when the atomic counter grants a slot', async () => {
@@ -87,11 +90,34 @@ describe('POST /api/oauth/device/initiate live-pending cap', () => {
 
   it('holds when every request rotates its IP headers', async () => {
     incrementCounterConditional.mockResolvedValue({ success: false, count: 500 });
+    repo.countPendingAndUnexpired.mockResolvedValue(500);
     for (const ip of ['198.51.100.1', '198.51.100.2', '198.51.100.3']) {
       const { req, res } = request(ip);
       await mockRefs.handler!(req, res);
       expect(res.statusCode).toBe(503);
     }
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('reconciles to the true DB count and grants a slot when the counter drifted high', async () => {
+    // Counter says 500 (at cap) but only 42 docs actually exist (drift from TTL-expiry).
+    incrementCounterConditional
+      .mockResolvedValueOnce({ success: false, count: 500 }) // first attempt: blocked
+      .mockResolvedValueOnce({ success: true, count: 43 }); // retry after reconcile: granted
+    repo.countPendingAndUnexpired.mockResolvedValue(42);
+    const { req, res } = request();
+    await mockRefs.handler!(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(createOrUpdate).toHaveBeenCalledWith(expect.objectContaining({ result: { count: 42 } }));
+    expect(repo.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 503 when the counter and the DB both confirm the cap is truly reached', async () => {
+    incrementCounterConditional.mockResolvedValue({ success: false, count: 500 });
+    repo.countPendingAndUnexpired.mockResolvedValue(500);
+    const { req, res } = request();
+    await mockRefs.handler!(req, res);
+    expect(res.statusCode).toBe(503);
     expect(repo.create).not.toHaveBeenCalled();
   });
 });
