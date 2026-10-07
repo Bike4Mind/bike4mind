@@ -3,7 +3,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { VideoGeneration } from '@bike4mind/common';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { CREDITS_BALANCE_KEY } from '@client/app/hooks/data/credits';
-import { isTerminalVideoState, patchVideoGeneration } from '@client/app/hooks/data/videoGenerationCache';
+import {
+  isAwaitingVideoOutput,
+  isTerminalVideoState,
+  patchVideoGeneration,
+} from '@client/app/hooks/data/videoGenerationCache';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 
 /**
@@ -45,7 +49,7 @@ const VideoGenerationUpdatesListener = () => {
     if (isOpen && !wasOpenRef.current && hasOpenedRef.current) {
       void queryClient.invalidateQueries({ queryKey: videoGenerationKeys.list });
       for (const [key, job] of queryClient.getQueriesData<VideoGeneration>({ queryKey: videoGenerationKeys.details })) {
-        if (job && !isTerminalVideoState(job.state)) {
+        if (job && (!isTerminalVideoState(job.state) || isAwaitingVideoOutput(job))) {
           void queryClient.invalidateQueries({ queryKey: key, exact: true });
         }
       }

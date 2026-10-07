@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   setOpen: vi.fn(),
   downloadData: vi.fn(),
   downloadUrl: vi.fn(),
+  toastError: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/videoGenerations', () => ({
@@ -21,7 +22,7 @@ vi.mock('@client/app/components/Files/fileBrowserStore', () => ({
     selector({ setOpen: h.setOpen }),
 }));
 vi.mock('@client/app/utils/download', () => ({ downloadData: h.downloadData, downloadUrl: h.downloadUrl }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { error: h.toastError, success: vi.fn() } }));
 
 import { readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import VideoJobCard, { MAX_PLAYER_URL_REFRESHES } from './VideoJobCard';
@@ -35,6 +36,9 @@ const card = () => (
 
 const showJob = (job: VideoGeneration) => {
   h.query = { data: job, isPending: false, isError: false, refetch: vi.fn().mockResolvedValue({ data: job }) };
+};
+const showJobRefetching = (job: VideoGeneration, refetched: VideoGeneration) => {
+  h.query = { data: job, isPending: false, isError: false, refetch: vi.fn().mockResolvedValue({ data: refetched }) };
 };
 const succeeded = (output: VideoGeneration['output']) => videoJob({ state: 'succeeded', progress: 1, output });
 
@@ -164,6 +168,12 @@ describe('VideoJobCard states', () => {
     expect(screen.queryByTestId('video-job-card-cancel-btn')).not.toBeInTheDocument();
   });
 
+  it('falls back to a generic message when a failed job has no error', () => {
+    showJob(videoJob({ state: 'failed', error: null }));
+    render(card());
+    expect(screen.getByTestId('video-job-card-error')).toHaveTextContent('This video could not be generated.');
+  });
+
   it('says so when the job cannot be loaded', () => {
     h.query = { data: undefined, isPending: false, isError: true, refetch: vi.fn() };
     render(card());
@@ -183,6 +193,17 @@ describe('VideoJobCard playback URL', () => {
     expect(screen.getByTestId('video-job-card-player')).toHaveAttribute('src', 'https://files.example/b');
   });
 
+  it('refetches on a player error and plays the new URL once it arrives', () => {
+    showJob(succeeded(readyOutput({ url: 'https://files.example/a' })));
+    const { rerender } = render(card());
+    const refetch = h.query.refetch;
+    fireEvent.error(screen.getByTestId('video-job-card-player'));
+    expect(refetch).toHaveBeenCalledTimes(1);
+    showJob(succeeded(readyOutput({ url: 'https://files.example/b' })));
+    rerender(card());
+    expect(screen.getByTestId('video-job-card-player')).toHaveAttribute('src', 'https://files.example/b');
+  });
+
   it('stops refreshing after MAX_PLAYER_URL_REFRESHES failed loads', () => {
     showJob(succeeded(readyOutput()));
     render(card());
@@ -195,10 +216,15 @@ describe('VideoJobCard playback URL', () => {
 
 describe('VideoJobCard download', () => {
   it('re-reads the job and saves the fresh URL as a file', async () => {
-    showJob(succeeded(readyOutput()));
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['clip']) }));
+    const freshUrl = 'https://files.example/fresh';
+    showJobRefetching(succeeded(readyOutput({ url: 'https://files.example/stale' })), {
+      ...succeeded(readyOutput({ url: freshUrl })),
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(['clip']) });
+    vi.stubGlobal('fetch', fetchMock);
     render(card());
     fireEvent.click(screen.getByTestId('video-job-card-download-btn'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(freshUrl));
     await waitFor(() => expect(h.downloadData).toHaveBeenCalledWith(expect.any(Blob), 'video-job-1.mp4', 'video/mp4'));
     expect(h.query.refetch).toHaveBeenCalled();
   });
@@ -209,5 +235,20 @@ describe('VideoJobCard download', () => {
     render(card());
     fireEvent.click(screen.getByTestId('video-job-card-download-btn'));
     await waitFor(() => expect(h.downloadUrl).toHaveBeenCalledWith(readyOutput().url, 'video-job-1.mp4'));
+  });
+
+  it('toasts and downloads nothing when the re-read has no ready URL', async () => {
+    showJobRefetching(
+      succeeded(readyOutput()),
+      succeeded(readyOutput({ availability: 'unavailable', url: null, expires_at: null }))
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(card());
+    fireEvent.click(screen.getByTestId('video-job-card-download-btn'));
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith('This video is not available to download.'));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.downloadData).not.toHaveBeenCalled();
+    expect(h.downloadUrl).not.toHaveBeenCalled();
   });
 });

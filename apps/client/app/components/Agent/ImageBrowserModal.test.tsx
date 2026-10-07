@@ -28,14 +28,16 @@ const renderModal = (extra: { title?: string; emptyHint?: string } = {}) =>
 describe('ImageBrowserModal', () => {
   it('keeps the portrait wording by default', () => {
     renderModal();
-    expect(screen.getByText('Select Portrait Image')).toBeInTheDocument();
-    expect(screen.getByText(/agent portraits/)).toBeInTheDocument();
+    expect(screen.getByTestId('image-browser-modal-title')).toHaveTextContent('Select Portrait Image');
+    expect(screen.getByTestId('image-browser-modal-empty-hint')).toHaveTextContent(/agent portraits/);
   });
 
   it('takes a caller title and empty hint', () => {
     renderModal({ title: 'Choose an image to animate', emptyHint: 'Upload images in Files to animate them here.' });
-    expect(screen.getByText('Choose an image to animate')).toBeInTheDocument();
-    expect(screen.getByText('Upload images in Files to animate them here.')).toBeInTheDocument();
+    expect(screen.getByTestId('image-browser-modal-title')).toHaveTextContent('Choose an image to animate');
+    expect(screen.getByTestId('image-browser-modal-empty-hint')).toHaveTextContent(
+      'Upload images in Files to animate them here.'
+    );
     expect(screen.queryByText('Select Portrait Image')).not.toBeInTheDocument();
   });
 });

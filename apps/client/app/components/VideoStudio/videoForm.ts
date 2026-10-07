@@ -6,6 +6,7 @@
 import {
   estimateVideoCostCredits,
   VIDEO_MODEL_CATALOG,
+  VIDEO_PROMPT_MAX_LENGTH,
   VideoModelIdSchema,
   type AspectRatio,
   type CreateVideoGenerationBody,
@@ -13,9 +14,6 @@ import {
   type VideoMode,
   type VideoModel,
 } from '@bike4mind/common';
-
-// Must match the prompt max in CreateVideoGenerationBodySchema (b4m-core/common/src/schemas/videoGenerations.ts).
-export const VIDEO_PROMPT_MAX_LENGTH = 4000;
 
 export type VideoInputImage = { fileId: string; fileName: string };
 

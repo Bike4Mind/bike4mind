@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateVideoCostCredits, VIDEO_MODEL_CATALOG } from '@bike4mind/common';
+import { estimateVideoCostCredits, VIDEO_MODEL_CATALOG, VIDEO_PROMPT_MAX_LENGTH } from '@bike4mind/common';
 import { discreteModel, optionalAudioModel, rangeModel } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import {
   canSubmit,
@@ -8,7 +8,6 @@ import {
   initialFormFor,
   snapDuration,
   toCreateBody,
-  VIDEO_PROMPT_MAX_LENGTH,
   type VideoFormState,
 } from './videoForm';
 

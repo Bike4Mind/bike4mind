@@ -6,6 +6,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { CREDITS_BALANCE_KEY } from './credits';
 import {
+  isAwaitingVideoOutput,
   isTerminalVideoState,
   prependVideoGeneration,
   seedVideoGeneration,
@@ -19,7 +20,12 @@ import { videoGenerationKeys } from './videoGenerationKeys';
 export const VIDEO_GALLERY_PAGE_SIZE = 12;
 // Detail reads share the per-user 10/min bucket with every other video route, so the fallback poll stays well under it.
 export const SOCKET_DOWN_POLL_MS = 15_000;
+// A scan normally clears in well under a minute; one that stalls backs off with the job's age up to the cap, so a few
+// stuck cards cannot drain that bucket.
 export const PENDING_SCAN_POLL_MS = 30_000;
+export const PENDING_SCAN_MAX_POLL_MS = 5 * 60_000;
+// The output normally lands seconds after 'succeeded'; past this the card stops asking and stays on "Finishing".
+export const AWAITING_OUTPUT_MAX_POLL_AGE_MS = 10 * 60_000;
 // Signed URLs live 15 minutes (OUTPUT_URL_TTL_SECONDS on the server). The gallery list re-signs a whole page
 // first (longer lead) so a page of cards sharing one expiry does not fire one request each: every video route is
 // per-user rate-limited, as low as 10/min.
@@ -39,11 +45,17 @@ export function videoGenerationPollInterval(
   now: number
 ): number | false {
   if (!job) return false;
-  // The websocket frame writes 'succeeded' before the output exists; keep reading until it arrives.
-  const awaitingOutput = job.state === 'succeeded' && !job.output;
-  if (!isTerminalVideoState(job.state) || awaitingOutput) return socketOpen ? false : SOCKET_DOWN_POLL_MS;
+  // Polled even with the socket open: no further frame will arrive, and the listener's one refetch may have been
+  // rate-limited or landed before the output was written.
+  if (isAwaitingVideoOutput(job)) {
+    return now - Date.parse(job.updated_at) < AWAITING_OUTPUT_MAX_POLL_AGE_MS ? SOCKET_DOWN_POLL_MS : false;
+  }
+  if (!isTerminalVideoState(job.state)) return socketOpen ? false : SOCKET_DOWN_POLL_MS;
   if (job.state !== 'succeeded' || !job.output) return false;
-  if (job.output.availability === 'pending_scan') return PENDING_SCAN_POLL_MS;
+  if (job.output.availability === 'pending_scan') {
+    const age = now - Date.parse(job.updated_at);
+    return Math.min(Math.max(age, PENDING_SCAN_POLL_MS), PENDING_SCAN_MAX_POLL_MS);
+  }
   if (job.output.availability === 'ready' && job.output.expires_at) {
     return msUntil(job.output.expires_at, DETAIL_URL_REFRESH_LEAD_MS, now);
   }

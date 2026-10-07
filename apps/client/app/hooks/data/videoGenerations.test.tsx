@@ -20,18 +20,22 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }));
 
-import { listOf, readyOutput, videoJob } from './__test__/videoGenerationFixtures';
+import { listOf, rangeModel, readyOutput, videoJob } from './__test__/videoGenerationFixtures';
 import type { VideoGenerationList } from './videoGenerationCache';
 import { videoGenerationKeys } from './videoGenerationKeys';
 import {
+  AWAITING_OUTPUT_MAX_POLL_AGE_MS,
   DETAIL_URL_REFRESH_LEAD_MS,
   LIST_URL_REFRESH_LEAD_MS,
+  PENDING_SCAN_MAX_POLL_MS,
   PENDING_SCAN_POLL_MS,
   SOCKET_DOWN_POLL_MS,
   URL_REFRESH_FLOOR_MS,
+  useCancelVideoGeneration,
   useCreateVideoGeneration,
   useVideoGeneration,
   useVideoGenerations,
+  useVideoModels,
   videoGenerationPollInterval,
   videoListRefreshInterval,
 } from './videoGenerations';
@@ -62,20 +66,42 @@ describe('videoGenerationPollInterval', () => {
     expect(SOCKET_DOWN_POLL_MS).toBe(15_000);
   });
 
-  it('treats a succeeded job without output as still running until the output arrives', () => {
+  it('polls a succeeded job without output every 15s even with the socket open', () => {
     const noOutput = videoJob({ state: 'succeeded', output: null });
     expect(videoGenerationPollInterval(noOutput, false, NOW)).toBe(SOCKET_DOWN_POLL_MS);
-    expect(videoGenerationPollInterval(noOutput, true, NOW)).toBe(false);
+    expect(videoGenerationPollInterval(noOutput, true, NOW)).toBe(SOCKET_DOWN_POLL_MS);
     const withOutput = videoJob({ state: 'succeeded', output: readyOutput({ expires_at: EXPIRES }) });
     expect(videoGenerationPollInterval(withOutput, false, NOW)).not.toBe(SOCKET_DOWN_POLL_MS);
   });
 
-  it('re-reads a succeeded job every 30s while its file is being scanned', () => {
-    const job = videoJob({
-      state: 'succeeded',
-      output: readyOutput({ availability: 'pending_scan', url: null, expires_at: null }),
+  it('stops polling for the output once the job has waited past the cap', () => {
+    const noOutput = videoJob({ state: 'succeeded', output: null });
+    expect(videoGenerationPollInterval(noOutput, true, NOW + AWAITING_OUTPUT_MAX_POLL_AGE_MS - 1)).toBe(
+      SOCKET_DOWN_POLL_MS
+    );
+    expect(videoGenerationPollInterval(noOutput, true, NOW + AWAITING_OUTPUT_MAX_POLL_AGE_MS)).toBe(false);
+  });
+
+  describe('while its file is being scanned', () => {
+    const scanning = (updated_at: string) =>
+      videoJob({
+        state: 'succeeded',
+        updated_at,
+        output: readyOutput({ availability: 'pending_scan', url: null, expires_at: null }),
+      });
+    const ago = (ms: number) => new Date(NOW - ms).toISOString();
+
+    it('re-reads a fresh job every 30s', () => {
+      expect(videoGenerationPollInterval(scanning(ago(0)), true, NOW)).toBe(PENDING_SCAN_POLL_MS);
     });
-    expect(videoGenerationPollInterval(job, true, NOW)).toBe(PENDING_SCAN_POLL_MS);
+
+    it('backs off with the age of the job', () => {
+      expect(videoGenerationPollInterval(scanning(ago(120_000)), true, NOW)).toBe(120_000);
+    });
+
+    it('caps the back-off', () => {
+      expect(videoGenerationPollInterval(scanning(ago(60 * 60_000)), true, NOW)).toBe(PENDING_SCAN_MAX_POLL_MS);
+    });
   });
 
   it('re-signs a ready URL shortly before it expires', () => {
@@ -118,9 +144,32 @@ describe('videoListRefreshInterval', () => {
     expect(typeof listDelay === 'number' && typeof cardDelay === 'number' && listDelay < cardDelay).toBe(true);
   });
 
+  it('fires at the earliest expiry among several ready jobs', () => {
+    const readyAt = (id: string, expires_at: string) =>
+      videoJob({ id, state: 'succeeded', output: readyOutput({ expires_at }) });
+    const list = listOf([
+      readyAt('late', '2026-10-07T00:14:00.000Z'),
+      readyAt('earliest', '2026-10-07T00:05:00.000Z'),
+      readyAt('middle', '2026-10-07T00:09:00.000Z'),
+    ]);
+    expect(videoListRefreshInterval(list, NOW)).toBe(
+      Date.parse('2026-10-07T00:05:00.000Z') - LIST_URL_REFRESH_LEAD_MS - NOW
+    );
+  });
+
   it('does not refresh a list with no ready URL', () => {
     expect(videoListRefreshInterval(listOf([videoJob()]), NOW)).toBe(false);
     expect(videoListRefreshInterval(undefined, NOW)).toBe(false);
+  });
+});
+
+describe('useVideoModels', () => {
+  it('reads the model catalog', async () => {
+    h.get.mockResolvedValue({ data: { models: [rangeModel] } });
+    const { result } = renderHook(() => useVideoModels(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(h.get).toHaveBeenCalledWith('/api/v1/video-models');
+    expect(result.current.data).toEqual([rangeModel]);
   });
 });
 
@@ -167,6 +216,20 @@ describe('useVideoGeneration', () => {
     expect(h.get).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retry a missing (404) job', async () => {
+    h.get.mockRejectedValue(httpError(404));
+    const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(h.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a server error (500)', async () => {
+    h.get.mockRejectedValueOnce(httpError(500)).mockResolvedValue({ data: videoJob({ id: 'job-1' }) });
+    const { result } = renderHook(() => useVideoGeneration('job-1'), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 5000 });
+    expect(h.get).toHaveBeenCalledTimes(2);
+  });
+
   it('does not refetch on mount when the detail is already cached', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1' }), {
       updatedAt: Date.now() - 120_000,
@@ -206,5 +269,32 @@ describe('useCreateVideoGeneration', () => {
       await result.current.mutateAsync(body).catch(() => undefined);
     });
     expect(h.toastError).toHaveBeenCalledWith('This model has been turned off. Pick another model.');
+  });
+});
+
+describe('useCancelVideoGeneration', () => {
+  it('posts the cancel and writes the cancelled job into the detail and the list', async () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ id: 'job-1', state: 'running' }));
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ id: 'job-1', state: 'running' })]));
+    h.post.mockResolvedValue({
+      data: videoJob({ id: 'job-1', state: 'cancelled', updated_at: '2026-10-07T00:01:00.000Z' }),
+    });
+    const { result } = renderHook(() => useCancelVideoGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('job-1');
+    });
+    expect(h.post).toHaveBeenCalledWith('/api/v1/video-generations/job-1/cancel');
+    expect(queryClient.getQueryData<VideoGeneration>(videoGenerationKeys.detail('job-1'))?.state).toBe('cancelled');
+    const list = queryClient.getQueryData<VideoGenerationList>(videoGenerationKeys.list);
+    expect(list?.pages[0].data[0].state).toBe('cancelled');
+  });
+
+  it('toasts the rate-limit message on a 429', async () => {
+    h.post.mockRejectedValue(Object.assign(new AxiosError('Request failed'), { response: { status: 429, data: {} } }));
+    const { result } = renderHook(() => useCancelVideoGeneration(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync('job-1').catch(() => undefined);
+    });
+    expect(h.toastError).toHaveBeenCalledWith('Too many requests. Wait a moment and try again.');
   });
 });

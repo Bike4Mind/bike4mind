@@ -13,7 +13,7 @@ import {
   ToggleButtonGroup,
   Typography,
 } from '@mui/joy';
-import type { CreateVideoGenerationBody, VideoModel } from '@bike4mind/common';
+import { VIDEO_PROMPT_MAX_LENGTH, type CreateVideoGenerationBody, type VideoModel } from '@bike4mind/common';
 import ImageBrowserModal from '@client/app/components/Agent/ImageBrowserModal';
 import { useImageBrowser } from '@client/app/hooks/agent/useImageBrowser';
 import { formatCredits } from '@client/app/utils/formatUsd';
@@ -24,7 +24,6 @@ import {
   initialFormFor,
   MODE_LABELS,
   toCreateBody,
-  VIDEO_PROMPT_MAX_LENGTH,
   type VideoFormState,
 } from './videoForm';
 
@@ -109,7 +108,7 @@ const VideoStudioForm = ({ models, isSubmitting, onSubmit }: VideoStudioFormProp
           data-testid="video-form-mode-toggle"
         >
           {model.modes.map(mode => (
-            <Button key={mode} value={mode}>
+            <Button key={mode} value={mode} data-testid={`video-form-mode-${mode}-btn`}>
               {MODE_LABELS[mode]}
             </Button>
           ))}

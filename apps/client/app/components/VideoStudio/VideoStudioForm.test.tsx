@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFabFileDocument, VideoModel } from '@bike4mind/common';
@@ -156,7 +156,7 @@ describe('VideoStudioForm submit', () => {
   it('needs an image in image to video and sends it', () => {
     render(tree([rangeModel]));
     typePrompt('make the waves move');
-    fireEvent.click(within(screen.getByTestId('video-form-mode-toggle')).getByText('Image to video'));
+    fireEvent.click(screen.getByTestId('video-form-mode-image_to_video-btn'));
     expect(screen.getByTestId('video-form-submit-btn')).toBeDisabled();
     fireEvent.click(screen.getByTestId('video-form-image-pick-btn'));
     expect(h.openImageBrowser).toHaveBeenCalled();

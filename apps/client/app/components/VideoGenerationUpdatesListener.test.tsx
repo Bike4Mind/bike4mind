@@ -21,7 +21,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
   }),
 }));
 
-import { listOf, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
+import { listOf, readyOutput, videoJob } from '@client/app/hooks/data/__test__/videoGenerationFixtures';
 import { videoGenerationKeys } from '@client/app/hooks/data/videoGenerationKeys';
 import VideoGenerationUpdatesListener from './VideoGenerationUpdatesListener';
 
@@ -86,6 +86,15 @@ describe('VideoGenerationUpdatesListener', () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
   });
 
+  it('ignores a frame for another kind of job', async () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    renderListener();
+    await send(frame({ id: 'job-1', kind: 'image', state: 'running' } as never));
+    expect(detail('job-1')?.state).toBe('pending');
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
   it('ignores other actions', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'pending' }));
     renderListener();
@@ -95,9 +104,16 @@ describe('VideoGenerationUpdatesListener', () => {
     expect(detail('job-1')?.state).toBe('pending');
   });
 
-  it('on reconnect refreshes the list and only the unfinished jobs, once', async () => {
+  it('on reconnect refreshes the list, the unfinished jobs and the ones still waiting for output, once', async () => {
     queryClient.setQueryData(videoGenerationKeys.detail('live'), videoJob({ id: 'live', state: 'running' }));
-    queryClient.setQueryData(videoGenerationKeys.detail('done'), videoJob({ id: 'done', state: 'succeeded' }));
+    queryClient.setQueryData(
+      videoGenerationKeys.detail('done'),
+      videoJob({ id: 'done', state: 'succeeded', output: readyOutput() })
+    );
+    queryClient.setQueryData(
+      videoGenerationKeys.detail('no-output'),
+      videoJob({ id: 'no-output', state: 'succeeded', output: null })
+    );
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const { rerender } = renderListener();
     // A fresh element each time: re-rendering the same element reference bails out before the mock is re-read.
@@ -117,10 +133,11 @@ describe('VideoGenerationUpdatesListener', () => {
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.list });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('live'), exact: true });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('no-output'), exact: true });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: videoGenerationKeys.detail('done'), exact: true });
-    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenCalledTimes(3);
 
     rerender(tree());
-    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(invalidate).toHaveBeenCalledTimes(3);
   });
 });

@@ -13,6 +13,19 @@ export type VideoJobLiveUpdate = { id: string; state: GenerationJobState; progre
 export const isTerminalVideoState = (state: GenerationJobState): boolean =>
   TERMINAL_GENERATION_JOB_STATES.includes(state);
 
+// The websocket frame writes 'succeeded' before the output exists; the job is not done until it arrives.
+export const isAwaitingVideoOutput = (job: VideoGeneration): boolean => job.state === 'succeeded' && !job.output;
+
+// A live job only ever moves forward through these. Frames and patched rows carry no newer timestamp, so the rank is
+// what tells a late 'running' apart from a real one.
+const LIVE_STATE_RANK: Partial<Record<GenerationJobState, number>> = { pending: 0, running: 1, storing: 2 };
+
+const movesLiveStateBackwards = (from: GenerationJobState, to: GenerationJobState): boolean => {
+  const fromRank = LIVE_STATE_RANK[from];
+  const toRank = LIVE_STATE_RANK[to];
+  return fromRank !== undefined && toRank !== undefined && toRank < fromRank;
+};
+
 // A terminal job is final, and a snapshot read earlier (a list request that was in flight while a detail
 // refetch landed) must not replace a later one.
 export const shouldReplaceVideoGeneration = (
@@ -21,7 +34,11 @@ export const shouldReplaceVideoGeneration = (
 ): boolean => {
   if (!existing) return true;
   if (isTerminalVideoState(existing.state) && !isTerminalVideoState(incoming.state)) return false;
-  return Date.parse(incoming.updated_at) >= Date.parse(existing.updated_at);
+  const incomingAt = Date.parse(incoming.updated_at);
+  const existingAt = Date.parse(existing.updated_at);
+  // A websocket patch keeps the cached updated_at, so a list row read before the frame ties with it.
+  if (incomingAt === existingAt && movesLiveStateBackwards(existing.state, incoming.state)) return false;
+  return incomingAt >= existingAt;
 };
 
 const mapListedJobs = (queryClient: QueryClient, mapJob: (job: VideoGeneration) => VideoGeneration): void => {
@@ -78,13 +95,11 @@ export function upsertVideoGeneration(queryClient: QueryClient, job: VideoGenera
 /** Applies a websocket frame's state and progress. Returns whether the job was cached anywhere. */
 export function patchVideoGeneration(queryClient: QueryClient, update: VideoJobLiveUpdate): boolean {
   let found = false;
-  // The patch keeps the cached updated_at, so an older list row sharing that timestamp can briefly move storing back
-  // to running until the next frame (terminal jobs stay protected).
   const patch = (cached: VideoGeneration): VideoGeneration => {
     if (cached.id !== update.id) return cached;
     found = true;
-    // Frames can arrive out of order; a finished job stays finished.
-    if (isTerminalVideoState(cached.state)) return cached;
+    // Frames can arrive out of order; a finished job stays finished and a live one never steps back.
+    if (isTerminalVideoState(cached.state) || movesLiveStateBackwards(cached.state, update.state)) return cached;
     return { ...cached, state: update.state, progress: update.progress ?? cached.progress };
   };
   queryClient.setQueryData<VideoGeneration>(videoGenerationKeys.detail(update.id), cached => cached && patch(cached));

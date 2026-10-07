@@ -57,7 +57,7 @@ const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
         }}
       >
         <ModalClose onClick={onClose} />
-        <Typography level="h4" mb={2}>
+        <Typography level="h4" mb={2} data-testid="image-browser-modal-title">
           {title}
         </Typography>
 
@@ -79,7 +79,11 @@ const ImageBrowserModal: React.FC<ImageBrowserModalProps> = ({
         ) : imageFiles.length === 0 ? (
           <Box sx={{ p: 4, textAlign: 'center' }}>
             <Typography level="body-lg">No images found</Typography>
-            <Typography level="body-sm" sx={{ mt: 1, color: 'text.secondary' }}>
+            <Typography
+              level="body-sm"
+              sx={{ mt: 1, color: 'text.secondary' }}
+              data-testid="image-browser-modal-empty-hint"
+            >
               {emptyHint}
             </Typography>
           </Box>

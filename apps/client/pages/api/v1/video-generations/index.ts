@@ -72,7 +72,8 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
 }).post(async (req, res) => {
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
-  // A session token is the SPA (the studio); an API key is the public API.
+  // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
+  // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
   const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(

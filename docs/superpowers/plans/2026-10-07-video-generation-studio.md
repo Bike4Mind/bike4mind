@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (strict), React 19, MUI Joy 5 beta, TanStack Query v5 (`useInfiniteQuery`, `InfiniteData`), TanStack Router v1 (code-based routes), Zustand (Files drawer store), sonner, vitest 4 + Testing Library (jsdom project), Zod v4 schemas from `@bike4mind/common`.
 
-**Spec:** `docs/superpowers/specs/2026-10-05-multi-provider-video-generation-design.md`, section 9 (this phase), with section 8 (the API this page calls) and section 10 (the agent tool that will reuse `VideoJobCard`). Epic #3890, phase 4. Stacked on #3968 (`feat/video-generation-omni-flash-api`). Previous plan: `docs/superpowers/plans/2026-10-06-video-generation-omni-flash-api.md`.
+**Spec:** `docs/superpowers/specs/2026-10-05-multi-provider-video-generation-design.md`, section 9 (this phase), with section 8 (the API this page calls) and section 10 (the agent tool that will reuse `VideoJobCard`). Epic #3890, phase 4. Built on #3968 (`feat/video-generation-omni-flash-api`, merged). Previous plan: `docs/superpowers/plans/2026-10-06-video-generation-omni-flash-api.md`.
 
 ## Plan-time corrections
 
@@ -65,7 +65,7 @@ Repo commands used throughout:
 
 Five real-world failures the happy-path tests would not catch, each pinned by a named test in its owning task.
 
-1. **The socket drops while a job finishes, then reconnects.** Frames sent while it was down are lost; the card must still reach its terminal state without a page reload. Detail queries poll every 5s while the socket is not `OPEN`, and the listener refreshes the list and every unfinished job once on reconnect (never on the first connect). Pinned in Task 4 "polls every 5s while the socket is down and stops when it is open" and Task 5 "on reconnect refreshes the list and only the unfinished jobs, once".
+1. **The socket drops while a job finishes, then reconnects.** Frames sent while it was down are lost; the card must still reach its terminal state without a page reload. Detail queries poll every 15s while the socket is not `OPEN` (the per-user 10/min detail bucket rules out anything faster), and the listener refreshes the list and every unfinished job once on reconnect (never on the first connect). Pinned in Task 4 "polls every 15s while the socket is down and stops when it is open" and Task 5 "on reconnect refreshes the list and only the unfinished jobs, once".
 2. **The signed URL is re-signed while the user is watching, or has expired when they press play.** Swapping `src` on a playing `<video>` restarts it; an expired URL fails with 403. The card keeps the URL it started with until the element errors, then takes the newest one, and gives up after two refreshes so a permanently broken file cannot loop. Pinned in Task 8 "keeps the player src across a re-sign and swaps on error" and "stops refreshing after MAX_PLAYER_URL_REFRESHES failed loads".
 3. **A late frame or an older snapshot moves a finished job back to running.** Websocket frames can arrive out of order, and a list request issued before a detail refetch can land after it. A cached terminal job is never overwritten by a non-terminal one, and an older `updated_at` never replaces a newer one. Pinned in Task 3 "never regresses a terminal job" (patch) and "does not overwrite a newer cached job with an older list row" (seed).
 4. **A full gallery page reaches its URL expiry at the same instant.** Twelve per-card refetches against a per-user limit as low as 10/min would 429 and leave dead players. The list re-signs the page before any card's own timer. Pinned in Task 4 "the list refresh fires before any card's own refresh".

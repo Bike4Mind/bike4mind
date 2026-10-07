@@ -49,6 +49,10 @@ describe('shouldReplaceVideoGeneration', () => {
   it('keeps the cached job when the incoming one is older', () => {
     expect(shouldReplaceVideoGeneration(videoJob({ updated_at: LATER }), videoJob())).toBe(false);
   });
+  it('keeps a storing job when a same-timestamp row says running, and takes a forward one', () => {
+    expect(shouldReplaceVideoGeneration(videoJob({ state: 'storing' }), videoJob({ state: 'running' }))).toBe(false);
+    expect(shouldReplaceVideoGeneration(videoJob({ state: 'running' }), videoJob({ state: 'storing' }))).toBe(true);
+  });
   it('never replaces a terminal job with a non-terminal one', () => {
     const cached = videoJob({ state: 'succeeded' });
     expect(shouldReplaceVideoGeneration(cached, videoJob({ state: 'running', updated_at: LATER }))).toBe(false);
@@ -147,6 +151,21 @@ describe('patchVideoGeneration', () => {
     patchVideoGeneration(queryClient, { id: 'job-1', state: 'running', progress: 0.9 });
     expect(detail('job-1')?.state).toBe('succeeded');
     expect(listJob('job-1')?.state).toBe('succeeded');
+  });
+
+  it('ignores a backwards frame but applies a forward one', () => {
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'storing' }));
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'storing' })]));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'running', progress: 0.1 });
+    expect(detail('job-1')?.state).toBe('storing');
+    expect(listJob('job-1')?.state).toBe('storing');
+    expect(detail('job-1')?.progress).toBeNull();
+
+    queryClient.setQueryData(videoGenerationKeys.detail('job-1'), videoJob({ state: 'running' }));
+    queryClient.setQueryData(videoGenerationKeys.list, listOf([videoJob({ state: 'running' })]));
+    patchVideoGeneration(queryClient, { id: 'job-1', state: 'storing' });
+    expect(detail('job-1')?.state).toBe('storing');
+    expect(listJob('job-1')?.state).toBe('storing');
   });
 
   it('reports a job it has never seen', () => {
