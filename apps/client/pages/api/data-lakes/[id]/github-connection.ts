@@ -29,7 +29,7 @@ async function findLakeConnection(lakeId: string, organizationId: string) {
 
 /**
  * GET    /api/data-lakes/:id/github-connection -> { connection: IOrgGitHubLakeConnectionResponse | null,
- *        canManage?: boolean } (canManage is absent for a personal lake, which has no connection to manage)
+ *        canManage: boolean } (always false for a personal lake: GitHub lakes are org-only, so there is nothing to manage)
  * POST   /api/data-lakes/:id/github-connection -> { authorizeUrl } (starts the connect, see
  *        buildGitHubLakeAuthorizeUrl. The callback page relays GitHub's return to POST
  *        /api/data-lakes/github-callback; the picker then lists .../repositories and binds via
@@ -54,7 +54,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new NotFoundError('Data lake not found');
     }
     if (!lake.organizationId) {
-      return res.json({ connection: null });
+      return res.json({ connection: null, canManage: false });
     }
     const { canManage } = await verifyOrgAdminRead(req.user, lake.organizationId);
     const conn = await findLakeConnection(lake.id, lake.organizationId);
