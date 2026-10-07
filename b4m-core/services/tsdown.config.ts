@@ -8,6 +8,7 @@ export default defineConfig({
     'src/imageCost/index.ts',
     // Pure widening rule; the settings modal imports it from '@bike4mind/services/lakeGateWideningRule'.
     'src/dataLakeService/lakeGateWideningRule.ts',
+    'src/llm/evals/lakeRag/index.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
     'src/generationJobs/index.ts',

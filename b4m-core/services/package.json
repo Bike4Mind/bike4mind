@@ -40,6 +40,16 @@
         "default": "./dist/dataLakeService/lakeGateWideningRule.cjs"
       }
     },
+    "./evals/lakeRag": {
+      "import": {
+        "types": "./dist/llm/evals/lakeRag/index.d.mts",
+        "default": "./dist/llm/evals/lakeRag/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/evals/lakeRag/index.d.cts",
+        "default": "./dist/llm/evals/lakeRag/index.cjs"
+      }
+    },
     "./apiKeyService": {
       "import": {
         "types": "./dist/apiKeyService/index.d.mts",
