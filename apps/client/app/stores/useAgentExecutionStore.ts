@@ -530,7 +530,8 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
   // has resolved or abandoned it. `PermissionCard` renders purely on
   // `pendingPermission` presence (not status), so a lingering value would leave a
   // dead permission prompt on a completed/failed/aborted run. Clear it on every
-  // terminal transition.
+  // terminal transition. `isAborting` is cleared too, so an abort racing a
+  // completed/failed event doesn't leave the flag set on a finished run.
   markCompleted: (executionId, answer, totalCreditsUsed) =>
     set(state => ({
       executions: withExecution(state, executionId, exec => ({
@@ -539,6 +540,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         answer,
         totalCreditsUsed,
         pendingPermission: undefined,
+        isAborting: false,
       })),
     })),
 
@@ -550,6 +552,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         failureReason: reason,
         errorMessage: message,
         pendingPermission: undefined,
+        isAborting: false,
       })),
     })),
 

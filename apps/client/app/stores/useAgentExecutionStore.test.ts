@@ -798,6 +798,21 @@ describe('useAgentExecutionStore — clears stale pendingPermission on terminal 
     expect(exec.pendingPermission).toBeUndefined();
   });
 
+  it.each([
+    ['markCompleted', 'completed', (id: string) => useAgentExecutionStore.getState().markCompleted(id, 'done', 5)],
+    ['markFailed', 'failed', (id: string) => useAgentExecutionStore.getState().markFailed(id, 'boom', 'it broke')],
+    ['markAborted', 'aborted', (id: string) => useAgentExecutionStore.getState().markAborted(id)],
+  ] as const)('%s clears isAborting when it lands mid-abort', (_name, status, finish) => {
+    const { startExecution, markAborting } = useAgentExecutionStore.getState();
+    startExecution('exec-race', 'session-A');
+    markAborting('exec-race');
+    expect(useAgentExecutionStore.getState().executions['exec-race'].isAborting).toBe(true);
+    finish('exec-race');
+    const exec = useAgentExecutionStore.getState().executions['exec-race'];
+    expect(exec.status).toBe(status);
+    expect(exec.isAborting).toBe(false);
+  });
+
   it('hydrateFromReconnect drops a stale pendingPermission for a TERMINAL run (the reconnect bug)', () => {
     useAgentExecutionStore.getState().hydrateFromReconnect({
       executionId: 'exec-recon-done',
