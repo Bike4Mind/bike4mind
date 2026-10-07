@@ -492,7 +492,7 @@ declare module "sst" {
       "type": "sst.sst.Linkable"
       "video-generation": string
       "webhook-delivery": string
-      "whats-new-generation": string
+      "release-notes": string
       "whats-new-highlights": string
     }
     "emailAnalysisQueue": {
