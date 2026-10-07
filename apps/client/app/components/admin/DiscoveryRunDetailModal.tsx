@@ -361,13 +361,15 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
         ]
       : [];
 
-  // A truncated slice cannot be split truthfully: how many of the cut rows came from the build is unknown.
-  const priceRowsTruncated = (run?.detailTotals?.priceRows ?? 0) > (run?.priceRows.length ?? 0);
+  // The run document caps its price rows, so a split of a cut list counts only what is shown; the
+  // total says how many rows the run had, and which section the cut ones belong to is unknown.
+  const priceRowTotal = run?.detailTotals?.priceRows;
+  const priceRowsTruncated = (priceRowTotal ?? 0) > (run?.priceRows.length ?? 0);
+  const priceRowCount = (shown: number) =>
+    priceRowsTruncated ? `${shown} shown, ${priceRowTotal} in the run` : `${shown}`;
   const isFromBuild = (row: PlannedPriceRow) => row.sources.includes(ADAPTER_LITERAL_PRICE_SOURCE);
-  const priceRowsFromBuild = priceRowsTruncated ? [] : (run?.priceRows ?? []).filter(isFromBuild);
-  const priceRowsRepriced = priceRowsTruncated
-    ? (run?.priceRows ?? [])
-    : (run?.priceRows ?? []).filter(row => !isFromBuild(row));
+  const priceRowsFromBuild = (run?.priceRows ?? []).filter(isFromBuild);
+  const priceRowsRepriced = (run?.priceRows ?? []).filter(row => !isFromBuild(row));
 
   const overrideCount = countLabel(run?.priceOverrides?.length ?? 0, run?.detailTotals?.priceOverrides);
 
@@ -501,8 +503,8 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                     // Nothing was repriced on a run that wrote nothing, and an older
                     // run carries no mode to claim either way.
                     run.mode === 'write'
-                      ? `Repriced (${countLabel(priceRowsRepriced.length, run.detailTotals?.priceRows)})`
-                      : `Price rows planned (${countLabel(priceRowsRepriced.length, run.detailTotals?.priceRows)})`
+                      ? `Repriced (${priceRowCount(priceRowsRepriced.length)})`
+                      : `Price rows planned (${priceRowCount(priceRowsRepriced.length)})`
                   }
                 >
                   <PriceRowsTable rows={priceRowsRepriced} />
@@ -513,8 +515,8 @@ export const DiscoveryRunDetailModal: React.FC<{ runId: string | null; onClose: 
                 <Section
                   title={
                     run.mode === 'write'
-                      ? `Recorded from build (${priceRowsFromBuild.length})`
-                      : `Recorded from build, planned (${priceRowsFromBuild.length})`
+                      ? `Recorded from build (${priceRowCount(priceRowsFromBuild.length)})`
+                      : `Recorded from build, planned (${priceRowCount(priceRowsFromBuild.length)})`
                   }
                 >
                   <PriceRowsTable rows={priceRowsFromBuild} testId="discovery-run-build-price-rows-table" />
