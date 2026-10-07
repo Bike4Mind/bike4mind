@@ -30,6 +30,6 @@ describe('ApiReferenceTab', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
     const banner = screen.getByTestId('api-reference-drift-banner');
     expect(banner).toHaveTextContent(/hand-maintained and may lag/i);
-    expect(banner.querySelector('a')).toHaveAttribute('href', '/api/v1/docs');
+    expect(screen.getByTestId('api-reference-drift-docs-link')).toHaveAttribute('href', '/api/v1/docs');
   });
 });

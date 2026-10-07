@@ -135,7 +135,12 @@ const ApiReferenceTab = () => {
           <Typography level="body-sm">
             This reference is hand-maintained and may lag the code. For endpoints with a verified, always-current
             contract, use the{' '}
-            <Link href={ExternalLinks.apiDocs} target="_blank" rel="noopener noreferrer">
+            <Link
+              href={ExternalLinks.apiDocs}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="api-reference-drift-docs-link"
+            >
               generated interactive API docs
             </Link>
             .
