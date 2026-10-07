@@ -96,11 +96,11 @@ describe('/api/data-lakes/[id]/github-connection', () => {
   });
 
   describe('GET', () => {
-    it('resolves null for a personal (org-less) lake without checking org access', async () => {
+    it('resolves null with canManage false for a personal (org-less) lake without checking org access', async () => {
       h.dlFindById.mockResolvedValue({ id: 'lake1', organizationId: undefined });
       const { res, json } = makeRes();
       await run(makeReq('GET'), res);
-      expect(json).toHaveBeenCalledWith({ connection: null });
+      expect(json).toHaveBeenCalledWith({ connection: null, canManage: false });
       expect(h.verifyOrgAdminRead).not.toHaveBeenCalled();
       expect(h.verifyOrgAccess).not.toHaveBeenCalled();
     });
