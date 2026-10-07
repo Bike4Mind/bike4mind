@@ -17,6 +17,7 @@ import {
 import {
   canAccessLake,
   assertLakeAccess,
+  assertLakeAccessById,
   assertLakeWritable,
   assertLakeGrantable,
   isFallbackLake,
@@ -574,6 +575,43 @@ describe('assertLakeAccess - foreign-org grant resolves by slug (#2425)', () => 
       '[dataLakes] grant-held slug fallback query failed; resolving with no grant reach',
       expect.any(Error)
     );
+  });
+});
+
+describe('assertLakeAccessById - no slug fall-through', () => {
+  const lakeHex = '507f1f77bcf86cd799439011';
+  const db = (byId: IDataLakeDocument | null) => ({
+    dataLakes: {
+      findById: byId ? vi.fn().mockResolvedValue(byId) : vi.fn().mockRejectedValue(new Error('cast')),
+      // The next lake sharing the slug, which the slug arm would hand back once the first is deleted.
+      findBySlug: vi.fn().mockResolvedValue(lake({ id: 'other-lake', slug: 'shared', createdByUserId: 'owner' })),
+      findBySlugAmongIds: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('refuses a slug with a 400 instead of resolving the next lake that shares it', async () => {
+    const d = db(null);
+    const err = await assertLakeAccessById('shared', ctx({ userId: 'owner' }), { db: d }).catch(e => e);
+    expect(err).toBeInstanceOf(BadRequestError);
+    expect(err.message).toMatch(/needs the data lake id/);
+    expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
+  });
+
+  it('still resolves a deleted lake by id, so a retried delete reaches the same lake', async () => {
+    const deleted = lake({ id: lakeHex, slug: 'shared', status: 'deleted', createdByUserId: 'owner' });
+    await expect(assertLakeAccessById(lakeHex, ctx({ userId: 'owner' }), { db: db(deleted) })).resolves.toBe(deleted);
+  });
+
+  it('answers an id-shaped miss with not-found, not the slug 400', async () => {
+    const d = { dataLakes: { ...db(null).dataLakes, findById: vi.fn().mockResolvedValue(null) } };
+    await expect(assertLakeAccessById(lakeHex, ctx({ userId: 'owner' }), { db: d })).rejects.toThrow(/not found/i);
+    expect(d.dataLakes.findBySlug).not.toHaveBeenCalled();
+  });
+
+  it('still resolves a registry lake, so assertLakeWritable can give its read-only refusal', async () => {
+    const resolved = await assertLakeAccessById('opti-knowledge', ctx({ isAdmin: true }), { db: db(null) });
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(() => assertLakeWritable(resolved)).toThrow(/read-only/);
   });
 });
 
