@@ -1628,6 +1628,7 @@ async function processExecution(
         // usageEvents is deliberately absent: onToolLlmUsage already folds tool COGS into the
         // agent_execution event (billIteration), so wiring it would make
         // recordToolOperationalUsage also write an 'operations' event and double-count costUsd.
+        // Side effect: search_knowledge_base's 'embedding' events (not folded) also no-op here.
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
         fabfiles: fabFileRepository,
