@@ -4089,6 +4089,42 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
       expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
     });
 
+    it('keeps lake files ahead of a personal library large enough to fill the listing when the flag is on', async () => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      const lakeFile = { id: 'lake-1', fileName: 'zz-lake.pdf', tags: [{ name: 'datalake:acme' }] };
+      const library = Array.from({ length: 100 }, (_, i) => ({
+        id: `lib-${i}`,
+        fileName: `a-${String(i).padStart(3, '0')}.pdf`,
+        tags: [],
+      }));
+      // Emulates the DB: the union sorts by name and stops at the page size, so the lake file is cut.
+      ctx.db.fabfiles.search = vi.fn((...args: unknown[]) => {
+        const restrict = (args[5] as { restrictToDataLake: boolean }).restrictToDataLake;
+        return Promise.resolve(restrict ? { data: [lakeFile], hasMore: false } : { data: library, hasMore: true });
+      });
+      await build(ctx, ['datalake:acme'], true).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      const scanned = ctx.db.fabfilechunks.findVectorsByFabFileIds.mock.calls.flatMap(c => c[0] as string[]);
+      expect(scanned[0]).toBe('lake-1');
+      expect(scanned).toHaveLength(100);
+      expect(scanned).not.toContain('lib-99');
+    });
+
+    it('lists only once, without the lake-first pass, when the flag is unset', async () => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, ['datalake:acme'], undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledTimes(1);
+    });
+
     it('re-admits the library for a named lake this caller can no longer reach when the flag is on', async () => {
       const ctx = makeCtx({ dataLakes: [] });
       await build(ctx, ['datalake:unreachable'], true).getContextMessages(

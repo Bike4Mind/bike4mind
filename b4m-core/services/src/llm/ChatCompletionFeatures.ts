@@ -2906,32 +2906,52 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const listingLimit = relevanceSelectionAvailable
         ? FORCED_RETRIEVAL_MAX_LISTED_FILES
         : FORCED_RETRIEVAL_MAX_CANDIDATE_FILES;
-      const fileResults = await db.fabfiles.search(
-        user.id,
-        '',
-        { tags: nonLakeRetrievalTags, shared: false },
-        { page: 1, limit: listingLimit },
-        { by: 'fileName', direction: 'asc' },
-        {
-          textSearch: true,
-          includeShared: true,
-          userGroups: user.groups || [],
-          dataLakeTags,
-          dataLakeTagPrefixes, // static-registry (open) prefixes
-          lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
-          // Scope to the resolved lake(s) only, never the caller's whole library - but only when
-          // the session excludes the library; see the gating note above.
-          restrictToDataLake: excludeLibrary,
-          excludeContent: true, // metadata only; chunk text + vectors fetched below
-          // supersededInLakes is select:false by default; forced retrieval feeds the same
-          // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
-          // FabFileModel.executeSearch.
-          includeSupersessionRulings: true,
-          // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
-          // so this arm agrees with the surface's document-listing predicate. No-op when unset.
-          ...this.retrievalFilter,
-        }
-      );
+      const listFiles = (restrictToDataLake: boolean) =>
+        db.fabfiles.search(
+          user.id,
+          '',
+          { tags: nonLakeRetrievalTags, shared: false },
+          { page: 1, limit: listingLimit },
+          { by: 'fileName', direction: 'asc' },
+          {
+            textSearch: true,
+            includeShared: true,
+            userGroups: user.groups || [],
+            dataLakeTags,
+            dataLakeTagPrefixes, // static-registry (open) prefixes
+            lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
+            restrictToDataLake,
+            excludeContent: true, // metadata only; chunk text + vectors fetched below
+            // supersededInLakes is select:false by default; forced retrieval feeds the same
+            // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
+            // FabFileModel.executeSearch.
+            includeSupersessionRulings: true,
+            // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
+            // so this arm agrees with the surface's document-listing predicate. No-op when unset.
+            ...this.retrievalFilter,
+          }
+        );
+      // An explicit "+ My files" turns the listing into a union where a large personal library,
+      // sorted by name, could crowd the lake out of the listing and the by-name candidate cut. The
+      // lake-only listing goes first so lake files keep their slots; library files fill the rest.
+      const prioritizeLakeFiles = this.includeLibraryFiles === true && hasLakeArms;
+      // Scope to the resolved lake(s) only, never the caller's whole library - but only when the
+      // session excludes the library; see the gating note above.
+      const [lakeListing, scopeListing] = await Promise.all([
+        prioritizeLakeFiles ? listFiles(true) : null,
+        listFiles(excludeLibrary),
+      ]);
+      const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
+      const libraryRows = lakeListing ? scopeListing.data.filter(f => !lakeFileIds.has(f.id)) : [];
+      const fileResults = lakeListing
+        ? {
+            data: [...lakeListing.data, ...libraryRows].slice(0, listingLimit),
+            hasMore:
+              lakeListing.hasMore === true ||
+              scopeListing.hasMore === true ||
+              lakeListing.data.length + libraryRows.length > listingLimit,
+          }
+        : scopeListing;
 
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
       // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
@@ -2947,8 +2967,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       }
       const fileById = new Map(files.map(f => [f.id, f]));
       // Fixed scan order so batching, the model pick, and any truncation are all reproducible;
-      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves.
+      // the DB sort is by a non-unique fileName, so `id` breaks the ties it leaves. Prioritized
+      // lake files sort first so a by-name candidate cut keeps them (see prioritizeLakeFiles).
       const scanOrder = [...files].sort((a, b) => {
+        const al = lakeFileIds.has(a.id);
+        if (al !== lakeFileIds.has(b.id)) return al ? -1 : 1;
         const an = a.fileName ?? '';
         const bn = b.fileName ?? '';
         if (an !== bn) return an < bn ? -1 : 1;
