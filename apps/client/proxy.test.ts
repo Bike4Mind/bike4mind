@@ -242,9 +242,27 @@ describe('proxy CSP for the pdf.js worker', () => {
     '/pdf.worker-6.3.289.min.mjs.map',
     '/pdf.worker-x.mjs',
     '/pdf.worker.min.mjs/x',
+    '/pdf.worker-x.min.mjs',
+    '/pdf.workerXminXmjs',
+    '/pdf.worker-6.3.min.mjs',
+    '/pdf.worker-6.3.289.mjs',
   ])("keeps 'wasm-unsafe-eval' off near-miss path %s", path => {
     const csp = proxy(makeRequest(`https://app.bike4mind.com${path}`)).headers.get('Content-Security-Policy');
     expect(csp).not.toContain("'wasm-unsafe-eval'");
+  });
+
+  it("adds both 'wasm-unsafe-eval' and dev 'unsafe-eval' on the worker path in development", () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    try {
+      const csp = proxy(makeRequest('https://app.bike4mind.com/pdf.worker-6.3.289.min.mjs')).headers.get(
+        'Content-Security-Policy'
+      );
+      const scriptSrc = (csp ?? '').split(';').find(d => d.trim().startsWith('script-src')) ?? '';
+      expect(scriptSrc).toContain("'wasm-unsafe-eval'");
+      expect(scriptSrc).toContain("'unsafe-eval'");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps 'wasm-unsafe-eval' off app pages", () => {

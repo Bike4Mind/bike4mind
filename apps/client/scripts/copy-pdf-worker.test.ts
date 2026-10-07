@@ -75,7 +75,7 @@ describe('copy-pdf-worker.mjs', () => {
     const result = run(dir);
 
     expect(result.status).toBe(0);
-    expect(fs.readdirSync(path.join(dir, ASSETS_NAME)).sort()).toEqual(ASSET_DIRS);
+    expect(fs.readdirSync(path.join(dir, ASSETS_NAME)).sort()).toEqual(['.complete', ...ASSET_DIRS]);
     for (const file of [
       'wasm/openjpeg.wasm',
       'standard_fonts/FoxitSerif.pfb',
@@ -104,8 +104,9 @@ describe('copy-pdf-worker.mjs', () => {
     expect(fs.readdirSync(dir).filter(f => f.startsWith('pdfjs-assets-'))).toEqual([]);
   });
 
-  it('survives overlapping runs on the same directory', async () => {
+  it('survives overlapping runs over an existing assets directory', async () => {
     const dir = makeTempDir();
+    expect(run(dir).status).toBe(0);
     const runAsync = () =>
       new Promise<number | null>(resolve => {
         spawn(process.execPath, [SCRIPT, dir], { stdio: 'ignore' }).on('close', resolve);
@@ -115,6 +116,74 @@ describe('copy-pdf-worker.mjs', () => {
 
     expect(codes).toEqual([0, 0, 0]);
     expect(fs.readdirSync(dir).sort()).toEqual([VERSIONED_NAME, LEGACY_NAME, ASSETS_NAME].sort());
+  });
+
+  describe('rename failures (fs.renameSync patched via preload)', () => {
+    const runPatched = (dir: string, body: string) => {
+      const preload = path.join(makeTempDir(), 'preload.cjs');
+      fs.writeFileSync(
+        preload,
+        `const fs = require('fs'); const real = fs.renameSync;
+         fs.renameSync = (from, to) => { ${body} return real(from, to); };`
+      );
+      return spawnSync(process.execPath, ['--require', preload, SCRIPT, dir], { encoding: 'utf8' });
+    };
+
+    it('exits 0 and leaves no temp directory when a concurrent run wins the rename', () => {
+      const dir = makeTempDir();
+      const result = runPatched(
+        dir,
+        `if (to.endsWith('${ASSETS_NAME}')) {
+           fs.mkdirSync(to, { recursive: true }); fs.writeFileSync(to + '/.complete', '');
+           const e = new Error('lost race'); e.code = 'ENOTEMPTY'; throw e;
+         }`
+      );
+
+      expect(result.status).toBe(0);
+      expect(fs.readdirSync(dir).filter(f => f.endsWith('.tmp'))).toEqual([]);
+      expect(fs.existsSync(path.join(dir, ASSETS_NAME, '.complete'))).toBe(true);
+    });
+
+    it('exits 1 and leaves no assets or temp directory on an unrelated rename error', () => {
+      const dir = makeTempDir();
+      const result = runPatched(
+        dir,
+        `if (to.endsWith('${ASSETS_NAME}')) { const e = new Error('denied'); e.code = 'EPERM'; throw e; }`
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain('[copy-pdf-worker] Failed to copy');
+      expect(fs.readdirSync(dir).filter(f => f.startsWith('pdfjs-assets-'))).toEqual([]);
+    });
+  });
+
+  it('keeps a previously copied assets directory when a pdfjs-dist asset directory is missing', () => {
+    const dir = makeTempDir();
+    fs.mkdirSync(path.join(dir, ASSETS_NAME, 'cmaps'), { recursive: true });
+    fs.writeFileSync(path.join(dir, ASSETS_NAME, 'cmaps', 'keep.bcmap'), 'keep');
+    const fakeRoot = makeTempDir();
+    fs.copyFileSync(path.join(pdfjsDir, 'package.json'), path.join(fakeRoot, 'package.json'));
+    fs.mkdirSync(path.join(fakeRoot, 'legacy', 'build'), { recursive: true });
+    fs.copyFileSync(REAL_WORKER, path.join(fakeRoot, 'legacy', 'build', 'pdf.worker.min.mjs'));
+
+    const result = run(dir, fakeRoot);
+
+    expect(result.status).toBe(1);
+    expect(fs.existsSync(path.join(dir, ASSETS_NAME, 'cmaps', 'keep.bcmap'))).toBe(true);
+  });
+
+  it('sweeps an abandoned temp directory but not a recent one', () => {
+    const dir = makeTempDir();
+    const abandoned = path.join(dir, `${ASSETS_NAME}.1.tmp`);
+    const recent = path.join(dir, `${ASSETS_NAME}.2.tmp`);
+    fs.mkdirSync(abandoned);
+    fs.mkdirSync(recent);
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(abandoned, old, old);
+
+    expect(run(dir).status).toBe(0);
+    expect(fs.existsSync(abandoned)).toBe(false);
+    expect(fs.existsSync(recent)).toBe(true);
   });
 
   it('removes a stale versioned assets directory and refreshes the current one', () => {

@@ -38,7 +38,9 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
+  writeFileSync,
 } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -61,6 +63,8 @@ const ASSETS_DIR_PREFIX = 'pdfjs-assets-';
 // pdf.js's scripting sandbox (a JS interpreter), which PdfViewer never enables; not worth serving.
 const UNUSED_WASM_PREFIX = 'quickjs-';
 const TEMP_SUFFIX = '.tmp';
+const TEMP_MAX_AGE_MS = 10 * 60 * 1000;
+const COMPLETE_MARKER = '.complete';
 
 function main() {
   // Resolve the worker from the installed package (works with pnpm's nested node_modules).
@@ -96,15 +100,22 @@ function main() {
   console.log(`[copy-pdf-worker] Copied ${SOURCE_WORKER_FILE} -> public/${SOURCE_WORKER_FILE}`);
 
   const assetsDir = `${ASSETS_DIR_PREFIX}${version}`;
+  const finalDir = path.join(destinationDir, assetsDir);
   for (const entry of readdirSync(destinationDir)) {
-    if (entry.startsWith(ASSETS_DIR_PREFIX) && entry !== assetsDir && !entry.endsWith(TEMP_SUFFIX)) {
-      rmSync(path.join(destinationDir, entry), { recursive: true, force: true });
-      console.log(`[copy-pdf-worker] Removed stale public/${entry}`);
-    }
+    if (!entry.startsWith(ASSETS_DIR_PREFIX) || entry === assetsDir) continue;
+    const entryPath = path.join(destinationDir, entry);
+    // A live run's private temp dir is recent; only an abandoned one (killed run) is swept.
+    if (entry.endsWith(TEMP_SUFFIX) && Date.now() - statSync(entryPath).mtimeMs < TEMP_MAX_AGE_MS) continue;
+    rmSync(entryPath, { recursive: true, force: true });
+    console.log(`[copy-pdf-worker] Removed stale public/${entry}`);
   }
-  // Build in a private sibling and rename into place, so overlapping runs (postinstall vs
-  // predev/prebuild) never delete each other's half-copied directory or expose a partial one.
-  const tempDir = path.join(destinationDir, `${assetsDir}.${process.pid}${TEMP_SUFFIX}`);
+
+  // Build in a private sibling, mark it complete, then swap it in by rename. Overlapping runs
+  // (postinstall vs predev/prebuild) never delete a directory another run is still walking, and a
+  // directory carrying the marker is always whole.
+  const tempDir = `${finalDir}.${process.pid}${TEMP_SUFFIX}`;
+  const oldDir = `${finalDir}.${process.pid}.old${TEMP_SUFFIX}`;
+  const isComplete = () => existsSync(path.join(finalDir, COMPLETE_MARKER));
   try {
     for (const dir of ASSET_DIRS) {
       cpSync(path.join(pdfjsDir, dir), path.join(tempDir, dir), {
@@ -112,17 +123,22 @@ function main() {
         filter: source => !path.basename(source).startsWith(UNUSED_WASM_PREFIX),
       });
     }
-  } catch (error) {
+    writeFileSync(path.join(tempDir, COMPLETE_MARKER), '');
+    if (isComplete()) return;
+    try {
+      renameSync(finalDir, oldDir);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    try {
+      renameSync(tempDir, finalDir);
+    } catch (error) {
+      // A concurrent run renamed its own whole copy into place first.
+      if (!(error.code === 'ENOTEMPTY' || error.code === 'EEXIST') || !isComplete()) throw error;
+    }
+  } finally {
     rmSync(tempDir, { recursive: true, force: true });
-    throw error;
-  }
-  rmSync(path.join(destinationDir, assetsDir), { recursive: true, force: true });
-  try {
-    renameSync(tempDir, path.join(destinationDir, assetsDir));
-  } catch (error) {
-    rmSync(tempDir, { recursive: true, force: true });
-    // Lost the race to a concurrent run that already put the same version in place.
-    if (!existsSync(path.join(destinationDir, assetsDir))) throw error;
+    rmSync(oldDir, { recursive: true, force: true });
   }
   console.log(`[copy-pdf-worker] Copied ${ASSET_DIRS.join(', ')} -> public/${assetsDir}/`);
 }
