@@ -334,7 +334,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const message = secureParameters(JSON.parse(body), QueuePayload);
 
   const checkBudget = () => {
-    if (context.getRemainingTimeInMillis?.() < 1000) throw new Error('Quest export run budget exhausted');
+    if (context.getRemainingTimeInMillis() < 1000) throw new Error('Quest export run budget exhausted');
   };
   if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
     await runOrgFeedbackSummary(message, logger, checkBudget);
@@ -372,7 +372,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // check below (its `groups` feed the share predicate); a missing owner doc fails closed.
     const exportUser = await userRepository.findById(plan.userId || userId);
 
-    // Authorize the current plan before returning an existing artifact.
+    // Keep replay lookup after plan authorization so cached artifacts cannot bypass access checks.
     const slug = slugify(plan.goal);
     const finalZipKey = `exports/quest/${encodeURIComponent(userId)}/${encodeURIComponent(planId)}/${encodeURIComponent(exportJobId)}/artifact.zip`;
 
