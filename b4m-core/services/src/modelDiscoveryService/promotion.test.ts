@@ -1,7 +1,13 @@
 import { ModelBackend } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import { testCredentials, testRecord } from './__fixtures__/fakes';
-import { AWAITING_APPROVAL_REASON, AWAITING_PRICE_REASON, NOT_INVOCABLE_REASON, evaluatePromotion } from './promotion';
+import {
+  AWAITING_APPROVAL_REASON,
+  AWAITING_PRICE_REASON,
+  NOT_INVOCABLE_REASON,
+  UNCORROBORATED_PRICE_REASON,
+  evaluatePromotion,
+} from './promotion';
 import type { PromotionInput } from './promotion';
 
 const evaluate = (overrides: Partial<PromotionInput> = {}) =>
@@ -65,6 +71,20 @@ describe('evaluatePromotion', () => {
 
     expect(decision.blockedBy).toEqual(['no-trusted-price']);
     expect(decision.autoDisabledReason).toBe(AWAITING_PRICE_REASON);
+  });
+
+  it('words the denial differently when an aggregator quoted a price nobody corroborated', () => {
+    const decision = evaluate({ hasTrustedPrice: false, aggregatorPriceUncorroborated: true });
+
+    expect(decision.blockedBy).toEqual(['no-trusted-price']);
+    expect(decision.autoDisabledReason).toBe(UNCORROBORATED_PRICE_REASON);
+  });
+
+  it('does not let the uncorroborated flag change a verdict', () => {
+    expect(evaluate({ hasTrustedPrice: true, aggregatorPriceUncorroborated: true })).toEqual({
+      promote: true,
+      blockedBy: [],
+    });
   });
 
   it('promotes an unpriced model that cannot cost anything', () => {
