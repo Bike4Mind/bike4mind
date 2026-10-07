@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { useState } from 'react';
 import { getApiReferenceContent } from './content/apiReferenceContent';
 import { getQuickstartContent } from './content/quickstartContent';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 
 const markdownStyles = {
   '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
@@ -70,7 +71,7 @@ const ApiReferenceTab = () => {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Button
             component="a"
-            href="/api/v1/docs"
+            href={ExternalLinks.apiDocs}
             target="_blank"
             rel="noopener noreferrer"
             variant="outlined"
@@ -82,7 +83,7 @@ const ApiReferenceTab = () => {
           </Button>
           <Button
             component="a"
-            href="/api/v1/openapi.json"
+            href={ExternalLinks.openApiSpec}
             // Same-origin, so the browser saves rather than navigates.
             download="openapi.json"
             variant="outlined"
@@ -134,7 +135,7 @@ const ApiReferenceTab = () => {
           <Typography level="body-sm">
             This reference is hand-maintained and may lag the code. For endpoints with a verified, always-current
             contract, use the{' '}
-            <Link href="/api/v1/docs" target="_blank" rel="noopener noreferrer">
+            <Link href={ExternalLinks.apiDocs} target="_blank" rel="noopener noreferrer">
               generated interactive API docs
             </Link>
             .
