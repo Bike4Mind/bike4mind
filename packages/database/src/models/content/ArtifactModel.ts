@@ -381,9 +381,9 @@ export class ArtifactRepository extends BaseRepository<IArtifactDocument> {
    * `content` (which is the whole artifact body) across for a chip label.
    *
    * Scoped to `userId` because `sourceQuestId` is caller-supplied on the public
-   * create endpoint: without it, anyone holding a quest id could have their own
-   * artifact joined onto that quest's node. A run's artifacts are always written
-   * under the run's user (see persistAgentArtifacts).
+   * create endpoint: without it, another user with update access to the quest's
+   * session could have their own artifact joined onto that quest's node. A run's
+   * artifacts are always written under the run's user (see persistAgentArtifacts).
    */
   async findByQuestIds(
     questIds: string[],

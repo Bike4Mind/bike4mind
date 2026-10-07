@@ -22,7 +22,11 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await Promise.all([Artifact.deleteMany({}), QuestGraph.deleteMany({}), QuestNode.deleteMany({})]);
+  await Promise.all([
+    Artifact.collection.deleteMany({}),
+    QuestGraph.collection.deleteMany({}),
+    QuestNode.collection.deleteMany({}),
+  ]);
 });
 
 const artifact = (id: string, userId: string) =>

@@ -344,6 +344,29 @@ describe('persistAgentArtifacts', () => {
     expect(deps.createArtifact).toHaveBeenCalledTimes(1);
   });
 
+  it('queries the real quest gate with the run user in the filter', async () => {
+    const count = vi.fn().mockResolvedValue(1);
+    vi.doMock('@bike4mind/database', () => ({
+      artifactRepository: { count },
+      adminSettingsRepository: { getSettingsValue: vi.fn().mockResolvedValue(true) },
+    }));
+    vi.resetModules();
+    const { persistAgentArtifacts: persistWithDefaultDeps } = await import('./persistAgentArtifacts');
+
+    await persistWithDefaultDeps({
+      replyText: reactArtifact('foo'),
+      questId: QUEST_ID,
+      questCreatedAtMs: QUEST_CREATED_AT_MS,
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      executionId: EXECUTION_ID,
+      logger,
+    });
+
+    expect(count).toHaveBeenCalledWith({ sourceQuestId: QUEST_ID, userId: USER_ID });
+    vi.doUnmock('@bike4mind/database');
+  });
+
   // A driver error that crossed a serialization boundary arrives as a plain
   // object with only `message`. Missing it would send a genuine duplicate down
   // the generic failure path and leave the orphan unrepaired.
