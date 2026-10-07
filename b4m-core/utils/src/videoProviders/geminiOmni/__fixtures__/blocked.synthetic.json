@@ -1,0 +1,100 @@
+{
+  "scenario": "blocked.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built: poll_terminal is the recorded W8 shape (status completed, text-only model_output, no error or finish_reason) from a sync call; the background submit/poll_first are assumed to match text-to-video. Text redacted as the recorder does. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1beta/interactions",
+        "body": {
+          "model": "gemini-omni-1.1-flash",
+          "input": "<redacted:blocked-prompt>",
+          "background": true,
+          "response_format": {
+            "type": "video",
+            "delivery": "uri",
+            "aspect_ratio": "16:9",
+            "resolution": "720p",
+            "duration": "3s"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-blocked",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:00Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-blocked"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-blocked",
+          "status": "in_progress",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:05Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash"
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1beta/interactions/v1_synthetic-blocked"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json; charset=UTF-8"
+        },
+        "body": {
+          "id": "v1_synthetic-blocked",
+          "status": "completed",
+          "created": "2026-10-06T12:00:00Z",
+          "updated": "2026-10-06T12:00:09Z",
+          "service_tier": "standard",
+          "object": "interaction",
+          "model": "gemini-omni-1.1-flash",
+          "steps": [
+            {
+              "signature": "<redacted:signature 1024 chars>",
+              "type": "thought"
+            },
+            {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "<redacted:blocked-prompt>"
+                }
+              ],
+              "type": "model_output"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

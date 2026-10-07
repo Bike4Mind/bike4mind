@@ -19,6 +19,7 @@ export { createFileUploadContract, getFileContract } from './contracts/files.con
 export { createEmbeddingsContract } from './contracts/embeddings.contract';
 export { getQuestContract } from './contracts/quest.contract';
 export { createSessionContract } from './contracts/sessionCreate.contract';
+export { listSessionsContract } from './contracts/sessionList.contract';
 export {
   listDataLakesContract,
   getDataLakeContract,
@@ -27,6 +28,12 @@ export {
   removeDataLakeFileContract,
   searchDataLakeContract,
 } from './contracts/dataLakes.contract';
-export { generateVideoContract } from './contracts/videoGeneration.contract';
+export {
+  cancelVideoGenerationContract,
+  createVideoGenerationContract,
+  getVideoGenerationContract,
+  listVideoGenerationsContract,
+  listVideoModelsContract,
+} from './contracts/videoGeneration.contract';
 export { listVoicesContract, createVoiceSessionContract, endVoiceSessionContract } from './contracts/voice.contract';
 export { CONTRACTS } from './contracts';

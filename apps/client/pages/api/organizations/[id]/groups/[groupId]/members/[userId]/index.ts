@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError } from '@server/utils/errors';
-import { organizationRepository } from '@bike4mind/database';
+import { organizationRepository } from '@bike4mind/database/infra';
 import { groupRepository } from '@bike4mind/database/social';
 import { userRepository } from '@bike4mind/database/auth';
 import { organizationService } from '@bike4mind/services';

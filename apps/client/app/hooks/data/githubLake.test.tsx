@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import React from 'react';
 import { renderHook, waitFor, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 import {
@@ -334,6 +334,24 @@ describe('useCompleteLakeGitHubConnect', () => {
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnection('lake1'));
     const removedKeys = removeSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(removedKeys).toContainEqual(dataLakeKeys.gitHubRepositoryChoices('lake1'));
+    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual(connection);
+  });
+
+  it('settles as soon as the POST does, without waiting on the connection refetch', async () => {
+    const connection = { id: 'c1', repositoryFullName: 'acme/docs' };
+    post.mockResolvedValue({ data: { connection } });
+    get.mockReturnValue(new Promise(() => {}));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(
+      () => ({ connection: useLakeGitHubConnection('lake1'), complete: useCompleteLakeGitHubConnect() }),
+      { wrapper: wrapperFor(queryClient) }
+    );
+
+    act(() => result.current.complete.mutate({ dataLakeId: 'lake1', installationId: 42, repositoryId: 100 }));
+
+    await waitFor(() => expect(result.current.complete.isSuccess).toBe(true));
+    expect(result.current.connection.isFetching).toBe(true);
+    expect(result.current.connection.data).toEqual(connection);
   });
 });
 
@@ -354,13 +372,28 @@ describe('useResyncLakeGitHub', () => {
     const invalidatedKeys = invalidateSpy.mock.calls.map(([arg]) => (arg as { queryKey: unknown[] }).queryKey);
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnection('lake1'));
   });
+
+  it('settles as soon as the POST does, without waiting on the connection refetch', async () => {
+    post.mockResolvedValue({ data: undefined });
+    get.mockReturnValue(new Promise(() => {}));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { result } = renderHook(
+      () => ({ connection: useLakeGitHubConnection('lake1'), resync: useResyncLakeGitHub() }),
+      { wrapper: wrapperFor(queryClient) }
+    );
+
+    act(() => result.current.resync.mutate('lake1'));
+
+    await waitFor(() => expect(result.current.resync.isSuccess).toBe(true));
+    expect(result.current.connection.isFetching).toBe(true);
+  });
 });
 
 describe('useDisconnectLakeGitHub', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('DELETEs the connection and invalidates the connection, the lake files, and tag counts', async () => {
-    del.mockResolvedValue({ data: undefined });
+    del.mockResolvedValue({ status: 202, data: { success: true, queued: true } });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     const { result } = renderHook(() => useDisconnectLakeGitHub(), { wrapper: wrapperFor(queryClient) });
@@ -374,5 +407,59 @@ describe('useDisconnectLakeGitHub', () => {
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.gitHubConnection('lake1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.filesOf('lake1'));
     expect(invalidatedKeys).toContainEqual(dataLakeKeys.tagCountsRoot);
+  });
+
+  const connected = { id: 'c1', repositoryFullName: 'acme/docs', disconnecting: false, disconnectStalled: true };
+
+  it('settles on the 202 without waiting on the refetches, and shows the connection as disconnecting', async () => {
+    del.mockResolvedValue({ status: 202, data: { success: true, queued: true } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    get.mockResolvedValueOnce({ data: { connection: connected } });
+    const { result } = renderHook(
+      () => ({
+        connection: useLakeGitHubConnection('lake1'),
+        files: useQuery({ queryKey: dataLakeKeys.files('lake1'), queryFn: () => new Promise(() => {}) }),
+        disconnect: useDisconnectLakeGitHub(),
+      }),
+      { wrapper: wrapperFor(queryClient) }
+    );
+    await waitFor(() => expect(result.current.connection.data).toEqual(connected));
+    get.mockReturnValue(new Promise(() => {}));
+
+    act(() => result.current.disconnect.mutate('lake1'));
+
+    await waitFor(() => expect(result.current.disconnect.isSuccess).toBe(true));
+    expect(result.current.connection.isFetching).toBe(true);
+    expect(result.current.connection.data).toEqual({ ...connected, disconnecting: true, disconnectStalled: false });
+  });
+
+  it('still shows a repeat disconnect as disconnecting when its 202 says no new purge was queued', async () => {
+    del.mockResolvedValue({ status: 202, data: { success: true, queued: false } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), { ...connected, disconnecting: true });
+    const { result } = renderHook(() => useDisconnectLakeGitHub(), { wrapper: wrapperFor(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toEqual({
+      ...connected,
+      disconnecting: true,
+      disconnectStalled: false,
+    });
+  });
+
+  it('clears the cached connection on a 204 (nothing was connected)', async () => {
+    del.mockResolvedValue({ status: 204, data: '' });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(dataLakeKeys.gitHubConnection('lake1'), connected);
+    const { result } = renderHook(() => useDisconnectLakeGitHub(), { wrapper: wrapperFor(queryClient) });
+
+    await act(async () => {
+      await result.current.mutateAsync('lake1');
+    });
+
+    expect(queryClient.getQueryData(dataLakeKeys.gitHubConnection('lake1'))).toBeNull();
   });
 });

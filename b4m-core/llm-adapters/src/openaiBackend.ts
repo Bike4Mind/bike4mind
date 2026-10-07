@@ -9,7 +9,6 @@ import {
   RESPONSES_API_TOOL_MODELS,
   REASONING_SUPPORTED_MODELS,
   SpeechToTextModels,
-  VideoModels,
   type ModelInfo,
   type ReasoningEffort,
   type CacheUsageStats,
@@ -940,51 +939,6 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 11,
         description:
           "OpenAI's speech-to-text model supporting multiple languages and audio formats. Optimized for transcription and translation tasks.",
-      },
-      // OpenAI Video Models (Sora)
-      {
-        id: VideoModels.SORA_2,
-        type: 'video',
-        name: 'Sora',
-        backend: ModelBackend.OpenAI,
-        contextWindow: 10000, // Prompt length limit
-        max_tokens: 10000,
-        can_stream: false,
-        pricing: {
-          // Pricing per video based on duration: 4s = $0.25, 8s = $0.50, 12s = $0.75
-          1: { input: 0.25, output: 0 },
-        },
-        supportsVision: false,
-        supportsTools: false,
-        supportsImageVariation: false,
-        logoFile: 'OpenAI_Logo.svg',
-        rank: 1,
-        // Sora 2 and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
-        deprecationDate: '2026-09-24',
-        description:
-          "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
-      },
-      {
-        id: VideoModels.SORA_2_PRO,
-        type: 'video',
-        name: 'Sora Pro',
-        backend: ModelBackend.OpenAI,
-        contextWindow: 10000, // Prompt length limit
-        max_tokens: 10000,
-        can_stream: false,
-        pricing: {
-          // Pricing per video based on duration: 4s = $0.50, 8s = $1.00, 12s = $1.50
-          1: { input: 0.5, output: 0 },
-        },
-        supportsVision: false,
-        supportsTools: false,
-        supportsImageVariation: false,
-        logoFile: 'OpenAI_Logo.svg',
-        rank: 0,
-        // Sora 2 Pro and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
-        deprecationDate: '2026-09-24',
-        description:
-          "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
       },
     ];
   }

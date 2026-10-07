@@ -21,6 +21,7 @@
  */
 
 import { connectDB, questRepository } from '@bike4mind/database';
+import { QUESTS_NAMESPACE, QUEST_METRICS, type QuestMetricName } from '@bike4mind/infra';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
@@ -36,8 +37,6 @@ import {
 } from '@server/generationCallback/dispatchQuestCallback';
 
 const logger = new Logger({ metadata: { service: 'questTimeoutSweep' } });
-
-const CLOUDWATCH_NAMESPACE = 'Lumina5/Quests';
 
 /**
  * Oldest quest a steady-state pass will touch. Without a floor the first runs
@@ -69,7 +68,7 @@ export async function handler() {
   // Ahead of the connect and the query, so a sweep that cannot reach the database
   // still reports as a run. Emitted after them, a totally broken sweep looks
   // identical to one that was never scheduled.
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'TimeoutSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
+  await emitMetric(QUESTS_NAMESPACE, QUEST_METRICS.TimeoutSweepRuns, 1, { Stage: stage }, StandardUnit.Count);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
   return runQuestTimeoutSweep();
@@ -82,8 +81,8 @@ export async function handler() {
  */
 export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   const stage = Resource.App.stage;
-  const metric = async (name: string, value: number) => {
-    if (emitMetrics) await emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
+  const metric = async (name: QuestMetricName, value: number) => {
+    if (emitMetrics) await emitMetric(QUESTS_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
   };
 
   const nowMs = Date.now();
@@ -96,7 +95,7 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
   // Candidate depth is its own metric because `recovered` cannot distinguish a
   // run that drained the backlog from one that hit the cap with more waiting -
   // the difference that matters during an incident stranding thousands of quests.
-  await metric('TimeoutSweepCandidates', staleQuests.length);
+  await metric(QUEST_METRICS.TimeoutSweepCandidates, staleQuests.length);
 
   if (staleQuests.length >= SWEEP_LIMIT) {
     logger.warn('[QuestTimeoutSweep] Hit the per-run candidate cap; more quests may be waiting', {
@@ -140,11 +139,11 @@ export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
     callbacksRedispatched,
     staleCallbacksReenqueued,
   });
-  await metric('TimeoutSweepRecovered', recovered);
-  await metric('TimeoutSweepCallbacksRedispatched', callbacksRedispatched);
+  await metric(QUEST_METRICS.TimeoutSweepRecovered, recovered);
+  await metric(QUEST_METRICS.TimeoutSweepCallbacksRedispatched, callbacksRedispatched);
   // Its own metric: a message lost after its claim is a different failure from a claim never made,
   // and its rate is the one worth alerting on.
-  await metric('TimeoutSweepStaleCallbacksReenqueued', staleCallbacksReenqueued);
+  await metric(QUEST_METRICS.TimeoutSweepStaleCallbacksReenqueued, staleCallbacksReenqueued);
 
   return { status: 'OK', recovered };
 }

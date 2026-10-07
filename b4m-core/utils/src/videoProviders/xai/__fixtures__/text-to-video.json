@@ -1,0 +1,85 @@
+{
+  "scenario": "text-to-video",
+  "recordedAt": "2026-10-06T15:09:42.857Z",
+  "exchanges": [
+    {
+      "name": "submit",
+      "request": {
+        "method": "POST",
+        "path": "/v1/videos/generations",
+        "body": {
+          "model": "grok-imagine-video-1.5",
+          "prompt": "A slow dolly shot of a red lighthouse on a rocky coast at dusk, waves breaking.",
+          "duration": 2,
+          "aspect_ratio": "16:9",
+          "resolution": "480p"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "request_id": "f784e9cd-c8d8-9436-9574-fc8050ff943d"
+        }
+      }
+    },
+    {
+      "name": "poll_first",
+      "request": {
+        "method": "GET",
+        "path": "/v1/videos/f784e9cd-c8d8-9436-9574-fc8050ff943d"
+      },
+      "response": {
+        "status": 202,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "pending",
+          "progress": 1
+        }
+      }
+    },
+    {
+      "name": "poll_terminal",
+      "request": {
+        "method": "GET",
+        "path": "/v1/videos/f784e9cd-c8d8-9436-9574-fc8050ff943d"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "status": "done",
+          "video": {
+            "url": "https://vidgen.x.ai/xai-vidgen-bucket/xai-video-f784e9cd-c8d8-9436-9574-fc8050ff943d.mp4",
+            "duration": 2,
+            "respect_moderation": true
+          },
+          "model": "grok-imagine-video-1.5",
+          "usage": {
+            "cost_in_usd_ticks": 1600000000
+          },
+          "progress": 100
+        }
+      }
+    },
+    {
+      "name": "download",
+      "request": {
+        "method": "GET",
+        "path": "/xai-vidgen-bucket/xai-video-f784e9cd-c8d8-9436-9574-fc8050ff943d.mp4"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "video/mp4"
+        }
+      }
+    }
+  ]
+}

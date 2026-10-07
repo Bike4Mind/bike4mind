@@ -3467,66 +3467,6 @@
       }
     },
     {
-      "modelId": "sora-2",
-      "ownedGroups": [
-        "identity",
-        "limits",
-        "modalities",
-        "lifecycle",
-        "presentation"
-      ],
-      "patch": {
-        "id": "sora-2",
-        "vendor": "openai",
-        "backend": "openai",
-        "type": "video",
-        "name": "Sora",
-        "contextWindow": 10000,
-        "maxOutputTokens": 10000,
-        "canStream": false,
-        "supportsVision": false,
-        "supportsTools": false,
-        "supportsImageVariation": false,
-        "lifecycle": {
-          "status": "deprecated",
-          "deprecationDate": "2026-09-24"
-        },
-        "description": "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
-        "logoFile": "OpenAI_Logo.svg",
-        "rank": 1
-      }
-    },
-    {
-      "modelId": "sora-2-pro",
-      "ownedGroups": [
-        "identity",
-        "limits",
-        "modalities",
-        "lifecycle",
-        "presentation"
-      ],
-      "patch": {
-        "id": "sora-2-pro",
-        "vendor": "openai",
-        "backend": "openai",
-        "type": "video",
-        "name": "Sora Pro",
-        "contextWindow": 10000,
-        "maxOutputTokens": 10000,
-        "canStream": false,
-        "supportsVision": false,
-        "supportsTools": false,
-        "supportsImageVariation": false,
-        "lifecycle": {
-          "status": "deprecated",
-          "deprecationDate": "2026-09-24"
-        },
-        "description": "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
-        "logoFile": "OpenAI_Logo.svg",
-        "rank": 0
-      }
-    },
-    {
       "modelId": "transcribe",
       "ownedGroups": [
         "identity",

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import { DATA_LAKE_GROUNDING_MODES } from '../constants/dataLakes';
+import { SESSION_ORIGIN_CHANNELS } from '../types/entities/SessionTypes';
+import { PaginationQuerySchema, paginatedResponseSchema } from './pagination';
 
 // Shared by the request and response schemas below - kept to one definition so the two
 // can't quietly diverge on what a tag looks like.
@@ -55,8 +57,8 @@ export const SessionUpdateRequestSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      'The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from ' +
-        'GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
+      'The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from ' +
+        'GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
         'lake at all, or `null` to clear the choice so retrieval falls back to every lake you can ' +
         'reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach ' +
         'are ignored at retrieval time rather than rejected here. Narrowing the scope does not by ' +
@@ -120,6 +122,31 @@ export const SessionResponseSchema = z.object({
 });
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
+
+/** Query for GET /api/v1/sessions: the pagination convention plus flat filters. */
+export const ListSessionsQuerySchema = PaginationQuerySchema.extend({
+  search: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Case-insensitive substring match on the session name, its summary, or a tag name.'),
+  surface: z
+    .string()
+    .min(1)
+    .optional()
+    .describe('Lists only sessions of this product surface. When omitted, only sessions with no surface are listed.'),
+  origin: z
+    .enum(SESSION_ORIGIN_CHANNELS)
+    .optional()
+    .describe('Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.'),
+});
+
+export type ListSessionsQuery = z.infer<typeof ListSessionsQuerySchema>;
+
+export const ListSessionsResponseSchema = paginatedResponseSchema(SessionResponseSchema);
+
+export type ListSessionsResponse = z.infer<typeof ListSessionsResponseSchema>;
 
 /** Response for DELETE /api/sessions/{id}. */
 export const SessionDeleteResponseSchema = z.object({
