@@ -49,7 +49,7 @@ export const TOOL_META: ToolMeta[] = [
   {
     name: 'list_projects',
     title: 'List projects',
-    description: "List the caller's Bike4Mind projects.",
+    description: 'List the Bike4Mind projects the caller can access, including ones shared with them.',
     scope: 'projects:read',
   },
   {

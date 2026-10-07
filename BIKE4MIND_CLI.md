@@ -134,7 +134,7 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
 | `get_notebook` | Fetch one notebook by id | `notebooks:read` |
 | `create_notebook` | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`) | `notebooks:write` |
-| `list_projects` | List your projects | `projects:read` |
+| `list_projects` | List the projects you can access, including shared ones | `projects:read` |
 | `get_project` | Fetch one project by id | `projects:read` |
 | `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |
 | `send_message` | Send a chat message and wait for the reply; returns the reply's cited sources (`citables`) | `ai:chat` |
