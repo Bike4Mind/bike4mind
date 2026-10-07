@@ -35,6 +35,7 @@ export const staticPriceBackends = () => [
 ];
 
 let cached: Promise<ReadonlyMap<string, IModelPriceTier>> | undefined;
+let cachedLadders: Promise<ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>> | undefined;
 let cachedIds: Promise<ReadonlySet<string>> | undefined;
 
 /**
@@ -71,15 +72,43 @@ export async function adapterPriceTiers(): Promise<ReadonlyMap<string, IModelPri
   return cached;
 }
 
-async function collect(): Promise<ReadonlyMap<string, IModelPriceTier>> {
+/**
+ * The whole tier ladder of each model `adapterPriceTiers` covers, keyed by model
+ * id and then by input-token threshold. The planner writes this, not the lowest
+ * tier, when it records an adapter literal as a first price row: the read path
+ * replaces a model's entire pricing map with the row's, so a row carrying only
+ * the base tier would bill every long prompt of a tiered model at the short rate.
+ */
+export async function adapterPriceLadders(): Promise<ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>> {
+  cachedLadders ??= collectLadders();
+  return cachedLadders;
+}
+
+async function pricedTextModels(): Promise<ModelInfo[]> {
   const tables = await Promise.all(staticPriceBackends().map(backend => backend.getModelInfo()));
+  return tables.flat().filter(model => model.type === 'text' && !model.freeToRun);
+}
+
+async function collect(): Promise<ReadonlyMap<string, IModelPriceTier>> {
   const tiers = new Map<string, IModelPriceTier>();
-  for (const model of tables.flat()) {
-    if (model.type !== 'text' || model.freeToRun) continue;
+  for (const model of await pricedTextModels()) {
     const tier = lowestTier(model);
     if (tier) tiers.set(String(model.id), tier);
   }
   return tiers;
+}
+
+async function collectLadders(): Promise<ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>> {
+  const ladders = new Map<string, Readonly<Record<string, IModelPriceTier>>>();
+  for (const model of await pricedTextModels()) {
+    if (!lowestTier(model)) continue;
+    const ladder: Record<string, IModelPriceTier> = {};
+    for (const [threshold, tier] of Object.entries(model.pricing)) {
+      if (Number.isFinite(Number(threshold))) ladder[threshold] = tier as IModelPriceTier;
+    }
+    ladders.set(String(model.id), ladder);
+  }
+  return ladders;
 }
 
 function lowestTier(model: ModelInfo): IModelPriceTier | undefined {
