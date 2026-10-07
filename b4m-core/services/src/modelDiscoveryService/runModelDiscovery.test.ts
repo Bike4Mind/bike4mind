@@ -412,6 +412,7 @@ describe('runModelDiscovery', () => {
       { creds: testCredentials({ isSelfHost: true, bedrock: false, awsIam: false }), lines: 1 },
       { creds: testCredentials({ isSelfHost: true, bedrock: true, awsIam: false }), lines: 0 },
       { creds: testCredentials(), lines: 0 },
+      { creds: testCredentials({ isSelfHost: false, bedrock: false }), lines: 0 },
     ];
 
     for (const { creds, lines } of cases) {

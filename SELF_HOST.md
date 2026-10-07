@@ -203,7 +203,7 @@ The reply fields (`response`/`responses` synchronously, `reply`/`replies` when p
 - Entries are in emission order, which matters for a multi-step turn.
 - Additive only - the prose reply is byte-for-byte what it was before, so nothing that reads `response` today needs to change.
 
-If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was *offered* to the model, which is not the same thing.
+If `toolPayloads` is empty on a turn you expected structure from, the tool most likely never ran. `promptMeta.functionCalls[].name` on the polled quest lists the calls the turn actually made; the `tools` field on the `/api/chat` response only reports what was _offered_ to the model, which is not the same thing.
 
 ## Streaming completions API (`/api/ai/v1/completions`)
 
@@ -285,13 +285,13 @@ sysctl -n hw.memsize | awk '{print $1/1073741824, "GB RAM"}'  # macOS
 
 **On Docker Desktop, match the row against the memory ALLOCATED TO DOCKER (Settings > Resources), not host RAM.** The VM defaults to a fraction of host RAM (commonly 8 GB) regardless of how much the host has, so a host with 24 GB does not mean the container gets 24 GB. Picking the "24 GB" row without raising the Docker VM allocation first makes chat silently fall back to the embedding model with a "Fallback Model Used" badge (the chat model failed to load, so the picker served the only other one available). Not an issue on Linux, where the daemon runs directly on the host.
 
-| System RAM | Set `OLLAMA_PULL_MODELS` to | Download | MoE override |
-|------------|-----------------------------|---------:|--------------|
-| **32 GB or more** | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b` | ~25 GB | required |
-| **24 GB** - template default | `gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b` | ~18 GB | required |
-| **16 GB** | `gpt-oss:20b qwen3-embedding:0.6b` | ~15 GB | required |
-| **8 GB** | `qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b` | ~5 GB | not used |
-| **4 GB** | `qwen3.5:0.8b qwen3-embedding:0.6b` | ~2 GB | not used |
+| System RAM                   | Set `OLLAMA_PULL_MODELS` to                               | Download | MoE override |
+| ---------------------------- | --------------------------------------------------------- | -------: | ------------ |
+| **32 GB or more**            | `qwen3.6:35b-a3b-q4_K_M qwen3-embedding:0.6b`             |   ~25 GB | required     |
+| **24 GB** - template default | `gemma4:26b-a4b-it-q4_K_M qwen3-embedding:0.6b`           |   ~18 GB | required     |
+| **16 GB**                    | `gpt-oss:20b qwen3-embedding:0.6b`                        |   ~15 GB | required     |
+| **8 GB**                     | `qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b` |    ~5 GB | not used     |
+| **4 GB**                     | `qwen3.5:0.8b qwen3-embedding:0.6b`                       |    ~2 GB | not used     |
 
 The first three rows are one sparse MoE model that handles chat, tools, artifacts, vision, and RAG on its own. The bottom two rows are small dense models: the 8 GB pair needs switching per task because a 2-4B model cannot finish an HTML artifact, and 4 GB is chat only. [Choosing a model](#choosing-a-model) has the full menu and the measured numbers behind these picks.
 
@@ -315,9 +315,9 @@ The first three rows are one sparse MoE model that handles chat, tools, artifact
 
    Adjust the override files for your setup:
 
-   | Your setup | Change |
-   |------------|--------|
-   | No NVIDIA GPU | drop `-f compose.ollama-gpu.yaml` |
+   | Your setup                           | Change                            |
+   | ------------------------------------ | --------------------------------- |
+   | No NVIDIA GPU                        | drop `-f compose.ollama-gpu.yaml` |
    | A dense model (the 8 GB or 4 GB row) | drop `-f compose.ollama-moe.yaml` |
 
    The GPU override needs the [NVIDIA Container Toolkit](#gpu-acceleration-nvidia) installed first. The MoE override is what makes the large models fit - see [MoE expert offload](#moe-expert-offload). Pass the same `-f` set every time you bring the stack up: compose only applies overrides you name, so dropping one on a later `up` silently reconfigures the `ollama` service.
@@ -330,17 +330,17 @@ The rows in [Start here](#start-here-check-your-ram) are the recommended pick pe
 
 Two things about the prefill column, because a single number for it is misleading. It rises with prompt length, so it is quoted here at the ~9K-token prompt an agent turn actually carries; see [Prefill and the prefix cache](#prefill-and-the-prefix-cache) for the curve. And it is bounded by the batch size Ollama pins on its llama.cpp runner, which is not adjustable through Ollama - the same section covers what that costs.
 
-| Model tag | Download | VRAM | RAM | gen | prefill | Notes |
-|-----------|---------:|-----:|----:|----:|--------:|-------|
-| **MoE - one model for everything** ||||||
-| `gpt-oss:20b` | ~14 GB | ~3.3 GB | ~16 GB | - | - | 21B total / 3.6B active |
-| `gemma4:26b-a4b-it-q4_K_M` | ~17 GB | ~3.4 GB | ~24 GB | 22/s | 53/s | 26B/4B; **default**; multimodal |
-| `qwen3.6:35b-a3b-q4_K_M` | ~24 GB | ~2.9 GB | ~32 GB | 28/s | 39/s | 35B/3B; strongest coder |
-| **Small dense - needs a separate coder for artifacts** ||||||
-| `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | - | - | Tiny; multimodal |
-| `qwen3.5:2b-q4_K_M` | ~1.9 GB | ~3.0 GB | ~8 GB | 85/s | 3240/s | Fastest; general/vision/tools |
-| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | - | - | Spills to CPU under 6 GB VRAM |
-| `qwen2.5-coder:3b` | ~1.9 GB | ~3.1 GB | ~8 GB | 73/s | 2309/s | Coding-tuned; artifacts |
+| Model tag                                              | Download |    VRAM |    RAM |  gen | prefill | Notes                           |
+| ------------------------------------------------------ | -------: | ------: | -----: | ---: | ------: | ------------------------------- |
+| **MoE - one model for everything**                     |          |         |        |      |         |
+| `gpt-oss:20b`                                          |   ~14 GB | ~3.3 GB | ~16 GB |    - |       - | 21B total / 3.6B active         |
+| `gemma4:26b-a4b-it-q4_K_M`                             |   ~17 GB | ~3.4 GB | ~24 GB | 22/s |    53/s | 26B/4B; **default**; multimodal |
+| `qwen3.6:35b-a3b-q4_K_M`                               |   ~24 GB | ~2.9 GB | ~32 GB | 28/s |    39/s | 35B/3B; strongest coder         |
+| **Small dense - needs a separate coder for artifacts** |          |         |        |      |         |
+| `qwen3.5:0.8b`                                         |  ~1.0 GB |   ~2 GB |  ~4 GB |    - |       - | Tiny; multimodal                |
+| `qwen3.5:2b-q4_K_M`                                    |  ~1.9 GB | ~3.0 GB |  ~8 GB | 85/s |  3240/s | Fastest; general/vision/tools   |
+| `qwen3.5:4b`                                           |  ~3.4 GB |   ~6 GB |  ~8 GB |    - |       - | Spills to CPU under 6 GB VRAM   |
+| `qwen2.5-coder:3b`                                     |  ~1.9 GB | ~3.1 GB |  ~8 GB | 73/s |  2309/s | Coding-tuned; artifacts         |
 
 The MoE rows and `qwen3.5:2b-q4_K_M` were re-measured on the reference box. `qwen2.5-coder:3b` carries an earlier figure. `gpt-oss:20b` is blank because it could not be re-measured, not because it is slow.
 
@@ -348,10 +348,10 @@ Note the shape of those numbers: a 26B MoE generates at about a quarter the spee
 
 Prefill also decides which MoE to pick, and it does not rank them the way generation does:
 
-| Prompt size | ~900 tok | ~3.5K tok | ~9K tok | gen |
-|-------------|---------:|----------:|--------:|----:|
-| `gemma4:26b-a4b` | 36/s | 44/s | 53/s | 22/s |
-| `qwen3.6:35b-a3b` | 30/s | 35/s | 39/s | 28/s |
+| Prompt size       | ~900 tok | ~3.5K tok | ~9K tok |  gen |
+| ----------------- | -------: | --------: | ------: | ---: |
+| `gemma4:26b-a4b`  |     36/s |      44/s |    53/s | 22/s |
+| `qwen3.6:35b-a3b` |     30/s |      35/s |    39/s | 28/s |
 
 On a ~10K-token tool or RAG turn that is about 190s to first token for the 26B against 256s for the 35B. The 26B generates slower and still finishes the turn about a minute sooner, because prefill dominates a turn of that shape. Choosing a local model for tool or RAG work by generation speed alone can get you the slower one.
 
@@ -373,10 +373,10 @@ They do iterate, but they need precise direction. Reporting a symptom ("the char
 
 Ollama will run these models without the override - it spills to CPU on its own - but slower and far larger. Measured on the reference box with the same prompt and context:
 
-| | Placement | Resident | gen | prefill |
-|-|-----------|---------:|----:|--------:|
-| Override off | 0/31 layers on GPU, 96%/4% CPU/GPU | 17 GB | 14/s | 21-37/s |
-| Override on | 31/31 layers on GPU, 100% GPU | 2.5 GB | 22/s | 29-51/s |
+|              | Placement                          | Resident |  gen | prefill |
+| ------------ | ---------------------------------- | -------: | ---: | ------: |
+| Override off | 0/31 layers on GPU, 96%/4% CPU/GPU |    17 GB | 14/s | 21-37/s |
+| Override on  | 31/31 layers on GPU, 100% GPU      |   2.5 GB | 22/s | 29-51/s |
 
 Generation is the clear win at +57%. The prefill ranges overlap, so treat prefill as unchanged rather than improved. The reason to keep the override on is the footprint: 17 GB resident against 2.5 GB is what decides whether the model fits on the box at all. Without it the model runs, it just runs as a CPU model with a GPU attached.
 
@@ -394,12 +394,12 @@ None of this changes the recommended setup. It is why the prefill figures here a
 
 **Context window.** Requests are sized from the model's own reported context length, capped by `OLLAMA_MAX_NUM_CTX` (default 32768). The cap exists because KV cache is not free: a model advertising a 262K window would try to allocate far more memory than a typical box has, and nothing else clamps it. Budget this rather than maximising it - usable input is `OLLAMA_MAX_NUM_CTX - 8192 (reserved for the reply) - 1000 (safety buffer)`. A tool-enabled RAG turn spends roughly 2.2K tokens on the system prompt and 2.6K on tool schemas before any of your content, so 16384 leaves only about 2.4K for retrieved chunks and overflows; 32768 is the smallest value that comfortably fits tools plus RAG.
 
-| VRAM | Model class | Suggested | Usable input |
-|------|-------------|----------:|-------------:|
-| 4 GB | MoE 20-35B | 32768 | ~23.5K |
-| 4 GB | dense 2-4B | 16384 | ~7.2K |
-| 8 GB | MoE 20-35B | 65536 | ~56K |
-| 12 GB+ | MoE 20-35B | 131072 | ~122K |
+| VRAM   | Model class | Suggested | Usable input |
+| ------ | ----------- | --------: | -----------: |
+| 4 GB   | MoE 20-35B  |     32768 |       ~23.5K |
+| 4 GB   | dense 2-4B  |     16384 |        ~7.2K |
+| 8 GB   | MoE 20-35B  |     65536 |         ~56K |
+| 12 GB+ | MoE 20-35B  |    131072 |        ~122K |
 
 KV cache is what grows with this number, and MoE models are cheap here: at 32768 the default holds under 1 GB of KV. Do not assume KV scales linearly - `gemma4` uses sliding-window attention on most of its layers, so much of its cache is a fixed size. If you run out of VRAM, halve the KV cost with `OLLAMA_KV_CACHE_TYPE=q8_0` before lowering the context. Lower the cap if you are tight on VRAM/RAM (`OLLAMA_MAX_NUM_CTX=8192`), raise it if you have headroom and want longer conversations. Do not go below 8192: Ollama's own 4096 default is small enough to truncate the tool definitions out of a request and make a tool-capable model report it has no tools. Confirm what a loaded model actually got with `docker compose -f compose.selfhost.yaml exec ollama ollama ps` - the CONTEXT column shows the allocated window.
 
@@ -466,10 +466,10 @@ Without any Firecrawl config, `web_fetch` falls back to a **keyless direct fetch
 
 There are two independent paths to an image, and they support different things:
 
-| Path | Where it runs | Models |
-|------|---------------|--------|
-| The image tools in chat (`image_generation`, `edit_image`) | inline in `chatcompletion` | provider models, plus local SD.Next (`local-image/<checkpoint>`) |
-| The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only |
+| Path                                                                                 | Where it runs                  | Models                                                           |
+| ------------------------------------------------------------------------------------ | ------------------------------ | ---------------------------------------------------------------- |
+| The image tools in chat (`image_generation`, `edit_image`)                           | inline in `chatcompletion`     | provider models, plus local SD.Next (`local-image/<checkpoint>`) |
+| The `/image` chat command (`POST /api/ai/generate-image`, `POST /api/ai/edit-image`) | queued to the `worker` service | provider models only                                             |
 
 The queued path needs a provider key set in **Admin > Settings** (or the user's own key under
 **Settings > API Keys**) - OpenAI, Gemini, BFL, or xAI. Text-to-image works on all four.
@@ -508,10 +508,10 @@ Open the image model settings and pick your checkpoint. No keys, no admin settin
 
 Pick by the hardware you have. "Min GPU VRAM" is what it takes to run comfortably on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all.
 
-| Checkpoint | Download | Min GPU VRAM | CPU-only RAM | License |
-|------------|---------:|-------------:|-------------:|---------|
-| SD 1.5 (default) | ~4.0 GB | ~4 GB | ~8 GB | CreativeML OpenRAIL-M |
-| SDXL base 1.0 | ~6.9 GB | ~10-12 GB | ~16 GB | CreativeML Open RAIL++-M |
+| Checkpoint       | Download | Min GPU VRAM | CPU-only RAM | License                  |
+| ---------------- | -------: | -----------: | -----------: | ------------------------ |
+| SD 1.5 (default) |  ~4.0 GB |        ~4 GB |        ~8 GB | CreativeML OpenRAIL-M    |
+| SDXL base 1.0    |  ~6.9 GB |    ~10-12 GB |       ~16 GB | CreativeML Open RAIL++-M |
 
 Set one or more (space-separated) `.safetensors` URLs from a public host in `IMAGE_GEN_PULL_MODELS`. Re-running `up` downloads any new ones and skips already-present files. Any A1111-compatible checkpoint URL works. No GPU? Start with SD 1.5.
 
@@ -601,9 +601,9 @@ Known limitations:
 
 This is a separate corpus from your uploaded files: the **Help** panel and the Help AI chat search the product documentation shipped in `docs-site/docs`, not your Data Lakes. The two halves are built differently, and only one of them needs a key:
 
-| Half | Built by | Needs a key |
-|---|---|---|
-| The article index and the bundled markdown | `prebuild`, on every `next build` | no |
+| Half                                           | Built by                                          | Needs a key        |
+| ---------------------------------------------- | ------------------------------------------------- | ------------------ |
+| The article index and the bundled markdown     | `prebuild`, on every `next build`                 | no                 |
 | The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
 
 Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
@@ -667,7 +667,7 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 
 ### Amazon Bedrock (optional)
 
-Bedrock models are off on self-host by default: the stack's `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are the MinIO credentials, so they are never sent to AWS. To use Bedrock, set a dedicated pair in `.env.selfhost`:
+Bedrock models are off on self-host by default: the stack's `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are the MinIO credentials, so no Bedrock client ever signs with them. To use Bedrock, set a dedicated pair in `.env.selfhost`:
 
 ```bash
 BEDROCK_AWS_ACCESS_KEY_ID=...
@@ -678,7 +678,7 @@ BEDROCK_AWS_SESSION_TOKEN=...
 
 With SSO, `aws configure export-credentials --format env` prints the three values; copy them under the `BEDROCK_` prefix. Temporary credentials expire after a few hours, and an expired set shows up as a Bedrock auth error in discovery runs and in chat - re-export and re-run `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d` so the services pick them up (a plain `restart` keeps the old values). The account needs Bedrock model access in us-east-1 and us-east-2, the regions chat requests are sent to.
 
-Once set, Bedrock models appear in the picker, discovery lists and promotes them, and chat to them works. Without them, each discovery run logs one `bedrock skipped` info line. The default chat model stays the direct-Anthropic one either way. AWS Transcribe (speech-to-text) and Bedrock embeddings stay hosted-only: Transcribe reads media from S3, which self-host keeps in MinIO.
+Once set, Bedrock models appear in the picker, discovery lists and promotes them, and chat to them works. Without them, each discovery run logs one `bedrock skipped` info line. The default chat model stays the direct-Anthropic one either way. Every Bedrock client (chat, discovery, embeddings, usage insights) signs with this pair and refuses to sign without it. AWS Transcribe (speech-to-text) stays hosted-only: it reads media from S3, which self-host keeps in MinIO.
 
 ### Abandoned agent execution recovery
 
@@ -700,16 +700,16 @@ A data lake can sync from a GitHub repository through a GitHub App you create an
 
 Create the App under **Settings -> Developer settings -> GitHub Apps** (personal or organization):
 
-| GitHub App field | Value |
-|---|---|
-| Callback URL | `<APP_URL>/data-lakes/github/callback` (list it first) |
-| Request user authorization (OAuth) during installation | on (this greys out Setup URL; leave it empty) |
-| Redirect on update | on |
-| Webhook URL | `<APP_URL>/api/webhooks/github/lake` |
-| Webhook secret | a long random string (`openssl rand -hex 32`) |
-| Repository permissions | Contents: read-only, Metadata: read-only |
-| Subscribe to events | Push (installation events are always delivered) |
-| Where can this App be installed | your choice; users pick repositories when installing |
+| GitHub App field                                       | Value                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------ |
+| Callback URL                                           | `<APP_URL>/data-lakes/github/callback` (list it first) |
+| Request user authorization (OAuth) during installation | on (this greys out Setup URL; leave it empty)          |
+| Redirect on update                                     | on                                                     |
+| Webhook URL                                            | `<APP_URL>/api/webhooks/github/lake`                   |
+| Webhook secret                                         | a long random string (`openssl rand -hex 32`)          |
+| Repository permissions                                 | Contents: read-only, Metadata: read-only               |
+| Subscribe to events                                    | Push (installation events are always delivered)        |
+| Where can this App be installed                        | your choice; users pick repositories when installing   |
 
 `APP_URL` must be the exact public origin, the same value the CSRF allow-list uses. Then generate a client secret and a private key on the App page and fill these in `.env.selfhost`:
 
@@ -765,6 +765,7 @@ The drill derives its broker image, configuration mount, and storage mounts from
   docker volume rm "$MONGO_VOLUME"
   docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
   ```
+
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **Saving settings / generating an API key / uploading returns `403`, but reading works** - `APP_URL` does not match the origin in your browser's address bar. It is the CSRF origin allow-list and it fails closed, so only state-changing requests break; `GET` is exempt, which is why the app looks fine until you try to save something. Unset, the response is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected ...)`, which names the value it is comparing against. `APP_URL` was added to the template after the initial release, so an **upgraded install may be missing it entirely** - an existing `.env.selfhost` does not gain it. Add `APP_URL=<the origin you browse>` (scheme + host + optional port, no trailing slash) and recreate the `app` container. Reaching the stack over Tailscale or the Caddy proxy? It must be the tailnet or public origin, not `http://localhost:3000` - see "Share your instance with friends".
