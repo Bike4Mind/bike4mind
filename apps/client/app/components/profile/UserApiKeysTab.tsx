@@ -40,6 +40,7 @@ import {
   AccordionGroup,
   AccordionSummary,
   AccordionDetails,
+  Link,
 } from '@mui/joy';
 import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -53,9 +54,11 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
 import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import { isRevoked, revocationTooltip } from '@client/app/utils/apiKeyRevocation';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import ConfirmationModal from '@client/app/components/common/ConfirmationModal';
 import { toast } from 'sonner';
 import { useState } from 'react';
@@ -883,6 +886,19 @@ ai_response = response.json()`,
 
   return (
     <Box className="project-api-keys-documentation-container">
+      <Typography level="body-sm" sx={{ color: 'text.secondary', mb: 2 }}>
+        These guides cover the essentials. For every endpoint with full request and response schemas, see the{' '}
+        <Link
+          href={ExternalLinks.apiDocs}
+          target="_blank"
+          rel="noopener noreferrer"
+          endDecorator={<OpenInNewIcon sx={{ fontSize: '14px' }} />}
+          data-testid="api-keys-docs-reference-link"
+        >
+          API reference
+        </Link>
+        .
+      </Typography>
       <Tabs
         value={activeTab}
         onChange={(_, value) => setActiveTab(value as number)}
@@ -1927,6 +1943,18 @@ export default function UserApiKeysTab() {
                   sx={{ mr: 1, whiteSpace: 'nowrap' }}
                 />
               )}
+              <Button
+                component="a"
+                href={ExternalLinks.apiDocs}
+                target="_blank"
+                rel="noopener noreferrer"
+                variant="outlined"
+                color="neutral"
+                endDecorator={<OpenInNewIcon sx={{ fontSize: '16px' }} />}
+                data-testid="api-keys-open-docs-btn"
+              >
+                API Docs
+              </Button>
               <Tooltip title="Refresh">
                 <IconButton onClick={() => refetch()} variant="outlined">
                   <RefreshIcon />
