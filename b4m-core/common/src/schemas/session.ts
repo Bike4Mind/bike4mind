@@ -55,8 +55,8 @@ export const SessionUpdateRequestSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      'The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from ' +
-        'GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
+      'The data lakes this session grounds on, as lake tags (the `datalake_tag` of each lake from ' +
+        'GET /api/v1/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no ' +
         'lake at all, or `null` to clear the choice so retrieval falls back to every lake you can ' +
         'reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach ' +
         'are ignored at retrieval time rather than rejected here. Narrowing the scope does not by ' +
