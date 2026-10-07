@@ -1,0 +1,16 @@
+{
+  "scenario": "expired.synthetic",
+  "synthetic": true,
+  "basis": "Hand-built from the docs guide table (status expired: request has expired); the API reference omits it. Replace with a recording.",
+  "exchanges": [
+    {
+      "name": "poll_terminal",
+      "request": { "method": "GET", "path": "/v1/videos/synthetic-expired" },
+      "response": {
+        "status": 200,
+        "headers": { "content-type": "application/json" },
+        "body": { "status": "expired" }
+      }
+    }
+  ]
+}

@@ -1,19 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ValidatedVideoRequest } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import type { ProviderPollResult, VideoProvider, VideoProviderContext } from './types';
+import { ProviderSubmitError, type ProviderPollResult, type VideoProvider, type VideoProviderContext } from './types';
+
+export type ConformanceScenario = 'succeeds' | 'blocked' | 'fails' | 'rejects';
 
 /**
- * Every adapter must pass this. `scenario(name)` returns the request (and any fixture setup the adapter
+ * Every adapter must pass this. `scenario(name)` returns the request (and arms any fixture state the adapter
  * needs, e.g. msw handlers for recorded responses) that drives the provider to that outcome.
  * Test-only: never export from index.ts (it imports vitest).
  */
 export type ConformanceSetup = {
   provider: () => VideoProvider;
   context?: Partial<VideoProviderContext>;
-  scenario: (name: 'succeeds' | 'blocked' | 'fails') => Promise<ValidatedVideoRequest> | ValidatedVideoRequest;
+  scenario: (name: ConformanceScenario) => Promise<ValidatedVideoRequest> | ValidatedVideoRequest;
   // Advance whatever clock or fixture state makes the provider report completion.
   settle: () => Promise<void> | void;
+  /** Per-test state reset (clocks, msw handlers); runs inside the conformance describe. */
+  beforeEach?: () => Promise<void> | void;
+  afterEach?: () => Promise<void> | void;
 };
 
 const pollUntilTerminal = async (
@@ -40,6 +45,9 @@ export function describeVideoProviderConformance(name: string, setup: Conformanc
   });
 
   describe(`${name} conformance`, () => {
+    if (setup.beforeEach) beforeEach(setup.beforeEach);
+    if (setup.afterEach) afterEach(setup.afterEach);
+
     it('submits and returns a JSON-serialisable handle tagged with its provider id', async () => {
       const provider = setup.provider();
       const handle = await provider.submit(await setup.scenario('succeeds'), {}, ctx());
@@ -72,6 +80,37 @@ export function describeVideoProviderConformance(name: string, setup: Conformanc
       const result = await pollUntilTerminal(provider, handle, c, setup.settle);
       expect(result.status).toBe('failed');
       if (result.status === 'failed') expect(typeof result.retryable).toBe('boolean');
+    });
+
+    it('rejects a request the provider refuses with a definitive ProviderSubmitError', async () => {
+      const provider = setup.provider();
+      const error = await provider.submit(await setup.scenario('rejects'), {}, ctx()).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ProviderSubmitError);
+      expect((error as ProviderSubmitError).definitive).toBe(true);
+    });
+
+    it('reports running on the first poll, so the engine re-poll path is exercised', async () => {
+      const provider = setup.provider();
+      const c = ctx();
+      const handle = await provider.submit(await setup.scenario('succeeds'), {}, c);
+      expect((await provider.poll(handle, c)).status).toBe('running');
+    });
+
+    it('gives a failure a non-empty message', async () => {
+      const provider = setup.provider();
+      const c = ctx();
+      const handle = await provider.submit(await setup.scenario('fails'), {}, c);
+      const result = await pollUntilTerminal(provider, handle, c, setup.settle);
+      expect(result.status).toBe('failed');
+      if (result.status === 'failed') expect(result.message.trim().length).toBeGreaterThan(0);
+    });
+
+    it('resolves cancel when the provider implements it', async () => {
+      const provider = setup.provider();
+      if (!provider.cancel) return;
+      const c = ctx();
+      const handle = await provider.submit(await setup.scenario('succeeds'), {}, c);
+      await expect(provider.cancel(handle, c)).resolves.toBeUndefined();
     });
   });
 }

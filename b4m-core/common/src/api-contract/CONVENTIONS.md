@@ -305,6 +305,11 @@ for the whole window. Removing an alias is a major-version change.
   already shipped in `apps/client/public/openapi.json` when this rule landed. **The list is
   frozen - entries are only ever removed.** Adding to it is the thing this convention
   exists to prevent.
+- Precedent for the one exception: `/api/v1/video-generations` was changed in place (new
+  request and response shape) because the upstream provider, Sora, shut down, so no sunset
+  window was possible. Its create body is strict so a stale field such as `callbackUrl`
+  fails with a 422 rather than being dropped. A future in-place change needs a comparable
+  reason; "the new shape is nicer" is not one.
 
 ---
 
