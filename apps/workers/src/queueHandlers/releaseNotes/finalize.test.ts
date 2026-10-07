@@ -39,6 +39,9 @@ describe('scrubCustomerText', () => {
     ['Fixed in # 123 today', 'Fixed in today'],
     [`Fixed in #${String.fromCharCode(0x200b)}123 today`, 'Fixed in today'],
     [`Resolves ENG-${String.fromCharCode(0x2060)}1234, finally`, 'Resolves, finally'],
+    ['Sign up at acme.io/signup today', 'Sign up at today'],
+    ['Read [docs](https://evil.example/x) now', 'Read [docs] now'],
+    ['Runs on Node.js/Deno now', 'Runs on Node.js/Deno now'],
   ])('scrubs %j', (input, expected) => {
     expect(scrubCustomerText(input)).toBe(expected);
   });
@@ -102,6 +105,17 @@ describe('finalizeReleaseNote', () => {
       expect(result.kind === 'ok' && result.note.items).toEqual([item('Keep me.')]);
     }
   );
+
+  it.each([
+    [`Built for ${String.fromCharCode(0x0430)}cme`, 'acme'],
+    [`Built for ${String.fromCharCode(0x0410)}CME`, 'acme'],
+    [`Built for Stra${String.fromCharCode(0xdf)}e`, 'strasse'],
+    ['Built for Strasse', `stra${String.fromCharCode(0xdf)}e`],
+  ])('drops an item that spells a denylisted term with lookalike letters: %j', (text, term) => {
+    const result = run(draft({ items: [item(text), item('Keep me.')] }), { embargoHours: 12, denylist: [term] });
+
+    expect(result.kind === 'ok' && result.note.items).toEqual([item('Keep me.')]);
+  });
 
   it('matches a multi-word denylist term regardless of its own spacing', () => {
     const result = run(draft({ items: [item('Uses project-falcon now'), item('Keep me.')] }), {

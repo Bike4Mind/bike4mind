@@ -80,8 +80,11 @@ function buildSlackText(note: ReleaseNote, releaseUrl: string): string {
       ? 'No customer-facing changes; stored hidden and will not publish.'
       : `Goes live in ${hours}h (${note.publishAt.toISOString()}). Edit it before then to change or hide it.`;
   const lines = [`*Release notes for <${releaseUrl}|${escapeSlack(note.releaseTag)}>*`, status];
-  if (note.headline) lines.push('', `*${escapeSlack(note.headline)}*`);
-  if (note.summary) lines.push(escapeSlack(note.summary));
+  // A hidden note's headline and summary describe the items that were dropped.
+  if (note.status !== 'hidden') {
+    if (note.headline) lines.push('', `*${escapeSlack(note.headline)}*`);
+    if (note.summary) lines.push(escapeSlack(note.summary));
+  }
   for (const item of note.items) lines.push(`- [${CATEGORY_LABEL[item.category]}] ${escapeSlack(item.text)}`);
   return lines.join('\n');
 }

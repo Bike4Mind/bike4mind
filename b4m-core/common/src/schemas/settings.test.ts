@@ -176,6 +176,17 @@ describe('other object settings use makeObjectSetting', () => {
   });
 });
 
+describe('releaseNotesConfig', () => {
+  it('defaults to disabled', () => {
+    expect(settingsMap.releaseNotesConfig.schema.parse('{}')).toEqual({
+      enabled: false,
+      modelId: 'gpt-4o-mini',
+      embargoHours: 12,
+      denylist: [],
+    });
+  });
+});
+
 describe('public settings projection (M2.5 security boundary)', () => {
   describe('userReadableSettingKeys', () => {
     it('excludes admin-only operational config a non-admin has no claim to', () => {

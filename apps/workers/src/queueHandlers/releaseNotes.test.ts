@@ -192,6 +192,18 @@ describe('releaseNotes queue handler', () => {
     expect(text).not.toContain('<!channel>');
   });
 
+  it('leaves the headline and summary out of the Slack post for a hidden note', async () => {
+    setConfig(enabledConfig);
+    const hidden = draft();
+    hidden.draft.items = [{ category: 'improved', text: 'Built for Acme', importance: 1, sourcePrs: [1] }];
+    h.writeReleaseNotes.mockResolvedValue(hidden);
+    await expect(run(JSON.stringify(validPayload))).resolves.toBeUndefined();
+    const { text } = JSON.parse(slackPosts()[0][1].body);
+    expect(text).toContain('No customer-facing changes');
+    expect(text).not.toContain('Faster search');
+    expect(text).not.toContain('Search is quicker.');
+  });
+
   it('gives the completer a deadline inside the Lambda timeout', async () => {
     setConfig(enabledConfig);
     const before = Date.now();
