@@ -13,6 +13,9 @@ interface IParams {
 
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, IParams>(async (req, res) => {
+    // Response depends on who asks, so a shared CDN cache must never store it.
+    res.setHeader('Cache-Control', 'private, no-store');
+
     const id = req.query.id;
 
     if (!id) {

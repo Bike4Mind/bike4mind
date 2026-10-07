@@ -127,6 +127,7 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
 
     expect(res._getStatusCode()).toBe(410);
     expect(res._getJSONData()).toEqual({ message: 'Invite has expired' });
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
