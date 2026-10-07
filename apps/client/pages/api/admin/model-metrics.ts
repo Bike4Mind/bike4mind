@@ -69,6 +69,10 @@ interface ModelMetricResponse {
   statusLog?: Array<{ status: string; timestamp: string }>;
 }
 
+function getClientFirstTokenTime(quest: IChatHistoryItemDocument): number | undefined {
+  return quest.clientFirstTokenTime ?? quest.promptMeta?.performance?.clientFirstTokenTime;
+}
+
 function getProcessPickupTime(quest: IChatHistoryItemDocument): number | undefined {
   const processingTimeLog = (quest.promptMeta?.statusLog || []).find(
     log => log.status === 'Processing your request...'
@@ -155,6 +159,7 @@ async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMet
       modelInferenceTime: quest.promptMeta?.performance?.modelInferenceTime,
       firstTokenTime: quest.promptMeta?.performance?.firstTokenTime,
       firstChunkTime: quest.promptMeta?.performance?.firstChunkTime,
+      clientFirstTokenTime: getClientFirstTokenTime(quest),
       processPickupTime: getProcessPickupTime(quest),
       streamingPerformance: quest.promptMeta?.performance?.streamingPerformance
         ? {

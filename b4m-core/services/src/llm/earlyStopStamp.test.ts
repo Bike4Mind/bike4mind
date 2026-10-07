@@ -3,6 +3,7 @@ import {
   CLEAN_FINISH_REASONS,
   DEGENERATE_FINISH_REASON,
   EARLY_STOP_FINISH_REASONS,
+  REFUSAL_FINISH_REASON,
   TRUNCATED_FINISH_REASON,
 } from '@bike4mind/common';
 import {
@@ -12,6 +13,7 @@ import {
   INCOMPLETE_ANSWER_NOTICE,
   TRUNCATED_ANSWER_NOTICE,
   TRUNCATION_WARNING,
+  usageEventStatusForFinish,
 } from './earlyStopStamp';
 
 describe('buildEarlyStopStamp', () => {
@@ -53,6 +55,22 @@ describe('buildEarlyStopStamp', () => {
 
   it.each([undefined, null, '', 'some_future_reason'])('stamps nothing for %p', reason => {
     expect(buildEarlyStopStamp(reason)).toBeNull();
+  });
+});
+
+describe('usageEventStatusForFinish', () => {
+  it('records a model refusal as a refusal, with no early-stop warning', () => {
+    expect(usageEventStatusForFinish(REFUSAL_FINISH_REASON)).toBe('refusal');
+    expect(buildEarlyStopStamp(REFUSAL_FINISH_REASON)).toBeNull();
+  });
+
+  it('defers to the early-stop stamp for degenerate and truncated replies', () => {
+    expect(usageEventStatusForFinish(DEGENERATE_FINISH_REASON)).toBe('degenerate');
+    expect(usageEventStatusForFinish(TRUNCATED_FINISH_REASON)).toBe('ok');
+  });
+
+  it.each([...CLEAN_FINISH_REASONS, undefined, null, 'some_future_reason'])('is ok for %p', reason => {
+    expect(usageEventStatusForFinish(reason)).toBe('ok');
   });
 });
 
