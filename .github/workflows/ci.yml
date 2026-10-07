@@ -85,7 +85,7 @@ jobs:
         run: bash scripts/check-no-baseapi.sh
 
       - name: Check API-key-authed endpoints use the contract abstraction
-        run: bash scripts/check-contract-gate.sh
+        run: bash scripts/check-contract-gate.sh --error
 
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
