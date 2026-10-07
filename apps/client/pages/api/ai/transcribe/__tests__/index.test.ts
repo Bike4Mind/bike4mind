@@ -115,4 +115,13 @@ describe('POST /api/ai/transcribe', () => {
     expect(mocks.transcribeAWSFromS3).not.toHaveBeenCalled();
     expect(mocks.subtractCredits).not.toHaveBeenCalled();
   });
+
+  it('still deletes the transient S3 upload when the credit gate refuses', async () => {
+    mocks.assertPreflightCredits.mockRejectedValue(new InsufficientCreditsPreflightError('broke'));
+    const { promise } = run();
+    await expect(promise).rejects.toBeInstanceOf(BadRequestError);
+    const deletes = mocks.send.mock.calls.filter(([cmd]) => cmd.constructor.name === 'DeleteObjectCommand');
+    expect(deletes).toHaveLength(1);
+    expect(deletes[0][0].input).toMatchObject({ Key: FILE_KEY });
+  });
 });

@@ -171,6 +171,18 @@ describe('POST /api/ai/tts', () => {
     });
   });
 
+  it('prices an ElevenLabs request at the elevenlabs default model', async () => {
+    const { promise } = run({ text: 'hello', provider: 'elevenlabs' });
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('elevenlabs', 'eleven_multilingual_v2', 5);
+  });
+
+  it('forwards an explicit model to the estimate', async () => {
+    const { promise } = run({ text: 'hello', model: 'tts-1-hd' });
+    await promise;
+    expect(mocks.estimateTtsCreditCost).toHaveBeenCalledWith('openai', 'tts-1-hd', 5);
+  });
+
   describe('audio over the response limit', () => {
     const oversizedAudio = Buffer.alloc(4 * 1024 * 1024 + 1);
 
