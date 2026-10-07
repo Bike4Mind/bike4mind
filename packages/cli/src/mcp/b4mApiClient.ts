@@ -66,9 +66,21 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
+  // server has no CDN configured).
+  images?: string[];
+  files?: GeneratedQuestFile[];
   // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
   promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
+}
+
+/** A tool-generated file on a polled quest; mirrors `GeneratedFileSchema` (@bike4mind/common). */
+export interface GeneratedQuestFile {
+  name: string;
+  url: string;
+  isImage: boolean;
+  isAudio: boolean;
 }
 
 export type RawCitable = z.infer<typeof CitableSourceSchema> & { [key: string]: unknown };
@@ -114,6 +126,22 @@ export interface RawDataLake {
   built_in?: boolean;
   status?: string;
   file_count?: number;
+  [key: string]: unknown;
+}
+
+/** Arguments for POST /api/ai/generate-image; a subset of `GenerateImageRequestBodySchema`. */
+export interface GenerateImageArgs {
+  prompt: string;
+  model: string;
+  size?: string;
+  notebookId?: string;
+  projectId?: string;
+}
+
+/** The generate-image ACK: the render is queued, and its outcome arrives on the quest. */
+export interface GenerateImageAck {
+  quest: { id: string; sessionId?: string; [key: string]: unknown };
+  enhancedPrompt?: string;
   [key: string]: unknown;
 }
 
@@ -295,6 +323,16 @@ export class B4mApiClient {
       }
       throw error;
     }
+  }
+
+  async generateImage(args: GenerateImageArgs): Promise<GenerateImageAck> {
+    return this.client.post<GenerateImageAck>('/api/ai/generate-image', {
+      prompt: args.prompt,
+      model: args.model,
+      ...(args.size ? { size: args.size } : {}),
+      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
+    });
   }
 
   /**

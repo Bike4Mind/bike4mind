@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { isAxiosError } from 'axios';
 import {
   DEFAULT_TTS_PROVIDER,
+  GENERATED_IMAGE_EXTENSION_RE,
+  ImageModels,
   PROMPT_TEXT_MAX,
   ttsRequestSchema,
   type GeneratedAudioResponse,
@@ -78,6 +81,13 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Text to speech',
     description:
       'Synthesize speech from text. Returns a saved audio file with a signed download URL when available, otherwise audio inline.',
+    scope: 'ai:generate',
+  },
+  {
+    name: 'generate_image',
+    title: 'Generate image',
+    description:
+      "Generate an image from a text prompt and wait for the render. Returns the quest and notebook ids plus each image's file name and download URL. Image names are not file ids and do not work with get_file.",
     scope: 'ai:generate',
   },
 ];
@@ -158,6 +168,14 @@ const generateSoundEffectShape = {
     .optional()
     .describe('How strictly to follow the prompt (0 = loose, 1 = strict)'),
   format: z.string().optional().describe('Provider output encoding token, e.g. mp3_44100_128'),
+};
+
+const generateImageShape = {
+  prompt: z.string().min(1).describe('Text description of the image to generate'),
+  model: z.string().default(ImageModels.GPT_IMAGE_1).describe('Image model id, e.g. gpt-image-1'),
+  size: z.string().optional().describe("Image size as 'widthxheight', e.g. 1024x1024; omit for the model default"),
+  notebookId: z.string().optional().describe('Notebook to add the image to; omit to create a new one'),
+  projectId: z.string().optional().describe('Project for the new notebook when notebookId is omitted'),
 };
 
 const textToSpeechShape = {
@@ -271,6 +289,103 @@ export async function generateSoundEffect(
 ): Promise<CallToolResult> {
   const response = await client.generateSoundEffect(args);
   return generatedAudioResult(response, { provider: args.provider });
+}
+
+export interface PollOptions {
+  intervalMs?: number;
+  timeoutMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  /** Aborts the poll when the MCP client cancels the call. */
+  signal?: AbortSignal;
+  /** Called after each non-terminal poll, so the tool can keep the client's request alive. */
+  onProgress?: (elapsedMs: number) => Promise<void> | void;
+}
+
+const IMAGE_POLL_INTERVAL_MS = 2000;
+// Renders typically finish well under a minute; the cap only stops a wedged quest from
+// holding the tool call open indefinitely.
+const IMAGE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+// The render is already queued and billed, so a transient poll failure (5xx, 429, network)
+// must not abandon it; only a run of them does.
+const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+
+const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+// `status` is optional on the poll response; a quest that already carries its outcome is
+// finished whatever its status says.
+const isTerminal = (q: QuestResponse) =>
+  q.status === 'done' || q.status === 'stopped' || q.type === 'error' || (!q.status && !!q.images?.length);
+
+const isPermanentApiError = (err: unknown) => {
+  const status = isAxiosError(err) ? err.response?.status : undefined;
+  return status === 401 || status === 403 || status === 404;
+};
+
+/**
+ * Queue an image render and poll its quest to completion. A failed render still
+ * resolves `status: 'done'`, so `type: 'error'` (reason in `reply`) is the failure signal.
+ * Generated images are not FabFiles, so there is no file id: the quest id is the handle,
+ * and each image is its generated-file name plus the URL the quest poll resolves for it
+ * (`fileUrl` is absent when the server has no CDN configured).
+ */
+export async function generateImage(
+  client: B4mApiClient,
+  args: { prompt: string; model: string; size?: string; notebookId?: string; projectId?: string },
+  {
+    intervalMs = IMAGE_POLL_INTERVAL_MS,
+    timeoutMs = IMAGE_POLL_TIMEOUT_MS,
+    sleep = defaultSleep,
+    signal,
+    onProgress,
+  }: PollOptions = {}
+) {
+  const ack = await client.generateImage(args);
+  const questId = ack.quest.id;
+  const ref = `quest ${questId}${ack.quest.sessionId ? `, notebook ${ack.quest.sessionId}` : ''}`;
+
+  const started = Date.now();
+  let failures = 0;
+  let quest: QuestResponse | undefined;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      quest = await client.getQuest(questId);
+      failures = 0;
+      if (isTerminal(quest)) break;
+    } catch (err) {
+      failures += 1;
+      if (isPermanentApiError(err) || failures >= MAX_CONSECUTIVE_POLL_FAILURES) throw err;
+    }
+    const elapsed = Date.now() - started;
+    if (elapsed >= timeoutMs) {
+      throw new Error(`image generation did not finish within ${Math.round(timeoutMs / 1000)}s (${ref})`);
+    }
+    await onProgress?.(elapsed);
+    await sleep(intervalMs);
+  }
+
+  if (quest.status === 'stopped') {
+    throw new Error(`image generation was stopped (${ref})`);
+  }
+  if (quest.type === 'error') {
+    throw new Error(quest.reply || `image generation failed (${ref})`);
+  }
+
+  const urls = new Map((quest.files ?? []).map(f => [f.name, f.url]));
+  const images = (quest.images ?? [])
+    .filter(name => GENERATED_IMAGE_EXTENSION_RE.test(name))
+    .map(name => ({ fileName: name, fileUrl: urls.get(name) }));
+  if (images.length === 0) {
+    throw new Error(quest.reply || `image generation finished without producing an image (${ref})`);
+  }
+
+  return {
+    notebookId: quest.sessionId ?? ack.quest.sessionId,
+    questId,
+    model: args.model,
+    enhancedPrompt: ack.enhancedPrompt,
+    images,
+  };
 }
 
 function toResult(value: unknown): CallToolResult {
@@ -477,6 +592,32 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       } catch (err) {
         return errorResult(mapApiError(err, baseURL, 'ai:generate'));
       }
+    }
+  );
+
+  server.registerTool(
+    'generate_image',
+    {
+      title: meta('generate_image').title,
+      description: meta('generate_image').description,
+      inputSchema: generateImageShape,
+    },
+    (args, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      return run('ai:generate', () =>
+        generateImage(client, args, {
+          signal: extra.signal,
+          // Progress lets a client that resets its request timeout on progress wait out a slow render.
+          onProgress:
+            progressToken === undefined
+              ? undefined
+              : elapsedMs =>
+                  extra.sendNotification({
+                    method: 'notifications/progress',
+                    params: { progressToken, progress: Math.floor(elapsedMs / 1000), message: 'rendering image' },
+                  }),
+        })
+      );
     }
   );
 }
