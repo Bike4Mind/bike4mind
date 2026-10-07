@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ChatModels } from '@bike4mind/common';
 
 /**
  * Guards that the transport timeout is wired onto EVERY Bedrock client we build. A Bedrock call
@@ -70,6 +71,26 @@ describe('Bedrock client transport timeout', () => {
 
     expect(clientConfigs).toHaveLength(1);
     expect(clientConfigs[0].requestHandler).toMatchObject({ requestTimeout: 120_000 });
+  });
+
+  it('routes global Claude inference profiles through us-east-1', async () => {
+    const backend = await makeBackend();
+    clientConfigs.length = 0;
+
+    backend.rebuildFor(ChatModels.CLAUDE_4_8_OPUS_BEDROCK);
+
+    expect(clientConfigs).toHaveLength(1);
+    expect(clientConfigs[0].region).toBe('us-east-1');
+  });
+
+  it('does not route unknown future global Claude profiles to the default region', async () => {
+    const backend = await makeBackend();
+    clientConfigs.length = 0;
+
+    backend.rebuildFor('global.anthropic.claude-sonnet-5-5');
+
+    expect(clientConfigs).toHaveLength(1);
+    expect(clientConfigs[0].region).toBe('us-east-1');
   });
 
   it('keeps the retry config alongside the handler on both clients', async () => {

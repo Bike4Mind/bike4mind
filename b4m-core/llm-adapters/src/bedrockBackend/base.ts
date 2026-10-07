@@ -153,6 +153,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
   }
 
   protected getRegionForModel(model: string): string {
+    if (model.startsWith('global.anthropic.')) return 'us-east-1';
     return this._usEast1Models.includes(model) ? 'us-east-1' : 'us-east-2';
   }
 
