@@ -72,6 +72,7 @@ import {
   type SupportedEmbeddingModel,
   PersistedSessionSummaryTrigger,
   SessionSummaryTrigger,
+  effectiveIncludeLibraryFiles,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -2042,6 +2043,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * retrieval scoping keeps working; see ToolContext.sessionReaderConsentDatalakeTags.
    */
   private readerConsentTags: string[];
+  /** `session.includeLibraryFiles` - resolve through effectiveIncludeLibraryFiles, never raw. */
+  private includeLibraryFiles: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
@@ -2050,7 +2053,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     retrievalFilter?: RetrievalExclusionOptions,
     preauthorizedLakeIds?: string[],
     lakeScopeExplicit?: boolean,
-    readerConsentDatalakeTags?: string[]
+    readerConsentDatalakeTags?: string[],
+    includeLibraryFiles?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -2060,6 +2064,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
     this.lakeScopeExplicit = lakeScopeExplicit;
     this.readerConsentTags = Array.isArray(readerConsentDatalakeTags) ? readerConsentDatalakeTags : [];
+    this.includeLibraryFiles = includeLibraryFiles;
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2832,11 +2837,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // query to one lake); narrowing without restrictToDataLake still leaks the personal library
       // through the own/shared/group base arms.
       //
-      // Both halves are gated on `lakeScoped`, NOT applied unconditionally. The narrowing no-ops
+      // Both halves are gated, NOT applied unconditionally. The narrowing no-ops
       // for a session whose tags name no lake (see sessionNamesALake), and pairing that no-op with
       // restrictToDataLake would drop the base arms for a session that never asked to be
       // lake-scoped - silently confining its grounding to lake content and losing the caller's own
-      // files. `restrictToDataLake` must mean "the session named a lake", not "this code ran".
+      // files. `restrictToDataLake` must mean "the session excludes the library", not "this code
+      // ran": `lakeScoped` while `includeLibraryFiles` is unset, the explicit flag once set. Explicit
+      // false therefore also confines an all-lakes session (no lake named) to lake content.
       //
       // `lakeScoped` is computed from the PRE-narrowing set. That is equivalent to asking the
       // narrowed one today - `retainedLakes` is a superset of the prefix-matched lakes, so the
@@ -2850,6 +2857,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const lakeMemberships = lakeMembershipsFrom(lakes);
       warnIfManyLakeMemberships(lakeMemberships, this.logger, 'forced-retrieval');
       attemptedDataLakeTags = dataLakeTags;
+      const excludeLibrary = !effectiveIncludeLibraryFiles(this.includeLibraryFiles, lakeScoped);
+      const hasLakeArms = dataLakeTags.length > 0 || dataLakeTagPrefixes.length > 0 || lakeMemberships.length > 0;
 
       // The session named a lake and narrowing retained none of it: a revoked grant, an archived
       // lake, or a lapsed entitlement on a session that still names that lake. Nothing was in scope
@@ -2857,9 +2866,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // buildOwnershipConditions' restrictToDataLake fail-fast throws into the outer catch and
       // stamps `failed` at error level on EVERY turn of that session, indefinitely, reporting a
       // benign access state as a retrieval failure to logs and to the retrieval-rate metric.
-      // Only reachable while `lakeScoped` - with it false the base arms survive, so `conditions`
-      // is never empty and the fail-fast cannot fire.
-      if (lakeScoped && !dataLakeTags.length && !dataLakeTagPrefixes.length && !lakeMemberships.length) {
+      // Also the exit for a library-excluding session with no lake at all to reach. Only reachable
+      // while `excludeLibrary` - otherwise the base arms survive, so `conditions` is never empty
+      // and the fail-fast cannot fire.
+      if (excludeLibrary && !hasLakeArms) {
         recordRetrieval('no_lakes', []);
         this.logger.log('🔒 Forced retrieval: session names no lake this caller can reach');
         return this.noContextMessages('unavailable');
@@ -2910,8 +2920,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           dataLakeTagPrefixes, // static-registry (open) prefixes
           lakeMemberships, // dynamic-lake arms, each anchored to that lake's creator
           // Scope to the resolved lake(s) only, never the caller's whole library - but only when
-          // the session actually named a lake; see the `lakeScoped` note above.
-          restrictToDataLake: lakeScoped,
+          // the session excludes the library; see the gating note above.
+          restrictToDataLake: excludeLibrary,
           excludeContent: true, // metadata only; chunk text + vectors fetched below
           // supersededInLakes is select:false by default; forced retrieval feeds the same
           // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see

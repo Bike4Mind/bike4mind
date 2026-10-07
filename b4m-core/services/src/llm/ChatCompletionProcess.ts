@@ -2237,7 +2237,8 @@ export class ChatCompletionProcess {
         toRetrievalFilter(session),
         session.lakeScopeExplicit,
         vettedPreauthorizedLakeIds,
-        vetReaderConsentDatalakeTags(session, this.user.id)
+        vetReaderConsentDatalakeTags(session, this.user.id),
+        session.includeLibraryFiles
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -6674,7 +6675,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     /** Already vetted against the request's authenticated principal by the caller - see ChatCompletionProcess's call site. */
     preauthorizedLakeIds?: string[],
     /** Already vetted against the request's authenticated principal by the caller (vetReaderConsentDatalakeTags). */
-    readerConsentDatalakeTags?: string[]
+    readerConsentDatalakeTags?: string[],
+    includeLibraryFiles?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -6793,7 +6795,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
           retrievalFilter,
           preauthorizedLakeIds,
           lakeScopeExplicit,
-          readerConsentDatalakeTags
+          readerConsentDatalakeTags,
+          includeLibraryFiles
         )
       );
 

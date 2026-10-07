@@ -4033,6 +4033,81 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
     );
   });
 
+  describe('includeLibraryFiles', () => {
+    const build = (ctx: ReturnType<typeof makeCtx>, tags: string[], flag: boolean | undefined) =>
+      new KnowledgeRetrievalFeature(
+        ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        tags,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        flag
+      );
+
+    // Unset keeps the pre-flag rule (only a named lake excludes the library); a set flag wins.
+    it.each([
+      ['a named lake', ['datalake:acme'], undefined, true],
+      ['a named lake', ['datalake:acme'], false, true],
+      ['a named lake', ['datalake:acme'], true, false],
+      ['all lakes', [], undefined, false],
+      ['all lakes', [], false, true],
+      ['all lakes', [], true, false],
+      ['a content tag', ['legal:review'], undefined, false],
+      ['a content tag', ['legal:review'], false, true],
+      ['a content tag', ['legal:review'], true, false],
+    ])('scopes %s with flag %s to restrictToDataLake: %s', async (_, tags, flag, restrict) => {
+      const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
+      await build(ctx, tags as string[], flag as boolean | undefined).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: restrict })
+      );
+    });
+
+    it('abstains as no_lakes for an all-lakes session excluding the library with no lake to reach', async () => {
+      const ctx = makeCtx({ dataLakes: [] });
+      const quest = makeQuest();
+      await build(ctx, [], false).getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(quest.promptMeta?.retrieval?.outcome).toBe('no_lakes');
+      expect(ctx.logger.error).not.toHaveBeenCalled();
+      expect(ctx.db.fabfiles.search).not.toHaveBeenCalled();
+    });
+
+    it('re-admits the library for a named lake this caller can no longer reach when the flag is on', async () => {
+      const ctx = makeCtx({ dataLakes: [] });
+      await build(ctx, ['datalake:unreachable'], true).getContextMessages(
+        makeQuest(),
+        embeddingFactory as unknown as Parameters<KnowledgeRetrievalFeature['getContextMessages']>[1],
+        'anything'
+      );
+
+      expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+        'viewer-1',
+        '',
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ restrictToDataLake: false })
+      );
+    });
+  });
+
   it('degrades to the abstention block instead of throwing when the underlying search fails', async () => {
     const ctx = makeCtx({ dataLakes: [LAKE_DOC] });
     // A genuine outage on the query itself - distinct from the no_lakes abstain above, and the one
