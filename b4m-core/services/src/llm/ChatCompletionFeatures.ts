@@ -2964,6 +2964,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         prioritizeLakeFiles ? listFiles(true) : null,
         listFiles(excludeLibrary),
       ]);
+      const lakeFileIds = new Set((lakeListing?.data ?? []).map(f => f.id));
       const fileResults = lakeListing ? mergeLakeFirstListing(lakeListing, scopeListing, listingLimit) : scopeListing;
 
       // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
