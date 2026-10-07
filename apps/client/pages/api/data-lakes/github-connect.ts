@@ -185,7 +185,11 @@ export function createGitHubConnectHandler(suffix: () => string = newPlaceholder
       if (!reused) {
         // A double-click can make two connects both miss the finder and both insert. Re-reading converges them on
         // the lowest-_id lake, best-effort only: there is no unique index and _id order is not insert order.
-        const oldest = await findReusablePendingLake(req, organizationId);
+        // An older lake that another tab started binding meanwhile is not ours to converge on, so keep this one.
+        const oldest = await findReusablePendingLake(req, organizationId).catch((error: unknown) => {
+          if (error instanceof ConflictError) return null;
+          throw error;
+        });
         if (oldest && oldest.id !== lake.id) {
           await rollBackPendingLake(req, lake);
           lake = reused = oldest;

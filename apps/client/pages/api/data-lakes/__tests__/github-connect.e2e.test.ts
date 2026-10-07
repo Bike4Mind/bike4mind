@@ -12,6 +12,7 @@ import {
   LakeConfigChangeEventModel,
   LakeConnectorClaim,
   dataLakeAccessGrantRepository,
+  dataLakeRepository,
   lakeConnectorClaimRepository,
 } from '@bike4mind/database';
 import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
@@ -340,6 +341,28 @@ describe('POST /api/data-lakes/github-connect', () => {
     await expect(run(makeReq({ organizationId: ORG }), makeRes().res)).rejects.toMatchObject({ statusCode: 409 });
     expect(await DataLakeModel.countDocuments({})).toBe(1);
     expect((await DataLakeModel.findById(lakeId).lean())?.pendingConnector).toBe('github');
+  });
+
+  it('keeps its own new lake when the older one it would converge on is claimed mid-request', async () => {
+    const first = makeRes();
+    await run(makeReq({ organizationId: ORG }), first.res);
+    const olderId = lakeIdOf(first.json);
+    await lakeConnectorClaimRepository.tryAcquire({
+      lakeId: olderId,
+      kind: 'github',
+      connectionId: new mongoose.Types.ObjectId().toString(),
+    });
+    // The first finder misses the older lake, as a concurrent double-click would; the re-read then sees it.
+    const finder = vi.spyOn(dataLakeRepository, 'findPendingPlaceholderLake').mockResolvedValueOnce(null);
+    try {
+      const second = makeRes();
+      await run(makeReq({ organizationId: ORG }), second.res);
+      expect(lakeIdOf(second.json)).not.toBe(olderId);
+      expect(await DataLakeModel.findById(lakeIdOf(second.json)).lean()).not.toBeNull();
+      expect((await DataLakeModel.findById(olderId).lean())?.pendingConnector).toBe('github');
+    } finally {
+      finder.mockRestore();
+    }
   });
 
   it('creates a lake the bind-time rename renames, stamps and audits', async () => {
