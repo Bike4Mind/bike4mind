@@ -136,7 +136,7 @@ export interface PersistAgentArtifactsDeps {
    * count, not a boolean: a partially-successful first write must still be
    * completable by a later one (see the gate in `persistAgentArtifacts`).
    */
-  countQuestArtifacts: (questId: string) => Promise<number>;
+  countQuestArtifacts: (questId: string, userId: string) => Promise<number>;
   /**
    * Remove the content/version rows left behind by a `create` that died partway.
    * Only ever called once the artifacts row has been confirmed ABSENT, so
@@ -176,12 +176,14 @@ function defaultDeps(): PersistAgentArtifactsDeps {
         },
       });
     },
-    countQuestArtifacts: async questId => {
+    countQuestArtifacts: async (questId, userId) => {
       const { artifactRepository } = await import('@bike4mind/database');
       // Deliberately NOT filtered on deletedAt: a row the user deleted still
       // means this quest was already processed, and a repeat terminal write
-      // must not resurrect it.
-      return artifactRepository.count({ sourceQuestId: questId });
+      // must not resurrect it. Scoped to the run's user: `sourceQuestId` is
+      // caller-supplied on the create endpoint, so another user's rows carrying
+      // this quest id must not satisfy the gate and suppress this run's write.
+      return artifactRepository.count({ sourceQuestId: questId, userId });
     },
     clearPartialArtifact: async artifactId => {
       const { ArtifactContent, ArtifactVersion } = await import('@bike4mind/database');
@@ -275,7 +277,7 @@ export async function persistAgentArtifacts(args: {
     // never be retried - trading the duplicate-row bug for a silent-loss one.
     // Comparing against what this invocation would write lets an incomplete
     // quest be completed, while a complete one still short-circuits.
-    const alreadyPersisted = await deps.countQuestArtifacts(questId);
+    const alreadyPersisted = await deps.countQuestArtifacts(questId, userId);
     if (alreadyPersisted >= capped.length) {
       logger.info('[Artifacts] quest already fully persisted - skipping duplicate terminal write', {
         executionId,
