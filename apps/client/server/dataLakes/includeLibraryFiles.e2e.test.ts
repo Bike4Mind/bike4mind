@@ -46,10 +46,12 @@ let mongoServer: MongoMemoryServer;
 let userId: string;
 let lakeFileId: string;
 let personalFileId: string;
+let sharedFileId: string;
 
-async function makeFile(fileName: string, tags: { name: string }[]) {
+async function makeFile(fileName: string, tags: { name: string }[], sharedBy?: string) {
   const doc = await FabFile.create({
-    userId,
+    userId: sharedBy ?? userId,
+    ...(sharedBy ? { users: [{ userId, permissions: ['read'] }] } : {}),
     type: KnowledgeType.FILE,
     fileName,
     tags,
@@ -83,6 +85,8 @@ beforeAll(async () => {
   });
   lakeFileId = await makeFile('lake protocol.pdf', [{ name: LAKE_TAG }]);
   personalFileId = await makeFile('personal protocol.pdf', []);
+  const colleague = await User.create({ username: 'colleague', name: 'Colleague' });
+  sharedFileId = await makeFile('shared protocol.pdf', [], colleague.id as string);
 });
 
 afterAll(async () => {
@@ -166,7 +170,7 @@ async function retrieveById(s: SessionShape, fileId: string): Promise<string> {
   return String(await tool.toolFn({ file_id: fileId }));
 }
 
-const both = () => [lakeFileId, personalFileId].sort();
+const both = () => [lakeFileId, personalFileId, sharedFileId].sort();
 
 describe('includeLibraryFiles against real Mongo', () => {
   it.each<[string, SessionShape, 'lake' | 'both']>([
@@ -179,6 +183,13 @@ describe('includeLibraryFiles against real Mongo', () => {
     const want = expected === 'lake' ? [lakeFileId] : both();
     expect(await forcedRetrievalCitables(session)).toEqual(want);
     expect(await searchToolCitables(session)).toEqual(want);
+  });
+
+  it('a file shared with the caller but in no lake follows the library, not the lake', async () => {
+    const off = { retrievalTags: [LAKE_TAG], lakeScopeExplicit: true, includeLibraryFiles: false };
+    expect(await forcedRetrievalCitables(off)).not.toContain(sharedFileId);
+    expect(await searchToolCitables(off)).not.toContain(sharedFileId);
+    expect(await searchToolCitables({ ...off, includeLibraryFiles: true })).toContain(sharedFileId);
   });
 
   it('a content-tag session keeps the library in search_knowledge_base', async () => {
