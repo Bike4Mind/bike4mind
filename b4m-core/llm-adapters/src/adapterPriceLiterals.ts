@@ -111,9 +111,10 @@ export async function adapterPriceLadders(): Promise<ReadonlyMap<string, Readonl
 }
 
 /**
- * Priced per-token text models, by threshold. A model whose base tier lacks a
- * positive input and output rate is left out: it would otherwise promote on, and be
- * billed at, a placeholder that settles every call free.
+ * Priced per-token text models, by threshold. A model with any tier lacking a
+ * positive input or output rate is left out: it would otherwise promote on, and be
+ * billed at, a placeholder that settles every call at that tier free, and the whole
+ * ladder is written as one row.
  */
 async function collectLadders(): Promise<ReadonlyMap<string, Readonly<Record<string, IModelPriceTier>>>> {
   const ladders = new Map<string, Readonly<Record<string, IModelPriceTier>>>();
@@ -123,8 +124,9 @@ async function collectLadders(): Promise<ReadonlyMap<string, Readonly<Record<str
     for (const [threshold, tier] of Object.entries(model.pricing)) {
       if (Number.isFinite(Number(threshold))) ladder[threshold] = tier as IModelPriceTier;
     }
-    const base = lowestOf(ladder);
-    if (base && base.input > 0 && base.output > 0) ladders.set(String(model.id), ladder);
+    const tiers = Object.values(ladder);
+    if (tiers.length > 0 && tiers.every(tier => tier.input > 0 && tier.output > 0))
+      ladders.set(String(model.id), ladder);
   }
   return ladders;
 }
