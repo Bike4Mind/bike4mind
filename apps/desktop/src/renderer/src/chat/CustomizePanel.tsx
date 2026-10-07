@@ -1,55 +1,24 @@
-import type { ReactNode } from 'react';
 import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
-import Chip from '@mui/joy/Chip';
 import IconButton from '@mui/joy/IconButton';
-import Sheet from '@mui/joy/Sheet';
 import Stack from '@mui/joy/Stack';
 import Switch from '@mui/joy/Switch';
 import ToggleButtonGroup from '@mui/joy/ToggleButtonGroup';
 import Typography from '@mui/joy/Typography';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
-import { updateAttention, updateSummary } from '@shared/update';
-import { CloseIcon, ContrastIcon, DownloadIcon, GearIcon, ServerIcon, SparkIcon } from './icons';
+import { entryAttentionChip, EntrySection, type ConfigEntry } from './ConfigEntry';
+import { CloseIcon, ContrastIcon, ServerIcon, SlidersIcon, SparkIcon } from './icons';
 import { McpServersSettings } from './McpServersSettings';
 import { NavItem } from './SessionList';
 import { columnStackSx, contentColumnSx, scrollingColumnHostSx } from './layout';
 import { promptSuggestionsSummary, usePromptSuggestions } from './promptSuggestions';
 import { THEME_MODES, currentThemeMode, themeModeSummary, type ResolvedThemeMode, type ThemeMode } from './themeMode';
-import { UpdateSettings } from './UpdateSettings';
-import { useAppUpdate, type AppUpdateController } from './useAppUpdate';
 import { useMcpServers, type McpServersController } from './useMcpServers';
 
-/**
- * One thing the user can configure about the app itself.
- *
- * Deliberately not shaped around MCP: `summary` is whatever one line describes the current
- * state, and `attention` is whatever is wrong with it. A second entry - folder access is the
- * one this is waiting for - fills the same fields and needs no change here.
- *
- * `control` is the setting itself, rendered on the screen under the label. An entry that has
- * none falls back to `onOpen` behind a button, which is what an entry whose control is a
- * window of its own - an OS permission prompt, say - still wants.
- */
-export interface CustomizeEntry {
-  id: string;
-  icon: ReactNode;
-  label: string;
-  /** Current state in one line, so the section answers the easy question before it is read. */
-  summary: string;
-  /** Set only when the entry needs the user; also surfaced on the Customize nav row. */
-  attention?: string;
-  /**
-   * How to colour that chip. Danger by default, because every entry that had one until now was
-   * reporting something broken. An update is not broken - drawing "Restart" in the same red as
-   * a dead MCP server would read as a fault the user has to go and fix.
-   */
-  attentionColor?: 'danger' | 'primary';
-  control?: ReactNode;
-  onOpen?: () => void;
-}
+/** What this screen is for, said on the screen so it does not have to be inferred from a name. */
+const CUSTOMIZE_INTRO = 'How the app looks, and what it can reach.';
 
-function mcpEntry(controller: McpServersController): CustomizeEntry {
+function mcpEntry(controller: McpServersController): ConfigEntry {
   const connected = controller.servers.filter(server => server.status === 'connected').length;
   const failed = controller.servers.filter(server => server.status === 'failed').length;
   const tools = controller.servers.reduce((total, server) => total + server.tools.length, 0);
@@ -90,7 +59,7 @@ function appearanceEntry(
   mode: string | undefined,
   setMode: (mode: ThemeMode) => void,
   resolved: ResolvedThemeMode
-): CustomizeEntry {
+): ConfigEntry {
   return {
     id: 'appearance',
     icon: <ContrastIcon />,
@@ -124,7 +93,7 @@ function appearanceEntry(
  * reply, so a user who does not want either has to be able to find the switch. There is
  * deliberately no third state - nothing here makes a suggestion send itself.
  */
-function suggestionsEntry(enabled: boolean, toggle: () => void): CustomizeEntry {
+function suggestionsEntry(enabled: boolean, toggle: () => void): ConfigEntry {
   return {
     id: 'prompt-suggestions',
     icon: <SparkIcon />,
@@ -144,32 +113,15 @@ function suggestionsEntry(enabled: boolean, toggle: () => void): CustomizeEntry 
 }
 
 /**
- * The app's own version, and the only place an update is offered.
- *
- * It sits last so a broken MCP server still wins the one chip the nav row has room for: a
- * server that is down is stopping work now, and an update can wait for the screen to be opened.
- */
-function updateEntry(controller: AppUpdateController): CustomizeEntry {
-  const attention = updateAttention(controller.state);
-  return {
-    id: 'updates',
-    icon: <DownloadIcon />,
-    label: 'Updates',
-    summary: updateSummary(controller.state),
-    ...(attention ? { attention, attentionColor: 'primary' as const } : {}),
-    control: <UpdateSettings controller={controller} />,
-  };
-}
-
-/**
- * Every app-level setting, built once and read by both the nav row and the screen.
+ * Every appearance-and-tools setting, built once and read by both the nav row and the screen.
  *
  * The row needs only `attention` out of this, but it has to come from the same list the screen
  * draws or the badge would be answering a different question from the section it points at.
+ * MCP is now the only entry here that can raise one; the chip still honours `attentionColor`,
+ * since what the row has to say about an entry is the entry's to decide.
  */
-function useCustomizeEntries(): CustomizeEntry[] {
+function useCustomizeEntries(): ConfigEntry[] {
   const mcp = useMcpServers();
-  const update = useAppUpdate();
   const { mode, setMode } = useColorScheme();
   const theme = useTheme();
   const [suggestions, toggleSuggestions] = usePromptSuggestions();
@@ -178,49 +130,7 @@ function useCustomizeEntries(): CustomizeEntry[] {
     appearanceEntry(mode, setMode, theme.palette.mode),
     suggestionsEntry(suggestions, toggleSuggestions),
     mcpEntry(mcp),
-    updateEntry(update),
   ];
-}
-
-function EntrySection({ entry }: { entry: CustomizeEntry }) {
-  return (
-    <Sheet
-      variant="outlined"
-      sx={{ borderRadius: 'sm', mb: 1, px: 1.5, py: 1.25 }}
-      data-testid="customize-section"
-      data-entry={entry.id}
-    >
-      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
-        <Box sx={{ color: 'text.tertiary', display: 'flex' }}>{entry.icon}</Box>
-        <Stack sx={{ flex: 1, minWidth: 0 }}>
-          <Typography level="title-sm" noWrap>
-            {entry.label}
-          </Typography>
-          <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="customize-entry-summary">
-            {entry.summary}
-          </Typography>
-        </Stack>
-        {entry.attention && (
-          <Chip
-            size="sm"
-            variant="soft"
-            color={entry.attentionColor ?? 'danger'}
-            data-testid="customize-entry-attention"
-          >
-            {entry.attention}
-          </Chip>
-        )}
-        {/* An entry with no control of its own keeps the button it used to have in the list. */}
-        {!entry.control && entry.onOpen && (
-          <Button size="sm" variant="soft" color="neutral" onClick={entry.onOpen} data-testid="customize-entry-btn">
-            Open
-          </Button>
-        )}
-      </Stack>
-
-      {entry.control && <Box sx={{ mt: 1.25 }}>{entry.control}</Box>}
-    </Sheet>
-  );
 }
 
 /**
@@ -236,37 +146,29 @@ function EntrySection({ entry }: { entry: CustomizeEntry }) {
  * card worth the space.
  */
 export function CustomizeNavItem({ onOpen }: { onOpen: () => void }) {
-  const flagged = useCustomizeEntries().find(entry => entry.attention);
+  const entries = useCustomizeEntries();
 
   return (
     <NavItem
-      icon={<GearIcon />}
+      icon={<SlidersIcon />}
       label="Customize"
       onClick={onOpen}
-      end={
-        flagged?.attention ? (
-          <Chip
-            size="sm"
-            variant="soft"
-            color={flagged.attentionColor ?? 'danger'}
-            data-testid="customize-attention-chip"
-          >
-            {flagged.attention}
-          </Chip>
-        ) : undefined
-      }
+      end={entryAttentionChip(entries, 'customize-attention-chip')}
       testId="chat-customize-btn"
     />
   );
 }
 
 /**
- * "Customize": where the app's own settings live, as a screen beside Artifacts.
+ * "Customize": how the app looks and what it can reach, as a screen beside Artifacts.
  *
  * Each setting is on the page rather than behind a row that opens something else. A list of
  * three links that each lead somewhere would be a navigation step bought with a whole screen -
  * strictly worse than the one-row collapse it replaces - so the screen shows the controls
  * themselves and MCP, the one that used to need a window, is a section like the rest.
+ *
+ * The server and the app's own updates are NOT here; they are Settings. The two screens say
+ * which half they own under their titles, so neither has to be searched for the other's half.
  */
 export function CustomizeScreen({ onClose }: { onClose: () => void }) {
   const entries = useCustomizeEntries();
@@ -275,9 +177,12 @@ export function CustomizeScreen({ onClose }: { onClose: () => void }) {
     <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }} data-testid="customize-panel">
       <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ ...contentColumnSx, py: 1.25 }}>
-          <Typography level="title-sm" sx={{ flex: 1 }}>
-            Customize
-          </Typography>
+          <Stack sx={{ flex: 1, minWidth: 0 }}>
+            <Typography level="title-sm">Customize</Typography>
+            <Typography level="body-xs" textColor="text.tertiary">
+              {CUSTOMIZE_INTRO}
+            </Typography>
+          </Stack>
           <IconButton
             size="sm"
             variant="plain"

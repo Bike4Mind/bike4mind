@@ -317,3 +317,40 @@ export function ReloadIcon() {
     </Glyph>
   );
 }
+
+/** The account itself, for the menu row that opens the profile. */
+export function UserIcon() {
+  return (
+    <Glyph>
+      <circle cx="8" cy="5.75" r="2.75" />
+      <path d="M2.9 13.25a5.1 5.1 0 0 1 10.2 0" />
+    </Glyph>
+  );
+}
+
+/** Leaving: a door with an arrow walking out of it. */
+export function SignOutIcon() {
+  return (
+    <Glyph>
+      <path d="M9.75 2.75h-5a1 1 0 0 0-1 1v8.5a1 1 0 0 0 1 1h5" />
+      <path d="M13.25 8h-6.5M10.6 5.35 13.25 8l-2.65 2.65" />
+    </Glyph>
+  );
+}
+
+/**
+ * Customize: three sliders, each set somewhere different.
+ *
+ * The gear went to Settings, which is the name every app draws a gear beside - including the
+ * account menu row that now points at it. Two rows in one sidebar cannot both be the gear.
+ */
+export function SlidersIcon() {
+  return (
+    <Glyph>
+      <path d="M2.75 4.5h10.5M2.75 8h10.5M2.75 11.5h10.5" />
+      <circle cx="5.75" cy="4.5" r="1.4" />
+      <circle cx="10.25" cy="8" r="1.4" />
+      <circle cx="6.75" cy="11.5" r="1.4" />
+    </Glyph>
+  );
+}

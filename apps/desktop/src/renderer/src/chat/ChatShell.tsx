@@ -7,6 +7,7 @@ import Input from '@mui/joy/Input';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
+import type { AuthState } from '@shared/auth';
 import type { ChatProject, ChatSessionMode } from '@shared/chat';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -24,6 +25,7 @@ import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
 import { SessionList } from './SessionList';
+import { SettingsNavItem, SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
 import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
@@ -109,18 +111,21 @@ function WorkingDirectoryLine({ project }: { project: ChatProject }) {
  * What the main pane is showing. One value rather than a flag per screen, so the screens
  * cannot both be up and nothing has to remember to shut the other one.
  */
-type ChatScreen = 'conversation' | 'artifacts' | 'customize';
+type ChatScreen = 'conversation' | 'artifacts' | 'customize' | 'settings';
 
 /**
- * The sidebar's account strip, given the dot that says whether a reply is running.
+ * The sidebar's account strip, given the dot that says whether a reply is running and the way
+ * to open Settings.
  *
  * A function rather than a node because the two halves are owned in different places: this
  * component knows the turn state, and the account strip knows where a glyph goes in its own
- * row. Handing the finished dot down keeps both where they belong - see TurnDot.
+ * row. Handing the finished dot down keeps both where they belong - see TurnDot. The opener
+ * rides along for the same reason: Settings is a screen in this pane, and the account menu is
+ * where a user who knew the server lived under their name will still go looking for it.
  */
-export type AccountStrip = (status: ReactNode) => ReactNode;
+export type AccountStrip = (status: ReactNode, openSettings: () => void) => ReactNode;
 
-export function ChatShell({ account }: { account?: AccountStrip }) {
+export function ChatShell({ auth, account }: { auth?: AuthState | null; account?: AccountStrip }) {
   const {
     sessions,
     loading,
@@ -152,6 +157,10 @@ export function ChatShell({ account }: { account?: AccountStrip }) {
   const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
+
+  // Stable, because the account strip is rebuilt on every turn of the conversation and this is
+  // the one thing in it that has no reason to change.
+  const openSettings = useCallback(() => setScreen('settings'), []);
 
   const setTasksPanelOpen = useCallback((next: boolean) => {
     setTasksOpen(next);
@@ -420,8 +429,12 @@ export function ChatShell({ account }: { account?: AccountStrip }) {
         onTogglePin={session => void togglePin(session)}
         onToggleArchived={session => void toggleArchived(session)}
         customize={<CustomizeNavItem onOpen={() => setScreen('customize')} />}
+        settings={<SettingsNavItem auth={auth ?? null} onOpen={openSettings} />}
         footer={account?.(
-          <TurnDot state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })} />
+          <TurnDot
+            state={turnState({ streaming: turnOpen, disabled: !activeId || creatingCode, notReady: unbound })}
+          />,
+          openSettings
         )}
       />
 
@@ -429,6 +442,8 @@ export function ChatShell({ account }: { account?: AccountStrip }) {
         <ArtifactLibraryPanel onClose={() => setScreen('conversation')} />
       ) : screen === 'customize' ? (
         <CustomizeScreen onClose={() => setScreen('conversation')} />
+      ) : screen === 'settings' ? (
+        <SettingsScreen auth={auth ?? null} onClose={() => setScreen('conversation')} />
       ) : (
         <Stack sx={{ flex: 1, minWidth: 0, ...columnStackSx }}>
           <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
