@@ -24,9 +24,16 @@ const handler = baseApi().get(
     // ObjectIds around a real one. The shape check the resolver applies replaces the isValidObjectId
     // guard that used to live here, which would have rejected every bearer token outright.
     const invite = await sharingService.resolveRedeemableInvite(id, { db: { invites: inviteRepository } });
-    // A caller who is not a named recipient or share-authorized gets the same 404 as a
-    // missing invite -- a 403 would confirm the id exists.
-    if (!invite || !(await canViewInvite(req.user, invite))) {
+    // Strangers and bad ids get the same 404 so ids cannot be probed; an expired invite returns
+    // 410 only to callers who could otherwise view it (see canViewInvite).
+    if (!invite) {
+      return res.status(404).json({ message: 'Invite Not Found' });
+    }
+    const access = await canViewInvite(req.user, invite);
+    if (access === 'expired') {
+      return res.status(410).json({ message: 'Invite has expired' });
+    }
+    if (access !== 'allowed') {
       return res.status(404).json({ message: 'Invite Not Found' });
     }
 

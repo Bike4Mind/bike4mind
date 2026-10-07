@@ -1,6 +1,5 @@
 import {
   acceptDocument,
-  fetchInvite,
   fetchProjectInvites,
   fetchUserInvites,
   IGetInvitesRequest,
@@ -48,10 +47,6 @@ export function useGetProjectInvites(
     enabled: options?.enabled ?? true,
     ...options,
   });
-}
-
-export function useGetInvite(id: string) {
-  return useQuery({ queryKey: ['invite'], queryFn: () => fetchInvite(id) });
 }
 
 export function useShareDocument({

@@ -111,6 +111,25 @@ describe('GET /api/[type]/[id] - authorization gate', () => {
     expect(getInviteDetails).toHaveBeenCalled();
   });
 
+  it('returns 410 with no invite details for a named recipient of an expired invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: VALID_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(410);
+    expect(res._getJSONData()).toEqual({ message: 'Invite has expired' });
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when the invite does not exist', async () => {
     resolveRedeemableInvite.mockResolvedValue(null);
 

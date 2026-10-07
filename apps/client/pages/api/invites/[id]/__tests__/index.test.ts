@@ -132,6 +132,25 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     expect(getInviteDetails).not.toHaveBeenCalled();
   });
 
+  it('returns 410 with no invite details for a named recipient of an expired invite', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(410);
+    expect(res._getJSONData()).toEqual({ message: 'Invite has expired' });
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
   // The route must not pre-judge the key's shape: a share link now carries a token, and narrowing
   // to ObjectIds here would 404 every new invite before the resolver ever saw it.
   it('passes a token through to the resolver untouched', async () => {
@@ -149,7 +168,10 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     (req as any).user = { id: 'u1', email: 'a@x.com' };
     await mockRefs.getHandler!(req, res);
 
-    expect(resolveRedeemableInvite).toHaveBeenCalledWith(INVITE_TOKEN, expect.objectContaining({ db: expect.any(Object) }));
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(
+      INVITE_TOKEN,
+      expect.objectContaining({ db: expect.any(Object) })
+    );
     expect(res._getStatusCode()).toBe(200);
   });
 
