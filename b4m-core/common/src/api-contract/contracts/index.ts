@@ -2,6 +2,8 @@ import type { EndpointContract } from '../types';
 import { chatContract } from './chat.contract';
 import { startAgentExecutionContract, getAgentExecutionContract } from './agentExecutions.contract';
 import { sessionUpdateContract } from './sessionUpdate.contract';
+import { sessionGetContract } from './sessionGet.contract';
+import { sessionDeleteContract } from './sessionDelete.contract';
 import { executeToolContract } from './tools.contract';
 import { createCompletionContract } from './completions.contract';
 import { synthesizeSpeechContract } from './tts.contract';
@@ -9,6 +11,7 @@ import { generateMusicContract } from './music.contract';
 import { generateSoundEffectContract } from './soundEffects.contract';
 import { getMeContract } from './me.contract';
 import { getCreditBalanceContract } from './credits.contract';
+import { listModelsContract } from './models.contract';
 import { generateImageContract } from './imageGeneration.contract';
 import { editImageContract } from './imageEdit.contract';
 import { createFileUploadContract, getFileContract } from './files.contract';
@@ -36,7 +39,9 @@ export const CONTRACTS: readonly EndpointContract[] = [
   chatContract,
   startAgentExecutionContract,
   getAgentExecutionContract,
+  sessionGetContract,
   sessionUpdateContract,
+  sessionDeleteContract,
   executeToolContract,
   createCompletionContract,
   synthesizeSpeechContract,
@@ -44,6 +49,7 @@ export const CONTRACTS: readonly EndpointContract[] = [
   generateSoundEffectContract,
   getMeContract,
   getCreditBalanceContract,
+  listModelsContract,
   generateImageContract,
   editImageContract,
   createFileUploadContract,

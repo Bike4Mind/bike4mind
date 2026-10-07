@@ -95,6 +95,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findCitableFieldsByIds: vi.fn(),
   findCitableFieldsWithTagsByIds: vi.fn(),
   findByBatchId: vi.fn(),
+  findToolGeneratedBySessionId: vi.fn(),
   claimIndexNotification: vi.fn(),
   search: vi.fn(),
   executeSearch: vi.fn(),

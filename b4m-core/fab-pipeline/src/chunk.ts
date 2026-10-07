@@ -7,7 +7,7 @@ import {
   MIN_CHUNK_CHARS_FLOOR,
   MIN_PASSAGE_TOKEN_TARGET,
   OllamaEmbeddingModel,
-  isAudioMimeType,
+  isMediaOnlyMimeType,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   SupportedFabFileMimeTypes,
@@ -339,12 +339,12 @@ export class SmartChunker {
     this.lastExtractedText = undefined;
     this.lastDocumentDate = undefined;
 
-    // Audio (generated TTS / sound effects) is intentionally not vectorizable -
+    // Audio and video (generated media) are intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
     // paths don't log it as an "Unsupported file type" error. The normal ingest
-    // path already skips the chunk-queue enqueue for audio (objectCreated.ts).
-    if (isAudioMimeType(mimeType)) {
-      this.logger.log(`Skipping chunking for audio file type: ${mimeType}`);
+    // path already skips the chunk-queue enqueue for media-only files (objectCreated.ts).
+    if (isMediaOnlyMimeType(mimeType)) {
+      this.logger.log(`Skipping chunking for media-only file type: ${mimeType}`);
       return [];
     }
 

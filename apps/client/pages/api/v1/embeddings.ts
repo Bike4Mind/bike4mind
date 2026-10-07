@@ -38,6 +38,7 @@ import { reserveRequestCredits } from '@server/billing/reserveRequestCredits';
 import { embedTexts, encodeEmbeddingBase64 } from '@server/embeddings/embedTexts';
 import { planEmbeddingDimensions } from '@server/embeddings/planEmbeddingDimensions';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
+import { resolveRequestUsageSource } from '@server/utils/resolveRequestUsageSource';
 
 let sharedTokenizer: ITokenizer | undefined;
 
@@ -116,6 +117,7 @@ const handler = nextRouteForContract(createEmbeddingsContract).post(async (req, 
   });
 
   const requestId = `embeddings-${userId}-${Date.now()}`;
+  const source = resolveRequestUsageSource(req);
   const startedAt = Date.now();
   const recordUsage = (status: 'ok' | 'error', creditsCharged: number, costUsdValue: number) =>
     usageEventRepository
@@ -128,7 +130,7 @@ const handler = nextRouteForContract(createEmbeddingsContract).post(async (req, 
         feature: 'embedding',
         provider,
         model,
-        source: 'api',
+        source,
         inputTokens: promptTokens,
         outputTokens: 0,
         cachedInputTokens: 0,
@@ -167,7 +169,7 @@ const handler = nextRouteForContract(createEmbeddingsContract).post(async (req, 
     model,
     inputTokens: promptTokens,
     outputTokens: 0,
-    source: 'api',
+    source,
   });
   recordUsage('ok', creditsCharged, costUsd);
 

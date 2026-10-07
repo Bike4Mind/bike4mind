@@ -53,8 +53,12 @@ export type DataLakeStatus = (typeof DATA_LAKE_STATUSES)[number];
 /**
  * Statuses a slug lookup (`findBySlug` / `findBySlugAmongIds`) never resolves. The lake keeps
  * reserving its slug (create still disambiguates past it, and restore needs it back), but reaching
- * it by slug would let writes land on a lake the user deleted. `deleting` stays resolvable so an
- * in-flight delete can still be retried or inspected by slug. By-id lookups are unaffected.
+ * it by slug would let writes land on a lake the user deleted. By-id lookups are unaffected.
+ * `deleting` stays resolvable: the lifecycle route re-runs a stuck delete by id OR slug (API keys
+ * included), and hiding it would not 404 but fall through to the next same-slug lake the caller
+ * manages. Slug status does not keep writes off a `deleting` lake. The ingest doors gate on
+ * `isLakeIngestable`; the tag-write doors (tag toggle, createFabFile, file PATCH, presigned upload)
+ * and the PDF ingest script do not check status.
  */
 export const DATA_LAKE_SLUG_UNRESOLVABLE_STATUSES = ['deleted', 'purging'] as const satisfies readonly DataLakeStatus[];
 
@@ -855,6 +859,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     id: string,
     stats: { fileCount: number; totalSizeBytes: number; totalChunkedChars: number }
   ): Promise<IDataLakeDocument | null>;
+  /**
+   * Bumps `updatedAt` and nothing else, so a manage write that would otherwise never write the lake
+   * document collides with a concurrent grant revoke (see the WRITE-TIME RESIDUAL note on
+   * `canManageLake`). Only meaningful inside `withTransaction`, after the gate.
+   *
+   * Skips a lake in a transitional status: `updatedAt` is that lake's stranded clock
+   * (`strandedCutoffMsFor`), and a data-plane write must not make a stuck lifecycle look busy.
+   * Returns whether the lake was touched.
+   */
+  touchIfStable(id: string): Promise<boolean>;
   /**
    * Atomically reserve `amountMicroUsd` of embedding spend against this lake, but only if
    * the running total stays within `limitMicroUsd`. All-or-nothing; false means the caller

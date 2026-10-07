@@ -1027,8 +1027,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       // earlier turn as an input image (see ImageGenerationService.selectInputImage).
       // Include suggestedChoices so history can re-attach a turn's stored choices (see
       // withStoredChoices in @bike4mind/utils).
+      // Include pinned: IChatHistoryItemDocument types it, so omitting it hands every caller undefined.
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob suggestedChoices pinned _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)
