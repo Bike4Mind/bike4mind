@@ -82,3 +82,24 @@ describe('authorizeLakeDriveRead', () => {
     await expect(authorizeLakeDriveRead({ id: 'admin', isAdmin: true }, lake)).rejects.toBeInstanceOf(NotFoundError);
   });
 });
+
+// authorizeLakeDriveRead restates the personal-lake creator check; this pins the two gates together.
+describe('personal-lake parity between the write and read gates', () => {
+  it.each([
+    { who: 'the creator', user: member, admitted: true },
+    { who: 'another user', user: { id: 'other', isAdmin: false }, admitted: false },
+    { who: 'a platform admin', user: { id: 'admin', isAdmin: true }, admitted: false },
+  ])('treats $who the same on both gates', async ({ user, admitted }) => {
+    const lake = { organizationId: null, createdByUserId: 'u1' };
+    const writeAdmits = await authorizeLakeDriveAccess(user, lake).then(
+      () => true,
+      () => false
+    );
+    const readManages = await authorizeLakeDriveRead(user, lake).then(
+      result => result.canManage,
+      () => false
+    );
+    expect(writeAdmits).toBe(admitted);
+    expect(readManages).toBe(admitted);
+  });
+});
