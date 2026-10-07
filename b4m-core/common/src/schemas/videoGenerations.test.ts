@@ -33,9 +33,16 @@ describe('video generation wire schemas', () => {
     });
   });
 
-  it('strips unknown camelCase fields and rejects an over-long prompt', () => {
-    expect(CreateVideoGenerationBodySchema.parse({ model: 'm', prompt: 'p', durationSeconds: 5 })).not.toHaveProperty(
-      'durationSeconds'
+  it('rejects unknown keys (e.g. the removed callbackUrl) and an over-long prompt', () => {
+    const unknownKey = CreateVideoGenerationBodySchema.safeParse({
+      model: 'm',
+      prompt: 'p',
+      callbackUrl: 'https://x.test',
+    });
+    expect(unknownKey.success).toBe(false);
+    expect(unknownKey.error?.issues[0]).toMatchObject({ code: 'unrecognized_keys', keys: ['callbackUrl'] });
+    expect(CreateVideoGenerationBodySchema.safeParse({ model: 'm', prompt: 'p', durationSeconds: 5 }).success).toBe(
+      false
     );
     expect(CreateVideoGenerationBodySchema.safeParse({ model: 'm', prompt: 'x'.repeat(4001) }).success).toBe(false);
   });

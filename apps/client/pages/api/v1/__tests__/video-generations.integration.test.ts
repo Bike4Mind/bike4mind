@@ -205,13 +205,25 @@ describe('POST /api/v1/video-generations', () => {
     expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 
-  it('ignores camelCase field names and applies the catalog default duration', async () => {
+  it('rejects an unknown key such as the removed callbackUrl (422), naming it', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
-    h.createVideoJob.mockResolvedValue({ ok: true, job: videoJob(), created: true });
+    const { req, res } = post({
+      model: 'gemini-omni-1.1-flash',
+      prompt: 'p',
+      callbackUrl: 'https://example.com/hook',
+    });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(422);
+    expect(res._getJSONData()).toMatchObject({ error: expect.stringContaining('Unrecognized key: "callbackUrl"') });
+    expect(h.createVideoJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects camelCase field names (422) rather than silently applying the catalog default', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = post({ model: 'gemini-omni-1.1-flash', prompt: 'p', durationSeconds: 3 });
     await handler(req, res);
-    expect(res._getStatusCode()).toBe(202);
-    expect(h.createVideoJob.mock.calls[0][0].request).toMatchObject({ durationSeconds: 6 });
+    expect(res._getStatusCode()).toBe(422);
+    expect(h.createVideoJob).not.toHaveBeenCalled();
   });
 });
 

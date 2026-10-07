@@ -330,9 +330,13 @@ describe('XaiVideoProvider specifics', () => {
   });
 
   it('maps done with respect_moderation false to blocked, even when a url is present', async () => {
-    expect(
-      await pollWith({ status: 'done', video: { url: VIDEO_URL, duration: 2, respect_moderation: false } })
-    ).toEqual(expect.objectContaining({ status: 'blocked', reason: 'xai_moderation', billed: true }));
+    const withheld = { status: 'done', video: { url: VIDEO_URL, duration: 2, respect_moderation: false } };
+    expect(await pollWith({ ...withheld, usage: { cost_in_usd_ticks: 5 } })).toEqual(
+      expect.objectContaining({ status: 'blocked', reason: 'xai_moderation', billed: true })
+    );
+    expect(await pollWith(withheld)).toEqual(
+      expect.objectContaining({ status: 'blocked', reason: 'xai_moderation', billed: false })
+    );
   });
 
   it('maps a moderated output seen live (a poll 400, still billed) to blocked instead of throwing', async () => {
@@ -353,10 +357,10 @@ describe('XaiVideoProvider specifics', () => {
     expect(await pollWith(zeroCost, status)).toMatchObject({ status: 'blocked', billed: false });
   });
 
-  it('treats a moderated poll 400 without usage as billed, as the observed one was', async () => {
+  it('does not claim billed for a moderated poll 400 without usage', async () => {
     expect(
       await pollWith({ code: 'imagine:content-moderated', error: 'Rejected by content moderation' }, 400)
-    ).toMatchObject({ status: 'blocked', billed: true });
+    ).toMatchObject({ status: 'blocked', billed: false });
   });
 
   it('reads billed from usage on a done job withheld by moderation', async () => {

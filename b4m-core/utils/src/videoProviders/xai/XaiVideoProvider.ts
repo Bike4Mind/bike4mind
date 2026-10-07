@@ -45,11 +45,10 @@ const SubmitResponseSchema = z.looseObject({ request_id: z.string().min(1) });
 // The live moderated 400 carries `usage.cost_in_usd_ticks` (1600000000 for a 2s clip).
 const UsageSchema = z.looseObject({ usage: z.looseObject({ cost_in_usd_ticks: z.number() }) });
 
-// A moderated output was generated before it was withheld; without usage to read, assume xAI billed it, as it did
-// the one observed live.
+// Billed only when xAI's usage says so; without usage we are unsure, so leave it unset per VideoProvider's contract.
 const billedFor = (raw: unknown): boolean => {
   const parsed = UsageSchema.safeParse(raw);
-  return parsed.success ? parsed.data.usage.cost_in_usd_ticks > 0 : true;
+  return parsed.success && parsed.data.usage.cost_in_usd_ticks > 0;
 };
 
 const PollSchema = z.looseObject({
