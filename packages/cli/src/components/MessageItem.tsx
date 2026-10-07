@@ -117,7 +117,7 @@ export const MessageItem = React.memo(function MessageItem({
                         the pair to a single row; nested <Text> keeps the colours. */}
                     <Text wrap={traceWrap}>
                       <Text color="yellow">{formattedToolName}</Text>
-                      {toolInput && !hideArgs && (
+                      {!!toolInput && !hideArgs && (
                         <Text dimColor>{` • ${oneLine(truncateValue(toolInput, ACTION_ARG_LIMIT))}`}</Text>
                       )}
                     </Text>

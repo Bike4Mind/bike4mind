@@ -285,6 +285,27 @@ describe('MessageItem', () => {
       expect(frame).toContain('Result:');
     });
 
+    it.each([undefined, ''])('should omit the args row when toolInput is %j', toolInput => {
+      const message = createMockMessage({
+        role: 'assistant',
+        content: 'Done',
+        metadata: {
+          steps: [
+            {
+              type: 'action',
+              content: 'Searching...',
+              metadata: { toolName: 'grep_search', toolInput, timestamp: Date.now() },
+            },
+          ],
+        },
+      });
+
+      const frame = render(<MessageItem message={message} />).lastFrame();
+
+      expect(frame).toContain('Grep Search');
+      expect(frame).not.toContain('\u2022');
+    });
+
     it('should show thoughts by default', () => {
       const message = createMockMessage({
         role: 'assistant',
