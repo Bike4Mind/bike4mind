@@ -8,6 +8,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { dataLakeAccessGrantRepository, dataLakeRepository, organizationRepository } from '@bike4mind/database';
 import {
   BadRequestError,
+  ConflictError,
   ForbiddenError,
   GITHUB_LAKE_PLACEHOLDER_NAME,
   HTTPError,
@@ -22,6 +23,7 @@ import {
 import { clearStateNonce, NONCE_SLOT } from '@server/auth/oauthFlowCookie';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { assertLakeConnectorFree } from '@server/dataLakes/assertLakeConnectorFree';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { serializeError } from '@server/utils/serializeError';
 
@@ -85,14 +87,26 @@ async function findReusablePendingLake(req: Request, organizationId: string): Pr
     await resolveConnectableLake(req.user, lake.id);
     return lake;
   } catch (error) {
-    if (error instanceof HTTPError) {
-      // Unmark it so the finder can move on to a lake that can still connect instead of every retry inserting.
-      await dataLakeRepository.clearPendingConnector(lake.id);
-      return null;
+    if (!(error instanceof HTTPError)) throw error;
+    // A live claim with no connector row yet is another tab mid-bind on this lake: that bind clears the
+    // marker if it succeeds, and the lake is reusable again if it fails, so keep it marked.
+    if (error instanceof ConflictError && !(await isBoundToConnector(lake.id))) {
+      throw new ConflictError('A GitHub connect for this data lake is already in progress. Try again shortly.');
     }
-    throw error;
+    // Unmark it so the finder can move on to a lake that can still connect instead of every retry inserting.
+    await dataLakeRepository.clearPendingConnector(lake.id);
+    return null;
   }
 }
+
+const isBoundToConnector = (lakeId: string): Promise<boolean> =>
+  assertLakeConnectorFree(lakeId).then(
+    () => false,
+    (error: unknown) => {
+      if (error instanceof ConflictError) return true;
+      throw error;
+    }
+  );
 
 /**
  * Removes a lake this request just created when its connect never started. The lake is brand new

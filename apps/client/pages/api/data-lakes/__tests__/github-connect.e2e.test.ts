@@ -10,7 +10,9 @@ import {
   DataLakeModel,
   DataLakeAccessGrantModel,
   LakeConfigChangeEventModel,
+  LakeConnectorClaim,
   dataLakeAccessGrantRepository,
+  lakeConnectorClaimRepository,
 } from '@bike4mind/database';
 import { GITHUB_LAKE_PLACEHOLDER_NAME, NotFoundError } from '@bike4mind/common';
 import { nameLakeAfterRepository } from '@server/integrations/github/dataLake/githubLakeConnection';
@@ -137,6 +139,7 @@ afterEach(async () => {
     DataLakeModel.deleteMany({}),
     DataLakeAccessGrantModel.deleteMany({}),
     LakeConfigChangeEventModel.deleteMany({}),
+    LakeConnectorClaim.deleteMany({}),
   ]);
 });
 
@@ -323,6 +326,20 @@ describe('POST /api/data-lakes/github-connect', () => {
     expect(lakeIdOf(third.json)).toBe(lakeIdOf(second.json));
     const stale = await DataLakeModel.findById(lakeIdOf(first.json)).lean();
     expect(stale?.pendingConnector).toBeUndefined();
+  });
+
+  it('keeps a placeholder lake marked and refuses with a 409 while another connect holds its claim', async () => {
+    const first = makeRes();
+    await run(makeReq({ organizationId: ORG }), first.res);
+    const lakeId = lakeIdOf(first.json);
+    await lakeConnectorClaimRepository.tryAcquire({
+      lakeId,
+      kind: 'github',
+      connectionId: new mongoose.Types.ObjectId().toString(),
+    });
+    await expect(run(makeReq({ organizationId: ORG }), makeRes().res)).rejects.toMatchObject({ statusCode: 409 });
+    expect(await DataLakeModel.countDocuments({})).toBe(1);
+    expect((await DataLakeModel.findById(lakeId).lean())?.pendingConnector).toBe('github');
   });
 
   it('creates a lake the bind-time rename renames, stamps and audits', async () => {
