@@ -19,6 +19,7 @@ import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   SEARCH_BUDGET_SETTING_KEYS,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  isBlankSettingValue,
   type SettingKey,
 } from './settings';
 import {
@@ -629,6 +630,26 @@ describe('forcedRetrievalCharBudget agrees with the forced-retrieval fallback (#
     expect(settingsMap.forcedRetrievalCharBudget.max).toBe(100_000);
     expect(() => settingsMap.forcedRetrievalCharBudget.schema.parse(100_001)).toThrow();
     expect(settingsMap.forcedRetrievalCharBudget.schema.parse(100_000)).toBe(100_000);
+  });
+});
+
+describe('isBlankSettingValue', () => {
+  // The single definition of "nobody stored a choice": the scoped resolver, the forced-retrieval
+  // reads and the update route all route through it, so its edge behavior is a contract, not a
+  // helper detail. `0` / `'0'` / `false` are real stored values and must NOT read as blank.
+  it.each([undefined, null, '', ' ', '\t'])('reads %j as no stored choice', raw => {
+    expect(isBlankSettingValue(raw)).toBe(true);
+  });
+
+  it.each([0, '0', false, 'false', 75, '75'])('leaves a real stored value %j alone', raw => {
+    expect(isBlankSettingValue(raw)).toBe(false);
+  });
+
+  it('pins the settings whose blank save deletes the platform row', () => {
+    // The clearDeletesRow gate is what makes "clear the field" mean unset for this one key. A second
+    // key opting in silently would change that key's clear semantics, so pin the set here.
+    const clearing = (Object.keys(settingsMap) as SettingKey[]).filter(key => settingsMap[key].clearDeletesRow === true);
+    expect(clearing).toEqual(['forcedRetrievalMinSimilarityPct']);
   });
 });
 

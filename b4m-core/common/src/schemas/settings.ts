@@ -861,8 +861,9 @@ interface BaseSetting {
 }
 
 /**
- * A missing, null or whitespace-only stored value. A number setting's schema rewrites it into the
- * declared default, so it means "unset", not a choice of that default.
+ * "No stored choice", for a setting of ANY type (the scoped resolver applies this to every key, not
+ * just numbers): a missing, null or whitespace-only stored value. A number setting's schema rewrites
+ * one into the declared default, which is exactly why a stored default must not read as a choice of it.
  */
 export function isBlankSettingValue(raw: unknown): boolean {
   return raw == null || (typeof raw === 'string' && raw.trim() === '');
