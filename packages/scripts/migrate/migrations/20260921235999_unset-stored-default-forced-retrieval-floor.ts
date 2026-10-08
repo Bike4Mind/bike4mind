@@ -37,8 +37,9 @@ type ScopedRow = Row & { scopeLevel?: unknown; scopeId?: unknown };
  * winning scoped 75 went per space even over, say, a platform 80; removing it would silently expose
  * that 80. Such a row is kept and logged instead: it now pins 75 in every space, a change too, but it
  * is the admin's explicit value and the log lets an operator choose. An org row's wider rung is the
- * platform row. An owner row can sit under any org the user is in, so it is kept if the platform OR
- * any live org row for this key is non-neutral - conservative, and it needs no membership lookup.
+ * platform row. An owner row's org rung is the org row with the SAME scopeId: `scopeForCaller` (the
+ * only resolver for this key, in services/src/settings/resolveScopedSetting.ts) keys an org member at
+ * `owner:<orgId>` + `organization:<orgId>`, and an org-less user at `owner:<userId>` with no org rung.
  */
 async function removeRows(
   label: string,
@@ -61,10 +62,17 @@ const migration: MigrationFile = {
     const scopedRows: ScopedRow[] = await ScopedSetting.find(filter).lean();
 
     const platform = adminRows.find(r => !isNeutral(r.settingValue));
-    const org = scopedRows.find(r => r.scopeLevel === SettingScopeLevel.Organization && !isNeutral(r.settingValue));
     // The non-neutral value a scoped 75 was shadowing, if any; removing the row would expose it.
     const shadowed = (row: ScopedRow): Row | undefined =>
-      platform ?? (row.scopeLevel === SettingScopeLevel.Owner ? org : undefined);
+      platform ??
+      (row.scopeLevel === SettingScopeLevel.Owner
+        ? scopedRows.find(
+            r =>
+              r.scopeLevel === SettingScopeLevel.Organization &&
+              String(r.scopeId) === String(row.scopeId) &&
+              !isNeutral(r.settingValue)
+          )
+        : undefined);
 
     const scopedIds: unknown[] = [];
     // A blank overlay row parses to the prefaulted 75 and wins, so it is a stored 75 in effect.
@@ -74,6 +82,7 @@ const migration: MigrationFile = {
       const wider = live ? shadowed(row) : undefined;
       if (!wider) {
         scopedIds.push(row._id);
+        console.log(`${LOG} removing ${String(row.scopeLevel)}:${String(row.scopeId)} (_id ${String(row._id)})`);
         continue;
       }
       console.log(
@@ -93,8 +102,8 @@ const migration: MigrationFile = {
     await removeRows('scopedsettings', scopedIds, f => ScopedSetting.deleteMany(f));
   },
 
-  // Irreversible by design: every removed row sat over neutral wider rungs, so its scope resolved per
-  // embedding space before and after. Kept rows are untouched.
+  // No automatic down: every removed row's scope resolved per embedding space before and after. Platform
+  // rows are hard-deleted; overlay rows stay as soft-deleted tombstones (logged by _id) for a manual restore.
   down: async () => {},
 };
 

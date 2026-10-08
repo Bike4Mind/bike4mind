@@ -110,14 +110,28 @@ describe('unset-stored-default-forced-retrieval-floor', () => {
     expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-x'] } });
   });
 
-  it('keeps an owner 75 while any org row holds a different value, but still removes an org 75', async () => {
+  it('removes an owner 75 whose own org rung is unset, even while another org holds a different value', async () => {
     rows.admin = [];
-    rows.scoped = [org('org-60', '60'), org('org-75', '75'), owner('u1', '75')];
+    rows.scoped = [org('org-x', '60'), org('org-75', '75'), owner('u1', '75')];
 
     await migration.up();
 
-    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-75'] } });
-    expect(logs().some(l => l.includes('kept owner:u1') && l.includes('60'))).toBe(true);
+    expect(deleteMany.scoped).toHaveBeenCalledWith({ _id: { $in: ['org-75', 'u1'] } });
+    expect(logs().some(l => l.includes('kept'))).toBe(false);
+    expect(logs().some(l => l.includes('removing owner:u1 (_id u1)'))).toBe(true);
+  });
+
+  it('keeps an owner 75 under its same-scopeId org row holding a different value', async () => {
+    rows.admin = [];
+    rows.scoped = [
+      org('org-60', '60'),
+      { _id: 'owner-row', settingValue: '75', scopeLevel: 'owner', scopeId: 'org-60' },
+    ];
+
+    await migration.up();
+
+    expect(deleteMany.scoped).not.toHaveBeenCalled();
+    expect(logs().some(l => l.includes('kept owner:org-60') && l.includes('60'))).toBe(true);
   });
 
   it.each([

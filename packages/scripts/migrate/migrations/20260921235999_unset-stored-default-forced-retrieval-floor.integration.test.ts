@@ -109,8 +109,8 @@ describe('unset-stored-default-forced-retrieval-floor migration (real DB)', () =
 
   it('ignores a soft-deleted org row when deciding whether to keep an owner 75', async () => {
     await raw('scopedsettings').insertMany([
-      { ...scopedRow(KEY, '60', 'org-gone'), deletedAt: new Date() },
-      scopedRow(KEY, '75', 'user-a', 'owner'),
+      { ...scopedRow(KEY, '60', 'org-a'), deletedAt: new Date() },
+      scopedRow(KEY, '75', 'org-a', 'owner'),
     ]);
 
     await migration.up();
