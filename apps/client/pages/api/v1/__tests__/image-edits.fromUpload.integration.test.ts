@@ -81,7 +81,7 @@ vi.mock('@server/files/createPresignedUpload', () => ({
 vi.mock('@server/files/loadAccessibleFabFile', () => ({ loadAccessibleFabFile: mockLoadAccessibleFabFile }));
 vi.mock('@server/managers/sessionManager', () => ({ getOrCreateSession: vi.fn().mockResolvedValue({}) }));
 vi.mock('@server/utils/orgAccess', () => ({ resolveBillingOrgId: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@server/queueHandlers/imageEdit', () => ({ getImageEdit: () => ({ invoke: mockInvoke }) }));
+vi.mock('@server/imageGenerations/imageEdit', () => ({ getImageEdit: () => ({ invoke: mockInvoke }) }));
 
 import uploadHandler from '../files/index';
 import getFileHandler from '../files/[id]/index';
