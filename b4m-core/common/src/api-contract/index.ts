@@ -5,6 +5,7 @@ export { startAgentExecutionContract, getAgentExecutionContract } from './contra
 export { sessionUpdateContract } from './contracts/sessionUpdate.contract';
 export { sessionGetContract } from './contracts/sessionGet.contract';
 export { sessionDeleteContract } from './contracts/sessionDelete.contract';
+export { sessionCloneContract } from './contracts/sessionClone.contract';
 export { executeToolContract } from './contracts/tools.contract';
 export { createCompletionContract } from './contracts/completions.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
