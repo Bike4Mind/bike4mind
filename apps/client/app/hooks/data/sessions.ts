@@ -108,14 +108,16 @@ const filtersFromQueryKey = (queryKey: readonly unknown[]): SessionListFilters |
 
 /**
  * updateAllQueryData scoped to the 'sessions' collection, with sessionMatchesListFilters checked
- * before the create-path insert. Every 'sessions' cache write (create, rename, the
+ * before the create-path insert. Every create-capable 'sessions' cache write (create, rename, the
  * `session.created` realtime fan-out, ...) should go through this instead of calling
  * updateAllQueryData directly: without the filter check, a session that doesn't match a given
  * cached list's Content/Origin filter (sidenavFilters.ts) would still get spliced into that list's
  * first page the moment any write touches it - silently undoing the filter the user chose (e.g. an
- * API-created session appearing while viewing "Hide API"). Routing every write through this one
- * gate means a future call site can't reintroduce that gap by omission. writeCopiedSession
- * (clone/fork/snip) is a thin wrapper over it that only adds the surface refetch.
+ * API-created session appearing while viewing "Hide API"). Routing every create-capable write
+ * through this one gate means a future call site can't reintroduce that gap by omission; a caller
+ * that only updates already-cached entries passes no keysAllowedToCreate and may use
+ * updateAllQueryData directly. writeCopiedSession (clone/fork/snip) is a thin wrapper over it that
+ * only adds the surface refetch.
  */
 export function updateSessionsQueryData(
   queryClient: QueryClient,
