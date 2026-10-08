@@ -794,6 +794,63 @@ describe('runModelDiscovery', () => {
         const controlRows = bedrock.catalog.rows.filter(row => row.modelId === 'anthropic.foo-v1:0');
         expect(controlRows.some(row => row.patch.lifecycle?.status === 'deprecated')).toBe(true);
       });
+
+      describe('frozen profile ids', () => {
+        it('persists and warns on a profile id whose foundation id the listing omitted', async () => {
+          const bedrock = harness([
+            stubSource({
+              name: 'bedrock',
+              kind: 'provider',
+              records: [bareFoundation],
+              authoritativeFor: [ModelBackend.Bedrock],
+            }),
+          ]);
+          await seedActive(bedrock, 'global.anthropic.claude-opus-9-v1:0', 'Claude Opus 9 (global)');
+
+          const result = await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+          expect(result.absence.frozenProfileIds).toEqual(['global.anthropic.claude-opus-9-v1:0']);
+          expect(bedrock.runs.docs.at(-1)?.frozenProfileIds).toEqual(['global.anthropic.claude-opus-9-v1:0']);
+          expect(bedrock.warnings.some(message => message.includes('global.anthropic.claude-opus-9-v1:0'))).toBe(true);
+        });
+
+        it('persists an empty list and stays quiet when nothing is frozen', async () => {
+          const bedrock = harness([
+            stubSource({
+              name: 'bedrock',
+              kind: 'provider',
+              records: [bareFoundation],
+              authoritativeFor: [ModelBackend.Bedrock],
+            }),
+          ]);
+
+          await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+          expect(bedrock.runs.docs.at(-1)?.frozenProfileIds).toEqual([]);
+          expect(bedrock.warnings.some(message => message.includes('frozen'))).toBe(false);
+        });
+
+        it('caps the logged profile ids at 20 and counts the rest', async () => {
+          const bedrock = harness([
+            stubSource({
+              name: 'bedrock',
+              kind: 'provider',
+              records: [bareFoundation],
+              authoritativeFor: [ModelBackend.Bedrock],
+            }),
+          ]);
+          for (let index = 0; index < 21; index += 1) {
+            await seedActive(bedrock, `global.anthropic.claude-opus-${index}-v1:0`, `Opus ${index}`);
+          }
+
+          const result = await runModelDiscovery(bedrock.adapters, bedrock.options);
+
+          expect(result.absence.frozenProfileIds).toHaveLength(21);
+          const warning = bedrock.warnings.find(message => message.includes('frozen'));
+          expect(warning).toContain('21 Bedrock profile id(s) frozen');
+          expect(warning).toContain('(+1 more)');
+        });
+      });
     });
 
     describe('typed and docs signals', () => {

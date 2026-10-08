@@ -81,6 +81,43 @@ describe('B4mApiClient', () => {
     expect(mockPost).toHaveBeenCalledWith('/api/sessions/create', { name: 'My NB' });
   });
 
+  it('queues an image generation, mapping notebookId to sessionId and omitting unset fields', async () => {
+    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+
+    await client.generateImage({ prompt: 'a lighthouse', model: 'gpt-image-1', notebookId: 'nb1' });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
+      prompt: 'a lighthouse',
+      model: 'gpt-image-1',
+      sessionId: 'nb1',
+    });
+  });
+
+  it('forwards size and projectId on an image generation', async () => {
+    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+
+    await client.generateImage({ prompt: 'p', model: 'gpt-image-1', size: '1024x1024', projectId: 'p1' });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
+      prompt: 'p',
+      model: 'gpt-image-1',
+      size: '1024x1024',
+      projectId: 'p1',
+    });
+  });
+
+  it('sends prompt_resolution on an image generation when promptResolution is set', async () => {
+    mockPost.mockResolvedValue({ quest: { id: 'q1' } });
+
+    await client.generateImage({ prompt: 'p', model: 'gpt-image-2', promptResolution: 'literal' });
+
+    expect(mockPost).toHaveBeenCalledWith('/api/ai/generate-image', {
+      prompt: 'p',
+      model: 'gpt-image-2',
+      prompt_resolution: 'literal',
+    });
+  });
+
   it('forwards dataLakeId on create only when set', async () => {
     mockPost.mockResolvedValue({ id: 'n1' });
     await client.createNotebook({ name: 'My NB', dataLakeId: 'lake-1' });

@@ -127,6 +127,8 @@ export const DEFAULT_PRICE_BAND_PCT = 50;
 
 const LOG_PREFIX = '[model-discovery]';
 
+const MAX_LOGGED_FROZEN_PROFILE_IDS = 20;
+
 /**
  * Dropped records kept on the run document. They are a trace, not a ledger, and
  * a pathological run (a feed that renames every field) can drop thousands, which
@@ -461,6 +463,16 @@ async function executeRun(
 
   logPriceFlags(merged.priceFlags, logger);
   logLifecycle(merged, logger);
+  const { frozenProfileIds } = passes[0].plan.absence;
+  if (frozenProfileIds.length > 0) {
+    logger.warn(
+      `${LOG_PREFIX} ${frozenProfileIds.length} Bedrock profile id(s) frozen, foundation id not listed: ` +
+        frozenProfileIds.slice(0, MAX_LOGGED_FROZEN_PROFILE_IDS).join(', ') +
+        (frozenProfileIds.length > MAX_LOGGED_FROZEN_PROFILE_IDS
+          ? ` (+${frozenProfileIds.length - MAX_LOGGED_FROZEN_PROFILE_IDS} more)`
+          : '')
+    );
+  }
 
   await db.discoveryRuns.update({
     id: runId,
@@ -473,6 +485,7 @@ async function executeRun(
     skippedSources,
     joinCoverage: merged.joinCoverage,
     unmatchedIds: merged.unmatchedIds,
+    frozenProfileIds,
     changes: {
       added,
       promoted,
@@ -1480,7 +1493,7 @@ function skippedResult(
     skippedSources: [],
     diff: [],
     droppedRecords: [],
-    absence: { sighted: [], missed: [], frozenBackends: [] },
+    absence: { sighted: [], missed: [], frozenBackends: [], frozenProfileIds: [] },
     prices: { rows: [], flags: [], overrides: [] },
     lifecycle: { transitions: [], dateChanges: [], suggestions: [], wouldDeprecate: [] },
     metrics: emptyMetrics(),

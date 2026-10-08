@@ -41,6 +41,7 @@ const contract: EndpointContract = {
  * undeclared dependency for a type only these tests need.
  */
 type FixtureOperation = {
+  security?: unknown;
   parameters?: { name: string; in: string; required?: boolean; description?: string; schema?: { type?: unknown } }[];
   responses?: Record<string, unknown>;
 };
@@ -143,5 +144,9 @@ describe('registerContract - queryParams', () => {
     });
     const op = getOperation(generated, '/api/v1/fixture-query-only');
     expect(op.responses?.['422']).toBeDefined();
+  });
+
+  it('documents a public contract with an explicit empty security list', () => {
+    expect(operation.security).toEqual([]);
   });
 });

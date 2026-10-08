@@ -334,6 +334,8 @@ const AdminSettingsTab: React.FC = () => {
           'whatsNewAutomationEnabled',
           'whatsNewConfig',
           'whatsNewSyncConfig',
+          // Release notes config is edited in the Release notes tab
+          'releaseNotesConfig',
           // SRE Agent config has its own dedicated admin tab
           'sreAgentConfig',
           // Context Telemetry settings are managed in the Context Inspector tab

@@ -72,6 +72,7 @@ const RUN = {
   catalogDiff: [],
   detailTotals: {} as Record<string, number>,
   unmatchedIds: [],
+  frozenProfileIds: [] as string[],
   droppedRecords: [],
 };
 
@@ -172,6 +173,24 @@ describe('DiscoveryRunDetailModal', () => {
     expect(screen.queryByTestId('discovery-run-catalog-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-skips-toggle')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-operator-conflicts')).not.toBeInTheDocument();
+  });
+
+  it('names the Bedrock profile ids frozen for want of a listed foundation id, and hides the line otherwise', async () => {
+    mockGet.mockResolvedValue({
+      data: { run: runWith({ frozenProfileIds: ['us.anthropic.claude-x-v1:0', 'global.anthropic.claude-y-v1:0'] }) },
+    });
+    renderModal();
+
+    const line = await screen.findByTestId('discovery-run-frozen-profiles');
+    expect(line).toHaveTextContent('(2)');
+    expect(line).toHaveTextContent('us.anthropic.claude-x-v1:0, global.anthropic.claude-y-v1:0');
+  });
+
+  it('omits the frozen profiles line when none are frozen', async () => {
+    renderModal();
+
+    await screen.findByTestId('discovery-run-price-flags-table');
+    expect(screen.queryByTestId('discovery-run-frozen-profiles')).not.toBeInTheDocument();
   });
 
   it('reads a skipped source as skipped rather than as a failure', async () => {
