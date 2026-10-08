@@ -729,6 +729,9 @@ function lifecycleOf(resolved: ResolvedCatalogRecord | undefined): HeldLifecycle
 
 const statusOf = (resolved: ResolvedCatalogRecord | undefined): string | undefined => lifecycleOf(resolved)?.status;
 
+export const isTerminal = (resolved: ResolvedCatalogRecord | undefined): boolean =>
+  TERMINAL_STATUSES.has(statusOf(resolved) ?? '');
+
 const backendOf = (resolved: ResolvedCatalogRecord | undefined): string | undefined =>
   stringOf(resolved?.record.backend);
 

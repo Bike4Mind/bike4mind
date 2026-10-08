@@ -12,6 +12,9 @@ import {
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
+  type GeneratedFile,
+  type GenerateImageResponse,
+  type ImagePromptResolution,
   type QuestErrorCode,
   type SessionDeleteResponse,
   type TTSRequest,
@@ -80,6 +83,10 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
+  // server has no CDN configured).
+  images?: string[];
+  files?: GeneratedFile[];
   // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
   promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
@@ -129,6 +136,16 @@ export interface RawDataLake {
   status?: string;
   file_count?: number;
   [key: string]: unknown;
+}
+
+/** Arguments for POST /api/ai/generate-image; a subset of `GenerateImageRequestBodySchema`. */
+export interface GenerateImageArgs {
+  prompt: string;
+  model: string;
+  size?: string;
+  notebookId?: string;
+  projectId?: string;
+  promptResolution?: ImagePromptResolution;
 }
 
 export interface RawProject {
@@ -326,6 +343,17 @@ export class B4mApiClient {
     }
   }
 
+  async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
+    return this.client.post<GenerateImageResponse>('/api/ai/generate-image', {
+      prompt: args.prompt,
+      model: args.model,
+      ...(args.size ? { size: args.size } : {}),
+      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
+    });
+  }
+
   /**
    * POST a generated-audio request with `encoding: 'base64'` and normalize any
    * server's answer into the JSON shape `schema` describes. Base64 (never binary)
@@ -521,7 +549,7 @@ function decodeArrayBufferErrorBody(error: unknown): unknown {
  * to a whole, non-negative number of seconds. Returns undefined when the header is
  * absent or parses as neither, so callers can omit the retry hint entirely.
  */
-function parseRetryAfterSeconds(value: unknown): number | undefined {
+export function parseRetryAfterSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   const raw = String(value).trim();
   if (/^\d+$/.test(raw)) return Number(raw);

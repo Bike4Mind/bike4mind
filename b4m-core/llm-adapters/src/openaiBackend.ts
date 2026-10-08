@@ -27,7 +27,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
-import { executeToolsBatch } from './executeToolsBatch';
+import { executeToolsBatch, shouldEndTurnAfterTools } from './executeToolsBatch';
 import { recordToolResult, type RecordableToolUse } from './recordToolResult';
 import {
   CompletionInfo,
@@ -1377,6 +1377,28 @@ export class OpenAIBackend implements ICompletionBackend {
               );
             }
 
+            const requestedToolNames = c.message.tool_calls.flatMap(call =>
+              call.type === 'function' ? [call.function.name] : []
+            );
+            if (shouldEndTurnAfterTools(requestedToolNames, options.tools, c.message.content)) {
+              this.logger.info('[Tool Execution] Ending turn: answer already in hand, only end-of-turn tools ran', {
+                model,
+                toolsExecuted: requestedToolNames,
+              });
+              // Non-streaming never forwarded this round's text, so it rides on the terminal emit.
+              await (artifactGuard?.callback ?? callback)([c.message.content ?? ''], {
+                ...splitCacheInclusiveInput(
+                  accumInputTokens + (response.usage?.prompt_tokens || 0),
+                  totalCacheReadTokens
+                ),
+                outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
+                toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                stopReason: 'tool_use',
+              });
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+              return;
+            }
+
             // Keep tools available for MCP tools (enables chaining); remove for built-in tools
             // Carry this turn's tokens forward so the terminal recursive call's
             // emits carry the full multi-turn billable total (each OpenAI API
@@ -1463,6 +1485,8 @@ export class OpenAIBackend implements ICompletionBackend {
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
     let streamFinishReason: string | undefined;
+    // This round's visible answer text, for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
     for await (const chunk of response) {
       chunkCount++;
       const streamedText: string[] = [];
@@ -1511,6 +1535,7 @@ export class OpenAIBackend implements ICompletionBackend {
 
         if (c.delta.content) {
           streamedText[c.index] = (streamedText[c.index] || '') + c.delta.content;
+          streamedRoundText += c.delta.content;
         }
 
         if (c.finish_reason) {
@@ -1749,6 +1774,23 @@ export class OpenAIBackend implements ICompletionBackend {
             { id: outcome.id, name: outcome.name, parameters: outcome.parameters },
             sanitizedResult
           );
+        }
+
+        const requestedToolNames = func.flatMap(tool => (tool.name ? [tool.name] : []));
+        if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+          this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+            model,
+            toolsExecuted: requestedToolNames,
+          });
+          await (artifactGuard?.callback ?? callback)([], {
+            ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+            outputTokens: accumOutputTokens + outputTokens,
+            toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+            cacheStats,
+            stopReason: 'tool_use',
+          });
+          if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+          return;
         }
 
         // Keep tools available for MCP tools (enables chaining); remove for built-in tools.
@@ -2053,8 +2095,11 @@ export class OpenAIBackend implements ICompletionBackend {
     // Named to match the chat streaming path: this turn's cache reads, known only at
     // the terminal Response, so the per-delta emits below carry 0 for it.
     let cachedTokensFromStream = 0;
+    // This round's visible answer text, for shouldEndTurnAfterTools.
+    let streamedRoundText = '';
     for await (const event of stream) {
       if (event.type === 'response.output_text.delta') {
+        streamedRoundText += event.delta;
         await callback([event.delta], {
           ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
           outputTokens: accumOutputTokens + outputTokens,
@@ -2211,6 +2256,22 @@ export class OpenAIBackend implements ICompletionBackend {
     }
 
     const anyMcpTool = resolved.some(r => r.isMcpTool);
+
+    const requestedToolNames = functionCalls.map(fc => fc.name);
+    if (shouldEndTurnAfterTools(requestedToolNames, options.tools, streamedRoundText)) {
+      this.logger.info('[Tool Execution] Ending turn: answer already streamed, only end-of-turn tools ran', {
+        model,
+        toolsExecuted: requestedToolNames,
+      });
+      await (artifactGuard?.callback ?? callback)([], {
+        ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        stopReason: 'tool_use',
+      });
+      if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
+      return;
+    }
 
     // Recurse. Tool results are now in `messages`; carry this turn's tokens forward so
     // the terminal emit reports the full multi-turn billable total. Drop tools for the

@@ -146,6 +146,8 @@ import { Mutex } from 'async-mutex';
 import { z } from 'zod';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { resolveToolAvailability } from './toolAvailability';
+import { resolveVideoToolConfigSafely } from './resolveVideoToolConfigSafely';
+import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import { applyModerationHit, MODERATION_POLICY, moderationThrottleKey } from '../userService/moderationPolicy';
 import { ToolDefinition } from './tools/base/types';
 import { ServerAgentStore } from './agents/ServerAgentStore';
@@ -1715,6 +1717,7 @@ export class ChatCompletionProcess {
     prefetchedSession,
     prefetchedOrganization,
     externalTools,
+    videoToolConfigResolver,
   }: {
     body: z.infer<typeof QuestStartBodySchema>;
     logger: Logger;
@@ -1727,6 +1730,8 @@ export class ChatCompletionProcess {
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
     externalTools?: Record<string, ToolDefinition>;
+    /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
+    videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
   }) {
     const processStartTime = Date.now();
     const timer = new PipelineTimer();
@@ -3061,6 +3066,10 @@ export class ChatCompletionProcess {
         (dataSources as any).remainingUserPrompt = urlResult.remainingPrompt;
       }
 
+      const videoToolConfig = enabledTools.includes('video_generation')
+        ? await resolveVideoToolConfigSafely(videoToolConfigResolver, logger)
+        : null;
+
       let allTools = toolBuilder.buildTools({
         enabledTools,
         // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
@@ -3086,6 +3095,7 @@ export class ChatCompletionProcess {
           edit_image: imageConfig,
           audio_generation: audioConfig,
           web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
+          video_generation: videoToolConfig ?? undefined,
         },
         model,
         organization,

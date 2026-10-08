@@ -119,6 +119,13 @@ export interface ICompletionOptionTools {
    * MCP server. Built-in emitters are pinned in common TOOL_ARTIFACT_EMITTERS, which wins.
    */
   artifactType?: string;
+  /**
+   * Fire-and-forget tool whose result the model never needs to read: when a round already
+   * streamed answer text and every tool it called carries this flag, the adapter ends the
+   * turn instead of making the follow-up model call (which would only restate the answer).
+   * Decided by shouldEndTurnAfterTools (executeToolsBatch.ts). Never honored from MCP servers.
+   */
+  endsTurnAfterText?: boolean;
 }
 
 export interface ICompletionOptions {
