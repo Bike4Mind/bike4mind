@@ -581,7 +581,7 @@ export function useConversation(
         })
         .finally(() => {
           if (!goingOut) return;
-          sendingFor.current = null;
+          if (sendingFor.current === sessionId) sendingFor.current = null;
           // Whatever the outcome: a refused turn has no 'start' coming to clear it.
           if (activeSessionId.current === sessionId) setPreparing(null);
         });
