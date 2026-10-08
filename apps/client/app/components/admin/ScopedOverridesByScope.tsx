@@ -1,4 +1,4 @@
-import { settingsMap, SettingScopeLevel } from '@bike4mind/common';
+import { isBlankSettingValue, settingsMap, SettingScopeLevel } from '@bike4mind/common';
 import {
   useClearScopedSettingOverride,
   useScopedSettingOverrides,
@@ -124,10 +124,13 @@ export function ScopedOverridesByScope() {
               row => row.settingName === setting.key && row.scopeLevel === level && row.scopeId === address
             );
             const isSettableHere = setting.scope?.settableAt.includes(level) === true;
-            // A clearDeletesRow setting with no row is unset, not its declared default (see AdminSettingsTab).
+            // A clearDeletesRow setting with no row - or a blank one, which the resolver also reads
+            // as unset - is unset, not its declared default (see AdminSettingsTab).
+            const storedPlatformValue = platformSettings?.find(row => row.settingName === setting.key)?.settingValue;
             const platformValue =
-              platformSettings?.find(stored => stored.settingName === setting.key)?.settingValue ??
-              (setting.clearDeletesRow ? undefined : setting.defaultValue);
+              setting.clearDeletesRow && isBlankSettingValue(storedPlatformValue)
+                ? undefined
+                : (storedPlatformValue ?? setting.defaultValue);
 
             return (
               <Box

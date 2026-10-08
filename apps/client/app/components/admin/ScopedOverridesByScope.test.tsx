@@ -95,6 +95,18 @@ describe('ScopedOverridesByScope', () => {
     );
   });
 
+  // The resolver and the admin tab both read a blank stored row as unset. The scoped view must not
+  // disagree by printing an empty platform value, which reads as a stored blank.
+  it('reads a blank stored platform row as unset, not an empty value', () => {
+    platformSettings = [{ settingName: 'forcedRetrievalMinSimilarityPct', settingValue: '' } as IAdminSettings];
+    renderPanel();
+    enterAddress('org-1');
+
+    expect(screen.getByTestId('scoped-overrides-by-scope-row-forcedRetrievalMinSimilarityPct')).toHaveTextContent(
+      'no override at this rung (platform: unset, per embedding space)'
+    );
+  });
+
   // DefaultChunkSize is settableAt organization/owner only, so at the lake rung an override can
   // never exist there - saying "no override" would read as if one could be set.
   it('names a rung the setting cannot be set at, rather than calling it un-overridden', () => {
