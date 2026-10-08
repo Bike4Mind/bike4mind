@@ -113,6 +113,6 @@ export const BRIEFCASE_CATALOG_QUERIES = [
   { key: 'writing', type: 'writing' },
   { key: 'learning', type: 'learning' },
   { key: 'personal', personal: true },
-] as const;
+] as const satisfies readonly PromptBatchQueryType[];
 
 export { VISIBILITY_SCOPES_MAX };
