@@ -609,6 +609,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const })
             }
             onRefresh={() => activeId && void window.b4m.pullRequests.refresh(activeId)}
+            onSetOption={(option, enabled) =>
+              activeId
+                ? window.b4m.pullRequests.setOption(activeId, option, enabled)
+                : Promise.resolve({ ok: false as const, error: 'No conversation is open.' })
+            }
           />
 
           <Composer

@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import type { PrBarState } from '@shared/pullRequest';
+import type { PrBarState, PrOption } from '@shared/pullRequest';
 import { IPC_CHANNELS } from '@shared/ipc';
 import type { ChatService } from '../chat/ChatService';
 import type { SessionStore } from '../chat/SessionStore';
@@ -8,6 +8,8 @@ import { runGh } from './gh';
 import { PrGithub } from './github';
 import { PrBindingStore } from './PrBindingStore';
 import { PrMonitor, type PrMonitorLogger } from './PrMonitor';
+
+const OPTIONS: readonly PrOption[] = ['autoFix', 'autoMerge', 'autoArchive'];
 
 export interface RegisterPullRequestsOptions {
   path: string;
@@ -20,7 +22,7 @@ export interface RegisterPullRequestsOptions {
 
 /** Build the PR monitor and expose it to the renderer. */
 export function registerPullRequests(options: RegisterPullRequestsOptions): PrMonitor {
-  const { store, logger, send } = options;
+  const { store, logger, send, chat } = options;
   const watchedSenders = new Set<number>();
   const monitor = new PrMonitor({
     store: new PrBindingStore(options.path),
@@ -34,6 +36,11 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
         if (!project) return null;
         const branch = project.workspaceBranch ?? (await currentBranch(project.workingDirectory).catch(() => null));
         return { workingDirectory: project.workingDirectory, branch };
+      },
+      archive: async sessionId => {
+        const summary = await chat().setSessionArchived(sessionId, true);
+        // The sidebar learns of a change it did not ask for through the summary push.
+        if (summary) send(IPC_CHANNELS.chatSessionSummary, summary);
       },
     },
   });
@@ -62,6 +69,13 @@ export function registerPullRequests(options: RegisterPullRequestsOptions): PrMo
   );
   ipcMain.handle(IPC_CHANNELS.prRefresh, (_event, sessionId: unknown) =>
     typeof sessionId === 'string' ? monitor.refresh(sessionId) : undefined
+  );
+  // Coerced, not trusted: anything but an explicit `true` lands as off, which for auto-merge is
+  // the direction that cannot merge anything.
+  ipcMain.handle(IPC_CHANNELS.prSetOption, (_event, sessionId: unknown, option: unknown, enabled: unknown) =>
+    typeof sessionId === 'string' && OPTIONS.includes(option as PrOption)
+      ? monitor.setOption(sessionId, option as PrOption, enabled === true)
+      : { ok: false, error: 'Unknown option.' }
   );
   return monitor;
 }

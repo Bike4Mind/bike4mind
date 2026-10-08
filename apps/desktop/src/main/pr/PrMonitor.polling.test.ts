@@ -41,7 +41,7 @@ function setup(initial = snapshot({ checks: [check('Build', 'pending')] })) {
   const monitor = new PrMonitor({
     store,
     github: fake.github,
-    chat: { project: async () => null },
+    chat: { project: async () => null, archive: async () => undefined },
     emit: out.emit,
     logger: quietLogger,
     timers: clock.timers,

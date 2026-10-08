@@ -17,7 +17,7 @@ function setup(project: { workingDirectory: string; branch: string | null } | nu
   const monitor = new PrMonitor({
     store,
     github: fake.github,
-    chat: { project: async () => project },
+    chat: { project: async () => project, archive: async () => undefined },
     emit: out.emit,
     logger: quietLogger,
   });

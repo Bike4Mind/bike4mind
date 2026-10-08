@@ -39,7 +39,7 @@ import type {
   UpdateProjectResult,
 } from './chat';
 import type { DevLogRecord, DevLogSnapshot } from './devLog';
-import type { PrActionResult, PrBarState } from './pullRequest';
+import type { PrActionResult, PrBarState, PrOption } from './pullRequest';
 import type { SkillsState } from './skills';
 import type { UpdateInstallResult, UpdateState } from './update';
 import type { AccountUsageResult, UsageWindowId } from './usage';
@@ -219,6 +219,7 @@ export const IPC_CHANNELS = {
   prBind: 'pr:bind',
   prDismiss: 'pr:dismiss',
   prRefresh: 'pr:refresh',
+  prSetOption: 'pr:set-option',
   /** main -> renderer push; one conversation's bar changed. */
   prStateChanged: 'pr:state-changed',
 } as const;
@@ -603,6 +604,11 @@ export interface DesktopApi {
     bind(sessionId: string, url: string): Promise<PrActionResult>;
     dismiss(sessionId: string): Promise<PrActionResult>;
     refresh(sessionId: string): Promise<void>;
+    /**
+     * Switch one automation on or off for this conversation's PR. Each is consent for THAT PR
+     * only; see PrBinding.
+     */
+    setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult>;
     onStateChanged(listener: (state: PrBarState) => void): () => void;
   };
   shell: {

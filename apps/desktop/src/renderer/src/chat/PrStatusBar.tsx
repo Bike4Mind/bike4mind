@@ -5,10 +5,11 @@ import IconButton from '@mui/joy/IconButton';
 import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
-import type { PrActionResult, PrBarState } from '@shared/pullRequest';
+import type { PrActionResult, PrBarState, PrOption } from '@shared/pullRequest';
 import { CloseIcon, ExternalLinkIcon, PullRequestIcon, ReloadIcon } from './icons';
 import { contentColumnSx } from './layout';
 import { ghFixLine, lifecycleLabel, middleTruncate } from './prBarModel';
+import { PrAutomations } from './PrAutomations';
 import { PrCiMenu } from './PrCiMenu';
 
 const BRANCH_MAX_CHARS = 44;
@@ -37,10 +38,12 @@ export function PrStatusBar({
   state,
   onDismiss,
   onRefresh,
+  onSetOption,
 }: {
   state: PrBarState | null;
   onDismiss: () => Promise<PrActionResult>;
   onRefresh: () => void;
+  onSetOption: (option: PrOption, enabled: boolean) => Promise<PrActionResult>;
 }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const binding = state?.binding;
@@ -151,7 +154,11 @@ export function PrStatusBar({
           </Chip>
         )}
 
-        {snapshot && !fix && snapshot.state === 'OPEN' && <PrCiMenu state={state} />}
+        {snapshot && !fix && snapshot.state === 'OPEN' && (
+          <PrCiMenu state={state}>
+            <PrAutomations state={state} onSetOption={onSetOption} />
+          </PrCiMenu>
+        )}
 
         <Tooltip title="Refresh" size="sm" variant="soft">
           <IconButton

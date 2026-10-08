@@ -8,12 +8,14 @@ import {
   type PrBinding,
   type PrBindingSource,
   type PrGhStatus,
+  type PrOption,
   type PrRef,
   type PrSnapshot,
 } from '@shared/pullRequest';
 import { GhError } from './gh';
 import type { PrBindingStore } from './PrBindingStore';
 import type { PrGithub } from './github';
+import { shouldAutoArchive } from './autoArchive';
 import { POLL_MS, pollDelay } from './pollSchedule';
 
 /** Branches a PR lookup is never made for: a PR "for main" is someone else's fork, not this session's work. */
@@ -55,6 +57,8 @@ const realTimers: PrTimers = {
 export interface PrChatHooks {
   /** Where a Code session runs and the branch checked out there; null for anything else. */
   project(sessionId: string): Promise<{ workingDirectory: string; branch: string | null } | null>;
+  /** Move the conversation to the sidebar's Archived section. */
+  archive(sessionId: string): Promise<void>;
 }
 
 export interface PrMonitorLogger {
@@ -247,6 +251,16 @@ export class PrMonitor {
     return { ok: true };
   }
 
+  async setOption(sessionId: string, option: PrOption, enabled: boolean): Promise<PrActionResult> {
+    const binding = await this.deps.store.get(sessionId);
+    if (!binding || binding.dismissed) return { ok: false, error: 'This conversation has no pull request.' };
+    if (option !== 'autoArchive') return { ok: false, error: 'Not available yet.' };
+    await this.deps.store.set(sessionId, { ...binding, autoArchive: enabled });
+    await this.schedule(sessionId);
+    await this.publish(sessionId);
+    return { ok: true };
+  }
+
   async refresh(sessionId: string): Promise<void> {
     // A refresh is the user's way to say they have installed or signed in to gh.
     if (this.gh !== 'ok') this.gh = 'ok';
@@ -389,8 +403,20 @@ export class PrMonitor {
   }
 
   protected async afterRead(sessionId: string, binding: PrBinding, snapshot: PrSnapshot): Promise<void> {
-    if (binding.lastState !== snapshot.state) {
-      await this.deps.store.update(sessionId, current => ({ ...current, lastState: snapshot.state }));
+    // Re-read, not the copy the read started with: the user may have changed an option while gh ran.
+    const current = (await this.deps.store.get(sessionId)) ?? binding;
+    const archiving = shouldAutoArchive(current, snapshot.state);
+    if (current.lastState !== snapshot.state || archiving) {
+      // Recorded before archiving, so a crash in between errs toward not archiving twice.
+      await this.deps.store.set(sessionId, {
+        ...current,
+        lastState: snapshot.state,
+        ...(archiving ? { archivedOnClose: true } : {}),
+      });
+    }
+    if (archiving) {
+      this.deps.logger.debug(`PR: #${snapshot.number} is ${snapshot.state.toLowerCase()}; archiving ${sessionId}`);
+      await this.deps.chat.archive(sessionId).catch(err => this.deps.logger.warn(`PR: archive failed: ${err}`));
     }
   }
 

@@ -26,7 +26,7 @@ import {
   type BrowserPaneRequest,
   type DesktopApi,
 } from '@shared/ipc';
-import type { PrBarState } from '@shared/pullRequest';
+import type { PrBarState, PrOption } from '@shared/pullRequest';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 
@@ -219,6 +219,8 @@ const api: DesktopApi = {
     bind: (sessionId: string, url: string) => ipcRenderer.invoke(IPC_CHANNELS.prBind, sessionId, url),
     dismiss: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prDismiss, sessionId),
     refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),
+    setOption: (sessionId: string, option: PrOption, enabled: boolean) =>
+      ipcRenderer.invoke(IPC_CHANNELS.prSetOption, sessionId, option, enabled),
     onStateChanged: listener => {
       const handler = (_event: unknown, state: PrBarState) => listener(state);
       ipcRenderer.on(IPC_CHANNELS.prStateChanged, handler);
