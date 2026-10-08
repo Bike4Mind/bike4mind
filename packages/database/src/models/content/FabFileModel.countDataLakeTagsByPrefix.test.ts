@@ -278,6 +278,65 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
     });
   });
 
+  describe('restrictToDataLake (one selected lake)', () => {
+    // Prefixes are unique per creator, not install-wide, so two creators' lakes may both use
+    // `docs:`. A viewer who can see both (an admin) selects lake A: only A's members may count.
+    const lakeA = {
+      kind: 'owned' as const,
+      datalakeTag: 'datalake:x:a',
+      fileTagPrefix: 'docs:',
+      creatorUserId: 'creator-x',
+    };
+
+    const seedSharedPrefix = async () => {
+      await makeFile({ userId: 'creator-x', tags: ['datalake:x:a', 'docs:alpha'], fileName: 'a' });
+      await makeFile({ userId: 'creator-y', tags: ['datalake:y:b', 'docs:beta'], fileName: 'b' });
+      // The viewer's own file: same prefix, member of neither lake.
+      await makeFile({ tags: ['docs:gamma'], fileName: 'own' });
+    };
+
+    it("counts only the selected lake's members, not another creator's lake or the viewer's own files", async () => {
+      await seedSharedPrefix();
+
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['docs:'], {
+        dataLakeTags: [lakeA.datalakeTag],
+        lakeMemberships: [lakeA],
+        restrictToDataLake: true,
+      });
+
+      expect(sortedByTag(result)).toEqual([
+        { tag: 'docs', count: 0, fileCount: 1 },
+        { tag: 'docs:alpha', count: 1, fileCount: 1 },
+      ]);
+    });
+
+    it("lets the viewer's own non-member file through without the restriction (the leak it closes)", async () => {
+      await seedSharedPrefix();
+
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['docs:'], {
+        dataLakeTags: [lakeA.datalakeTag],
+        lakeMemberships: [lakeA],
+      });
+
+      expect(result.map(c => c.tag).sort()).toEqual(['docs', 'docs:alpha', 'docs:gamma']);
+    });
+
+    it("still counts a meta-tagged member uploaded by someone other than the lake's creator", async () => {
+      await makeFile({ userId: 'contributor', tags: ['datalake:x:a', 'docs:delta'] });
+
+      const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['docs:'], {
+        dataLakeTags: [lakeA.datalakeTag],
+        lakeMemberships: [lakeA],
+        restrictToDataLake: true,
+      });
+
+      expect(sortedByTag(result)).toEqual([
+        { tag: 'docs', count: 0, fileCount: 1 },
+        { tag: 'docs:delta', count: 1, fileCount: 1 },
+      ]);
+    });
+  });
+
   it('returns nothing for an empty prefix list', async () => {
     await makeFile({ tags: ['acme:uncategorized'] });
 

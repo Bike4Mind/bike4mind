@@ -1292,6 +1292,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       /** Server-supplied only - see buildOwnershipConditions.lakeMemberships. */
       lakeMemberships?: DataLakeMembershipScope[];
+      /** Count only the given lakes' members - see buildOwnershipConditions.restrictToDataLake. */
+      restrictToDataLake?: boolean;
     }
   ): Promise<{ tag: string; count: number; fileCount: number }[]> {
     const usablePrefixes = usableTagPrefixes(tagPrefixes);

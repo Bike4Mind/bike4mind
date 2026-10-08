@@ -1341,6 +1341,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       userGroups?: string[];
       dataLakeTags?: string[];
       dataLakeTagPrefixes?: string[];
+      restrictToDataLake?: boolean;
     }
   ): Promise<{ tag: string; count: number; fileCount: number }[]>;
 
