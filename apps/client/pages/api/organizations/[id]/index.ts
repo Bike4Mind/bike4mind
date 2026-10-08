@@ -66,7 +66,7 @@ const handler = baseApi()
     const id = req.query.id;
 
     // Wrapped in withTransaction (org-groups #1172/#1219): the member purge, the group
-    // soft-deletes, and the org delete must commit together, or a partial failure leaves either
+    // soft-deletes, the user organizationId reset, and the org delete must commit together, or a partial failure leaves either
     // dangling group access or an org that never actually deletes. Repositories join the session
     // automatically via transactionAsyncLocalStorage.
     await withTransaction(() =>
