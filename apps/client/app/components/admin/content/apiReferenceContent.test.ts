@@ -31,6 +31,8 @@ describe('API reference scopes table', () => {
       [...line.slice(line.indexOf(':**')).matchAll(/`([^`]+)`/g)].map(match => match[1])
     );
 
+    // Pin both label forms (plain and "scope for X"); the tokens alone would not catch a dropped line.
+    expect(requiredLines).toHaveLength(2);
     expect(required).toContain('notebooks:read');
     for (const scope of required) {
       expect(listed).toContain(scope);
