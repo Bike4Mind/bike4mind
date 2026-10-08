@@ -15,6 +15,7 @@ import {
   type GeneratedFile,
   type GenerateImageResponse,
   type ImagePromptResolution,
+  type PromptBatchQueryType,
   type QuestErrorCode,
   type TTSRequest,
 } from '@bike4mind/common';
@@ -162,6 +163,18 @@ interface ArtifactListEnvelope {
 export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
+}
+
+/**
+ * A Briefcase prompt. Catalog entries are metadata only; `promptText` ships only
+ * on the by-id fetch.
+ */
+export interface RawBriefcasePrompt {
+  id: string;
+  name: string;
+  description?: string;
+  promptText?: string;
+  [key: string]: unknown;
 }
 
 /**
@@ -427,6 +440,23 @@ export class B4mApiClient {
     return this.client.get<ArtifactWithContent>(`/api/artifacts/${encodeURIComponent(artifactId)}`, {
       params: { includeContent: 'true' },
     });
+  }
+
+  /** POST /api/briefcase/catalog: a key -> prompts map, one entry per query key. */
+  async getBriefcaseCatalog(
+    queries: readonly PromptBatchQueryType[]
+  ): Promise<Record<string, RawBriefcasePrompt[] | undefined>> {
+    const result = await this.client.post<{ catalog: Record<string, RawBriefcasePrompt[]> }>('/api/briefcase/catalog', {
+      queries,
+    });
+    return result.catalog;
+  }
+
+  async getBriefcasePrompt(promptId: string): Promise<RawBriefcasePrompt> {
+    const result = await this.client.get<{ prompt: RawBriefcasePrompt }>(
+      `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
+    );
+    return result.prompt;
   }
 }
 

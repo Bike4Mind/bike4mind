@@ -125,9 +125,9 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 ## Serve Bike4Mind as an MCP server (`b4m mcp serve`)
 
-`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers *into* the CLI.
+`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files, and use your Briefcase prompts. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers *into* the CLI.
 
-### Tools and resources
+### Tools, resources and prompts
 
 | Tool | Does | Scope |
 | --- | --- | --- |
@@ -168,6 +168,8 @@ Alongside those, `b4m://agent-quest` is a single fixed-URI resource (nothing to 
 For a lake-grounded answer, chain `list_lakes` -> `create_notebook { dataLakeId }` -> `send_message { notebookId }`; the reply comes back with its `citables`. Unlike most tools here, the data-lake routes do enforce their scopes, the instance must have data lakes enabled, and a key used with a lake must be bound to it.
 
 Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
+
+It also serves your **Briefcase** prompt catalog as MCP prompts, so a client's prompt picker (for example Claude Desktop's) offers the same one-click prompts as the in-app launcher. Each prompt is named by its id and titled by its display name. A `prompts/get` resolves the template's `{{placeholders}}`: the clock keys (`currentDate`, `currentTime`, `currentDateTime`, `currentYear`) are filled in automatically, and `userName`, `userEmail`, `userRole` and `organization` are optional arguments you supply. A placeholder left unsupplied stays as written. The instance must have the **Enable Briefcase** admin setting on (off by default). With it off, or on any other listing failure, the prompt list comes back empty and the error goes to stderr, the same as resources do. An API key sees the shared system prompts only. Your personal prompts are listed only under `b4m login`.
 
 The **Scope** column in both tables is the *recommended* key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
 

@@ -75,6 +75,21 @@ describe('B4mApiClient', () => {
     expect(mockGet).toHaveBeenCalledWith('/api/sessions/n%201');
   });
 
+  it('posts the briefcase catalog queries and unwraps the catalog map', async () => {
+    const catalog = { general: [{ id: 'p1', name: 'Summarize' }] };
+    mockPost.mockResolvedValue({ catalog });
+    const queries = [{ key: 'general', type: 'general' }];
+    await expect(client.getBriefcaseCatalog(queries)).resolves.toEqual(catalog);
+    expect(mockPost).toHaveBeenCalledWith('/api/briefcase/catalog', { queries });
+  });
+
+  it('gets a briefcase prompt by id (url-encoded) and unwraps it', async () => {
+    const prompt = { id: 'p 1', name: 'Summarize', promptText: 'Hi' };
+    mockGet.mockResolvedValue({ prompt });
+    await expect(client.getBriefcasePrompt('p 1')).resolves.toEqual(prompt);
+    expect(mockGet).toHaveBeenCalledWith('/api/briefcase/prompts/p%201');
+  });
+
   it('creates a notebook with only the provided fields', async () => {
     mockPost.mockResolvedValue({ id: 'n1' });
     await client.createNotebook({ name: 'My NB' });

@@ -1,22 +1,11 @@
 import { useMemo } from 'react';
 import { Box, Typography, CircularProgress, Sheet, Button } from '@mui/joy';
-import type { IPromptBatchQuery } from '@bike4mind/common';
+import { BRIEFCASE_CATALOG_QUERIES } from '@bike4mind/common';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useBriefcaseCatalog } from '@client/app/hooks/data/briefcase';
 import { BriefcaseLauncher } from './BriefcaseLauncher';
 
-/**
- * Default catalog layout: one launcher group per seeded system category, plus
- * the caller's personal prompts. Categories map to the `type` discriminator on
- * seeded system prompts (see the briefcase seed migration).
- */
-const CATALOG_QUERIES: IPromptBatchQuery[] = [
-  { key: 'general', type: 'general' },
-  { key: 'writing', type: 'writing' },
-  { key: 'learning', type: 'learning' },
-  { key: 'personal', personal: true },
-];
-
+// Keyed by BRIEFCASE_CATALOG_QUERIES keys.
 const GROUP_LABELS: Record<string, string> = {
   general: 'General',
   writing: 'Writing',
@@ -32,11 +21,14 @@ const GROUP_LABELS: Record<string, string> = {
 export function BriefcasePanel({ onLaunched }: { onLaunched?: () => void } = {}) {
   const { isFeatureEnabled, isLoading: featureLoading } = useFeatureEnabled();
   const enabled = isFeatureEnabled('enableBriefcase');
-  const { data, isLoading, isError, refetch } = useBriefcaseCatalog(CATALOG_QUERIES, enabled);
+  const { data, isLoading, isError, refetch } = useBriefcaseCatalog(BRIEFCASE_CATALOG_QUERIES, enabled);
 
   // Computed before any early return so the hook order is stable.
   const groups = useMemo(
-    () => CATALOG_QUERIES.map(q => ({ key: q.key, prompts: data?.[q.key] ?? [] })).filter(g => g.prompts.length > 0),
+    () =>
+      BRIEFCASE_CATALOG_QUERIES.map(q => ({ key: q.key, prompts: data?.[q.key] ?? [] })).filter(
+        g => g.prompts.length > 0
+      ),
     [data]
   );
 
