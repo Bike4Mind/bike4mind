@@ -23,9 +23,10 @@ import {
   LAKE_RECALL_K_DEFAULT,
   libraryFlagForScope,
   SettingScopeLevel,
+  settingsMap,
 } from '@bike4mind/common';
 import { invalidateScopedSettingsCache, invalidateSettingsCache } from '@bike4mind/utils';
-import type { CitableSource, ISessionDocument, IChatHistoryItemDocument } from '@bike4mind/common';
+import type { CitableSource, ISessionDocument, IChatHistoryItemDocument, SettingKey } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 
 // Partial mock: ChatCompletionFeatures pulls only `getRelevantMementos` from this module, and the V1
@@ -3384,6 +3385,15 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     expect((ctx.logger as unknown as { log: ReturnType<typeof vi.fn> }).log).toHaveBeenCalledWith(
       expect.stringContaining('absolute floor 58% resolved for embedding space "text-embedding-3-small"')
     );
+  });
+
+  it('a missing platform row on the plain read path is unset, not the declared 75', async () => {
+    const ctx = makeCtx({ scores: [0.9, 0.7, 0.6], platform: smallSpace, withScopedOverlay: false });
+    ctx.db.adminSettings.getSettingsValue = vi.fn(async (key: string) =>
+      key in smallSpace ? smallSpace[key as keyof typeof smallSpace] : settingsMap[key as SettingKey]?.defaultValue
+    );
+    const { injected } = await run(ctx);
+    expect(injected).toEqual([0, 1, 2]);
   });
 
   // Inject the RAW absolute value past the schema both read paths run (1..100), which is the only
