@@ -119,6 +119,15 @@ describe('repairBedrockProfileAbsence', () => {
     const first = await repairBedrockProfileAbsence({ apply: true, log: silent });
     expect(first.repaired).toBe(1);
 
+    // `source` decides precedence in resolveCatalogRecords, so the appended row must stay discovery.
+    const appended = await ModelCatalog.find({
+      modelId: 'global.anthropic.claude-sonnet-4-6',
+      note: /^discovery:absence-repair@/,
+    }).lean();
+    expect(appended).toHaveLength(1);
+    expect(appended[0].source).toBe('discovery');
+    expect(appended[0].note).toMatch(/^discovery:absence-repair@\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+
     const rows = await modelCatalogRepository.rowsInForce(new Date());
     // Active AND undated, or isModelDeprecated would still hide it from /api/models.
     expect(lifecycleOf(rows, 'global.anthropic.claude-sonnet-4-6')).toMatchObject({ status: 'active' });
@@ -182,6 +191,23 @@ describe('repairBedrockProfileAbsence', () => {
     expect(resolveCatalogRecords(rows).get(modelId)?.record.contextWindow).toBe(1_000_000);
 
     expect((await repairBedrockProfileAbsence({ apply: true, log: silent })).repaired).toBe(0);
+  });
+
+  it('skips a discovery deprecation whose note is not an absence graduation', async () => {
+    const modelId = 'global.anthropic.claude-haiku-5';
+    await modelCatalogRepository.append(seedRow(modelId, { status: 'active' }));
+    await modelCatalogRepository.append({
+      ...restated(modelId, { status: 'deprecated', deprecationDate: '2026-08-01' }),
+      effectiveFrom: AT,
+    });
+    const before = await ModelCatalog.countDocuments({});
+
+    const result = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    expect(result.candidates).toEqual([]);
+    expect(await ModelCatalog.countDocuments({})).toBe(before);
+
+    const rows = await modelCatalogRepository.rowsInForce(new Date());
+    expect(lifecycleOf(rows, modelId)).toMatchObject({ status: 'deprecated', deprecationDate: '2026-08-01' });
   });
 
   it('leaves a profile id a later discovery row deprecated for its own reason', async () => {
