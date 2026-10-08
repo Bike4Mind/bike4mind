@@ -295,7 +295,7 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
       await makeFile({ tags: ['docs:gamma'], fileName: 'own' });
     };
 
-    it("counts only the selected lake's members, not another creator's lake or the viewer's own files", async () => {
+    it("counts only the selected lake's members, not the viewer's own same-prefix files", async () => {
       await seedSharedPrefix();
 
       const result = await fabFileRepository.countDataLakeTagsByPrefix(USER, ['docs:'], {

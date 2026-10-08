@@ -2182,7 +2182,7 @@ export function useGetDataLakeTagCounts(source: DataLakeBrowseSource = 'opti') {
 
 /** Response shape for the tag-counts endpoint when scoped to selected lakes (`?lakeId=`). */
 export interface DataLakeScopedTagCountsResponse {
-  tagCounts: { tag: string; count: number }[];
+  tagCounts: { tag: string; count: number; fileCount: number }[];
 }
 
 /**

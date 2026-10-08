@@ -40,15 +40,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
       // directly from `result.grantedLakeIds` (queryDataLakeArticles's own gate already computed
       // it) rather than recomputing the same grantingLakes call a second time. The list/search
       // branch can be a mixed corpus when no lakeId is supplied (owned + shared + org-shared + data
-      // lake), so a hit with no recoverable tag may be the caller's own private file. Never fall back
-      // there; selected-lake attribution must use the same narrowed set as the search.
+      // lake), so a hit with no recoverable tag may be the caller's own private file.
+      // Fall back only when a lakeId is supplied: the search is then restricted to the selected
+      // lakes' members, so an unattributable (prefix-only) hit is still selected-lake content.
+      // Selected-lake attribution must use the same narrowed set as the search.
       const isDeepLink = !!req.query.id;
       const resolvedLakeIds = isDeepLink
         ? (result.grantedLakeIds ?? [])
         : dataLakeService.attributeAccessedLakeIds(
             files.map(f => f.tags?.map(t => t.name) ?? []),
             auditLakes,
-            { allowFullScopeFallback: false }
+            { allowFullScopeFallback: req.query.lakeId !== undefined }
           );
       if (isDeepLink || resolvedLakeIds.length > 0) {
         // Only the list/search branch actually runs a search - queryDataLakeArticles's deep-link
