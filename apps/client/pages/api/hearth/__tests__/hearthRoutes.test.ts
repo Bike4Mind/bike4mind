@@ -391,6 +391,9 @@ describe('POST /api/hearth/events machine payload validation', () => {
       undefined,
       { schema: 'hearth.delegation@1', payload: { task: 'run tests' } },
       { schema: 'hearth.delegation@1', payload: { targetActorId: 'actor-2', task: '' } },
+      // Over the 4000-char cap, and a null payload (the presence `?? {}` must not widen here).
+      { schema: 'hearth.delegation@1', payload: { targetActorId: 'actor-2', task: 'a'.repeat(4001) } },
+      { schema: 'hearth.delegation@1', payload: null },
     ]) {
       await expect(post()(makeReq(delegation(machine)), makeRes())).rejects.toBeInstanceOf(ZodError);
     }
@@ -464,6 +467,7 @@ describe('POST /api/hearth/events machine payload validation', () => {
   });
 
   it('accepts a hearth.presence@1 event with a null payload, as the projection does', async () => {
+    hearthLogAppendMock.mockResolvedValue({ ...DOMAIN_EVENT, kind: 'presence' });
     const res = makeRes();
     await post()(
       makeReq({
@@ -475,6 +479,11 @@ describe('POST /api/hearth/events machine payload validation', () => {
       res
     );
     expect(res.statusCode).toBe(201);
+    // The stored event keeps the null; the projection is what reads it as {}.
+    expect(hearthLogAppendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ machine: { schema: 'hearth.presence@1', payload: null } })
+    );
+    expect(upsertPresenceMock).toHaveBeenCalledTimes(1);
   });
 
   it('treats a schema name that shadows an Object.prototype key as unknown', async () => {

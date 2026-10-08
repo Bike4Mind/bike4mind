@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ZodError } from 'zod';
 import { HearthLog } from './log';
 import { InMemoryHearthStore } from './store';
 import type { AppendEventInput } from './types';
@@ -92,7 +93,9 @@ describe('HearthLog', () => {
     const log = new HearthLog(new InMemoryHearthStore());
     const { origin: _origin, ...noOrigin } = message();
     // any: deliberately missing origin to exercise runtime validation
-    await expect(log.append(noOrigin as any)).rejects.toThrow();
+    const err = await log.append(noOrigin as any).catch(e => e);
+    expect(err).toBeInstanceOf(ZodError);
+    expect((err as ZodError).issues.some(i => i.path[0] === 'origin')).toBe(true);
   });
 
   it('rejects malformed input', async () => {
