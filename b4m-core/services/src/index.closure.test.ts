@@ -120,6 +120,19 @@ describe('@bike4mind/services barrel closure', () => {
   it.each([
     ['llm/toolFinishObserver.ts', 'apps/client baseApi middleware, via toolGearObserver'],
     ['llm/questStartBody.ts', 'apps/client server/utils/eventBus.ts'],
+    ['llm/historyBudgetConstants.ts', 'leaf budget constants shared by Process and Features'],
+    ['llm/ChatCompletionFeatures.ts', 'apps/client queue handlers and slack; clean only after the cycle fix'],
+    ['llm/ChatCompletionInvoke.ts', 'apps/client pages/api/ai/llm.ts and slack'],
+    ['llm/ImageGeneration.ts', 'apps/client server/queueHandlers/imageGeneration.ts'],
+    ['llm/ImageEdit.ts', 'apps/client server/queueHandlers/imageEdit.ts'],
+    ['llm/toolAvailability.ts', 'apps/client pages/api/settings/serverConfig.ts'],
+    ['llm/imageModerationGate.ts', 'apps/client generate-avatar + knowledgeModerationDeps'],
+    ['llm/SmallLLMService.ts', 'apps/client server/deepAgent'],
+    ['llm/reranker/index.ts', 'apps/client pages/api/sessions/semantic-search.ts'],
+    ['llm/intentClassifier.ts', 'apps/client pages/api/ai/classify-intent.ts'],
+    ['llm/refineText.ts', 'apps/client pages/api/ai/refineText.ts'],
+    ['llm/artifactGating.ts', 'apps/client server/utils/artifactGate.ts'],
+    ['llm/agents/ServerAgentStore.ts', 'apps/client pages/api/admin/model-deprecation-status.ts'],
   ])('keeps %s free of the tool registry', module => {
     const closure = traceFrom(path.join(SRC, module));
     const trail = closure.pathTo.get(TOOL_REGISTRY);

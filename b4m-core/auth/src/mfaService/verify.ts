@@ -47,7 +47,7 @@ export async function verifyMFA(
   // this SAME write. Clearing must happen here, not from this function's return value: the
   // repository echo is not +selected, so a caller-side `update({ mfa })` built from it would
   // omit - and thus `$set`-replace-wipe - the plaintext secrets, permanently bricking MFA.
-  const updatedMFA = clearFailedAttempts(user);
+  const updatedMFA = clearFailedAttempts(user.mfa);
   updatedMFA.lastUsedAt = new Date();
 
   // Remove used backup code if applicable

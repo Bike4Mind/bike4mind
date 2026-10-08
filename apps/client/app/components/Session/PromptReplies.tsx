@@ -1,5 +1,6 @@
 import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
+import { GeneratedVideoJobs } from '@client/app/components/Session/GeneratedVideoJobs';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
 import React, {
@@ -593,6 +594,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
+        videoJobIds={messageData.videoJobIds}
         audio={audio}
         search={search}
         isExpandable={isExpandable}
@@ -1142,6 +1144,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   images = [],
   generatedFiles = [],
   videos = [],
+  videoJobIds = [],
   audio = [],
   search,
   isExpandable = false,
@@ -1576,6 +1579,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                 images.length > 0 ||
                 generatedFiles.length > 0 ||
                 videos.length > 0 ||
+                videoJobIds.length > 0 ||
                 audio.length > 0 ||
                 navSuggestions) && (
                 <Box
@@ -1691,6 +1695,8 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             ))}
                           </Box>
                         )}
+
+                        <GeneratedVideoJobs jobIds={videoJobIds} />
 
                         {videos?.length > 0 && (
                           <Box

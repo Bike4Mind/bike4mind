@@ -34,6 +34,7 @@ beforeEach(async () => {
 });
 
 const AT = new Date('2026-09-01T00:00:00Z');
+const NOW = new Date('2026-09-15T00:00:00Z');
 const silent = () => undefined;
 
 const bedrockRecord = (id: string, lifecycle: ModelRecord['lifecycle']): ModelRecord => ({
@@ -116,8 +117,17 @@ describe('repairBedrockProfileAbsence', () => {
   it('repairs only the absence-graduated profile id, and a second apply is a no-op', async () => {
     await seed();
 
-    const first = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    const first = await repairBedrockProfileAbsence({ apply: true, log: silent, now: NOW });
     expect(first.repaired).toBe(1);
+
+    // `source` decides precedence in resolveCatalogRecords, so the appended row must stay discovery.
+    const appended = await ModelCatalog.find({
+      modelId: 'global.anthropic.claude-sonnet-4-6',
+      note: /^discovery:absence-repair@/,
+    }).lean();
+    expect(appended).toHaveLength(1);
+    expect(appended[0].source).toBe('discovery');
+    expect(appended[0].note).toBe(`discovery:absence-repair@${NOW.toISOString()}`);
 
     const rows = await modelCatalogRepository.rowsInForce(new Date());
     // Active AND undated, or isModelDeprecated would still hide it from /api/models.
@@ -182,6 +192,27 @@ describe('repairBedrockProfileAbsence', () => {
     expect(resolveCatalogRecords(rows).get(modelId)?.record.contextWindow).toBe(1_000_000);
 
     expect((await repairBedrockProfileAbsence({ apply: true, log: silent })).repaired).toBe(0);
+  });
+
+  it('skips a discovery deprecation with no absence graduation in its history', async () => {
+    const modelId = 'global.anthropic.claude-haiku-5';
+    await modelCatalogRepository.append(seedRow(modelId, { status: 'active' }));
+    // An earlier discovery row deprecated the id for its own reason, then a later
+    // one carried the same deprecation forward. Neither note is an absence
+    // graduation, so the history lookup must reject the earlier row.
+    await modelCatalogRepository.append({
+      ...restated(modelId, { status: 'deprecated', deprecationDate: '2026-08-01' }),
+      effectiveFrom: AT,
+    });
+    await modelCatalogRepository.append(restated(modelId, { status: 'deprecated', deprecationDate: '2026-08-01' }));
+    const before = await ModelCatalog.countDocuments({});
+
+    const result = await repairBedrockProfileAbsence({ apply: true, log: silent });
+    expect(result.candidates).toEqual([]);
+    expect(await ModelCatalog.countDocuments({})).toBe(before);
+
+    const rows = await modelCatalogRepository.rowsInForce(new Date());
+    expect(lifecycleOf(rows, modelId)).toMatchObject({ status: 'deprecated', deprecationDate: '2026-08-01' });
   });
 
   it('leaves a profile id a later discovery row deprecated for its own reason', async () => {

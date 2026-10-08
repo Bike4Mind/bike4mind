@@ -54,6 +54,8 @@ const MOVED_MODULES = [
       'sreRevision',
       'vectorizeStrandRecovery',
       'webhookDelivery',
+      'whatsNewGeneration',
+      'whatsNewHighlights',
     ],
   },
 ] as const;

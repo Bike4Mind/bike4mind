@@ -55,7 +55,11 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
 }));
 
 import { handler, runQuestTimeoutSweep } from './questTimeoutSweep';
-import { QUEST_TIMEOUT_THRESHOLD_MS, UNFINISHED_REPLY_NOTICE } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  QUEST_TIMEOUT_THRESHOLD_MS,
+  STUCK_QUEST_RECOVERED_LOG,
+  UNFINISHED_REPLY_NOTICE,
+} from '@server/chatCompletion/questTimeoutRecovery';
 
 const staleQuest = (overrides: Record<string, unknown> = {}) => ({
   id: 'q-1',
@@ -123,8 +127,14 @@ describe('questTimeoutSweep cron', () => {
     await handler();
 
     // The Slack error channel is fed only by ERROR-level lines (infra/logMonitor.ts);
-    // a warn-level recovery is invisible to LiveOps triage.
-    expect(mockLogger.error).toHaveBeenCalledWith('[QuestTimeoutSweep] Recovered stuck quest', { questId: 'q-1' });
+    // a warn-level recovery is invisible to LiveOps triage. The message is the shared
+    // recovery constant so the same filter catches every settle site.
+    expect(mockLogger.error).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
+      questId: 'q-1',
+      via: 'sweep',
+    });
+    const recoveryLogs = mockLogger.error.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+    expect(recoveryLogs).toHaveLength(1);
   });
 
   it('recovers a stuck quest with content by flipping status only (no error clobber)', async () => {
@@ -179,6 +189,10 @@ describe('questTimeoutSweep cron', () => {
 
     expect(result).toEqual({ status: 'OK', recovered: 1 });
     expect(mockSettleIfUnfinished).toHaveBeenCalledTimes(2);
+    // The failed write must not alert: only q-ok was actually recovered, exactly once.
+    const recoveryLogs = mockLogger.error.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+    expect(recoveryLogs).toHaveLength(1);
+    expect(recoveryLogs[0][1]).toEqual({ questId: 'q-ok', via: 'sweep' });
   });
 
   it('does not count a quest that finished between the read and the write', async () => {
@@ -190,6 +204,11 @@ describe('questTimeoutSweep cron', () => {
 
     expect(result).toEqual({ status: 'OK', recovered: 1 });
     expect(metricValue(QUEST_METRICS.TimeoutSweepRecovered)).toBe(1);
+    // The lost race must not alert: the settle site that actually won logs for itself. Only the
+    // recovered quest is reported, exactly once.
+    const recoveryLogs = mockLogger.error.mock.calls.filter(([msg]) => msg === STUCK_QUEST_RECOVERED_LOG);
+    expect(recoveryLogs).toHaveLength(1);
+    expect(recoveryLogs[0][1]).toEqual({ questId: 'q-stuck', via: 'sweep' });
   });
 
   it('reports candidate depth separately from recovered count', async () => {

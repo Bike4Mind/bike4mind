@@ -1,6 +1,8 @@
 import type { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import {
   type EndpointContract,
+  ForbiddenError,
+  HTTPError,
   type RequestBodyOf,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
@@ -37,13 +39,19 @@ export type LambdaRateLimit = (ctx: {
 
 export type LambdaRouteOptions = { rateLimit?: LambdaRateLimit };
 
+/** A ForbiddenError (authenticated but forbidden, e.g. a suspended account) is a 403;
+ * any other auth throw, plain Errors included, is a 401. */
+function authFailureStatus(error: unknown): 401 | 403 {
+  return error instanceof ForbiddenError ? 403 : 401;
+}
+
 /**
  * AWS Lambda Function URL adapter for an {@link EndpointContract} - the transport
  * used for public endpoints the Next.js API can't serve (SST dev + Function URLs +
  * CloudFront had socket hang-ups; see cli/tools.ts).
  *
  * Owns the boilerplate every Function-URL handler repeats: request-id resolution,
- * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401, via resolveContractAuth
+ * the contract's method (405), body parsing (400), DB connect, contract-driven auth (401/403, via resolveContractAuth
  * so every JWT/API-key gate matches the rest of the app), optional rate limiting
  * (429, via `options.rateLimit`), contract validation (422 - the pattern's uniform
  * validation gate), JSON response shaping, and turning a thrown handler error into a
@@ -109,7 +117,7 @@ export function defineLambdaRoute<C extends EndpointContract>(
       try {
         auth = await resolveContractAuth(event.headers ?? {}, contract);
       } catch (error) {
-        return json(401, {
+        return json(authFailureStatus(error), {
           error: error instanceof Error ? error.message : 'Authentication failed',
           request_id: requestId,
         });
@@ -148,9 +156,17 @@ export function defineLambdaRoute<C extends EndpointContract>(
       result = await handle({ validated, auth, requestId, event });
     } catch (error) {
       // A thrown handler error must not surface as an opaque API-gateway 502 -
-      // shape it into a 500 with the correlation id. Log it too, or the id in the
-      // body has nothing to correlate to in CloudWatch.
-      new Logger({ metadata: { requestId } }).error(`[${contract.operationId}] Unhandled handler error`, error);
+      // shape it with the correlation id. Log it too, or the id in the body has
+      // nothing to correlate to in CloudWatch. An HTTPError keeps its own status,
+      // logged at the same levels as errorHandler's Next transport.
+      const log = new Logger({ metadata: { requestId } });
+      if (error instanceof HTTPError) {
+        const message = `[${contract.operationId}] ${error.statusCode}: ${error.message}`;
+        if (error.statusCode >= 500 && !error.expected) log.error(message, error);
+        else log.warn(message);
+        return json(error.statusCode, { error: error.message, request_id: requestId });
+      }
+      log.error(`[${contract.operationId}] Unhandled handler error`, error);
       return json(500, {
         error: error instanceof Error ? error.message : 'Internal server error',
         request_id: requestId,

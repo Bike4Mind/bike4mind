@@ -45,7 +45,7 @@ vi.mock('@bike4mind/database', async orig => {
   return { ...actual };
 });
 
-vi.mock('@bike4mind/services/llm', async orig => {
+vi.mock('@bike4mind/services/llm/ImageGeneration', async orig => {
   const actual = await orig<Record<string, unknown>>();
   return {
     ...actual,
@@ -53,10 +53,18 @@ vi.mock('@bike4mind/services/llm', async orig => {
       constructor(_opts: unknown) {}
       process = h.mockImageGenerationProcess;
     },
+  };
+});
+
+vi.mock('@bike4mind/services/llm/ImageEdit', async orig => {
+  const actual = await orig<Record<string, unknown>>();
+  return {
+    ...actual,
     ImageEditService: class MockImageEditService {
       constructor(_opts: unknown) {}
       process = h.mockImageEditProcess;
     },
+
   };
 });
 

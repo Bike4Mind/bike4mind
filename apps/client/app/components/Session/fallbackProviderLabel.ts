@@ -1,13 +1,9 @@
-import { ModelBackend, type FallbackInfo } from '@bike4mind/common';
+import { ModelBackend, isBedrockRegionProfileId, type FallbackInfo } from '@bike4mind/common';
 
-// Bedrock-hosted model ids carry a region scope (us./eu./apac./global.) or a bare vendor-dot
-// prefix; direct-provider ids are bare slugs (e.g. claude-opus-4-8, gpt-5). Keep in sync with
-// the id conventions in b4m-core/common/src/models.ts.
-const BEDROCK_ID_PREFIXES = [
-  'us.',
-  'eu.',
-  'apac.',
-  'global.',
+// Bedrock-hosted model ids carry a region scope (see isBedrockRegionProfileId) or a bare
+// vendor-dot prefix; direct-provider ids are bare slugs (e.g. claude-opus-4-8, gpt-5). Keep in
+// sync with the id conventions in b4m-core/common/src/models.ts.
+const BEDROCK_VENDOR_PREFIXES = [
   'anthropic.',
   'amazon.',
   'meta.',
@@ -37,7 +33,7 @@ export function getModelProviderLabel(modelId: string | undefined, backend?: str
   const id = modelId.toLowerCase();
 
   if (backend === ModelBackend.Ollama) return 'Ollama';
-  if (BEDROCK_ID_PREFIXES.some(prefix => id.startsWith(prefix))) return 'Bedrock';
+  if (isBedrockRegionProfileId(id) || BEDROCK_VENDOR_PREFIXES.some(prefix => id.startsWith(prefix))) return 'Bedrock';
   if (id.startsWith('claude')) return 'Anthropic direct';
   if (id.startsWith('gpt') || id.startsWith('chatgpt') || /^o\d/.test(id)) return 'OpenAI';
   if (id.startsWith('gemini')) return 'Google';

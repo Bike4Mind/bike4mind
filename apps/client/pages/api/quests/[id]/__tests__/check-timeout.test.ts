@@ -39,12 +39,20 @@ const sessionRepository = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({ questRepository, sessionRepository }));
 
 const resolveQuestTimeoutRecovery = vi.hoisted(() => vi.fn());
-vi.mock('@server/chatCompletion/questTimeoutRecovery', () => ({ resolveQuestTimeoutRecovery }));
+vi.mock('@server/chatCompletion/questTimeoutRecovery', async () => {
+  // Keep the real exports (notably STUCK_QUEST_RECOVERED_LOG) so the assertion pins the message
+  // every settle site must share; only the decision function is stubbed.
+  const actual = await vi.importActual<typeof import('@server/chatCompletion/questTimeoutRecovery')>(
+    '@server/chatCompletion/questTimeoutRecovery'
+  );
+  return { ...actual, resolveQuestTimeoutRecovery };
+});
 
 const dispatchQuestCallback = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/generationCallback/dispatchQuestCallback', () => ({ dispatchQuestCallback }));
 
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { STUCK_QUEST_RECOVERED_LOG } from '@server/chatCompletion/questTimeoutRecovery';
 import '@pages/api/quests/[id]/check-timeout';
 
 const quest = (overrides: Record<string, unknown> = {}) => ({
@@ -102,6 +110,13 @@ describe('POST /api/quests/[id]/check-timeout', () => {
     });
     expect(dispatchQuestCallback).toHaveBeenCalledTimes(1);
     expect(dispatchQuestCallback).toHaveBeenCalledWith('quest-1', req.logger);
+    // The recovery that actually settles a watched quest must reach the LiveOps Slack channel;
+    // without this line the sweep never gets the chance (the quest is no longer running).
+    expect(req.logger.error).toHaveBeenCalledTimes(1);
+    expect(req.logger.error).toHaveBeenCalledWith(STUCK_QUEST_RECOVERED_LOG, {
+      questId: 'quest-1',
+      via: 'check-timeout',
+    });
     expect(res._getJSONData()).toEqual(updatedQuest);
   });
 
@@ -116,6 +131,8 @@ describe('POST /api/quests/[id]/check-timeout', () => {
 
     expect(questRepository.settleIfUnfinished).not.toHaveBeenCalled();
     expect(dispatchQuestCallback).not.toHaveBeenCalled();
+    // A live quest is not a stall; no recovery, no alert.
+    expect(req.logger.error).not.toHaveBeenCalled();
     expect(res._getJSONData()).toEqual(liveQuest);
   });
 
@@ -131,6 +148,9 @@ describe('POST /api/quests/[id]/check-timeout', () => {
     await mockRefs.handler!(req, res);
 
     expect(dispatchQuestCallback).not.toHaveBeenCalled();
+    // A lost race means another settle site won and logs for itself - logging here would double
+    // every recovery.
+    expect(req.logger.error).not.toHaveBeenCalled();
     expect(res._getJSONData()).toEqual(wonByAnotherSite);
   });
 

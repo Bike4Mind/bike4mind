@@ -14,10 +14,12 @@ import {
   UnprocessableEntityError,
   VideoModelIdSchema,
   type CreateVideoGenerationBody,
+  type GenerationJobSource,
   type VideoGenerationRequest,
 } from '@bike4mind/common';
 import { generationJobRepository } from '@bike4mind/database';
 import { createVideoJob, type CreateVideoJobResult } from '@bike4mind/services/videoJobs';
+import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateVideoJobDeps } from '@server/generationJobs/wiring';
@@ -70,14 +72,18 @@ const createRouter = nextRouteForContract(createVideoGenerationContract, {
 }).post(async (req, res) => {
   const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
   const request = toDomainRequest(req.validated);
+  // 'studio' means any first-party session (the SPA), not only the Studio page; an API key is the public API.
+  // Idempotency keys are scoped per source, so the same key sent from both is two different requests.
+  const source: GenerationJobSource = isApiKeyAuth(req) ? 'api' : 'studio';
   // createVideoJob refuses a keyless provider itself, after its idempotent replay lookup.
   const result = await createVideoJob(
     {
       user: { id: req.user.id, organizationId: await resolveBillingOrgId(req, undefined) },
       request,
-      source: 'api',
-      // The domain scopes keys per credit owner (the org for members); per user here keeps members apart.
-      ...(idempotencyKey && { idempotencyKey: `api:${req.user.id}:${idempotencyKey}` }),
+      source,
+      // The domain scopes keys per credit owner (the org for members): per user keeps members apart, and per
+      // source keeps a studio retry from replaying an API job that reused the same key.
+      ...(idempotencyKey && { idempotencyKey: `${source}:${req.user.id}:${idempotencyKey}` }),
     },
     getCreateVideoJobDeps()
   );

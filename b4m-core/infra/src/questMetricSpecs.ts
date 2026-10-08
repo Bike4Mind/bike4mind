@@ -1,6 +1,6 @@
 /**
  * CloudWatch namespace and metric names for quest-lifecycle metrics. Emitted by
- * apps/client/server/chatCompletion/internal/route.ts and apps/workers/src/cron/questTimeoutSweep.ts;
+ * apps/client/server/chatCompletion/processingFailedMetric.ts and apps/workers/src/cron/questTimeoutSweep.ts;
  * the questProcessingFailures alarm in infra/alarms.ts watches ProcessingFailed. Renaming a value
  * starts a new CloudWatch series and orphans the existing history and dashboards.
  */

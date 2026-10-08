@@ -60,12 +60,14 @@ export const VideoGenerationErrorResponseSchema = ApiErrorSchema.extend({
   errorCode: z.enum(VIDEO_GENERATION_API_ERROR_CODES).optional(),
 });
 
+export const VIDEO_PROMPT_MAX_LENGTH = 4000;
+
 // No transforms or defaults: omitted fields take the model's catalog defaults in the handler.
 // Strict so a caller migrating from the removed Sora body (e.g. `callbackUrl`, webhooks no longer exist) gets a 422
 // naming the key instead of a 202 and a webhook that never arrives.
 export const CreateVideoGenerationBodySchema = z.strictObject({
   model: z.string().min(1).describe('A model id from GET /api/v1/video-models.'),
-  prompt: z.string().min(1).max(4000),
+  prompt: z.string().min(1).max(VIDEO_PROMPT_MAX_LENGTH),
   mode: z
     .enum(VIDEO_MODES)
     .optional()

@@ -79,7 +79,7 @@ vi.mock('../di/registry', () => ({
 
 // Mock ChatCompletionInvoke
 const mockInvoke = vi.fn();
-vi.mock('@bike4mind/services/llm', () => ({
+vi.mock('@bike4mind/services/llm/ChatCompletionInvoke', () => ({
   ChatCompletionInvoke: vi.fn().mockImplementation(function () {
     return {
       invoke: mockInvoke,

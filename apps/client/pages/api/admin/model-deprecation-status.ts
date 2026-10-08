@@ -12,7 +12,7 @@ import {
   resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
 import { modelDiscoveryService } from '@bike4mind/services';
-import { builtInAgentModelReferences } from '@bike4mind/services/llm';
+import { builtInAgentModelReferences } from '@bike4mind/services/llm/agents/ServerAgentStore';
 import { ApiKeyScope, toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 

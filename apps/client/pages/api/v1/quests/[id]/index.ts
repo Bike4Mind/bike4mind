@@ -3,7 +3,11 @@ import { NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { getQuestContract } from '@bike4mind/common';
 import { toQuestPollBody } from '@server/utils/questPollBody';
-import { applyRecoveryInMemory, resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
+import {
+  applyRecoveryInMemory,
+  resolveQuestTimeoutRecovery,
+  STUCK_QUEST_RECOVERED_LOG,
+} from '@server/chatCompletion/questTimeoutRecovery';
 import { dispatchQuestCallback } from '@server/generationCallback/dispatchQuestCallback';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 
@@ -60,6 +64,9 @@ const handler = nextRouteForContract(getQuestContract, {
         // rather than the stale value the read returned.
         applyRecoveryInMemory(quest, recovery);
         quest.updatedAt = new Date();
+        // The headless poll is a real settle site, not just a read - alert only when this GET won
+        // the write, so a lost race does not double-log alongside the winner.
+        req.logger.error(STUCK_QUEST_RECOVERED_LOG, { questId: quest.id, via: 'v1-poll' });
         await dispatchQuestCallback(quest.id, req.logger);
       }
     } catch (err) {

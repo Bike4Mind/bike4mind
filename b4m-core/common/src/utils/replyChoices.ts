@@ -160,9 +160,9 @@ export function extractChoicesBlock(reply: string): ExtractedChoices {
 }
 
 /**
- * {@link extractChoicesBlock} over the reply slots. Only the last slot with visible text - the
- * final answer - is read and stripped; earlier slots (reasoning, or a pre-tool-call answer) are
- * returned untouched, so an abandoned draft block can never supply the options.
+ * {@link extractChoicesBlock} over the reply slots. Every slot's block is stripped (a pre-tool-call
+ * answer must not leak raw JSON), but only the last slot with visible text - the final answer -
+ * supplies the options, so an abandoned earlier draft block can never offer buttons.
  */
 export function stripChoicesFromReplies(replies: readonly string[]): {
   replies: string[];
@@ -170,14 +170,13 @@ export function stripChoicesFromReplies(replies: readonly string[]): {
   found: boolean;
   outcome: ReplyChoicesOutcome;
 } {
-  const stripped = [...replies];
-  let answerIndex = stripped.length - 1;
-  while (answerIndex >= 0 && !visibleReplyText(stripped[answerIndex])) answerIndex -= 1;
+  const stripped = replies.map(slot => (visibleReplyText(slot) ? extractChoicesBlock(slot).text : slot));
+  let answerIndex = replies.length - 1;
+  while (answerIndex >= 0 && !visibleReplyText(replies[answerIndex])) answerIndex -= 1;
   if (answerIndex < 0) return { replies: stripped, choices: null, found: false, outcome: ABSENT };
 
-  const result = extractChoicesBlock(stripped[answerIndex]);
-  if (result.found) stripped[answerIndex] = result.text;
-  return { replies: stripped, choices: result.choices, found: result.found, outcome: result.outcome };
+  const { choices, found, outcome } = extractChoicesBlock(replies[answerIndex]);
+  return { replies: stripped, choices, found, outcome };
 }
 
 type ParsedOptions = { options: ChoiceOption[] } | { reason: ReplyChoicesInvalidReason };
@@ -276,7 +275,9 @@ export function applyReplyChoices(quest: {
 }): ReplyChoicesOutcome {
   const fromSlots = stripChoicesFromReplies(quest.replies ?? []);
   const fromReply = typeof quest.reply === 'string' ? extractChoicesBlock(quest.reply) : null;
-  if (fromSlots.found) quest.replies = fromSlots.replies;
+  // Not gated on `found`: that describes the final slot only, and an earlier slot's block must
+  // still be stripped before it is stored. Slots without a block pass through unchanged.
+  if (quest.replies) quest.replies = fromSlots.replies;
   if (fromReply?.found) quest.reply = fromReply.text;
   const options = fromSlots.choices ?? fromReply?.choices ?? null;
   quest.suggestedChoices = options ? { options } : undefined;

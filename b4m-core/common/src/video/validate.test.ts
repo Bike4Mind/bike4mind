@@ -11,6 +11,7 @@ const rangeCaps: VideoModelCapabilities = {
   aspectRatios: ['16:9', '9:16'],
   resolutions: ['720p', '1080p'],
   defaults: { durationSeconds: 4, aspectRatio: '16:9', resolution: '720p' },
+  typicalRenderSeconds: 8,
   audio: 'optional',
   pricing: { unit: 'per_second', usdByResolution: { '720p': 0.1, '1080p': 0.2 } },
   defaultEnabled: true,

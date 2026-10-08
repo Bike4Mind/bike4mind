@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { getApiReferenceContent } from './content/apiReferenceContent';
 import { getQuickstartContent } from './content/quickstartContent';
 import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { useGenericApiKeyScopes } from '@client/app/hooks/useGenericApiKeyScopes';
 
 const markdownStyles = {
   '& h1': { fontSize: '1.8rem', fontWeight: 700, mt: 3, mb: 2 },
@@ -63,6 +64,7 @@ const markdownStyles = {
 
 const ApiReferenceTab = () => {
   const [view, setView] = useState<'full' | 'quickstart'>('full');
+  const scopes = useGenericApiKeyScopes();
 
   return (
     <Box sx={{ p: 3, height: '100%', overflow: 'auto' }}>
@@ -134,7 +136,12 @@ const ApiReferenceTab = () => {
         <Alert color="warning" variant="soft" sx={{ mb: 2 }} data-testid="api-reference-drift-banner">
           <Typography level="body-sm">
             This reference is hand-maintained and may lag the code. Where an endpoint has a contract, the{' '}
-            <Link href={ExternalLinks.apiDocs} target="_blank" rel="noopener noreferrer">
+            <Link
+              href={ExternalLinks.apiDocs}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="api-reference-drift-docs-link"
+            >
               generated interactive API docs
             </Link>{' '}
             are authoritative; this page covers the endpoints that do not have one yet.
@@ -144,7 +151,7 @@ const ApiReferenceTab = () => {
       <Sheet variant="outlined" sx={{ p: 3, borderRadius: 'lg', ...markdownStyles }}>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {view === 'full'
-            ? getApiReferenceContent(window.location.origin)
+            ? getApiReferenceContent(window.location.origin, scopes)
             : getQuickstartContent(window.location.origin)}
         </ReactMarkdown>
       </Sheet>

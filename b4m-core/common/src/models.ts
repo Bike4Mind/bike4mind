@@ -219,9 +219,14 @@ export enum ChatModels {
   CLAUDE_4_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-5-20251101-v1:0',
   CLAUDE_4_6_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-4-6',
   CLAUDE_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5',
+  CLAUDE_5_5_SONNET_BEDROCK = 'global.anthropic.claude-sonnet-5-5',
   CLAUDE_4_6_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-6-v1',
   CLAUDE_4_7_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-7',
   CLAUDE_4_8_OPUS_BEDROCK = 'global.anthropic.claude-opus-4-8',
+  CLAUDE_FABLE_5_BEDROCK = 'global.anthropic.claude-fable-5',
+  CLAUDE_FABLE_5_1_BEDROCK = 'global.anthropic.claude-fable-5-1',
+  CLAUDE_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5',
+  CLAUDE_5_5_OPUS_BEDROCK = 'global.anthropic.claude-opus-5-5',
 
   // Anthropic hosted Anthropic models
   CLAUDE_3_OPUS = 'claude-3-opus-20240229',
@@ -449,16 +454,21 @@ export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * The API will reject requests that include temperature for these models.
  */
 export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
-  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5/5.5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  // Opus 4.7+, Sonnet 5+, Fable 5+, and Opus 5+ remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
   ChatModels.CLAUDE_4_7_OPUS,
   ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
   ChatModels.CLAUDE_4_8_OPUS,
   ChatModels.CLAUDE_4_8_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
+  ChatModels.CLAUDE_5_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
   ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_OPUS_BEDROCK,
   ChatModels.CLAUDE_5_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS_BEDROCK,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
   // as unmodifiable: the chat API reference states only the moonshot-v1 family
   // accepts them, and the thinking guide says outright that for kimi-k2.7-code
@@ -490,9 +500,14 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
  * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
  * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
- * sync with the `claude-fable-5` fallback preference chain in `adminSettings/fallback.ts`.
+ * sync with the `claude-fable-5` and Bedrock Fable fallback preference chains in
+ * `adminSettings/fallback.ts`.
  */
-export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([ChatModels.CLAUDE_FABLE_5]);
+export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_FABLE_5_BEDROCK,
+  ChatModels.CLAUDE_FABLE_5_1_BEDROCK,
+]);
 
 /**
  * Bedrock-hosted Claude models that do NOT support prompt caching (`cache_control`).

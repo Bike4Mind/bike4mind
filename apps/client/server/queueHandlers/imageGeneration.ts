@@ -13,7 +13,7 @@ import {
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
-import { ImageGenerationService } from '@bike4mind/services/llm';
+import { ImageGenerationService } from '@bike4mind/services/llm/ImageGeneration';
 import { SQSService } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { Logger } from '@bike4mind/observability';

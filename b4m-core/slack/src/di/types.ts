@@ -62,6 +62,7 @@ export interface GetOrCreateSessionParams {
   ability?: unknown;
   logger: ILogger;
   fabFileIds?: string[];
+  persistFabFileIds?: boolean;
   origin?: ISessionOrigin;
 }
 

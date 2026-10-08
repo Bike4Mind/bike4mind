@@ -48,7 +48,7 @@ contract, because a violation fails the build.
   silently mutate caller input (fail-quiet) and are opaque to zod-to-openapi. Use
   `.default()` for defaults and do domain filtering/coercion in the handler
   (e.g. `filterKnownTools`). This keeps the schema OpenAPI-representable with no doc
-  projection. `requestDoc` on the contract exists only as a rare escape hatch.
+  projection.
 - **Never call `.openapi()` in a shared schema or a contract file.** That method
   only exists after `extendZodWithOpenApi` runs (openapi/registry.ts), which the
   runtime handlers do not import - calling it there crashes the endpoint on import.

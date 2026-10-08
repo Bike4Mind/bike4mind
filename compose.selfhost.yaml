@@ -65,7 +65,9 @@ services:
 
   # S3-compatible object storage. The app uses the AWS S3 SDK pointed at this endpoint.
   minio:
-    image: minio/minio
+    build:
+      context: ./selfhost/minio
+      dockerfile: Dockerfile.minio
     command: server /data --console-address ":9001"
     # Credentials come from .env.selfhost (no literals in this file). The
     # .env.selfhost.example ships the conventional local default (minioadmin);
@@ -112,7 +114,9 @@ services:
   # FabFile rule also expires noncurrent versions, which unversioned MinIO buckets never have).
   # If you point object storage at a different S3 backend, add equivalent rules there.
   createbuckets:
-    image: minio/mc
+    build:
+      context: ./selfhost/minio
+      dockerfile: Dockerfile.mc
     depends_on:
       minio:
         condition: service_healthy

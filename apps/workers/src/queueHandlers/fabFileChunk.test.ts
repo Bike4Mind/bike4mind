@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Drive the raw handler: passthrough dispatchWithLogger (no connectDB / real logger)
-// and mock the data + service seams. Mirrors sreJob.test.ts / liveOpsTriage.test.ts.
+// and mock the data + service seams. Mirrors sreJob.test.ts.
 // Focus: the chunk-failure path must persist a per-file error and account the file as
 // failed in its batch (so a bad file is visible instead of silently stuck at
 // chunkCount:0), then re-throw so SQS retries then routes to the DLQ.

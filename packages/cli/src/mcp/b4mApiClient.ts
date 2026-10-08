@@ -7,11 +7,16 @@ import type { ZodType, output } from 'zod';
 import {
   generatedAudioResponseSchema,
   type GeneratedAudioResponse,
+  type IBriefcasePrompt,
   ttsBase64ResponseSchema,
   type CitableSourceSchema,
   ttsResponseTooLargeSchema,
   supportedVoiceGenerationVendor,
   type ChatHistoryItemType,
+  type GeneratedFile,
+  type GenerateImageResponse,
+  type ImagePromptResolution,
+  type PromptBatchQueryType,
   type QuestErrorCode,
   type TTSRequest,
 } from '@bike4mind/common';
@@ -66,6 +71,10 @@ export interface QuestResponse {
   // reads either.
   type?: ChatHistoryItemType;
   errorCode?: QuestErrorCode;
+  // Generated-file basenames, and `files` resolves each to a ready-to-use URL (empty when the
+  // server has no CDN configured).
+  images?: string[];
+  files?: GeneratedFile[];
   // Sources the reply was grounded in (`CitableSourceSchema` in @bike4mind/common).
   promptMeta?: { citables?: RawCitable[]; [key: string]: unknown } | null;
   [key: string]: unknown;
@@ -117,9 +126,21 @@ export interface RawDataLake {
   [key: string]: unknown;
 }
 
+/** Arguments for POST /api/ai/generate-image; a subset of `GenerateImageRequestBodySchema`. */
+export interface GenerateImageArgs {
+  prompt: string;
+  model: string;
+  size?: string;
+  notebookId?: string;
+  projectId?: string;
+  promptResolution?: ImagePromptResolution;
+}
+
 export interface RawProject {
   id: string;
   name?: string;
+  createdAt?: string;
+  updatedAt?: string;
   [key: string]: unknown;
 }
 
@@ -144,6 +165,17 @@ export interface ArtifactWithContent {
   artifact: RawArtifact;
   content?: unknown;
 }
+
+/**
+ * A Briefcase prompt. Catalog entries are metadata only; `promptText` ships only
+ * on the by-id fetch. Name/description are picked from the stored
+ * `IBriefcasePrompt` so an upstream rename is a compile error here, not a silent
+ * passthrough.
+ */
+export type RawBriefcasePrompt = Pick<IBriefcasePrompt, 'name' | 'description'> & {
+  id: string;
+  promptText?: string;
+};
 
 /**
  * Typed wrapper over {@link ApiClient} exposing exactly the Bike4Mind REST
@@ -297,6 +329,17 @@ export class B4mApiClient {
     }
   }
 
+  async generateImage(args: GenerateImageArgs): Promise<GenerateImageResponse> {
+    return this.client.post<GenerateImageResponse>('/api/ai/generate-image', {
+      prompt: args.prompt,
+      model: args.model,
+      ...(args.size ? { size: args.size } : {}),
+      ...(args.notebookId ? { sessionId: args.notebookId } : {}),
+      ...(args.projectId ? { projectId: args.projectId } : {}),
+      ...(args.promptResolution ? { prompt_resolution: args.promptResolution } : {}),
+    });
+  }
+
   /**
    * POST a generated-audio request with `encoding: 'base64'` and normalize any
    * server's answer into the JSON shape `schema` describes. Base64 (never binary)
@@ -357,6 +400,20 @@ export class B4mApiClient {
     return this.client.get<RawProject>(`/api/projects/${encodeURIComponent(projectId)}`);
   }
 
+  async createProject(args: {
+    name: string;
+    description: string;
+    sessionIds?: string[];
+    fileIds?: string[];
+  }): Promise<RawProject> {
+    return this.client.post<RawProject>('/api/projects', {
+      name: args.name,
+      description: args.description,
+      ...(args.sessionIds?.length ? { sessionIds: args.sessionIds } : {}),
+      ...(args.fileIds?.length ? { fileIds: args.fileIds } : {}),
+    });
+  }
+
   /**
    * GET /api/artifacts takes flat `limit`/`offset` params (not the nested
    * `pagination` object the session/file/project routes use) and hard-caps
@@ -383,6 +440,32 @@ export class B4mApiClient {
     return this.client.get<ArtifactWithContent>(`/api/artifacts/${encodeURIComponent(artifactId)}`, {
       params: { includeContent: 'true' },
     });
+  }
+
+  /**
+   * POST /api/briefcase/catalog: a key -> prompts map, one entry per query key.
+   *
+   * The route runs csrfProtection, which exempts API-key requests but rejects a
+   * login (JWT bearer) request that carries no Origin - and Node sends none. CSRF
+   * defends browsers, so a non-browser client naming the backend's own origin is
+   * the intended pass, not a bypass.
+   */
+  async getBriefcaseCatalog(
+    queries: readonly PromptBatchQueryType[]
+  ): Promise<Record<string, RawBriefcasePrompt[] | undefined>> {
+    const result = await this.client.post<{ catalog: Record<string, RawBriefcasePrompt[]> }>(
+      '/api/briefcase/catalog',
+      { queries },
+      { headers: { Origin: new URL(this.baseURL).origin } }
+    );
+    return result.catalog;
+  }
+
+  async getBriefcasePrompt(promptId: string): Promise<RawBriefcasePrompt> {
+    const result = await this.client.get<{ prompt: RawBriefcasePrompt }>(
+      `/api/briefcase/prompts/${encodeURIComponent(promptId)}`
+    );
+    return result.prompt;
   }
 }
 
@@ -412,6 +495,13 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       if ((error.response?.data as { code?: unknown } | undefined)?.code === 'FEATURE_DISABLED') {
         return 'feature disabled on this Bike4Mind instance (ask an admin to enable it)';
       }
+      // csrfProtection answers 403 when no Origin matches the deployment's APP_URL and
+      // names the expected origin in the body - the actual fix for a login (JWT) caller,
+      // where the key-scope fallback below would misdirect. Other 403s keep that fallback.
+      // The match is wording-based: must stay in sync with the ForbiddenError messages in
+      // apps/client/server/middlewares/csrfProtection.ts.
+      const csrfMessage = extractServerMessage(error.response?.data);
+      if (csrfMessage && /CSRF|request origin/i.test(csrfMessage)) return csrfMessage;
       const base = "API key forbidden: check the key's scopes and account access";
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }
@@ -478,7 +568,7 @@ function decodeArrayBufferErrorBody(error: unknown): unknown {
  * to a whole, non-negative number of seconds. Returns undefined when the header is
  * absent or parses as neither, so callers can omit the retry hint entirely.
  */
-function parseRetryAfterSeconds(value: unknown): number | undefined {
+export function parseRetryAfterSeconds(value: unknown): number | undefined {
   if (value === undefined || value === null) return undefined;
   const raw = String(value).trim();
   if (/^\d+$/.test(raw)) return Number(raw);

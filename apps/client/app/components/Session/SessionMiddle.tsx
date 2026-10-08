@@ -44,6 +44,7 @@ import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
 import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
 import { buildChatHistory } from './buildChatHistory';
 import { useReplyChoices, type NewestTurn } from '@client/app/hooks/useReplyChoices';
+import { useSessionReconnectProbe } from './AgentExecution/useSessionReconnectProbe';
 
 interface IProps {
   isFullWidth?: boolean;
@@ -243,6 +244,8 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
       clearPreparingQuest();
     }
   }, [isPreparingQuest, flattenQuests.length, clearPreparingQuest]);
+
+  useSessionReconnectProbe(sessionId);
 
   // Scan loaded quests for uiSideEffects and dispatch them. Handles the
   // notebook-switch case where quests load from the API - the rendering-based

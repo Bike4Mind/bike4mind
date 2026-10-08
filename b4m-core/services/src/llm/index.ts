@@ -1,5 +1,6 @@
 export * from './ChatCompletionProcess';
 export * from './ChatCompletionInvoke';
+export * from './historyBudgetConstants';
 export * from './earlyStopStamp';
 export * from './mementoGating';
 export * from './artifactGating';

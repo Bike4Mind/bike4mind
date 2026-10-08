@@ -1,8 +1,9 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, TEST_VIDEO_PROVIDER_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
+import { generationJobQueue } from './queues';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { searxngUrl } from './searxng';
 import { allSecrets, secrets } from './secrets';
@@ -17,12 +18,11 @@ import { websocketApi } from './websocket';
  * no 15-minute timeout ceiling on the steady-state path — the two problems that made
  * the Lambda path slow.
  *
- * Shutdown trade-off: on SIGTERM (deploy / scale-in / unhealthy-task replacement) the
- * task drains in-flight quests for up to `stopTimeout` (120s, the ECS Fargate ceiling)
- * before SIGKILL. A quest still running past that window is cut off — so the container
- * removes the cold-start + 15-min ceiling for normal processing, but does not make
- * shutdown-time cancellation free. The drain window in server.ts is kept in lock-step
- * with the stopTimeout set below.
+ * Shutdown trade-off: on SIGTERM (deploy / scale-in / unhealthy-task replacement) in-flight
+ * quests drain for up to DRAIN_TIMEOUT_MS (server.ts), which is set under this task's
+ * stopTimeout; a quest still running is cut off. The container removes the cold-start + 15-min
+ * ceiling for normal processing, but not shutdown-time cancellation. The drain only runs at all
+ * because the image makes node PID 1 with tsx as an in-process loader - see Dockerfile.chatcompletion.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
  * service's load balancer and gets a 202 back immediately; the service processes the quest
@@ -95,6 +95,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     mcpHandler,
     eventBus,
     imageProcessor,
+    generationJobQueue,
   ],
   permissions: [
     { actions: ['bedrock:*'], resources: ['*'] },
@@ -125,6 +126,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   ],
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
+    ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
     // External instance-service, consumed by a premium overlay tool that reads these as
     // plain env (linking alone only exposes SST_RESOURCE_*). URL + bearer resolve from
@@ -143,11 +145,11 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // are usually raised days later, well past a short retention window.
     retention: '1 month',
   },
-  // Give in-flight quests the full ECS-allowed grace period to drain on SIGTERM before
-  // SIGKILL. SST's Service args don't expose the container `stopTimeout`, so inject it
-  // into the task definition's containerDefinitions JSON. 120s is the Fargate maximum and
-  // matches DRAIN_TIMEOUT_MS in server.ts. Without this, ECS defaults to 30s and a deploy
-  // would hard-kill long quests — the same cut-off the service is meant to avoid.
+  // Raise stopTimeout to the Fargate max so the drain window fits under it before SIGKILL.
+  // SST's Service args don't expose the container `stopTimeout`, so inject it into the task
+  // definition. 120s is the Fargate maximum; DRAIN_TIMEOUT_MS in server.ts (110s) sits under
+  // it, leaving ~10s of margin so the drain-expiry error can log before SIGKILL. Without this
+  // transform ECS defaults to 30s and a deploy would hard-kill long quests.
   transform: {
     taskDefinition: args => {
       args.containerDefinitions = $output(args.containerDefinitions).apply(json => {
@@ -199,13 +201,14 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
       // egress left at SST's default (0.0.0.0/0): the ALB must reach the tasks.
     },
   },
-  // Local `sst dev`: run the server directly with tsx instead of building the image.
-  // The server defaults to port 8788 locally (8080 is commonly taken — e.g. Docker
-  // Desktop binds host :8080 — which caused `EADDRINUSE :::8080`). The cloud container
-  // still listens on 8080 (Dockerfile ENV PORT=8080, ALB forwards 80→8080). dev.url must
+  // Local `sst dev`: run the server directly with tsx instead of building the image. Same
+  // in-process loader as the image CMD (no pnpm wrapper) so local SIGTERM behaves the same.
+  // The server defaults to port 8788 locally (8080 is commonly taken - e.g. Docker
+  // Desktop binds host :8080 - which caused `EADDRINUSE :::8080`). The cloud container
+  // still listens on 8080 (Dockerfile ENV PORT=8080, ALB forwards 80->8080). dev.url must
   // match the local port so the frontend's dispatchQuest reaches the local server.
   dev: {
-    command: 'pnpm exec tsx server/chatCompletion/server.ts',
+    command: 'node --import tsx server/chatCompletion/server.ts',
     directory: 'apps/client',
     url: 'http://localhost:8788',
   },

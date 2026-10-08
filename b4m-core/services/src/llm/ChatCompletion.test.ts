@@ -1906,6 +1906,63 @@ describe('ChatCompletionProcess', () => {
         expect(mockQuest.replies.at(-1)).toBe(`\n\n${TRUNCATED_ANSWER_NOTICE}`);
       });
 
+      describe('turn ended by a tool flagged endsTurnAfterText', () => {
+        const navTool = (endsTurnAfterText: boolean) => ({
+          toolSchema: { name: 'navigate_view', description: 'nav', parameters: {} },
+          endsTurnAfterText,
+        });
+
+        // The adapter streams the answer, runs the tool, and ends the turn on 'tool_use'.
+        async function answerThenNavigate(cb: Emit) {
+          const toolsUsed: Array<Record<string, unknown>> = [];
+          await cb(['Here is the answer.'], { toolsUsed });
+          toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't1' });
+          await cb([], { toolsUsed, stopReason: 'tool_use' });
+        }
+
+        afterEach(() => vi.restoreAllMocks());
+
+        it('adds no notice when every tool of the last round is flagged', async () => {
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([navTool(true)] as any); // any: minimal tool shape
+          setupTurn(answerThenNavigate);
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+          expect(mockQuest.replies.join('')).toContain('Here is the answer.');
+        });
+
+        it('still adds the notice when the tool is not flagged', async () => {
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([navTool(false)] as any); // any: minimal tool shape
+          setupTurn(answerThenNavigate);
+
+          await runTurn();
+
+          expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        });
+
+        // Accepted residual: an OpenAI-family mixed round reports a native per-round
+        // 'tool_use' and the adapter recurses; if the follow-up reports no stop reason, the
+        // sticky 'tool_use' plus a flagged last tool suppresses the notice on an empty answer.
+        it('adds no notice when a mixed round leaves a stale tool_use and the follow-up is empty', async () => {
+          const searchTool = { toolSchema: { name: 'web_search', description: 'search', parameters: {} } };
+          vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([searchTool, navTool(true)] as any); // any: minimal tool shape
+          setupTurn(async cb => {
+            const toolsUsed: Array<Record<string, unknown>> = [];
+            await cb(['Let me look that up.'], { toolsUsed });
+            toolsUsed.push({ name: 'web_search', arguments: '{}', id: 't1' });
+            toolsUsed.push({ name: 'navigate_view', arguments: '{}', id: 't2' });
+            await cb([], { toolsUsed, stopReason: 'tool_use' });
+            await cb(['\n\n'], { toolsUsed });
+            await cb([], { toolsUsed });
+          });
+
+          await runTurn();
+
+          expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        });
+      });
+
       it('adds no notice to a plain answer with no tool calls', async () => {
         setupTurn(async cb => {
           await cb(['Hi!'], { toolsUsed: [] });

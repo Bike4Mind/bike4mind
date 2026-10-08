@@ -6,6 +6,7 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 import { FallbackInfoSchema } from './llm';
+import { SystemPromptDetailSchema } from './contextTelemetry';
 
 /**
  * Request schema for POST /api/chat - the simplified external chat surface.
@@ -141,8 +142,8 @@ export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
 /**
  * Async ACK returned on the default (wait:false) path of POST /api/chat. The
  * `type`/`errorCode` pair below is the same classifier the `wait: true` body and
- * the polled quest (`GET /api/v1/quests/{id}`) carry, so it is modelled once here -
- * the rest of those two bodies is NOT described by this schema. The
+ * the polled quest (`GET /api/v1/quests/{id}`) carry, so it is modelled once here.
+ * The rest of the `wait: true` body is ChatWaitResponseSchema below. The
  * handler assembles the ack body inline (apps/client/pages/api/chat.ts), so
  * this schema MUST stay in sync with that `res.json({...})` shape.
  */
@@ -202,6 +203,34 @@ export const ChatAckSchema = z.object({
 });
 
 export type ChatAck = z.infer<typeof ChatAckSchema>;
+
+// Must stay in sync with `ToolPayload` in utils/toolPayloads.ts.
+const ToolPayloadSchema = z.object({ type: z.string(), payload: z.unknown() });
+
+/**
+ * The completed-turn body POST /api/chat returns with `wait: true`. Like the ACK it is
+ * assembled inline in apps/client/pages/api/chat.ts and MUST stay in sync with that
+ * `res.json({...})` shape.
+ */
+export const ChatWaitResponseSchema = ChatAckSchema.extend({
+  type: z.enum(CHAT_HISTORY_ITEM_TYPES),
+  // questReplyText() is null when the turn produced no visible reply.
+  response: z.string().nullable(),
+  responses: z.array(z.string()),
+  toolPayloads: z.array(ToolPayloadSchema),
+  // ISO string on the wire; Date too because defineNextRoute's non-prod response check runs
+  // before JSON serialization. Not z.coerce.date(): that documents the field as nullable.
+  createdAt: z.union([z.string().datetime(), z.date()]),
+  promptDetails: z.array(SystemPromptDetailSchema).optional(),
+  promptText: z.string().optional(),
+  performance: z.object({
+    total_ms: z.number(),
+    phases: z.record(z.string(), z.number()),
+    pipeline_phases: z.record(z.string(), z.number()).optional(),
+  }),
+});
+
+export type ChatWaitResponse = z.infer<typeof ChatWaitResponseSchema>;
 
 /**
  * The quest a `wait: false` caller polls at `GET /api/v1/quests/{id}` - the outcome

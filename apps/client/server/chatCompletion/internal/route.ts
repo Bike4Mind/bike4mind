@@ -1,15 +1,12 @@
 import { timingSafeEqual } from 'crypto';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { Resource } from 'sst';
-import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { stripChoicesFromReplies, visibleReplyText } from '@bike4mind/common';
 import { questRepository } from '@bike4mind/database';
-import { QUESTS_NAMESPACE, QUEST_METRICS } from '@bike4mind/infra';
-import { categorizeToolError } from '@bike4mind/services';
 import { QuestStartBodySchema } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 import { processQuest } from '@server/queueHandlers/questProcessor';
-import { emitMetrics } from '@server/utils/cloudwatch';
+import { emitProcessingFailed } from '../processingFailedMetric';
 
 /**
  * Internal `/process` surface of the always-on ChatCompletion.
@@ -107,34 +104,9 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
       logger.error('Quest processing failed', { error: errorMessage });
 
       // Operator-facing signal only - the quest's own reply to the user is handled separately
-      // below. Without this, detection of a processing failure was "a user complains": nothing
-      // alerted an operator. ErrorClass reuses the same taxonomy as tool-call telemetry
-      // (categorizeToolError) rather than inventing a second one, so a rate-limit storm is visible -
-      // and alarmable - by class, not just as an undifferentiated count. categorizeToolError has no
-      // credential rule, so a credential failure scatters by wording: our own expired-key throw
-      // falls through to internal_error, a provider 401 lands in auth_error, and "invalid"/"required"
-      // phrasings land in validation_error. Tracked separately.
-      //
-      // Two datums, same metric name: CloudWatch keys a custom metric by namespace + name + the
-      // EXACT dimension set and never rolls one up into the other, so the Stage-only point is what
-      // the questProcessingFailures alarm in infra/alarms.ts watches (a per-class dimension set would
-      // leave it permanently INSUFFICIENT_DATA) while the Stage+ErrorClass point drives the "which
-      // class is failing" dashboard breakdown. Neither double-counts the other since they are distinct series.
-      const stage = Resource.App.stage;
-      const errorClass = categorizeToolError(errorMessage);
-      // emitMetrics never rejects (it catches and console.error's internally), so track() only
-      // registers this for the SIGTERM drain - it never delays the settle path below.
-      track(
-        emitMetrics(QUESTS_NAMESPACE, [
-          { name: QUEST_METRICS.ProcessingFailed, value: 1, dimensions: { Stage: stage }, unit: StandardUnit.Count },
-          {
-            name: QUEST_METRICS.ProcessingFailed,
-            value: 1,
-            dimensions: { Stage: stage, ErrorClass: errorClass },
-            unit: StandardUnit.Count,
-          },
-        ])
-      );
+      // below. Without this, detection of a processing failure was "a user complains".
+      // emitProcessingFailed never rejects, so track() only registers it for the SIGTERM drain.
+      track(emitProcessingFailed('/process', err));
 
       // Surface the failure to the client instead of leaving the quest 'running' forever - but only
       // when nothing terminal was written yet. ChatCompletionProcess persists the provider's own

@@ -1,23 +1,7 @@
-// speakeasy calls `new Buffer()` internally, which Node >=10 flags as a DeprecationWarning
-// (DEP0005). The warning fires synchronously during the speakeasy import, before any
-// test/app code runs, and cannot be silenced via command-line flags at that point.
-// We suppress only the specific Buffer deprecation here and restore the original handler
-// immediately after the import so no other warnings are affected.
-const originalEmitWarning = process.emitWarning;
-process.emitWarning = (warning: any, name?: any) => {
-  if (name === 'DeprecationWarning' && warning?.toString().includes('Buffer')) {
-    return; // Suppress speakeasy's Buffer deprecation warning only
-  }
-  return originalEmitWarning.call(process, warning, name);
-};
-
 import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import { timingSafeEqual, createHash } from 'crypto';
-import { IUserDocument } from '@bike4mind/common';
-
-// Restore original warning handler after import
-process.emitWarning = originalEmitWarning;
+import { IUserDocument, IMFAConfig, MFA_MAX_FAILED_ATTEMPTS } from '@bike4mind/common';
 
 export interface TOTPSetupData {
   secret: string;
@@ -126,19 +110,13 @@ export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean)
 /**
  * Check if a user has MFA configured
  */
-export function userHasMFAConfigured(user: IUserDocument): boolean {
+export function userHasMFAConfigured(user: IUserDocument): user is IUserDocument & { mfa: IMFAConfig } {
   // totpEnabled is the source of truth and is NOT select:false - so this works even
   // when the user was loaded without the (select:false) totpSecret (e.g. OTC login).
   return !!(user.mfa && user.mfa.totpEnabled);
 }
 
-/**
- * Server-side attempt tracking to prevent bypass via refresh/cancel
- * Constants for lockout policy
- */
-export const MAX_FAILED_ATTEMPTS = 3;
-const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
-const ATTEMPT_RESET_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+export const MAX_FAILED_ATTEMPTS = MFA_MAX_FAILED_ATTEMPTS;
 
 /**
  * Check if user is currently locked out from MFA attempts
@@ -158,46 +136,10 @@ export function getLockoutTimeRemaining(user: IUserDocument): number {
 }
 
 /**
- * Reset failed attempts if enough time has passed since last failure
- */
-export function shouldResetFailedAttempts(user: IUserDocument): boolean {
-  if (!user.mfa?.lastFailedAttempt) return false;
-  const timeSinceLastFailure = Date.now() - new Date(user.mfa.lastFailedAttempt).getTime();
-  return timeSinceLastFailure > ATTEMPT_RESET_WINDOW_MS;
-}
-
-/**
- * Record a failed MFA attempt and return updated MFA object
- */
-export function recordFailedAttempt(user: IUserDocument): any {
-  const currentAttempts = shouldResetFailedAttempts(user) ? 0 : user.mfa?.failedAttempts || 0;
-  const newAttempts = currentAttempts + 1;
-  const now = new Date();
-
-  const updatedMFA = { ...user.mfa };
-  updatedMFA.failedAttempts = newAttempts;
-  updatedMFA.lastFailedAttempt = now;
-
-  // Lock user if max attempts reached
-  if (newAttempts >= MAX_FAILED_ATTEMPTS) {
-    updatedMFA.lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
-  }
-
-  return updatedMFA;
-}
-
-/**
  * Clear failed attempts on successful verification
  */
-export function clearFailedAttempts(user: IUserDocument): any {
-  if (!user.mfa) return null;
-
-  const updatedMFA = { ...user.mfa };
-  updatedMFA.failedAttempts = 0;
-  updatedMFA.lastFailedAttempt = undefined;
-  updatedMFA.lockedUntil = undefined;
-
-  return updatedMFA;
+export function clearFailedAttempts(mfa: IMFAConfig): IMFAConfig {
+  return { ...mfa, failedAttempts: 0, lastFailedAttempt: undefined, lockedUntil: undefined };
 }
 
 /**

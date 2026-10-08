@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Integration self-test for the "Generate changeset" step of
-# .github/workflows/auto-changeset.yml.
+# Integration self-test for .github/scripts/generate-changeset.sh (the "Generate
+# changeset" step of .github/workflows/auto-changeset.yml) and verify-changeset.sh.
 #
-# The step's script is extracted from the workflow YAML and run for real against a
-# throwaway git repo with a local bare remote, so `git commit`/`git push` and the
-# merge-base diff behave as they do on a runner. `gh` is stubbed. This works only
-# because the step body contains no ${{ }} expressions -- keep it that way.
+# The scripts run for real against a throwaway git repo with a local bare remote, so
+# `git commit`/`git push` and the merge-base diff behave as they do on a runner. `gh` is
+# stubbed.
 #
 # Usage: bash .github/scripts/auto-changeset.test.sh
 
 set -uo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-WORKFLOW="$REPO_ROOT/.github/workflows/auto-changeset.yml"
+STEP="$REPO_ROOT/.github/scripts/generate-changeset.sh"
+VERIFY="$REPO_ROOT/.github/scripts/verify-changeset.sh"
 BOT_NAME="b4m-release-bot[bot]"
 
 PASSED=0
@@ -20,19 +20,6 @@ FAILED=0
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-
-# --- Extract the step body ---
-START=$(grep -n '^        run: |$' "$WORKFLOW" | tail -1 | cut -d: -f1)
-if [ -z "$START" ]; then
-  echo "FATAL: could not locate the 'Generate changeset' run block in $WORKFLOW"
-  exit 1
-fi
-STEP="$WORK/generate-changeset.sh"
-tail -n +$((START + 1)) "$WORKFLOW" | sed 's/^          //' >"$STEP"
-if ! grep -q 'resolve-changeset-packages.sh' "$STEP"; then
-  echo "FATAL: extracted block does not look like the generate step"
-  exit 1
-fi
 
 # --- Stub gh: records invocations, reports no existing comments ---
 mkdir -p "$WORK/bin"
@@ -91,6 +78,30 @@ run_step() {
       GH_TOKEN="stub" \
       bash "$STEP" >"$1/.step-output" 2>&1
   )
+}
+
+# Usage: run_verify <repo-work-dir> <pr-title> <pr-number>; sets VERIFY_RC.
+run_verify() {
+  VERIFY_RC=0
+  (
+    cd "$1"
+    PR_TITLE="$2" PR_NUMBER="$3" REPO="owner/repo" bash "$VERIFY" >"$1/.verify-output" 2>&1
+  ) || VERIFY_RC=$?
+}
+
+# Usage: expect_verify <rc> <label> <repo-work-dir> <pr-title> <pr-number>
+# Also asserts the verifier never pushed to the repo's real remote.
+expect_verify() {
+  local want="$1" label="$2" dir="$3" before
+  before=$(git -C "$dir" ls-remote origin 2>/dev/null)
+  run_verify "$dir" "$4" "$5"
+  if [ "$VERIFY_RC" -ne "$want" ]; then
+    fail "$label" "exit $VERIFY_RC, want $want:" "$(cat "$dir/.verify-output")"
+  elif [ "$(git -C "$dir" ls-remote origin 2>/dev/null)" != "$before" ]; then
+    fail "$label" "the verifier pushed to origin"
+  else
+    ok "$label"
+  fi
 }
 
 ok() {
@@ -263,6 +274,120 @@ if [ -f "$D/work/.changeset/pr-905.md" ]; then
 else
   ok "a chore generates no changeset"
 fi
+
+# --- verify-changeset.sh: fails whenever the bot would still commit ---
+D="$WORK/verify-missing"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+expect_verify 1 "verify fails: feat PR with no changeset" "$D/work" "feat(auth): new grant type" 910
+
+D="$WORK/verify-wrong-bump"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "fix(auth): correct token refresh" 911
+expect_verify 1 "verify fails: patch changeset under a feat title" "$D/work" "feat(auth): new grant type" 911
+
+D="$WORK/verify-stale"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "feat(auth): new grant type" 912
+expect_verify 1 "verify fails: stale changeset after the title became chore" "$D/work" "chore(auth): tidy" 912
+
+D="$WORK/verify-wrong-packages"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "fix(auth): correct token refresh" 913
+(
+  cd "$D/work"
+  mkdir -p b4m-core/common/src
+  printf '%s\n' "touched" >b4m-core/common/src/index.ts
+  git add -A
+  git commit --quiet -m "fix: also common"
+  git push --quiet 2>/dev/null
+)
+expect_verify 1 "verify fails: changeset misses a newly touched package" "$D/work" "fix(auth): correct token refresh" 913
+
+# --- verify-changeset.sh: passes every legitimate head ---
+D="$WORK/verify-match"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "feat(auth): new grant type" 914
+expect_verify 0 "verify passes: bot-generated changeset matches" "$D/work" "feat(auth): new grant type" 914
+
+D="$WORK/verify-chore"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+expect_verify 0 "verify passes: chore title needs no changeset" "$D/work" "chore(auth): bump a dev dependency" 915
+
+D="$WORK/verify-private"
+mkdir -p "$D"
+make_repo "$D" "apps/client/src/page.tsx"
+expect_verify 0 "verify passes: diff touches only private packages" "$D/work" "feat(client): new page" 916
+
+D="$WORK/verify-manual"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+(
+  cd "$D/work"
+  printf '%s\n' '---' '"@bike4mind/auth": minor' '---' '' 'Hand written.' >.changeset/hand-written.md
+  git add -A
+  git commit --quiet -m "chore: manual changeset"
+  git push --quiet 2>/dev/null
+)
+expect_verify 0 "verify passes: manual changeset covers the bump" "$D/work" "fix(auth): correct token refresh" 917
+
+D="$WORK/verify-opt-out"
+mkdir -p "$D"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+run_step "$D/work" "fix(auth): correct token refresh" 918
+(
+  cd "$D/work"
+  git rm --quiet .changeset/pr-918.md
+  git commit --quiet -m "chore: drop the auto-changeset"
+  git push --quiet 2>/dev/null
+)
+expect_verify 0 "verify passes: human-deleted changeset (opt-out)" "$D/work" "fix(auth): correct token refresh" 918
+
+# --- A title edit on a bot-authored head must regenerate, not skip ---
+# The "Skip if last commit is from bot" step exists only to break the loop on the bot's
+# own push; on an `edited` event it would leave the old bump in place.
+if grep -A1 -- '- name: Skip if last commit is from bot' "$REPO_ROOT/.github/workflows/auto-changeset.yml" |
+  grep -q "github.event.action == 'synchronize'"; then
+  ok "bot-head skip applies only to synchronize"
+else
+  fail "bot-head skip applies only to synchronize"
+fi
+
+if grep -A1 '^concurrency:' "$REPO_ROOT/.github/workflows/auto-changeset.yml" |
+  grep -q -- "-body-edit"; then
+  ok "body-only edits do not share the generate run's concurrency group"
+else
+  fail "body-only edits do not share the generate run's concurrency group"
+fi
+
+# --- The generator finds the resolver next to itself, not in the checked-out head ---
+# CI runs copies staged from main; a head branched before the resolver existed has none.
+D="$WORK/case-head-without-scripts"
+make_repo "$D" "b4m-core/auth/src/index.ts"
+rm "$D/work/.github/scripts/resolve-changeset-packages.sh"
+run_step "$D/work" "fix(auth): correct token refresh" 907
+if [ -f "$D/work/.changeset/pr-907.md" ]; then
+  ok "generator resolves sibling scripts from its own dir"
+else
+  fail "generator resolves sibling scripts from its own dir" "$(cat "$D/work/.step-output")"
+fi
+
+# --- Both workflows run main's staged scripts, never the PR head's ---
+for wf in auto-changeset.yml semantic-pr-title.yml; do
+  f="$REPO_ROOT/.github/workflows/$wf"
+  if grep -q 'git show "origin/main:.github/scripts/$f"' "$f" &&
+    grep -q 'bash "$SCRIPTS/' "$f" &&
+    ! grep -q 'bash .github/scripts/' "$f"; then
+    ok "$wf runs changeset scripts staged from main"
+  else
+    fail "$wf runs changeset scripts staged from main"
+  fi
+done
 
 echo
 echo "passed: $PASSED  failed: $FAILED"
