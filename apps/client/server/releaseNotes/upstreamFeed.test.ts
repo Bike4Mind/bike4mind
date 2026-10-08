@@ -91,6 +91,7 @@ describe('fetchUpstreamFeed', () => {
     ['a non-JSON body', () => new Response('<html>', { status: 200 })],
     ['a non-200 status', () => json(PAGE, 503)],
     ['an oversize body', () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 })],
+    ['an empty body', () => new Response('', { status: 200 })],
   ])('returns null and warns on %s', async (_label, make) => {
     mockSafeFetch.mockResolvedValue(make());
     expect(await fetchOnce()).toBeNull();
@@ -156,6 +157,7 @@ describe('fetchUpstreamFeed', () => {
 
   it.each([
     ['an oversize body', () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 })],
+    ['an empty body', () => new Response('', { status: 200 })],
     ['an off-schema body', () => json({ data: [{ id: 1 }] })],
   ])('does not open an outage window on %s for one query', async (_label, make) => {
     mockSafeFetch.mockResolvedValueOnce(make()).mockResolvedValue(json(PAGE));

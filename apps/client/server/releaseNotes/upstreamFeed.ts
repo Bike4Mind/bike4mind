@@ -118,13 +118,19 @@ async function fetchPage(
       return { page: null, upstreamDown: !requestError };
     }
     const text = await Promise.race([readCapped(response), timeout]);
-    // An oversize or off-schema page answered promptly and can follow from this request's limit or cursor
+    // An oversize, unparseable or off-schema page answered promptly and can follow from this request's limit or cursor
     // (a limit=100 page of long notes), so it must not trip the outage for every other query.
     if (text === null) {
       logger.warn('[whats-new] upstream feed body exceeded the size cap', { maxBytes: MAX_BODY_BYTES });
       return { page: null, upstreamDown: false };
     }
-    const parsed = pageSchema.safeParse(JSON.parse(text));
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+    const parsed = pageSchema.safeParse(body);
     if (!parsed.success) {
       logger.warn('[whats-new] upstream feed body did not match the public schema');
       return { page: null, upstreamDown: false };
