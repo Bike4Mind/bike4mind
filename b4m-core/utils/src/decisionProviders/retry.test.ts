@@ -62,6 +62,44 @@ describe('decideWithRetry', () => {
     expect(provider.decide).toHaveBeenCalledTimes(1);
   });
 
+  it('gives up at once when the wait would leave the retry too little of the deadline', async () => {
+    const provider = providerFailing(overloaded(9_000));
+    await expect(run(provider).result).rejects.toMatchObject({ retries: 0, retryAfterSeconds: 9 });
+    expect(provider.decide).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the retry only what is left of the deadline, and maps its timeout to overloaded', async () => {
+    let clock = 0;
+    const signals: AbortSignal[] = [];
+    const hangsUntilAborted: DecisionProvider = {
+      id: 'openaiDecisions',
+      models: ['gpt-6-luna'],
+      decide: vi.fn(async (_request, { signal }) => {
+        signals.push(signal);
+        if (signals.length === 1) {
+          clock = 7_500;
+          throw overloaded();
+        }
+        return new Promise<ProviderDecision>((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(signal.reason))
+        );
+      }),
+    };
+    const startedAt = Date.now();
+    const { result } = run(hangsUntilAborted, { now: () => clock });
+
+    await expect(result).rejects.toMatchObject({ retries: 1 });
+    expect(signals[1].aborted).toBe(true);
+    // 10s deadline minus 7.5s already spent; the full 10s would mean the budget is ignored.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it('surfaces an adapter bug instead of retrying it as overload', async () => {
+    const provider = providerFailing(new TypeError("Cannot read properties of undefined (reading 'answers')"));
+    await expect(run(provider).result).rejects.toBeInstanceOf(TypeError);
+    expect(provider.decide).toHaveBeenCalledTimes(1);
+  });
+
   it('throws DecisionOverloadedError after the one retry is spent', async () => {
     const provider = providerFailing(overloaded(), overloaded());
     await expect(run(provider).result).rejects.toBeInstanceOf(DecisionOverloadedError);

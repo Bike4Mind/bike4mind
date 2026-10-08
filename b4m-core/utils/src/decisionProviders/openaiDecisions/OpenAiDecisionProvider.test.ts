@@ -191,6 +191,21 @@ describe('OpenAiDecisionProvider wire mapping', () => {
     });
   });
 
+  it("maps the vendor's wrapped input path back to the caller's input index", async () => {
+    respond(fixture('err_url_image'), 400)();
+    await expect(new OpenAiDecisionProvider().decide(request([predicate('p')]), ctx())).rejects.toMatchObject({
+      kind: 'invalid_request',
+      details: { param: 'input[0]' },
+    });
+  });
+
+  it('does not retry an exhausted quota as overload', async () => {
+    respond({ error: { message: 'You exceeded your current quota', code: 'insufficient_quota' } }, 429)();
+    await expect(new OpenAiDecisionProvider().decide(request([predicate('p')]), ctx())).rejects.toMatchObject({
+      kind: 'upstream',
+    });
+  });
+
   it('keeps the vendor param on an invalid request', async () => {
     respond(fixture('err_one_level'), 400)();
     await expect(new OpenAiDecisionProvider().decide(request([predicate('p')]), ctx())).rejects.toMatchObject({

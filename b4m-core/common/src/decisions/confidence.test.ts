@@ -8,8 +8,8 @@ describe('choiceConfidence', () => {
   it.each([
     { source: 'OpenAI docs', probabilities: [0.95, 0.02, 0.01, 0.02], vendor: 0.93 },
     { source: 'OpenAI live', probabilities: [0.99, 0.01, 0], vendor: 0.99 },
-    { source: 'Jev live n=3', probabilities: [0.98, 0.01, 0.01], vendor: 0.97 },
-    { source: 'Jev live n=2', probabilities: [0.98, 0.02], vendor: 0.96 },
+    { source: 'vendor B live n=3', probabilities: [0.98, 0.01, 0.01], vendor: 0.97 },
+    { source: 'vendor B live n=2', probabilities: [0.98, 0.02], vendor: 0.96 },
   ])('reproduces $source within 0.01', ({ probabilities, vendor }) => {
     expect(Math.abs(choiceConfidence(probabilities) - vendor)).toBeLessThanOrEqual(VENDOR_TOLERANCE);
   });
@@ -22,9 +22,9 @@ describe('choiceConfidence', () => {
 
 describe('scoreConfidence', () => {
   it.each([
-    { source: 'TypeSafe docs', probabilities: [0.1, 0.7, 0.2], vendor: 0.55 },
+    { source: 'vendor C docs', probabilities: [0.1, 0.7, 0.2], vendor: 0.55 },
     { source: 'OpenAI live', probabilities: [0.36, 0.64, 0], vendor: 0.46 },
-    { source: 'Jev live', probabilities: [0, 0.01, 0.99], vendor: 0.98 },
+    { source: 'vendor B live', probabilities: [0, 0.01, 0.99], vendor: 0.98 },
   ])('reproduces $source within 0.01', ({ probabilities, vendor }) => {
     expect(Math.abs(scoreConfidence(probabilities) - vendor)).toBeLessThanOrEqual(VENDOR_TOLERANCE);
   });

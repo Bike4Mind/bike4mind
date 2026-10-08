@@ -127,7 +127,9 @@ export const createDecisionContract = defineEndpoint({
     },
     403: scopeForbidden,
     404: {
-      description: 'An image `file_id` does not exist or is not readable by the caller.',
+      description:
+        'An image `file_id` does not exist or is not readable by the caller. Reading one also needs the ' +
+        '`files:read` scope; a key without it gets 403.',
       schema: DecisionsErrorSchema,
     },
     422: {
@@ -135,8 +137,8 @@ export const createDecisionContract = defineEndpoint({
         'The body failed validation, or the request exceeds a per-model cap (`limit_exceeded`), sends an ' +
         'image to a text-only model (`unsupported_input`), repeats a question name or choice value ' +
         '(`invalid_request`), names a model this deployment does not serve (`model_unavailable`), overflows ' +
-        'the model context (`context_length_exceeded`), or the caller cannot afford it (`insufficient_credits`, ' +
-        '`spend_cap_exceeded`). `param` names the offending field when there is one.',
+        'the model context (`context_length_exceeded`), or the caller cannot afford it (`insufficient_credits`). ' +
+        '`param` names the offending field when there is one.',
       schema: DecisionsErrorSchema,
     },
     429: rateLimited,
@@ -165,7 +167,8 @@ export const listDecisionModelsContract = defineEndpoint({
   description:
     'Returns the decision models this deployment serves, with their per-model caps and USD token prices. ' +
     'A floating alias carries `alias_of`; pin the versioned id when you tune thresholds, since a new version ' +
-    'can shift probabilities.',
+    'can shift probabilities. The catalog is a handful of entries, so it is returned whole, not paginated ' +
+    '(as `GET /api/v1/video-models`).',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: DECISION_SCOPES,

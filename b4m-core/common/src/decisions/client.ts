@@ -72,7 +72,8 @@ export type TypedDecision<Qs extends readonly DecisionQuestionDefinition[]> = {
 };
 
 export type DecideParams<Qs extends readonly DecisionQuestionDefinition[]> = {
-  model: DecisionModelId;
+  // Catalog ids autocomplete; any string is accepted so a model added server-side needs no client upgrade.
+  model: DecisionModelId | (string & {});
   input: DecisionInput;
   questions: Qs;
   safety_identifier?: string;
@@ -127,6 +128,15 @@ const toApiError = async (response: Response): Promise<DecisionsApiError> => {
   );
 };
 
+/** A 2xx body that does not match the published schema is still a DecisionsApiError, never a raw ZodError. */
+const parseSuccessBody = <T>(schema: z.ZodType<T>, status: number, body: unknown): T => {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    throw new DecisionsApiError(`Unexpected decisions response: ${parsed.error.message}`, status, 'invalid_response');
+  }
+  return parsed.data;
+};
+
 const withByName = <Qs extends readonly DecisionQuestionDefinition[]>(
   response: DecisionResponse
 ): TypedDecision<Qs> => {
@@ -154,7 +164,7 @@ export const createDecisionsClient = ({ baseUrl, apiKey, fetch: fetchImpl = fetc
       body: JSON.stringify(params),
     });
     if (!response.ok) throw await toApiError(response);
-    return withByName<Qs>(DecisionResponseSchema.parse(await response.json()));
+    return withByName<Qs>(parseSuccessBody(DecisionResponseSchema, response.status, await response.json()));
   };
 
   /**
@@ -166,6 +176,9 @@ export const createDecisionsClient = ({ baseUrl, apiKey, fetch: fetchImpl = fetc
     params: Omit<DecideParams<Qs>, 'input'>,
     { concurrency = 4 }: { concurrency?: number } = {}
   ): Promise<DecideManyResult<Qs>[]> => {
+    if (!Number.isInteger(concurrency) || concurrency < 1) {
+      throw new RangeError(`concurrency must be a positive integer, got ${concurrency}`);
+    }
     const results: DecideManyResult<Qs>[] = new Array(inputs.length);
     let next = 0;
     const worker = async (): Promise<void> => {
@@ -178,7 +191,7 @@ export const createDecisionsClient = ({ baseUrl, apiKey, fetch: fetchImpl = fetc
         }
       }
     };
-    const workerCount = Math.max(1, Math.min(concurrency, inputs.length));
+    const workerCount = Math.min(concurrency, inputs.length);
     await Promise.all(Array.from({ length: workerCount }, worker));
     return results;
   };
@@ -186,7 +199,7 @@ export const createDecisionsClient = ({ baseUrl, apiKey, fetch: fetchImpl = fetc
   const listModels = async (): Promise<DecisionModel[]> => {
     const response = await fetchImpl(`${origin}/api/v1/decision-models`, { headers });
     if (!response.ok) throw await toApiError(response);
-    return ListDecisionModelsResponseSchema.parse(await response.json()).models;
+    return parseSuccessBody(ListDecisionModelsResponseSchema, response.status, await response.json()).models;
   };
 
   return { decide, decideMany, listModels };

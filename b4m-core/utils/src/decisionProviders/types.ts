@@ -22,7 +22,7 @@ export type DecisionProviderContext = {
 
 /** One vendor answer per question, in question order; `normalizeDecisionAnswers` turns these into the public shape. */
 export type ProviderDecision = {
-  /** The vendor's resolved model id (e.g. `jev-1.13.0` for `jev-latest`). */
+  /** The vendor's resolved model id (e.g. a versioned id for a `-latest` alias). */
   model: string;
   answers: RawDecisionAnswer[];
   usage: { inputTokens: number; outputTokens: number };

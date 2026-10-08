@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import type { DecisionModelCapabilities, DecisionModelLimits } from './types';
 
 /**
@@ -26,7 +25,6 @@ const PLATFORM_CAPS: Omit<DecisionModelLimits, 'maxInputTokens' | 'maxImageDimen
 // be a real decision model: a chat model asked for a probability returns uncalibrated numbers.
 export const DECISION_MODEL_IDS = ['test-decisions', 'gpt-6-luna'] as const;
 export type DecisionModelId = (typeof DECISION_MODEL_IDS)[number];
-export const DecisionModelIdSchema = z.enum(DECISION_MODEL_IDS);
 
 export const DECISION_MODEL_CATALOG: Record<DecisionModelId, DecisionModelCapabilities> = {
   // Deterministic and free; registered only when ENABLE_TEST_DECISION_PROVIDER=true (never in production).
@@ -47,6 +45,10 @@ export const DECISION_MODEL_CATALOG: Record<DecisionModelId, DecisionModelCapabi
     pricing: { usdPerMillionInputTokens: 0.1, usdPerMillionOutputTokens: 0 },
   },
 };
+
+// The wire `model` is a plain string (as for video models), so retiring or adding an id never changes the published
+// request schema; an id outside the catalog is a 422 `model_unavailable`, the same as one this deployment does not serve.
+export const isDecisionModelId = (id: string): id is DecisionModelId => Object.hasOwn(DECISION_MODEL_CATALOG, id);
 
 export const getDecisionModelCapabilities = (id: DecisionModelId): DecisionModelCapabilities =>
   DECISION_MODEL_CATALOG[id];

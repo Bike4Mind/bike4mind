@@ -73,6 +73,13 @@ const toRawAnswer = (answer: z.infer<typeof OpenAiAnswerSchema>): RawDecisionAns
   }
 };
 
+// Array input is wrapped as one user message, so OpenAI's `input[0].content[i]...` is the caller's `input[i]`.
+const toCallerParam = (param: string | null | undefined): string | undefined => {
+  if (!param) return undefined;
+  const contentPart = /^input\[0\]\.content\[(\d+)\]/.exec(param);
+  return contentPart ? `input[${contentPart[1]}]` : param;
+};
+
 const toProviderError = (response: Response, body: unknown): DecisionProviderError => {
   const parsed = OpenAiErrorSchema.safeParse(body);
   const message = parsed.success ? parsed.data.error.message : `OpenAI decisions returned ${response.status}`;
@@ -80,9 +87,12 @@ const toProviderError = (response: Response, body: unknown): DecisionProviderErr
   const details = {
     status: response.status,
     retryAfterMs: parseRetryAfterMs(response.headers),
-    param: (parsed.success ? parsed.data.error.param : undefined) ?? undefined,
+    param: toCallerParam(parsed.success ? parsed.data.error.param : undefined),
     raw: body,
   };
+  // A 429 for an exhausted platform quota is not transient: retrying it and telling the caller to come back in a
+  // second would only repeat the failure.
+  if (code === 'insufficient_quota') return new DecisionProviderError('upstream', message, details);
   const kind = classifyStatus(response.status);
   if (kind !== 'client_error') return new DecisionProviderError(kind, message, details);
   if (code === 'context_length_exceeded') return new DecisionProviderError('context_length', message, details);

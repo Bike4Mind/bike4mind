@@ -1,6 +1,6 @@
 /**
  * The one published `confidence` formula for every decision provider. We never pass a vendor's own value
- * through: both formulas reproduce OpenAI's and TypeSafe's documented examples, so the field stays portable
+ * through: both formulas reproduce two vendors' documented examples, so the field stays portable
  * across models. Predicates have no confidence; their probability already says it.
  */
 
