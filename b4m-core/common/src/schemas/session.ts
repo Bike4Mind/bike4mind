@@ -66,6 +66,19 @@ export const SessionUpdateRequestSchema = z.object({
         'is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve ' +
         'from, so its forced retrieval is skipped rather than run against every lake.'
     ),
+  includeLibraryFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether the session grounds on your own library (files you own, or that are shared with you ' +
+        'or your groups) alongside its lakes. `false` confines retrieval to lake content, including when ' +
+        "every lake is in scope; the session's attached files still reach the model and stay searchable " +
+        'by its knowledge-base tools. Omit to leave it unchanged; ' +
+        'while never set, the library is excluded only when a lake was picked for the session (Data ' +
+        'Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. ' +
+        'While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value ' +
+        'applies again once it is turned back on.'
+    ),
   // Defaults to true, matching what every caller did before this flag existed. Pass
   // false when the session gained a file WITHOUT the user asking for it to travel -
   // an upload that lands in notebook context by default has consented to this
@@ -113,6 +126,10 @@ export const SessionResponseSchema = z.object({
     .boolean()
     .optional()
     .describe('True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".'),
+  includeLibraryFiles: z
+    .boolean()
+    .optional()
+    .describe('Whether the session grounds on your own library alongside its lakes. Absent when never set.'),
   lastUsedModel: z.string().nullish(),
   // Plain z.date(), not z.coerce.date(): these are always set on a session (ISession has
   // them as required Date fields), and coerce accepts null (Date(null) -> epoch) which
@@ -208,6 +225,7 @@ export const CreateSessionRequestSchema = z.object({
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
   lakeScopeExplicit: z.boolean().optional(),
+  includeLibraryFiles: z.boolean().optional(),
   corpusGroundingMode: z
     .enum(DATA_LAKE_GROUNDING_MODES)
     .optional()

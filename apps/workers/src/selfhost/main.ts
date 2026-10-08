@@ -13,8 +13,8 @@ import { dispatch as driveDisconnectPurgeDispatch } from '@server/queueHandlers/
 import { dispatch as driveLakeIngestDispatch } from '@server/queueHandlers/driveLakeIngest';
 import { dispatch as githubLakeIngestDispatch } from '@server/queueHandlers/githubLakeIngest';
 import { dispatch as githubLakeRevokeDispatch } from '@server/queueHandlers/githubLakeRevoke';
-import { dispatch as imageGenerationDispatch } from '@server/queueHandlers/imageGeneration';
-import { dispatch as imageEditDispatch } from '@server/queueHandlers/imageEdit';
+import { dispatch as imageGenerationDispatch } from '@workers/queueHandlers/imageGeneration';
+import { dispatch as imageEditDispatch } from '@workers/queueHandlers/imageEdit';
 import { dispatch as generationCallbackDispatch } from '@workers/queueHandlers/generationCallback';
 import { dispatch as generationJobDispatch } from '@server/queueHandlers/generationJob';
 import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDiscovery/scheduledRun';
