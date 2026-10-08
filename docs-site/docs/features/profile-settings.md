@@ -291,7 +291,7 @@ Create and manage API keys for programmatic access.
 | `WRITE_PROJECTS` | Create/modify projects |
 | `READ_AGENTS` | View agents and their missions |
 | `WRITE_AGENTS` | Create, modify, fund and delete agents, create missions, manage their embed keys, generate agent content, and transfer credits. Can spend your credits |
-| `EMBED_CHAT` | Chat with a single bound agent from an embedded widget on an allow-listed site |
+| `EMBED_CHAT` | Chat with a single bound agent from an embedded widget on an allow-listed site. Minted only from the agent embed flow (needs an agent and an origin allow-list), not from the Create API Key list |
 | `ME_READ` | Read your own plan tier, credit balance, and entitlements |
 | `DATALAKE_READ` | List and browse data lakes you can already reach |
 | `DATALAKE_QUERY` | Run retrieval queries against a lake. Spends credits |
