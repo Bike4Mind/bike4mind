@@ -14,6 +14,15 @@ describe('toConsentScopes', () => {
     ]);
   });
 
+  it('labels the API scopes a third-party app requests at sign-in', () => {
+    // ai:generate also pays for text completions via the ai-token exchange, so the label
+    // must not read as media-only; me:read must not fall through to its raw id.
+    expect(toConsentScopes(['ai:generate', 'me:read'])).toEqual([
+      { id: 'ai:generate', label: 'Use your Bike4Mind credits to generate AI responses, images, video and audio' },
+      { id: 'me:read', label: 'See your plan, subscription and credit balance' },
+    ]);
+  });
+
   it('keeps an unmapped scope with a null label rather than dropping it', () => {
     // A scope registered after this map was last touched. Dropping it would understate the grant.
     expect(toConsentScopes(['openid', 'billing:write'])).toEqual([
