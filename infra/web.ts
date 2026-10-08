@@ -429,6 +429,8 @@ export const web = new sst.aws.Nextjs(
       ...TEST_VIDEO_PROVIDER_ENVIRONMENT,
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
+      // Optional https URL of another deployment's GET /api/v1/whats-new, served ahead of local notes.
+      WHATS_NEW_FEED_URL: process.env.WHATS_NEW_FEED_URL || '',
       // Locks the server function URL to the router (apps/client/proxy.ts 403s requests without the
       // matching header). Not under `sst dev`: Next runs locally there and nothing comes via CloudFront.
       // DISABLE_ORIGIN_VERIFY='true' ships the router stamp without the gate: use it on a stage's first

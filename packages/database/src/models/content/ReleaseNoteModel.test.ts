@@ -107,6 +107,50 @@ describe('ReleaseNoteRepository.findPublished', () => {
   });
 });
 
+describe('ReleaseNoteRepository.findPublishedBetween', () => {
+  const start = new Date('2026-01-01T00:00:00Z');
+  const end = new Date('2026-01-07T23:59:59.999Z');
+
+  it('returns published notes inside the inclusive range, newest first', async () => {
+    await releaseNoteRepository.upsertGenerated(
+      makeNote({ releaseTag: 'before', publishAt: new Date(start.getTime() - 1) })
+    );
+    await releaseNoteRepository.upsertGenerated(makeNote({ releaseTag: 'first', publishAt: start }));
+    await releaseNoteRepository.upsertGenerated(makeNote({ releaseTag: 'last', publishAt: end }));
+    await releaseNoteRepository.upsertGenerated(
+      makeNote({ releaseTag: 'after', publishAt: new Date(end.getTime() + 1) })
+    );
+    await releaseNoteRepository.upsertGenerated(
+      makeNote({ releaseTag: 'hidden', publishAt: new Date('2026-01-03T00:00:00Z'), status: 'hidden' })
+    );
+
+    const notes = await releaseNoteRepository.findPublishedBetween(start, end, new Date('2026-02-01T00:00:00Z'), 50);
+    expect(notes.map(n => n.releaseTag)).toEqual(['last', 'first']);
+  });
+
+  it('leaves out a note still under embargo at `now` even when it falls inside the range', async () => {
+    const now = new Date('2026-01-05T00:00:00Z');
+    await releaseNoteRepository.upsertGenerated(makeNote({ releaseTag: 'live', publishAt: new Date('2026-01-04') }));
+    await releaseNoteRepository.upsertGenerated(
+      makeNote({ releaseTag: 'embargoed', publishAt: new Date('2026-01-06') })
+    );
+
+    const notes = await releaseNoteRepository.findPublishedBetween(start, end, now, 50);
+    expect(notes.map(n => n.releaseTag)).toEqual(['live']);
+  });
+
+  it('caps the result at `limit`', async () => {
+    for (const day of [2, 3, 4]) {
+      await releaseNoteRepository.upsertGenerated(
+        makeNote({ releaseTag: `v${day}`, publishAt: new Date(`2026-01-0${day}T00:00:00Z`) })
+      );
+    }
+
+    const notes = await releaseNoteRepository.findPublishedBetween(start, end, end, 2);
+    expect(notes.map(n => n.releaseTag)).toEqual(['v4', 'v3']);
+  });
+});
+
 const HOUR = 3600_000;
 const NOW = new Date('2026-03-01T00:00:00Z');
 const seed = (tag: string, publishAt: Date, overrides: Partial<GeneratedReleaseNote> = {}) =>
