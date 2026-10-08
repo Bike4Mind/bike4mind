@@ -254,6 +254,7 @@ describe('POST /api/v1/video-generations', () => {
       });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(422);
+      expect(res._getJSONData()).toMatchObject({ error: expect.stringContaining(`Unrecognized key: "${field}"`) });
       expect(h.createVideoJob).not.toHaveBeenCalled();
     }
   );
