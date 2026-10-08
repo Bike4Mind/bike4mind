@@ -87,6 +87,8 @@ describe('ModalTriggerContext whats-new trigger source', () => {
   });
 
   it('auto-triggers the slider when the tab returns after 5+ minutes with an unseen slide', async () => {
+    // Pin the user-facing settle delay; the advances below only exercise its boundary.
+    expect(SETTLE_DELAY).toBe(2500);
     vi.useFakeTimers();
     const note = releaseNoteToModal({
       id: 'n1',
@@ -102,10 +104,17 @@ describe('ModalTriggerContext whats-new trigger source', () => {
 
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     document.dispatchEvent(new Event('visibilitychange'));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(SETTLE_DELAY + 100);
-    });
 
+    // Nothing fires until the settle delay has fully elapsed...
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SETTLE_DELAY - 1);
+    });
+    expect(mocks.refetch).not.toHaveBeenCalled();
+
+    // ...and it fires once it has.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(mocks.refetch).toHaveBeenCalled();
     expect(sliderAuto()).toBe('true');
   });
