@@ -23,7 +23,7 @@ It also holds the live driver (`run.live.test.ts`), which builds the lakes on a 
 
 The subjects (`planetary-moons`, `si-units`, `us-census`) have nothing to do with each other on purpose. In the driver's multi-lake arm, each one is a distractor lake for the others. The prose is original. The facts come from public-domain U.S. government sources (NASA, NIST, the Census Bureau), and each document names its source in its frontmatter. The stale documents carry the values those sources published at the earlier date.
 
-The corpus is not part of the built package. A driver in another workspace package reads it from source, at `src/llm/evals/lakeRag/corpus` under the `@bike4mind/services` package root.
+The corpus is not part of the built package. The in-directory live driver reads it from source, at `src/llm/evals/lakeRag/corpus` under the `@bike4mind/services` package root.
 
 ## Case kinds
 
