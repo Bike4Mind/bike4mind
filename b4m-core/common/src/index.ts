@@ -32,7 +32,6 @@ export * from './constants/organization';
 export * from './constants/dataLakes';
 export * from './constants/githubLakeFileRules';
 export * from './constants/dataLakeApiKeyScopes';
-export * from './constants/githubLakeFiles';
 export * from './constants/jupyter';
 export * from './constants/systemUsers';
 export * from './constants/searchResultCards';
