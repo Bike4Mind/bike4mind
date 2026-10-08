@@ -1,14 +1,15 @@
 # contract-gate-allowlist.txt
 #
-# MIGRATION DEBT -- not a permanent exemption list.
-#
-# Every entry here is a public v1 handler (pages/api/v1/**) that predates the
-# contract gate and has not yet been ported to nextRouteForContract.
-# The goal is to make this file empty.
+# Permanent legitimate exceptions to the contract gate.
+# These are v1 routes that are NOT API handlers and therefore do not use
+# nextRouteForContract: they serve static content (the OpenAPI spec and the
+# Scalar UI) with no auth, no user data, and no DB access.
 #
 # Rules:
-#   - Remove an entry when the handler is ported to nextRouteForContract.
-#   - Never add a NEW endpoint here. New public endpoints must use nextRouteForContract
-#     from day one (see b4m-core/common/src/api-contract/README.md).
-#   - Do not add inline comments explaining WHY -- the reason is always the same:
-#     the handler predates the gate and is in the migration backlog.
+#   - Do NOT add real API handlers here. Every handler under pages/api/v1
+#     must use nextRouteForContract from day one.
+#   - Remove an entry only if the file is deleted or rewritten as a handler.
+
+apps/client/pages/api/v1/docs.ts
+apps/client/pages/api/v1/openapi.deployment.json.ts
+apps/client/pages/api/v1/openapi.json.ts
