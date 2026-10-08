@@ -4,6 +4,7 @@ import {
   ImageModels,
   ModelBackend,
   PermissionDeniedError,
+  billsOpenAICacheWrites,
   FIXED_TEMPERATURE_MODELS,
   REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS,
   RESPONSES_API_TOOL_MODELS,
@@ -1193,7 +1194,9 @@ export class OpenAIBackend implements ICompletionBackend {
         accumCacheReadTokens + cachedTokensFromUsage(response.usage as unknown as Record<string, unknown> | undefined);
       const totalCacheWriteTokens =
         accumCacheWriteTokens +
-        cacheWriteTokensFromUsage(response.usage as unknown as Record<string, unknown> | undefined);
+        (billsOpenAICacheWrites(model)
+          ? cacheWriteTokensFromUsage(response.usage as unknown as Record<string, unknown> | undefined)
+          : 0);
 
       if (!response.choices || response.choices.length === 0) {
         throw new Error('No choices returned from OpenAI API');
@@ -1493,10 +1496,12 @@ export class OpenAIBackend implements ICompletionBackend {
         // OpenAI's prompt_tokens INCLUDE cached tokens (unlike Anthropic, where the
         // fields are disjoint), so forwarding without subtracting would double-bill the
         // cached portion in provider-basis settlement.
-        cacheWriteTokensFromStream = Math.max(
-          cacheWriteTokensFromStream,
-          cacheWriteTokensFromUsage(chunk.usage as unknown as Record<string, unknown>)
-        );
+        if (billsOpenAICacheWrites(model)) {
+          cacheWriteTokensFromStream = Math.max(
+            cacheWriteTokensFromStream,
+            cacheWriteTokensFromUsage(chunk.usage as unknown as Record<string, unknown>)
+          );
+        }
         if (chunk.usage.prompt_tokens_details?.cached_tokens !== undefined) {
           // Max, not assign, for the same reason inputTokens is maxed above: a later
           // usage chunk reporting 0 must not erase a cache hit an earlier one reported,
@@ -2122,9 +2127,9 @@ export class OpenAIBackend implements ICompletionBackend {
     cachedTokensFromStream = cachedTokensFromUsage(
       finalResponse.usage as unknown as Record<string, unknown> | undefined
     );
-    cacheWriteTokensFromStream = cacheWriteTokensFromUsage(
-      finalResponse.usage as unknown as Record<string, unknown> | undefined
-    );
+    cacheWriteTokensFromStream = billsOpenAICacheWrites(model)
+      ? cacheWriteTokensFromUsage(finalResponse.usage as unknown as Record<string, unknown> | undefined)
+      : 0;
 
     const functionCalls = finalResponse.output.filter(
       (item): item is Extract<ResponseOutputItem, { type: 'function_call' }> => item.type === 'function_call'

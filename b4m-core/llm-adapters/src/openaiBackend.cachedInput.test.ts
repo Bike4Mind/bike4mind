@@ -389,4 +389,24 @@ describe('OpenAI cache writes (GPT-5.6 and later)', () => {
     } as never;
     expect(getTextModelCost(sol, 0, 0, 0, 1_000_000)).toBeCloseTo(6.25, 6);
   });
+
+  it('leaves earlier models alone: their write counts stay in plain input', async () => {
+    const { backend } = streamingBackend([
+      [
+        {
+          choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: 'stop' }],
+          usage: {
+            prompt_tokens: 2000,
+            completion_tokens: 40,
+            prompt_tokens_details: { cached_tokens: 1000, cache_write_tokens: 800 },
+          },
+        },
+      ],
+    ]);
+
+    const info = settled(await run(backend, ChatModels.GPT5_5, { stream: true }));
+
+    expect(info).toMatchObject({ inputTokens: 1000, cacheReadInputTokens: 1000 });
+    expect(info.cacheCreationInputTokens).toBeUndefined();
+  });
 });

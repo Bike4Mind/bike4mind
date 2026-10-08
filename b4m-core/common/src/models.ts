@@ -717,6 +717,19 @@ type PricingInfo = {
 export const CACHE_READ_MULTIPLIER = 0.1; // 90% discount on cached tokens
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 25% surcharge per cached chunk
 
+/**
+ * OpenAI models that bill prompt tokens written to the cache at CACHE_WRITE_MULTIPLIER x the input
+ * rate (GPT-5.6 and later). Earlier OpenAI models cache for free, so their writes must not be
+ * surcharged. Add a model here when OpenAI starts charging writes on it.
+ */
+const OPENAI_CACHE_WRITE_MODELS: ReadonlySet<string> = new Set([
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
+]);
+
+export const billsOpenAICacheWrites = (modelId: string): boolean => OPENAI_CACHE_WRITE_MODELS.has(modelId);
+
 /** The pricing-map key whose tier covers `tokens` (the largest tier when `tokens` exceeds them all), or null when unpriced. */
 export const pricingTierForTokens = (model: ModelInfo, tokens: number): number | null => {
   const thresholds = Object.keys(model.pricing)
