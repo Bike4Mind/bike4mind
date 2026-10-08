@@ -488,8 +488,45 @@ describe('MemoryLedgerRepository', () => {
 
   describe('listPrincipalsNeedingVectors', () => {
     const CURRENT = 'space-v2';
+    const VECTORLESS_INDEX = 'memory_ledger_vectorless_candidates';
+    const STALE_INDEX = 'memory_ledger_stale_vector_candidates';
     const at = (kind: IMemoryLedgerEvent['principalKind'], id: string, owner: string, seq = 0) =>
       sealedEvent({ principalKind: kind, principalId: id, ownerUserId: owner, seq, hash: `${kind}:${id}:${seq}` });
+
+    const repairPipeline = (
+      vectorMatch: Record<string, unknown>,
+      after?: { principalKind: string; principalId: string; ownerUserId: string }
+    ) => {
+      const match: Record<string, unknown>[] = [
+        { shredded: { $ne: true }, kind: { $in: ['assert', 'affirm'] } },
+        { $or: [{ factCipher: { $nin: [null, ''] } }, { fact: { $nin: [null, ''] } }] },
+        vectorMatch,
+      ];
+      if (after) {
+        match.push({
+          $or: [
+            { principalKind: { $gt: after.principalKind } },
+            { principalKind: after.principalKind, principalId: { $gt: after.principalId } },
+            {
+              principalKind: after.principalKind,
+              principalId: after.principalId,
+              ownerUserId: { $gt: after.ownerUserId },
+            },
+          ],
+        });
+      }
+      return [
+        { $match: { $and: match } },
+        { $project: { _id: 0, principalKind: 1, principalId: 1, ownerUserId: 1 } },
+        {
+          $group: {
+            _id: { principalKind: '$principalKind', principalId: '$principalId', ownerUserId: '$ownerUserId' },
+          },
+        },
+        { $sort: { '_id.principalKind': 1 as const, '_id.principalId': 1 as const, '_id.ownerUserId': 1 as const } },
+        { $limit: 25 },
+      ];
+    };
 
     it('finds vectorless and stale-stamped chains of every kind, distinct and sorted', async () => {
       await memoryLedgerRepository.tryInsert(at('user', 'u1', 'u1'));
@@ -525,6 +562,14 @@ describe('MemoryLedgerRepository', () => {
       expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([]);
     });
 
+    it('finds a current-stamped event whose vector ciphertext is missing', async () => {
+      await memoryLedgerRepository.tryInsert({ ...at('agent', 'stamp-only', 'owner'), embeddingModel: CURRENT });
+
+      expect(await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { limit: 10 })).toEqual([
+        { principalKind: 'agent', principalId: 'stamp-only', ownerUserId: 'owner' },
+      ]);
+    });
+
     it('pages by keyset cursor across a kind boundary and honours limit', async () => {
       await memoryLedgerRepository.tryInsert(at('lake', 'lake:a', 'o1'));
       await memoryLedgerRepository.tryInsert(at('lake', 'lake:b', 'o1'));
@@ -535,6 +580,46 @@ describe('MemoryLedgerRepository', () => {
 
       const rest = await memoryLedgerRepository.listPrincipalsNeedingVectors(CURRENT, { after: first[1], limit: 2 });
       expect(rest.map(p => p.principalId)).toEqual(['u1']);
+    });
+
+    it('uses the partial repair indexes for initial and resumed pages', async () => {
+      await MemoryLedgerEventModel.collection.insertMany(
+        Array.from({ length: 2_000 }, (_, i) => ({
+          ...at('user', `done-${i}`, 'owner'),
+          embeddingCipher: 'vector',
+          embeddingModel: CURRENT,
+        }))
+      );
+      await memoryLedgerRepository.tryInsert(at('lake', 'needs-vector', 'owner'));
+      await memoryLedgerRepository.tryInsert({
+        ...at('user', 'stale-vector', 'owner'),
+        embeddingCipher: 'vector',
+        embeddingModel: 'space-v1',
+      });
+
+      const declared = new Map(MemoryLedgerEventModel.schema.indexes().map(index => [index[1]?.name, index]));
+      expect(declared.get(VECTORLESS_INDEX)).toEqual([
+        { embeddingCipher: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { name: VECTORLESS_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
+      ]);
+      expect(declared.get(STALE_INDEX)).toEqual([
+        { embeddingModel: 1, principalKind: 1, principalId: 1, ownerUserId: 1 },
+        { name: STALE_INDEX, partialFilterExpression: { kind: { $in: ['assert', 'affirm'] } }, background: true },
+      ]);
+
+      for (const after of [undefined, { principalKind: 'lake', principalId: 'needs-vector', ownerUserId: 'owner' }]) {
+        for (const [vectorMatch, indexName] of [
+          [{ embeddingCipher: { $in: [null, ''] } }, VECTORLESS_INDEX],
+          [{ embeddingModel: { $ne: CURRENT } }, STALE_INDEX],
+        ] as const) {
+          const plan = await MemoryLedgerEventModel.collection
+            .aggregate(repairPipeline(vectorMatch, after))
+            .explain('queryPlanner');
+          const winning = JSON.stringify(plan);
+          expect(winning).toContain(`\"indexName\":\"${indexName}\"`);
+          expect(winning).not.toContain('COLLSCAN');
+        }
+      }
     });
   });
 });
