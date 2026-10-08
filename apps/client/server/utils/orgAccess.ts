@@ -193,11 +193,11 @@ export async function verifyOrgMembership(user: IUserDocument, orgId: string) {
  *
  * The IMPLICIT own-org fallback (`undefined` request) is different: the caller did not choose it,
  * so a stale `organizationId` pointer must degrade to personal scope rather than 403-lock the
- * caller out of a route they could always reach. Stale pointers exist in the data (written
- * before `deleteOrganization` cleared them, and still left by `assignManager`), so validating the fallback through
- * the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is never an
- * automatic consequence of the home-org field. Security holds either way - a non-member org is
- * never billed; the fallback just bills personally instead of failing the request.
+ * caller out of a route they could always reach. Stale pointers exist in the data (written before
+ * `deleteOrganization` cleared them, and still left by `assignManager`), so validating the fallback
+ * through the same gate and catching a non-member/missing rejection matches `chat.ts`: billing is
+ * never an automatic consequence of the home-org field. Security holds either way - a non-member
+ * org is never billed; the fallback just bills personally instead of failing the request.
  */
 export async function resolveBillingOrgId(
   // Accept any authenticated request shape: the LLM/media routes type `req` with a narrowed `Params`
