@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const {
   sideEffects,
   createSessionService,
+  updateSessionService,
   projectGet,
   SessionModelMock,
   sessionSave,
@@ -43,6 +44,7 @@ const {
       recordNotebookAddedToProjectActivity: vi.fn().mockReturnValue(Promise.resolve()),
     },
     createSessionService: vi.fn(),
+    updateSessionService: vi.fn(),
     projectGet: vi.fn(),
     SessionModelMock,
     sessionSave,
@@ -62,7 +64,7 @@ const {
 vi.mock('./sessionSideEffects', () => sideEffects);
 
 vi.mock('@bike4mind/services', () => ({
-  sessionService: { createSession: createSessionService },
+  sessionService: { createSession: createSessionService, updateSession: updateSessionService },
   projectService: { get: projectGet },
 }));
 
@@ -75,6 +77,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   projectRepository: {},
   agentRepository: {},
+  cacheRepository: {},
   userRepository: { update: userRepoUpdate, findById: userRepoFindById },
 }));
 
@@ -106,6 +109,8 @@ vi.mock('@server/queueHandlers/agentExecutor.attachmentLakeAccess', () => ({
   createAttachmentLakeAccess: createAttachmentLakeAccessSpy,
 }));
 
+vi.mock('@server/utils/storage', () => ({ getFilesStorage: vi.fn() }));
+
 vi.mock('@casl/mongoose', () => ({
   accessibleBy: accessibleBySpy,
 }));
@@ -125,7 +130,7 @@ import type { Logger } from '@bike4mind/observability';
 const mockAbility = (canResult: boolean): Ability =>
   ({ can: vi.fn().mockReturnValue(canResult) }) as unknown as Ability;
 
-const logger = { log: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as Logger;
+const logger = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
 const user = { id: 'user-1' } as unknown as IUserDocument;
 const allowAbility = mockAbility(true);
 
@@ -248,6 +253,65 @@ describe('sessionCrud', () => {
       expect(createSessionService).not.toHaveBeenCalled();
     });
 
+    it('persists only the new fabFileIds onto an existing session, without project propagation', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      const updated = { id: 'existing', knowledgeIds: ['a', 'b'] };
+      updateSessionService.mockResolvedValueOnce(updated);
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['a', 'b'],
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(updateSessionService).toHaveBeenCalledTimes(1);
+      const [calledUser, params] = updateSessionService.mock.calls[0];
+      expect(calledUser).toBe(user);
+      expect(params).toEqual({ id: 'existing', knowledgeIds: ['a', 'b'], propagateToProjects: false });
+      expect(result.session).toBe(updated);
+    });
+
+    it('does not write when fabFileIds adds nothing or is omitted', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      await getOrCreateSession({ sessionId: 'existing', fabFileIds: ['a'], user, ability: allowAbility, logger });
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', knowledgeIds: ['a'] });
+      await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
+
+      expect(updateSessionService).not.toHaveBeenCalled();
+    });
+
+    it('persists new fabFileIds on the owner-only (no ability) path too', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned' });
+      updateSessionService.mockResolvedValueOnce({ id: 'owned', knowledgeIds: ['f1'] });
+
+      await getOrCreateSession({ sessionId: 'owned', fabFileIds: ['f1'], user, logger });
+
+      expect(updateSessionService).toHaveBeenCalledWith(
+        user,
+        { id: 'owned', knowledgeIds: ['f1'], propagateToProjects: false },
+        expect.anything()
+      );
+    });
+
+    it('keeps the resolved session when the persist fails, so the turn still runs', async () => {
+      const existing = { id: 'existing', knowledgeIds: [] };
+      SessionModelMock.findOne.mockResolvedValueOnce(existing);
+      updateSessionService.mockRejectedValueOnce(new Error('Session not found'));
+
+      const result = await getOrCreateSession({
+        sessionId: 'existing',
+        fabFileIds: ['f1'],
+        user,
+        ability: allowAbility,
+        logger,
+      });
+
+      expect(result.session).toBe(existing);
+      expect(logger.warn).toHaveBeenCalled();
+    });
+
     it("hands createSession the attachment-door lake resolver for the caller's supplied files", async () => {
       const lakeAccess = { lakeMemberships: [], dataLakeTags: ['lake:x'], dataLakeTagPrefixes: [] };
       createAttachmentLakeAccessSpy.mockReturnValueOnce(async () => lakeAccess);
@@ -260,6 +324,7 @@ describe('sessionCrud', () => {
       expect(params).toEqual(expect.objectContaining({ knowledgeIds: ['f1'] }));
       await expect(adapters.resolveAttachmentLakeAccess()).resolves.toBe(lakeAccess);
       expect(createAttachmentLakeAccessSpy).toHaveBeenCalledWith(user, logger);
+      expect(updateSessionService).not.toHaveBeenCalled();
     });
 
     it('also logs project add + activity when created within a project', async () => {

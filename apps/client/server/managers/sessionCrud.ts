@@ -2,6 +2,7 @@ import defineAbilitiesFor, { Ability } from '@server/auth/ability';
 import { accessibleBy } from '@casl/mongoose';
 import {
   agentRepository,
+  cacheRepository,
   compareMongoIds,
   favoriteRepository,
   mongoose,
@@ -11,6 +12,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { NotFoundError } from '@server/utils/errors';
+import { getFilesStorage } from '@server/utils/storage';
 import {
   Permission,
   ISessionDocument,
@@ -146,6 +148,42 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
           ...accessibleBy(ability, Permission.update).ofType(SessionModel),
         })
       : await sessionRepository.findByIdAndUserId(reqSessionId, userId);
+
+    // fabFileIds means notebook scope, so persist what it adds - otherwise the file rides this turn
+    // only (later turns read session.knowledgeIds). Never propagated to projects: an automatic attach
+    // is not consent to share. Best-effort: this turn still carries the ids as per-turn session files.
+    const knownIds = session?.knowledgeIds ?? [];
+    const addedIds = (fabFileIds ?? []).filter(id => !knownIds.includes(id));
+    if (session && addedIds.length > 0) {
+      try {
+        session = await sessionService.updateSession(
+          user,
+          { id: session.id, knowledgeIds: [...knownIds, ...addedIds], propagateToProjects: false },
+          {
+            db: {
+              sessions: sessionRepository,
+              projects: projectRepository,
+              fabFiles: fabFileRepository,
+              caches: cacheRepository,
+            },
+            logger,
+            // Request-free variants, as in the create branch below.
+            resolveLakeAccess: async () =>
+              (await import('@server/dataLakes/resolveRetrievalLakeScope')).resolveRetrievalLakeScopeForUser(user, {
+                logger,
+              }),
+            resolveAttachmentLakeAccess: async () =>
+              (await import('@server/queueHandlers/agentExecutor.attachmentLakeAccess')).createAttachmentLakeAccess(
+                user,
+                logger
+              )(),
+            storage: getFilesStorage(),
+          }
+        );
+      } catch (error) {
+        logger.warn('Failed to persist fabFileIds to session knowledge', { sessionId: session.id, error });
+      }
+    }
   } else {
     const createdSession = await sessionService.createSession(
       user,
