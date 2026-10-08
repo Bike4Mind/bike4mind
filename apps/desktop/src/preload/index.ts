@@ -26,6 +26,7 @@ import {
   type BrowserPaneRequest,
   type DesktopApi,
 } from '@shared/ipc';
+import type { PrBarState } from '@shared/pullRequest';
 import type { UpdateState } from '@shared/update';
 import type { UsageWindowId } from '@shared/usage';
 
@@ -212,6 +213,17 @@ const api: DesktopApi = {
     getAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGetAccess),
     grantAccess: () => ipcRenderer.invoke(IPC_CHANNELS.toolsGrantAccess),
     revokeAccess: (root: string) => ipcRenderer.invoke(IPC_CHANNELS.toolsRevokeAccess, root),
+  },
+  pullRequests: {
+    watch: (sessionId: string | null) => ipcRenderer.invoke(IPC_CHANNELS.prWatch, sessionId),
+    bind: (sessionId: string, url: string) => ipcRenderer.invoke(IPC_CHANNELS.prBind, sessionId, url),
+    dismiss: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prDismiss, sessionId),
+    refresh: (sessionId: string) => ipcRenderer.invoke(IPC_CHANNELS.prRefresh, sessionId),
+    onStateChanged: listener => {
+      const handler = (_event: unknown, state: PrBarState) => listener(state);
+      ipcRenderer.on(IPC_CHANNELS.prStateChanged, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.prStateChanged, handler);
+    },
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.shellOpenExternal, url),

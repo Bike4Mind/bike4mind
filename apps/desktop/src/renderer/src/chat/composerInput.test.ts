@@ -187,7 +187,7 @@ describe('composerPlaceholder', () => {
 describe('the `/` menu', () => {
   it('opens on a slash typed into an empty composer', () => {
     expect(skillQuery('/')).toBe('');
-    expect(matchCommands('').map(command => command.name)).toEqual(['clear', 'compact']);
+    expect(matchCommands('').map(command => command.name)).toEqual(['clear', 'compact', 'pr']);
   });
 
   // A slash mid-sentence is punctuation, and a path is a path. Either opening a menu would mean

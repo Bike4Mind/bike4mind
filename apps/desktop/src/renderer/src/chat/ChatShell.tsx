@@ -25,6 +25,8 @@ import { columnStackSx, contentColumnSx } from './layout';
 import { ModelPicker } from './ModelPicker';
 import { ReasoningEffortPicker } from './ReasoningEffortPicker';
 import { SessionChips } from './SessionChips';
+import { PrStatusBar } from './PrStatusBar';
+import { usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { SettingsScreen } from './SettingsPanel';
 import { TodoPanel } from './TodoPanel';
@@ -158,6 +160,8 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const [browserOpen, setBrowserOpen] = useState(() => readBrowserPaneOpen());
   const draft = useAttachmentDraft(activeId);
   const nextPrompt = usePromptSuggestion(activeId);
+  // Only the conversation screen counts as showing one: main polls what is on screen faster.
+  const pullRequest = usePullRequest(screen === 'conversation' ? activeId : null);
 
   // Stable, because the account strip is rebuilt on every turn of the conversation and this is
   // the one thing in it that has no reason to change.
@@ -598,6 +602,14 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
               inUse={conversation.messages.length > 0}
             />
           )}
+
+          <PrStatusBar
+            state={pullRequest}
+            onDismiss={() =>
+              activeId ? window.b4m.pullRequests.dismiss(activeId) : Promise.resolve({ ok: true as const })
+            }
+            onRefresh={() => activeId && void window.b4m.pullRequests.refresh(activeId)}
+          />
 
           <Composer
             sessionId={activeId}

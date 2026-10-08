@@ -60,6 +60,8 @@ import { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { parseReasoningEffortSetting, storedReasoningEffortSetting } from './reasoningEffort';
 import { ForegroundCommandRegistry } from './tools/ForegroundCommandRegistry';
 import { devLog } from '../devlog/DevLogSink';
+import { registerPullRequests } from '../pr';
+import type { PrMonitor } from '../pr/PrMonitor';
 import { appWindows } from '../windows';
 
 const VERBOSE = process.env.B4M_DESKTOP_VERBOSE === '1';
@@ -130,6 +132,8 @@ export interface RegisteredChat {
   mcp: McpManager;
   /** The agent's hidden browser windows, closed with the last app window and on quit. */
   browser: BrowserManager;
+  /** Each conversation's pull request, and the timers that watch it. */
+  pullRequests: PrMonitor;
 }
 
 /**
@@ -274,7 +278,19 @@ export function registerChat(auth: AuthService): RegisteredChat {
     }
   };
 
-  const broadcast = (event: ChatStreamEvent) => send(IPC_CHANNELS.chatStreamEvent, event);
+  // Built before the service so the service's tool results can bind a PR. It reaches the
+  // service only through `chat`, which is first called long after both exist.
+  const pullRequests = registerPullRequests({
+    path: join(userData, 'pull-requests.json'),
+    chat: () => service,
+    store,
+    logger,
+    send,
+  });
+  const broadcast = (event: ChatStreamEvent) => {
+    send(IPC_CHANNELS.chatStreamEvent, event);
+    if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
+  };
 
   // Constructed here rather than beside ArtifactPublisher because it needs `send`, which is
   // declared above. Note what it is NOT given: no hook into the turn, no tool registration.
@@ -437,7 +453,10 @@ export function registerChat(auth: AuthService): RegisteredChat {
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     service.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, (_event, sessionId: string) => service.deleteSession(sessionId));
+  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: string) => {
+    await service.deleteSession(sessionId);
+    await pullRequests.forget(sessionId);
+  });
   ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) =>
     service.send(request.sessionId, request.text, request.attachments)
   );
@@ -605,7 +624,7 @@ export function registerChat(auth: AuthService): RegisteredChat {
     roots: await access.revoke(root),
   }));
 
-  return { service, background, mcp, browser };
+  return { service, background, mcp, browser, pullRequests };
 }
 
 export { ChatService } from './ChatService';

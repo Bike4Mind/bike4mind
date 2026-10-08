@@ -277,8 +277,13 @@ export function Composer({
    * at all - by then the draft is no longer a bare token, so the menu has already closed.
    */
   const runCommand = (command: ComposerCommand) => {
-    setText('');
     setDismissed(null);
+    if (command.requiresArgument) {
+      setText(`/${command.name} `);
+      textareaRef.current?.focus();
+      return;
+    }
+    setText('');
     onRunCommand?.(command.name, '');
     textareaRef.current?.focus();
   };

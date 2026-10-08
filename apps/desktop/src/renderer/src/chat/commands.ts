@@ -19,6 +19,8 @@ export interface ComposerCommand {
   description: string;
   /** Shown beside the name when the command takes an argument, in the menu's own grammar. */
   argumentHint?: string;
+  /** Picking it from the menu fills in the name and waits for the argument instead of running it bare. */
+  requiresArgument?: true;
 }
 
 export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
@@ -31,6 +33,12 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
     description: 'Summarise this conversation and carry only the summary forward.',
     argumentHint: '[what to focus on]',
   },
+  {
+    name: 'pr',
+    description: 'Show a pull request above the composer and keep its status current.',
+    argumentHint: '<GitHub PR URL>',
+    requiresArgument: true,
+  },
 ];
 
 /** The command by that exact name, or undefined. Names are matched case-insensitively. */
@@ -42,7 +50,7 @@ export function findCommand(name: string): ComposerCommand | undefined {
 /**
  * Commands matching `query`, best first.
  *
- * Name only, and no description fallback: there are two of them and both names are the word the
+ * Name only, and no description fallback: there are a handful and each name is the word the
  * user would reach for. The skill menu needs that fallback because a deployment can hold thirty
  * skills whose names nobody remembers; this list is read in full at a glance.
  */

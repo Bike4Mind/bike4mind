@@ -106,7 +106,7 @@ void app.whenReady().then(async () => {
   const auth = registerAuth();
   registerAccount(auth);
   registerUsage(auth);
-  const { service: chat, background, mcp, browser } = registerChat(auth);
+  const { service: chat, background, mcp, browser, pullRequests } = registerChat(auth);
   closeAgentBrowsers = () => browser.closeAll();
 
   // Set by whichever path starts the teardown, so the `before-quit` veto below runs at most
@@ -164,6 +164,7 @@ void app.whenReady().then(async () => {
   app.once('will-quit', () => {
     auth.dispose();
     chat.dispose();
+    pullRequests.dispose();
     updates.dispose();
     // Synchronous and unconditional: this handler cannot await, and a quit that raced the
     // grace period above must not leave a process group behind.
