@@ -226,15 +226,15 @@ export async function migrateLedgerVectorsForPrincipal(
       }
 
       const arm = vector ? 'truncated' : hasVector ? 'reembedded' : 'backfilled';
+      if (!vector && stats.backfilled + stats.reembedded + stats.failed >= limit) {
+        stats.stoppedAtLimit = true;
+        break;
+      }
+      if (opts.dryRun) {
+        stats[arm] += 1;
+        continue;
+      }
       if (!vector) {
-        if (stats.backfilled + stats.reembedded + stats.failed >= limit) {
-          stats.stoppedAtLimit = true;
-          break;
-        }
-        if (opts.dryRun) {
-          stats[arm] += 1;
-          continue;
-        }
         if (service === undefined) {
           try {
             service = await createMementoEmbeddingService(ownerUserId);
@@ -249,9 +249,6 @@ export async function migrateLedgerVectorsForPrincipal(
           continue;
         }
         vector = toMementoVector(await service.generateEmbedding(fact));
-      } else if (opts.dryRun) {
-        stats.truncated += 1;
-        continue;
       }
 
       const sealed = encryptVector(dek, vector);

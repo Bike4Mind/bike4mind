@@ -64,8 +64,8 @@ async function embedWithinBudget(embed: MementoEmbedder, fact: string, logger: L
   } catch (err: unknown) {
     // Logged rather than swallowed: a belief that misses its vector here ranks on lexical overlap
     // until an operator runs the ledger backfill (`POST /api/admin/mementos/reembed-ledger`) or a
-    // replay re-asserts it - `POST .../belief` re-runs this writer, re-embeds and re-asserts. Still best-effort - a weaker belief beats losing the
-    // curator's decision.
+    // replay re-asserts it - `POST .../belief` re-runs this writer, re-embeds and re-asserts. Still
+    // best-effort - a weaker belief beats losing the curator's decision.
     logger.warn(
       `[lakeMemory] could not embed a curator resolution; writing it without a vector: ${
         err instanceof Error ? err.message : String(err)
