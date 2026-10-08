@@ -99,8 +99,14 @@ export interface HearthEvent {
   createdAt: Date;
 }
 
-/** Fields callers provide; id/seq/createdAt are assigned by the store. */
-export type AppendEventInput = Omit<HearthEvent, 'id' | 'seq' | 'createdAt'>;
+/**
+ * Fields callers provide; id/seq/createdAt are assigned by the store. `origin`
+ * is required here (not optional as on HearthEvent, where it is absent on
+ * pre-provenance rows) so a new writer cannot silently omit it.
+ */
+export type AppendEventInput = Omit<HearthEvent, 'id' | 'seq' | 'createdAt' | 'origin'> & {
+  origin: HearthEventOrigin;
+};
 
 export interface HearthChannel {
   id: string;
