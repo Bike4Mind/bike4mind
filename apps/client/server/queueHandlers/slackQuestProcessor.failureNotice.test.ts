@@ -167,6 +167,7 @@ describe('slackQuestProcessor failure notice', () => {
     const pendingActionTs = 1_700_000_000_000;
     mockProcess.mockResolvedValueOnce(undefined);
     questDoc = {
+      _id: { toString: () => QUEST_ID },
       slackNotification,
       type: 'completion',
       reply: 'Ready to create the issue',

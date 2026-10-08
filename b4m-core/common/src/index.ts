@@ -77,6 +77,7 @@ export * from './confluence';
 export * from './jira';
 export * from './atlassian';
 export * from './mcp/providers';
+export * from './mcp/pendingAction';
 
 // Artifact system exports (schemas and helpers only, types are already exported via './types')
 export * from './schemas/artifacts';

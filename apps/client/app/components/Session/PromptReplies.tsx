@@ -45,7 +45,12 @@ import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import EditModeContent from './EditModeContent';
 import { ExpandCollapseButton } from './ExpandCollapseButton';
-import { IAgent, GENERATED_AUDIO_EXTENSION_RE, GENERATED_IMAGE_EXTENSION_RE } from '@bike4mind/common';
+import {
+  IAgent,
+  GENERATED_AUDIO_EXTENSION_RE,
+  GENERATED_IMAGE_EXTENSION_RE,
+  MCP_ACTION_REPLACED_ERROR_CODE,
+} from '@bike4mind/common';
 import { ArtifactElisionBanner } from './ArtifactElisionBanner';
 import { RetrievalCoverageBanner } from './RetrievalCoverageBanner';
 import { useQuery } from '@tanstack/react-query';
@@ -739,7 +744,7 @@ function getPendingActionError(error: unknown, fallbackMessage: string): { messa
     const responseData = parsedResponse.success ? parsedResponse.data : undefined;
     return {
       message: responseData?.error || error.message,
-      isReplaced: error.response?.status === 409 && responseData?.errorCode === 'action_replaced',
+      isReplaced: error.response?.status === 409 && responseData?.errorCode === MCP_ACTION_REPLACED_ERROR_CODE,
     };
   }
 

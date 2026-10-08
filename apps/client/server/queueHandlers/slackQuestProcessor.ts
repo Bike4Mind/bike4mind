@@ -64,12 +64,12 @@ import {
   slackToolDefinitions,
   createPendingActionToolDefs,
   SlackClient,
-  buildConfirmationButtons,
   formatPreviewFromParams,
   processMarkdownForSlack,
   splitTextIntoBlocks,
 } from '@bike4mind/slack';
 import { cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { buildPendingActionButtons } from '@server/integrations/slack/pendingActionButtons';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { recallLakeMemoryForSession } from '@server/memory/lakeMemoryRecall';
@@ -491,13 +491,13 @@ export const handler = withEventContext(async (event, logger) => {
 
   let displayText = aiResponse;
   if (quest.pendingAction && quest.pendingAction.tool !== 'image_generation') {
-    const { tool, params: pendingParams, ts: pendingActionTs } = quest.pendingAction;
+    const { tool, params: pendingParams } = quest.pendingAction;
 
     const formattedPreview = formatPreviewFromParams(tool, pendingParams as Record<string, unknown>);
     displayText = formattedPreview;
     formatted = formatSimpleAgentResponse(formattedPreview);
 
-    const confirmButtons = buildConfirmationButtons(params.questId, pendingActionTs);
+    const confirmButtons = buildPendingActionButtons(quest);
     formatted.blocks = [...formatted.blocks, ...confirmButtons];
 
     await Quest.findByIdAndUpdate(params.questId, {

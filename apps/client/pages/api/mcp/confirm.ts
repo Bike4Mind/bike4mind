@@ -3,7 +3,7 @@ initializeSlackPackage();
 
 import { z } from 'zod';
 import { Quest, Session } from '@bike4mind/database';
-import { isImageServeable } from '@bike4mind/common';
+import { isImageServeable, MCP_ACTION_REPLACED_ERROR_CODE } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { isValidObjectId } from '@server/utils/objectId';
@@ -94,7 +94,7 @@ const handler = baseApi().post(async (req, res) => {
     logger.warn('[Web MCP Confirm] Pending action replaced since it was displayed', { questId });
     return res.status(409).json({
       error: 'This action was replaced by a newer one. Please review it again.',
-      errorCode: 'action_replaced',
+      errorCode: MCP_ACTION_REPLACED_ERROR_CODE,
     });
   }
 
