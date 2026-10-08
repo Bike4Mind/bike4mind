@@ -8,7 +8,7 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 import Typography from '@mui/joy/Typography';
 import type { AuthState } from '@shared/auth';
-import type { ChatProject, ChatSessionMode } from '@shared/chat';
+import type { ChatProject, ChatSessionMode, ChatSessionSummary } from '@shared/chat';
 import { effectiveContextLimit } from '@shared/contextLimit';
 import { activeTodos } from '@shared/todos';
 import { ArtifactLibraryPanel } from './ArtifactLibraryPanel';
@@ -34,6 +34,7 @@ import { TurnDot, turnState } from './TurnDot';
 import { TurnStatus } from './TurnStatus';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
+import { readLastSession, useLastSession } from './lastSession';
 import { newSessionInProject } from './newSessionInProject';
 import { roundsOf } from './replyRounds';
 import { contextTokens, describeActivity, latestReply, type ComposerUsage } from './statusLine';
@@ -144,8 +145,20 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
     apply,
   } = useSessions();
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [mode, setMode] = useState<ChatSessionMode>('chat');
+  const [mode, setMode] = useState<ChatSessionMode>(() => readLastSession()?.mode ?? 'chat');
+  const onRestore = useCallback((session: ChatSessionSummary | null) => {
+    setMode(session?.mode ?? 'chat');
+    if (session) setActiveId(session.id);
+  }, []);
+  const restoring = useLastSession({ loading, sessions, activeId, onRestore });
+  // Until this is false the shell does not know which conversation it will show, so it draws
+  // none of the empty-state copy that would otherwise flash up before the real one.
+  const settling = loading || restoring;
+
   const conversation = useConversation(activeId, apply);
+  // A conversation picked before its transcript has been read would otherwise show the empty
+  // thread's "send a message" line for a frame.
+  const opening = settling || (!!activeId && !conversation.session);
   const background = useBackgroundProcesses(activeId);
   const skills = useSkills(activeId);
   const catalog = useModelCatalog();
@@ -278,11 +291,13 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
    * the user looking for a list that says "No Code sessions yet." The button in the empty pane
    * is the step, and this points at it.
    */
-  const disabledPlaceholder = creatingCode
-    ? 'Starting a session...'
-    : mode === 'code'
-      ? 'Start a Code session to type here'
-      : 'Start a conversation to type here';
+  const disabledPlaceholder = settling
+    ? ''
+    : creatingCode
+      ? 'Starting a session...'
+      : mode === 'code'
+        ? 'Start a Code session to type here'
+        : 'Start a conversation to type here';
 
   const onSend = useCallback(
     async (text: string) => {
@@ -313,11 +328,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   // sidebar no longer lists. Only reselects when the open one is not in this mode; past that,
   // the user's choice stands.
   useEffect(() => {
-    if (loading) return;
+    if (settling) return;
     const open = sessions.find(session => session.id === activeId);
     if (open?.mode === mode) return;
     setActiveId(sessions.find(session => session.mode === mode)?.id ?? null);
-  }, [loading, activeId, sessions, mode]);
+  }, [settling, activeId, sessions, mode]);
 
   /**
    * Make a session, without touching what the pane is showing. The two callers differ on that:
@@ -358,11 +373,11 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
   const arrived = useRef(new Set<ChatSessionMode>());
   useEffect(() => {
     const empty = !sessions.some(session => session.mode === mode);
-    if (!seedOnArrival(arrived.current, { loading, mode, hasSessionInMode: !empty })) return;
+    if (!seedOnArrival(arrived.current, { loading: settling, mode, hasSessionInMode: !empty })) return;
     void startSession().then(created => {
       if (created) setActiveId(created);
     });
-  }, [loading, sessions, mode, startSession]);
+  }, [settling, sessions, mode, startSession]);
 
   /**
    * Another session in the same project, from the group header's "+".
@@ -463,7 +478,7 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
                     />
                     {conversation.session.project && <WorkingDirectoryLine project={conversation.session.project} />}
                   </>
-                ) : (
+                ) : opening ? null : (
                   <Typography level="title-sm" textColor="text.tertiary">
                     No conversation open
                   </Typography>
@@ -502,45 +517,49 @@ export function ChatShell({ auth, account }: { auth?: AuthState | null; account?
             </Box>
           </Box>
 
-          <MessageThread
-            messages={conversation.messages}
-            sessionId={activeId}
-            // What stands in for the transcript when there is no session to have one. It is the
-            // only control on screen that starts one from here, so it is a button and not a
-            // sentence pointing at the sidebar: the header above says what the state is, this
-            // says what to do about it, and the composer's placeholder names the same step.
-            noSession={
-              <Stack spacing={1.5} alignItems="center">
-                <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
-                  {mode === 'code'
-                    ? 'Start a Code session to run a task here.'
-                    : 'Start a conversation to send your first message.'}
-                </Typography>
-                <Button
-                  size="sm"
-                  variant="soft"
-                  loading={creatingCode}
-                  onClick={() => void onCreate()}
-                  data-testid="chat-start-session-btn"
-                >
-                  {mode === 'code' ? 'New Code session' : 'New conversation'}
-                </Button>
-              </Stack>
-            }
-            // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
-            // one parked at the approval gate - is still running, and Continue must not be
-            // offered on top of it.
-            streaming={turnOpen}
-            onRespond={conversation.respondToApproval}
-            onMove={background.moveToBackground}
-            onContinue={() => void conversation.continueReply()}
-            status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
-            // At the foot of the thread rather than above the composer: a background command is
-            // something this conversation started, so it reads as the last thing that happened
-            // in it. It scrolls with the transcript, which is the trade - the panel is reached
-            // from the bottom of the thread, not from a bar that is always on screen.
-            footer={<BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />}
-          />
+          {opening ? (
+            <Box sx={{ flex: 1 }} data-testid="chat-thread-opening" />
+          ) : (
+            <MessageThread
+              messages={conversation.messages}
+              sessionId={activeId}
+              // What stands in for the transcript when there is no session to have one. It is the
+              // only control on screen that starts one from here, so it is a button and not a
+              // sentence pointing at the sidebar: the header above says what the state is, this
+              // says what to do about it, and the composer's placeholder names the same step.
+              noSession={
+                <Stack spacing={1.5} alignItems="center">
+                  <Typography level="body-sm" textColor="text.tertiary" data-testid="chat-thread-no-session">
+                    {mode === 'code'
+                      ? 'Start a Code session to run a task here.'
+                      : 'Start a conversation to send your first message.'}
+                  </Typography>
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    loading={creatingCode}
+                    onClick={() => void onCreate()}
+                    data-testid="chat-start-session-btn"
+                  >
+                    {mode === 'code' ? 'New Code session' : 'New conversation'}
+                  </Button>
+                </Stack>
+              }
+              // turnOpen, not `streaming`: a turn this window never saw start - after a reload, or
+              // one parked at the approval gate - is still running, and Continue must not be
+              // offered on top of it.
+              streaming={turnOpen}
+              onRespond={conversation.respondToApproval}
+              onMove={background.moveToBackground}
+              onContinue={() => void conversation.continueReply()}
+              status={conversation.turn && <TurnStatus turn={conversation.turn} activity={activity} />}
+              // At the foot of the thread rather than above the composer: a background command is
+              // something this conversation started, so it reads as the last thing that happened
+              // in it. It scrolls with the transcript, which is the trade - the panel is reached
+              // from the bottom of the thread, not from a bar that is always on screen.
+              footer={<BackgroundTaskChip running={background.running} onClick={() => setTasksPanelOpen(true)} />}
+            />
+          )}
 
           <TodoPanel todos={plan} turnOpen={turnOpen} />
 
