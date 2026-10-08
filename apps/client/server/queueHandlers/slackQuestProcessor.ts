@@ -309,7 +309,12 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
   // ChatCompletionProcess saves the error as the quest reply before rethrowing, so reuse
   // it as the detail line when present - it is the same text the web client shows.
   const detail = quest.type === 'error' && quest.reply ? quest.reply : null;
-  const text = detail ? `${SLACK_PROCESSING_FAILURE_TEXT}\n\n> ${detail}` : SLACK_PROCESSING_FAILURE_TEXT;
+  // Slack blockquotes are per-line, so every line needs its own marker.
+  const quotedDetail = detail
+    ?.split(/\r?\n/)
+    .map(line => `> ${line}`)
+    .join('\n');
+  const text = quotedDetail ? `${SLACK_PROCESSING_FAILURE_TEXT}\n\n${quotedDetail}` : SLACK_PROCESSING_FAILURE_TEXT;
 
   if (messageTs) {
     try {
@@ -328,7 +333,9 @@ async function deliverSlackProcessingFailure(questId: string, logger: Logger): P
     }
   }
 
-  await clearSlackNotification(questId, logger, 'after failure notice');
+  // slackNotification is deliberately left in place: the handler rethrows so the event is
+  // retried, and a successful retry must still find it to replace this notice with the
+  // answer. A repeat failure only re-edits the same message by ts, which is idempotent.
 }
 
 /**
