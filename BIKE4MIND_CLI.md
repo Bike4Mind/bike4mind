@@ -134,6 +134,9 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
 | `get_notebook` | Fetch one notebook by id | `notebooks:read` |
 | `create_notebook` | Create a notebook (optionally in a project, or grounded in a data lake via `dataLakeId`) | `notebooks:write` |
+| `rename_notebook` | Rename a notebook | `notebooks:write` |
+| `clone_notebook` | Clone a notebook into a new one (rate-limited to 10 per minute) | `notebooks:write` |
+| `delete_notebook` | Permanently delete a notebook; requires `confirm: true` | `notebooks:write` |
 | `list_projects` | List the projects you can access, including shared ones | `projects:read` |
 | `get_project` | Fetch one project by id | `projects:read` |
 | `create_project` | Create a project (`name` and `description` required; optional `sessionIds`/`fileIds`); pass its id as `projectId` to `create_notebook` | `projects:write` |

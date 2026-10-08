@@ -136,6 +136,7 @@ export * from './utils/multimodalContent';
 export * from './utils/attachmentScope';
 export * from './utils/dataLakeTaxonomy';
 export * from './utils/dataLakeSlug';
+export * from './utils/includeLibraryFiles';
 export * from './utils/dataLakeAccessContext';
 export * from './utils/tagName';
 export * from './utils/tagPaths';

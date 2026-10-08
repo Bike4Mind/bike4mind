@@ -22,6 +22,7 @@ import {
   type RawDataLake,
   type RawNotebook,
   type RawProject,
+  NOTEBOOK_ID_PATTERN,
 } from './b4mApiClient.js';
 import { logger } from '../utils/Logger.js';
 
@@ -52,6 +53,25 @@ export const TOOL_META: ToolMeta[] = [
     title: 'Create notebook',
     description:
       'Create a new notebook, optionally inside a project or grounded in a data lake (dataLakeId, see list_lakes). Defaults the name to "New Notebook" when omitted.',
+    scope: 'notebooks:write',
+  },
+  {
+    name: 'rename_notebook',
+    title: 'Rename notebook',
+    description: 'Rename a notebook.',
+    scope: 'notebooks:write',
+  },
+  {
+    name: 'clone_notebook',
+    title: 'Clone notebook',
+    description: 'Clone a notebook into a new one; returns the new notebook.',
+    scope: 'notebooks:write',
+  },
+  {
+    name: 'delete_notebook',
+    title: 'Delete notebook',
+    description:
+      'Permanently delete a notebook and the files its owner uploaded to it; this cannot be undone through the API. Requires confirm: true. On a conflict (409) nothing was deleted, so retry.',
     scope: 'notebooks:write',
   },
   {
@@ -131,8 +151,11 @@ const listNotebooksShape = {
   page: z.number().int().min(1).default(1).describe('1-based page number; request the next page when hasMore is true'),
 };
 
+const notebookId = (description: string) =>
+  z.string().regex(NOTEBOOK_ID_PATTERN, 'notebookId must be a 24-character hex ObjectId').describe(description);
+
 const getNotebookShape = {
-  notebookId: z.string().describe('The notebook (session) id'),
+  notebookId: notebookId('The notebook (session) id'),
 };
 
 const createNotebookShape = {
@@ -142,6 +165,20 @@ const createNotebookShape = {
     .string()
     .optional()
     .describe("Data lake id or slug to ground the notebook in (see list_lakes); seeds the lake's retrieval defaults"),
+};
+
+const renameNotebookShape = {
+  notebookId: notebookId('The notebook (session) id'),
+  name: z.string().min(1).describe('The new name'),
+};
+
+const cloneNotebookShape = {
+  notebookId: notebookId('The notebook (session) id to clone'),
+};
+
+const deleteNotebookShape = {
+  notebookId: notebookId('The notebook (session) id to delete'),
+  confirm: z.literal(true).describe('Must be true; the delete is permanent'),
 };
 
 const listProjectsShape = {
@@ -278,6 +315,23 @@ export async function createNotebook(
   // POST /api/sessions/create hard-requires a name; default to the web app's
   // convention when the caller omits one so a nameless create still succeeds.
   return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
+}
+
+export async function renameNotebook(client: B4mApiClient, args: { notebookId: string; name: string }) {
+  return notebookSummary(await client.renameNotebook(args.notebookId, args.name));
+}
+
+export async function cloneNotebook(client: B4mApiClient, args: { notebookId: string }) {
+  return notebookSummary(await client.cloneNotebook(args.notebookId));
+}
+
+export async function deleteNotebook(client: B4mApiClient, args: { notebookId: string; confirm?: boolean }) {
+  // The MCP input schema already rejects anything but `true`; this guards direct callers.
+  if (args.confirm !== true) {
+    throw new Error('delete_notebook requires confirm: true');
+  }
+  const { newLastNotebookId } = await client.deleteNotebook(args.notebookId);
+  return { deleted: true, notebookId: args.notebookId, newLastNotebookId };
 }
 
 export async function listProjects(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
@@ -702,6 +756,36 @@ export function registerTools(server: McpServer, client: B4mApiClient): void {
       inputSchema: createNotebookShape,
     },
     args => run('notebooks:write', () => createNotebook(client, args))
+  );
+
+  server.registerTool(
+    'rename_notebook',
+    {
+      title: meta('rename_notebook').title,
+      description: meta('rename_notebook').description,
+      inputSchema: renameNotebookShape,
+    },
+    args => run('notebooks:write', () => renameNotebook(client, args))
+  );
+
+  server.registerTool(
+    'clone_notebook',
+    {
+      title: meta('clone_notebook').title,
+      description: meta('clone_notebook').description,
+      inputSchema: cloneNotebookShape,
+    },
+    args => run('notebooks:write', () => cloneNotebook(client, args))
+  );
+
+  server.registerTool(
+    'delete_notebook',
+    {
+      title: meta('delete_notebook').title,
+      description: meta('delete_notebook').description,
+      inputSchema: deleteNotebookShape,
+    },
+    args => run('notebooks:write', () => deleteNotebook(client, args))
   );
 
   server.registerTool(

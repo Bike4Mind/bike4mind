@@ -114,6 +114,8 @@ export interface ToolBuilderConfig {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Inlined-attachment ids, forwarded to the tool context (see ToolContext.inlinedAttachmentIds). */
   inlinedAttachmentIds?: ToolContext['inlinedAttachmentIds'];
+  /** Attached file ids, forwarded to the tool context (see ToolContext.attachedFileIds). */
+  attachedFileIds?: ToolContext['attachedFileIds'];
   /** Fully-inlined-attachment ids, forwarded to the tool context (see ToolContext.fullyInlinedAttachmentIds). */
   fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
   /** Personal-corpus lake suppression, forwarded to the tool context (see ToolContext.suppressLakeArms). */
@@ -124,6 +126,8 @@ export interface ToolBuilderConfig {
   sessionReaderConsentDatalakeTags?: ToolContext['sessionReaderConsentDatalakeTags'];
   /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
   sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
+  /** libraryFlagForScope(session), forwarded to the tool context (see ToolContext.sessionIncludeLibraryFiles). */
+  sessionIncludeLibraryFiles?: ToolContext['sessionIncludeLibraryFiles'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
@@ -850,11 +854,13 @@ export class ToolBuilder {
         entitlementKeys: this.deps.entitlementKeys,
         retrievalFilter: this.deps.retrievalFilter,
         inlinedAttachmentIds: this.deps.inlinedAttachmentIds,
+        attachedFileIds: this.deps.attachedFileIds,
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
         sessionReaderConsentDatalakeTags: this.deps.sessionReaderConsentDatalakeTags,
         sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
+        sessionIncludeLibraryFiles: this.deps.sessionIncludeLibraryFiles,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         organizationId: organization?.id,
         apiKeyId: this.deps.apiKeyId,
