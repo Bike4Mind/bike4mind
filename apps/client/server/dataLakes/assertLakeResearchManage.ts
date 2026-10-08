@@ -12,7 +12,8 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  * MANAGE-gated, exactly like the proposal queue it feeds (`proposals/index.ts`): configuring what a
  * run searches for, and spending money running it, are management rights. Read access to the lake
  * is not enough, and the read gate runs FIRST so a stranger still gets the not-found-style denial
- * that leaks no existence.
+ * that leaks no existence. By id only (`assertLakeAccessById`): a slug skips a deleted lake and would
+ * resolve, and spend money on, the next lake sharing it.
  *
  * Also hands back the `actor` these routes need to record a History event: building it here,
  * once, is what keeps every research route attributing a key-driven write to the key the same way
@@ -27,10 +28,10 @@ import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrinc
  */
 export async function assertLakeResearchManage(
   req: Request,
-  lakeIdOrSlug: string,
+  lakeId: string,
   ctx: AccessContext
 ): Promise<{ lake: IDataLakeDocument; actor: dataLakeService.ManageActor; grants: dataLakeService.LakeGrant[] }> {
-  const lake = await dataLakeService.assertLakeAccess(lakeIdOrSlug, ctx, {
+  const lake = await dataLakeService.assertLakeAccessById(lakeId, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
   const grants = await dataLakeService.loadActiveLakeGrants(lake, {

@@ -56,7 +56,8 @@ const SUPPORTED_PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'o
  */
 async function resolveLakeMemoryTarget(
   req: EntitlementRequest,
-  id: string
+  id: string,
+  { idOnly = false }: { idOnly?: boolean } = {}
 ): Promise<{
   principal: Principal;
   ownerUserId: string;
@@ -64,7 +65,10 @@ async function resolveLakeMemoryTarget(
   grants: dataLakeService.LakeGrant[];
 } | null> {
   const ctx = await toAccessContext(req);
-  const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
+  const assertAccess = idOnly
+    ? dataLakeService.assertLakeAccessWithGrantsById
+    : dataLakeService.assertLakeAccessWithGrants;
+  const { lake, grants } = await assertAccess(id, ctx, {
     db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
   });
   // BOTH halves of the ledger key must be present, and the tag half is not optional paranoia: the
@@ -181,12 +185,14 @@ handler.delete(async (req, res) => {
   const subject = typeof req.query.subject === 'string' ? req.query.subject : undefined;
 
   if (kind === 'lake') {
-    const target = await resolveLakeMemoryTarget(req, id);
+    // Id only: a slug falls through past a deleted lake to the next one sharing it, and this shred is
+    // irreversible (same reason as the manage routes under data-lakes/[id]/).
+    const target = await resolveLakeMemoryTarget(req, id, { idOnly: true });
     if (!target) return res.status(404).json({ error: 'No memory found for this principal.' });
 
     // Reading a lake is org-shared, but DELETING it is an OWNER action: only the effective owner (or
     // an admin) may shred what the whole org reads. Another reader gets a 403, not a 404 -
-    // assertLakeAccessWithGrants already confirmed they can see the lake. Mirrors the lifecycle
+    // assertLakeAccessWithGrantsById already confirmed they can see the lake. Mirrors the lifecycle
     // guards (data-lakes/[id]/lifecycle.ts).
     // The SAME predicate the list surface hands the UI as `canManageMemory`. Previously this was
     // `canManageLake` called with neither grants nor `organizationId`, which happens to reduce to

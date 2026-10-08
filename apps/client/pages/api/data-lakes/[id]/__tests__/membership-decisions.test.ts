@@ -8,7 +8,7 @@ const LAKE = {
 };
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessById: vi.fn(),
   assertLakeWritable: vi.fn(),
   resolveCanManageLake: vi.fn(async () => true),
   applyAdmissionDecision: vi.fn(async () => ({
@@ -41,7 +41,7 @@ vi.mock('@server/middlewares/featureFlag', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
-    assertLakeAccess: h.assertLakeAccess,
+    assertLakeAccessById: h.assertLakeAccessById,
     assertLakeWritable: h.assertLakeWritable,
     resolveCanManageLake: h.resolveCanManageLake,
     applyAdmissionDecision: h.applyAdmissionDecision,
@@ -91,7 +91,7 @@ beforeEach(() => {
   h.assertLakeWritable.mockImplementation(() => undefined);
   h.tx.length = 0;
   h.touchIfStable.mockImplementation(async () => (h.tx.push('touch'), true));
-  h.assertLakeAccess.mockResolvedValue(LAKE);
+  h.assertLakeAccessById.mockResolvedValue(LAKE);
   h.resolveCanManageLake.mockResolvedValue(true);
   h.applyAdmissionDecision.mockResolvedValue({
     group: { fileName: 'policy.md', tier: 'fileName', bucket: 'differing', members: [], memberCount: 2 },
@@ -193,7 +193,7 @@ describe('POST /api/data-lakes/:id/membership-decisions', () => {
 
   it('validates the body BEFORE resolving the lake, so a bad body cannot probe existence', async () => {
     await expect(invoke(makeReq({}), makeRes())).rejects.toThrow();
-    expect(h.assertLakeAccess).not.toHaveBeenCalled();
+    expect(h.assertLakeAccessById).not.toHaveBeenCalled();
   });
 
   it('is gated on the data-lakes feature flag', () => {
@@ -205,7 +205,7 @@ describe('POST serialization against a concurrent revoke', () => {
   const body = { fileName: 'policy.md', decision: 'keep-newest' };
 
   it('runs the gates and the decision inside the transaction, then touches the lake last', async () => {
-    h.assertLakeAccess.mockImplementation(async () => (h.tx.push('access'), LAKE));
+    h.assertLakeAccessById.mockImplementation(async () => (h.tx.push('access'), LAKE));
     h.resolveCanManageLake.mockImplementation(async () => (h.tx.push('manage'), true));
     h.applyAdmissionDecision.mockImplementation(async () => {
       h.tx.push('decide');

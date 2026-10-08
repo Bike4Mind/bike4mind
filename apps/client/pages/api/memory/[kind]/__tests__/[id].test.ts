@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   assertLakeAccessWithGrants: vi.fn(),
+  assertLakeAccessWithGrantsById: vi.fn(),
   canShredLakeMemory: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'caller-1', isAdmin: false })),
   readPrincipalMemory: vi.fn(),
@@ -64,6 +65,7 @@ vi.mock('@bike4mind/memory', () => ({
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
+    assertLakeAccessWithGrantsById: h.assertLakeAccessWithGrantsById,
     canShredLakeMemory: h.canShredLakeMemory,
   },
 }));
@@ -122,6 +124,7 @@ const LAKE = { id: 'lake-1', datalakeTag: 'tag-abc', createdByUserId: 'creator-1
 beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: [] });
+  h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: [] });
   h.toAccessContext.mockResolvedValue({ userId: 'caller-1', isAdmin: false });
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
   h.stampLakeMemoryPurge.mockResolvedValue(undefined);
@@ -299,6 +302,16 @@ describe('DELETE /api/memory/lake/:id - owner-gated crypto-shred', () => {
     expect(json).toHaveBeenCalledWith({ ok: true, shredded: 5 });
   });
 
+  it('resolves the lake by id only, never through the slug-tolerant gate', async () => {
+    h.canShredLakeMemory.mockReturnValue(true);
+    const { res } = makeRes();
+
+    await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'creator-1' } }), res);
+
+    expect(h.assertLakeAccessWithGrantsById).toHaveBeenCalledWith('lake-1', expect.anything(), expect.anything());
+    expect(h.assertLakeAccessWithGrants).not.toHaveBeenCalled();
+  });
+
   it('a single ?subject shreds one belief (no memento twin - lake memory is pure ledger)', async () => {
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredBelief.mockResolvedValue(1);
@@ -325,7 +338,7 @@ describe('DELETE /api/memory/lake/:id - owner-gated crypto-shred', () => {
 
   it('passes active owner grants to the shred gate so a transferred owner can delete memory', async () => {
     const ownerGrants = [{ principalType: 'user', principalId: 'new-owner', role: 'owner' }];
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: ownerGrants });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: LAKE, grants: ownerGrants });
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredPrincipalMemory.mockResolvedValue(2);
     const { res, status } = makeRes();
@@ -420,7 +433,7 @@ describe('DELETE /api/memory/lake/:id - owner-gated crypto-shred', () => {
     // filter instead of matching on it - so an unguarded tag would turn this keyed crypto-shred into
     // `{ principalKind: 'lake' }` with no id, destroying every lake's key in the collection, other
     // tenants' included. extractLakeMemory and recallLakeMemoryForSession guard the same pair.
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { ...LAKE, datalakeTag: undefined }, grants: [] });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: { ...LAKE, datalakeTag: undefined }, grants: [] });
     const { res, status } = makeRes();
 
     await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'creator-1' } }), res);
@@ -431,7 +444,7 @@ describe('DELETE /api/memory/lake/:id - owner-gated crypto-shred', () => {
   });
 
   it('returns 404 for a fallback lake before any manage check runs', async () => {
-    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { ...LAKE, createdByUserId: '' }, grants: [] });
+    h.assertLakeAccessWithGrantsById.mockResolvedValue({ lake: { ...LAKE, createdByUserId: '' }, grants: [] });
     const { res, status } = makeRes();
 
     await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'creator-1' } }), res);
@@ -447,7 +460,7 @@ describe('DELETE /api/memory/lake/:id - owner-gated crypto-shred', () => {
     await invoke(unauthedReq, res);
 
     expect(status).toHaveBeenCalledWith(401);
-    expect(h.assertLakeAccessWithGrants).not.toHaveBeenCalled();
+    expect(h.assertLakeAccessWithGrantsById).not.toHaveBeenCalled();
   });
 });
 
