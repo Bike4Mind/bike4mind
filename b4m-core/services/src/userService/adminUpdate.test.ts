@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { adminUpdateUser } from './adminUpdate';
 
+vi.mock('../friendshipService/sendFriendRequest', () => ({ sendFriendRequest: vi.fn() }));
+
 const ADMIN_ID = 'admin-1';
 const TARGET_ID = 'user-1';
 
@@ -412,5 +414,47 @@ describe('adminUpdateUser - API key deactivation on entering a blocked state', (
       'write failed'
     );
     expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+});
+
+describe('adminUpdateUser - org move membership row', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('adds a read row for a target not yet in the new org', async () => {
+    const { adapters } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org-new', userId: 'owner-1', users: [] });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org-new',
+      users: [{ userId: TARGET_ID, permissions: ['read'] }],
+    });
+  });
+
+  it('merges read into an existing row instead of adding a duplicate', async () => {
+    const { adapters } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({
+      id: 'org-new',
+      userId: 'owner-1',
+      users: [{ userId: TARGET_ID, permissions: ['admin'] }],
+    });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).toHaveBeenCalledWith({
+      id: 'org-new',
+      users: [{ userId: TARGET_ID, permissions: ['admin', 'read'] }],
+    });
+  });
+
+  it('adds no row when the target owns the new org', async () => {
+    const { adapters, update } = makeAdapters(100);
+    adapters.db.organizations.findById.mockResolvedValue({ id: 'org-new', userId: TARGET_ID, users: [] });
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, organizationId: 'org-new' }, adapters);
+
+    expect(adapters.db.organizations.update).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalled();
   });
 });
