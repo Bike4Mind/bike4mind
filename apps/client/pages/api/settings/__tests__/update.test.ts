@@ -207,7 +207,8 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
     expect(deleteOne).toHaveBeenCalledWith({ settingName: 'forcedRetrievalMinSimilarityPct' }, { hardDelete: true });
     expect(findOneAndUpdate).not.toHaveBeenCalled();
     expect(invalidateSettingsCache).toHaveBeenCalledWith('forcedRetrievalMinSimilarityPct');
-    expect(res.settingValue).toBe(75);
+    // null reads as "unset" in the field, distinct from a stored 75; see AdminSettingInputField.
+    expect(res.settingValue).toBe(null);
   });
 
   it('rejects without invalidating the cache or upserting when the delete fails', async () => {
@@ -224,6 +225,19 @@ describe('settings/update cleared forced-retrieval absolute floor', () => {
     expect(findOneAndUpdate).toHaveBeenCalledWith(
       { settingName: 'forcedRetrievalMinSimilarityPct' },
       { $set: { settingValue: 75 } },
+      expect.anything()
+    );
+  });
+
+  it('stores the default instead of deleting for a number key without clearDeletesRow', async () => {
+    // The delete branch is gated on clearDeletesRow. Without that check a blank save on ANY number
+    // key would hard-delete its row; this is the guard on the gate.
+    stageWriteResult('forcedRetrievalRelativeFloorPct', 85);
+    await runHandler('forcedRetrievalRelativeFloorPct', '');
+    expect(deleteOne).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).toHaveBeenCalledWith(
+      { settingName: 'forcedRetrievalRelativeFloorPct' },
+      { $set: { settingValue: 85 } },
       expect.anything()
     );
   });

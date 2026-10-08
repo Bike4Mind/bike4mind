@@ -96,7 +96,8 @@ const AdminSettingInputField = ({
   subSettings,
 }: {
   setting: (typeof settingsMap)[keyof typeof settingsMap];
-  defaultValue: string | number | boolean | object | undefined;
+  // null is a clearDeletesRow setting whose platform row is absent: unset, not the declared default.
+  defaultValue: string | number | boolean | object | undefined | null;
   index: number;
   subSettings?: SubSetting[];
 }) => {
@@ -157,6 +158,9 @@ const AdminSettingInputField = ({
           // not to what was submitted - sync from the response instead of leaving the field
           // empty until the next full settings refetch.
           if (setting.type === 'number' && typeof data?.settingValue === 'number') setValue(data.settingValue);
+          // clearDeletesRow answers null for a clear (the platform row was deleted): sync to the
+          // empty state so the field does not read as dirty against the default it used to hold.
+          if (setting.clearDeletesRow && data?.settingValue === null) setValue(null);
         },
       }
     );
@@ -210,6 +214,9 @@ const AdminSettingInputField = ({
                     },
                   }}
                   type="number"
+                  // clearDeletesRow with no row: the blank field is the "unset" state, not a missing
+                  // value. Name what it resolves to so an admin can tell it from a stored default.
+                  placeholder={setting.clearDeletesRow ? 'per embedding space' : undefined}
                   // A cleared field is kept as '' rather than coerced: Number('') is 0, which
                   // the server would store as a real zero instead of letting makeNumberSetting's
                   // empty-string preprocess fall back to the setting's own default.

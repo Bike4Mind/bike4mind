@@ -533,7 +533,13 @@ const AdminSettingsTab: React.FC = () => {
                   key={`${setting.key}-${groupId || 'ungrouped'}-${setting.name}-${index}`}
                   index={index}
                   setting={setting}
-                  defaultValue={settingValueByName.get(setting.key) ?? setting.defaultValue}
+                  // clearDeletesRow: no stored row means unset, NOT the declared default - pass null
+                  // so the field renders blank with its "per embedding space" placeholder instead of 75.
+                  defaultValue={
+                    setting.clearDeletesRow && !settingValueByName.has(setting.key)
+                      ? null
+                      : (settingValueByName.get(setting.key) ?? setting.defaultValue)
+                  }
                   subSettings={subSettings}
                 />
               );

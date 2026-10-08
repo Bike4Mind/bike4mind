@@ -38,7 +38,9 @@ const handler = baseApi().put(
     if (settingsMap[key].clearDeletesRow && isBlankSettingValue(req.body.value)) {
       await AdminSettings.deleteOne({ settingName: key }, { hardDelete: true });
       invalidateSettingsCache(key);
-      return res.json({ settingName: key, settingValue: settingsMap[key].defaultValue });
+      // null, not the declared default: the client renders that as "per embedding space", so an
+      // admin can tell a cleared setting apart from one pinned to the default's own number.
+      return res.json({ settingName: key, settingValue: null });
     }
 
     let value = settingsMap[key].schema.parse(req.body.value);
