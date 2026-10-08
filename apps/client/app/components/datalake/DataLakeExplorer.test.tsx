@@ -14,7 +14,7 @@ import DataLakeExplorer, { buildLakePrefixLookup } from './DataLakeExplorer';
 import type { DataLakeUncategorized } from './DataLakeTreeView';
 
 const U = '__uncategorized__';
-const NAV_PATHS = [[U], ['lakea'], ['lakea', U], ['acme', 'legal']];
+const NAV_PATHS = [[U], ['lakea'], ['lakea', U], ['acme', 'legal'], ['docs', 'alpha']];
 const nav = (path: string[]) => fireEvent.click(screen.getByTestId(`mock-nav-${path.join('/')}`));
 const tree = () => screen.getByTestId('mock-tree');
 
@@ -138,7 +138,7 @@ const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => (
     isError: false,
     isLoading: undefined as boolean | undefined,
   },
-  articleParams: [] as Array<{ tags?: string[] } | null | undefined>,
+  articleParams: [] as Array<{ tags?: string[]; lakeId?: string[] } | null | undefined>,
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
@@ -179,7 +179,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     };
   },
   // id query (deep-link) resolves to a file; tag query resolves empty.
-  useGetDataLakeArticles: (params?: { id?: string; tags?: string[] } | null) => {
+  useGetDataLakeArticles: (params?: { id?: string; tags?: string[]; lakeId?: string[] } | null) => {
     articleParams.push(params);
     return {
       data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
@@ -797,6 +797,9 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
 
     expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha');
     expect(tagCountsState.scopedLakeIds.at(-1)).toEqual(['lake-1']);
+
+    fireEvent.click(screen.getByTestId('mock-nav-docs/alpha'));
+    expect(articleParams).toContainEqual({ tags: ['docs:alpha'], lakeId: ['lake-1'], limit: 50 });
   });
 
   it('shows the tree as loading, not the empty-lake CTA, while the scoped count is in flight', () => {

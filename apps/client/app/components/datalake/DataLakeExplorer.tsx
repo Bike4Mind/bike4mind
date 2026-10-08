@@ -494,7 +494,7 @@ export default function DataLakeExplorer({
 
   // Phase 2: Fetch articles only when there's a tag at this breadcrumb to filter by (paginated)
   const { data: leafArticlesResult, isLoading: leafLoading } = useGetDataLakeArticles(
-    leafTag ? { tags: [leafTag], limit: 50 } : null,
+    leafTag ? { tags: [leafTag], limit: 50, ...(isLakeSelection ? { lakeId: selectedLakeIdList } : {}) } : null,
     source
   );
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];

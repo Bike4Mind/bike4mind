@@ -69,6 +69,18 @@ beforeEach(() => {
 });
 
 describe('GET /api/data-lakes/articles access-event audit', () => {
+  it('attributes a selected-lake article only to the selected accessible lake', async () => {
+    mockQueryDataLakeArticles.mockResolvedValue({
+      data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }, { name: 'datalake:lake2' }] }],
+      total: 1,
+      hasMore: false,
+    });
+
+    await route(makeReq({ lakeId: 'lake1', tags: 'docs:alpha' }), makeRes().res);
+
+    expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ resolvedLakeIds: ['lake1'] }));
+  });
+
   it('records an event attributed to the tag-matched lake(s) among the returned files', async () => {
     mockQueryDataLakeArticles.mockResolvedValue({
       data: [{ id: 'f1', tags: [{ name: 'datalake:lake1' }] }],

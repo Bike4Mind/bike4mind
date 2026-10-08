@@ -106,6 +106,7 @@ import {
   useUnderChunkedCount,
   useGetDataLakesWithRetrievability,
   useGetScopedDataLakeTagCounts,
+  useGetDataLakeArticles,
   useDataLakeSlugPreview,
 } from './dataLakes';
 import { dataLakeKeys } from './dataLakeKeys';
@@ -234,6 +235,24 @@ describe('useGetScopedDataLakeTagCounts', () => {
     expect(result.current.isLoading).toBe(false);
     expect(apiGet).not.toHaveBeenCalled();
   });
+});
+
+it('sends selected lake ids with a leaf article request', async () => {
+  apiGet.mockReset();
+  apiGet.mockResolvedValue({ data: { data: [], total: 0, hasMore: false } });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  const { result } = renderHook(
+    () => useGetDataLakeArticles({ tags: ['docs:alpha'], lakeId: ['lake-a', 'lake-b'], limit: 50 }, 'datalakes'),
+    { wrapper }
+  );
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+  expect(apiGet).toHaveBeenCalledWith(
+    '/api/data-lakes/articles?tags=docs%3Aalpha&lakeId=lake-a&lakeId=lake-b&limit=50'
+  );
 });
 
 describe('useBrowsePublicDataLakes', () => {

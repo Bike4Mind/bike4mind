@@ -2,6 +2,7 @@ import { Request } from 'express';
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { resolveAccessibleLakes, queryDataLakeArticles, type DataLakeArticlesQuery } from '@server/dataLakes';
+import { narrowAccessibleLakes } from '@server/dataLakes/narrowAccessibleLakes';
 import { adminSettingsRepository, lakeAccessEventRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
@@ -26,6 +27,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
   async (req: Request<{}, unknown, unknown, DataLakeArticlesQuery>, res) => {
     const lakes = await resolveAccessibleLakes(req);
     const result = await queryDataLakeArticles(req, lakes, req.query);
+    const auditLakes = narrowAccessibleLakes(lakes, req.query.lakeId);
 
     // Best-effort audit write, only when something was actually returned - an empty
     // result (no accessible lakes, or a deep-link miss) reflects no lake content, so no event.
@@ -37,16 +39,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES }).get(
       // open-prefix grant names exactly one lake, and the gate already knows which one. Reused
       // directly from `result.grantedLakeIds` (queryDataLakeArticles's own gate already computed
       // it) rather than recomputing the same grantingLakes call a second time. The list/search
-      // branch has no such guarantee: it is a mixed corpus (owned + shared + org-shared + data
-      // lake, since this route never sets restrictToDataLake), so a hit with no recoverable tag
-      // may be the caller's own private file - never fall back there, and skip the row entirely if
-      // nothing is attributable.
+      // branch can be a mixed corpus when no lakeId is supplied (owned + shared + org-shared + data
+      // lake), so a hit with no recoverable tag may be the caller's own private file. Never fall back
+      // there; selected-lake attribution must use the same narrowed set as the search.
       const isDeepLink = !!req.query.id;
       const resolvedLakeIds = isDeepLink
         ? (result.grantedLakeIds ?? [])
         : dataLakeService.attributeAccessedLakeIds(
             files.map(f => f.tags?.map(t => t.name) ?? []),
-            lakes,
+            auditLakes,
             { allowFullScopeFallback: false }
           );
       if (isDeepLink || resolvedLakeIds.length > 0) {

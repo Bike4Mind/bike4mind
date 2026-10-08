@@ -2103,6 +2103,7 @@ export function useAddFilesToLake() {
 
 export interface DataLakeArticlesParams {
   id?: string;
+  lakeId?: string[];
   tags?: string[];
   search?: string;
   page?: number;

@@ -40,6 +40,7 @@ import { getFilesStorage } from '@server/utils/storage';
 import { toAccessContext } from './toAccessContext';
 import { grantingLakes, isFileInAccessibleLake, normalizedLakePrefix } from './grantingLakes';
 import { firstQueryValue } from './firstQueryValue';
+import { narrowAccessibleLakes } from './narrowAccessibleLakes';
 
 export { grantingLakes, isFileInAccessibleLake, firstQueryValue };
 
@@ -111,6 +112,7 @@ export interface DataLakeArticlesQuery {
   // `string[]` for the same reason as `tags`/`search` below: /api/data-lakes/articles has no `[id]`
   // route segment, so `id` comes purely from the query string and is repeatable.
   id?: string | string[];
+  lakeId?: string | string[];
   tags?: string | string[];
   search?: string | string[];
   page?: string;
@@ -234,10 +236,11 @@ export async function queryDataLakeArticles(
   lakes: DataLakeConfig[],
   query: DataLakeArticlesQuery
 ): Promise<{ data: unknown[]; total: number; hasMore: boolean; grantedLakeIds?: string[] }> {
-  if (lakes.length === 0) return { data: [], total: 0, hasMore: false };
+  const scopedLakes = narrowAccessibleLakes(lakes, query.lakeId);
+  if (scopedLakes.length === 0) return { data: [], total: 0, hasMore: false };
 
-  const dataLakeTags = lakes.map(dl => dl.datalakeTag);
-  const { openTagPrefixes } = splitTagPrefixes(lakes);
+  const dataLakeTags = scopedLakes.map(dl => dl.datalakeTag);
+  const { openTagPrefixes } = splitTagPrefixes(scopedLakes);
 
   // Single-article fetch (deep link) - authorize it against the accessible lakes.
   // Access = the file carries an accessible lake's unique meta-tag (covers dynamic
@@ -250,7 +253,7 @@ export async function queryDataLakeArticles(
   const articleId = firstQueryValue(query.id);
   if (articleId) {
     const file = await fabFileRepository.findById(articleId);
-    const grantedLakeIds = file && !file.deletedAt ? grantingLakes(lakes, file.tags?.map(t => t.name) ?? []) : [];
+    const grantedLakeIds = file && !file.deletedAt ? grantingLakes(scopedLakes, file.tags?.map(t => t.name) ?? []) : [];
     if (!file || grantedLakeIds.length === 0) {
       return { data: [], total: 0, hasMore: false };
     }
@@ -280,7 +283,7 @@ export async function queryDataLakeArticles(
   // Dynamic-lake arms, each anchored to that lake's creator (#2243). Registry scopes are dropped
   // because these all land in one cross-lake `$or` - see dynamicMembershipScopesFor.
   const lakeMemberships = dynamicMembershipScopesFor(
-    await buildLakeMembershipScopes(lakes, 'data-lake-articles-browse', req.logger)
+    await buildLakeMembershipScopes(scopedLakes, 'data-lake-articles-browse', req.logger)
   );
 
   const result = await fabFilesService.search(
@@ -320,6 +323,7 @@ export async function queryDataLakeArticles(
       dataLakeTags,
       dataLakeTagPrefixes: openTagPrefixes,
       lakeMemberships,
+      restrictToDataLake: query.lakeId !== undefined,
     }
   );
 
