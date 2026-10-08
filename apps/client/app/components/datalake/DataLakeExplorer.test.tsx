@@ -118,6 +118,11 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
 const { tagCountsState, uncategorizedState, articleParams } = vi.hoisted(() => ({
   tagCountsState: {
     tagCounts: [] as { tag: string; count: number }[],
+    // The membership-scoped tree for a lake selection. null stands in for a server that agrees
+    // with the unscoped payload (the explorer's prefix belt still narrows it).
+    scoped: null as { tag: string; count: number }[] | null,
+    scopedLoading: false,
+    scopedLakeIds: [] as string[][],
     total: 0,
     lakeFileCounts: {} as Record<string, number>,
     uncategorizedFileCounts: {} as Record<string, number>,
@@ -148,6 +153,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isLoading: false,
     isError: false,
   }),
+  // Mirrors the real hook's `enabled: lakeIds.length > 0`: a disabled query is never loading.
+  useGetScopedDataLakeTagCounts: (_source: string, lakeIds: string[]) => {
+    if (lakeIds.length > 0) tagCountsState.scopedLakeIds.push([...lakeIds]);
+    return {
+      data:
+        lakeIds.length > 0 && !tagCountsState.scopedLoading
+          ? { tagCounts: tagCountsState.scoped ?? tagCountsState.tagCounts }
+          : undefined,
+      isLoading: lakeIds.length > 0 && tagCountsState.scopedLoading,
+      isError: false,
+    };
+  },
   // Records whether the query would actually RUN, mirroring the hook's own `enabled && !!lakeId`
   // gate: the explorer calls this unconditionally, with a null id whenever there is no bucket lake
   // (merged root, multi-lake scope), and counting that as a fetch would misread a disabled query.
@@ -286,6 +303,7 @@ vi.mock('./DataLakeChatTree', () => ({
         data-can-delete={String(props.canDeleteFile(file))}
         data-drop-hint={props.dropHint ?? ''}
         data-segments={props.tree.map(n => n.segment).join(',')}
+        data-child-segments={props.tree.flatMap(n => n.children.map(c => `${n.segment}:${c.segment}`)).join(',')}
         data-error={String(!!props.isError)}
         data-loading={String(!!props.isLoading)}
         data-lake-labels={JSON.stringify({
@@ -749,7 +767,45 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
   });
   afterEach(() => {
     tagCountsState.tagCounts = [];
+    tagCountsState.scoped = null;
+    tagCountsState.scopedLoading = false;
+    tagCountsState.scopedLakeIds = [];
     tagCountsState.total = 0;
+  });
+
+  // Prefixes are unique per creator only, so two creators' lakes can both use `docs`. The unscoped
+  // payload is merged by prefix and cannot tell them apart; the selected lake's tree has to come
+  // from the server's membership-scoped count.
+  it("builds a selected lake's tree from the scoped count, not another creator's same-prefix lake", () => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'docs', canManage: true },
+      { id: 'lake-2', name: 'Lake B', datalakeTag: 'datalake:lake-b', fileTagPrefix: 'docs', canManage: false },
+    ];
+    tagCountsState.tagCounts = [
+      { tag: 'docs:alpha', count: 1 },
+      { tag: 'docs:beta', count: 1 },
+    ];
+    tagCountsState.scoped = [{ tag: 'docs:alpha', count: 1 }];
+    renderExplorer();
+
+    expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha,docs:beta');
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+    expect(tree()).toHaveAttribute('data-child-segments', 'docs:alpha');
+    expect(tagCountsState.scopedLakeIds.at(-1)).toEqual(['lake-1']);
+  });
+
+  it('shows the tree as loading, not the empty-lake CTA, while the scoped count is in flight', () => {
+    tagCountsState.scopedLoading = true;
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-2'));
+
+    expect(tree()).toHaveAttribute('data-loading', 'true');
+    expect(screen.queryByTestId('datalake-tree-empty')).not.toBeInTheDocument();
   });
 
   it('offers the lake picker in the tree, opening on the all-lakes scope', () => {

@@ -28,6 +28,7 @@ import {
   useGetDataLakeArticles,
   useGetDataLakesWithRetrievability,
   useGetDataLakeTagCounts,
+  useGetScopedDataLakeTagCounts,
   useGetDataLakeUncategorizedFiles,
   useRemoveFileFromDataLake,
 } from '@client/app/hooks/data/dataLakes';
@@ -370,11 +371,28 @@ export default function DataLakeExplorer({
   // Add files action) addresses ONE lake, so they are offered only when the scope names one.
   const soleSelectedLake = selectedLakes.length === 1 ? selectedLakes[0] : null;
 
-  // Scoping lives in scopeTagCountsToLakes (pure + unit-tested, including the prefix-containment
-  // assumption it rests on) rather than inline here.
+  // A selected lake's tree comes from its own server-side count over its membership: the unscoped
+  // payload is merged by prefix, and prefixes are unique only per creator, so another creator's
+  // same-prefix lake cannot be filtered out of it here. The unscoped query still feeds the picker
+  // counts, totals and uncategorized buckets. No keepPreviousData: it would draw the previous
+  // lake's tree under the new lake's name.
+  const selectedLakeIdList = useMemo(() => selectedLakes.map(l => l.id), [selectedLakes]);
+  const {
+    data: scopedTagCountsData,
+    isLoading: scopedTagCountsLoading,
+    isError: scopedTagCountsError,
+  } = useGetScopedDataLakeTagCounts(source, selectedLakeIdList);
+  const isLakeSelection = selectedLakes.length > 0;
+  const treeCountsLoading = tagCountsLoading || (isLakeSelection && scopedTagCountsLoading);
+  const treeCountsError = tagCountsError || (isLakeSelection && scopedTagCountsError);
+  // scopeTagCountsToLakes stays applied over the scoped result as a belt (see its docblock).
   const scopedTagCounts = useMemo(
-    () => scopeTagCountsToLakes(tagCountsData?.tagCounts ?? [], selectedLakes),
-    [tagCountsData, selectedLakes]
+    () =>
+      scopeTagCountsToLakes(
+        (isLakeSelection ? scopedTagCountsData?.tagCounts : tagCountsData?.tagCounts) ?? [],
+        selectedLakes
+      ),
+    [isLakeSelection, scopedTagCountsData, tagCountsData, selectedLakes]
   );
 
   // Distinct lake members, which unlike the tree also counts files carrying no taxonomy tag.
@@ -391,7 +409,7 @@ export default function DataLakeExplorer({
    *  from scopedTagCounts (pre-seed) rather than the tree below, so seeding an empty lake's row
    *  in a populated scope can never flip this - it must stay exactly the "is there really
    *  nothing here" test DataLakeTreeEmptyState's variants key off. */
-  const isScopeEmpty = !tagCountsLoading && !tagCountsError && totalArticles === 0 && scopedTagCounts.length === 0;
+  const isScopeEmpty = !treeCountsLoading && !treeCountsError && totalArticles === 0 && scopedTagCounts.length === 0;
 
   // Seeds a zero-count root for every lake in scope that has no tagged files yet, so a freshly
   // restored/emptied lake still gets a row instead of vanishing from a tree built purely from tag
@@ -657,10 +675,10 @@ export default function DataLakeExplorer({
           onViewFile={handleViewFile}
           canDeleteFile={canDeleteFile}
           onDeleteFile={handleDeleteFile}
-          isLoading={tagCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0) || bucketBusy}
+          isLoading={treeCountsLoading || (!!leafTag && leafLoading && currentNodes.length === 0) || bucketBusy}
           // A failed bucket read must not render as an empty bucket: the row the user just
           // clicked promised a count, so "No articles found" would read as "they are gone".
-          isError={tagCountsError || bucketFailed}
+          isError={treeCountsError || bucketFailed}
           title={rootLabel ?? copy.rootLabel}
           onManage={onManage}
           onCreateLake={onCreateLake}

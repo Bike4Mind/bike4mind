@@ -26,6 +26,17 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isLoading: false,
     isError: false,
   }),
+  // Stands in for the server's membership-scoped count; the explorer's prefix belt narrows it.
+  useGetScopedDataLakeTagCounts: () => ({
+    data: {
+      tagCounts: [
+        { tag: 'docs:policy', count: 2 },
+        { tag: 'docs:policy:v2', count: 5 },
+      ],
+    },
+    isLoading: false,
+    isError: false,
+  }),
   useGetDataLakeUncategorizedFiles: () => ({ data: undefined, isLoading: false }),
   useGetDataLakeArticles: (params?: { tags?: string[] } | null) => {
     const tag = params?.tags?.[0];

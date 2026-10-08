@@ -24,6 +24,18 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
     isLoading: false,
     isError: false,
   }),
+  // Stands in for the server's membership-scoped count; the explorer's prefix belt narrows it.
+  useGetScopedDataLakeTagCounts: () => ({
+    data: {
+      tagCounts: [
+        { tag: 'books:business', count: 3 },
+        { tag: 'books:philosophy', count: 2 },
+        { tag: 'competitors:acme', count: 2 },
+      ],
+    },
+    isLoading: false,
+    isError: false,
+  }),
   useGetDataLakeUncategorizedFiles: () => ({ data: undefined, isLoading: false }),
   useGetDataLakeArticles: () => ({ data: { data: [] }, isLoading: false }),
   useGetDataLakes: () => ({ data: [] }),
