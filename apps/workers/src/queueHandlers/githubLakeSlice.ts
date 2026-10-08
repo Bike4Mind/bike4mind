@@ -39,7 +39,7 @@ import {
   createLakeIngestRetirer,
   ingestLakeFile,
   type IngestLake,
-} from '@server/queueHandlers/lakeIngestShared';
+} from '@workers/queueHandlers/lakeIngestShared';
 import { v4 as uuidv4 } from 'uuid';
 
 // Stop starting files with less than this left, so the invocation yields instead of dying mid-file.

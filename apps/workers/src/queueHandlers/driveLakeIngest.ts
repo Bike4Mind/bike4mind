@@ -29,7 +29,7 @@ import {
   createLakeIngestRetirer,
   ingestLakeFile,
   settleLakeIngestBatch,
-} from '@server/queueHandlers/lakeIngestShared';
+} from '@workers/queueHandlers/lakeIngestShared';
 import { MAX_FILE_SIZE_DEFAULT_MB } from '@server/utils/maxFileSizeDefault';
 import {
   disableDriveConnectionForLake,

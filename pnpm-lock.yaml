@@ -948,6 +948,9 @@ importers:
       '@bike4mind/utils':
         specifier: workspace:*
         version: link:../../b4m-core/utils
+      archiver:
+        specifier: ^7.0.0
+        version: 7.0.1
       axios:
         specifier: 1.20.0
         version: 1.20.0
@@ -957,6 +960,9 @@ importers:
       mailparser:
         specifier: ^3.9.26
         version: 3.9.26
+      mime-types:
+        specifier: ^3.0.2
+        version: 3.0.2
       mongodb:
         specifier: ^6.20.0
         version: 6.20.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
@@ -979,15 +985,30 @@ importers:
       '@bike4mind/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
+      '@googleapis/drive':
+        specifier: ^22.0.0
+        version: 22.0.0
+      '@octokit/rest':
+        specifier: ^22.0.1
+        version: 22.0.1
+      '@types/archiver':
+        specifier: ^7.0.0
+        version: 7.0.0
       '@types/aws-lambda':
         specifier: ^8.10.162
         version: 8.10.162
       '@types/mailparser':
         specifier: ^3.4.6
         version: 3.4.6
+      '@types/mime-types':
+        specifier: ^3.0.1
+        version: 3.0.1
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
+      '@types/yauzl':
+        specifier: ^3.4.0
+        version: 3.4.0
       mongodb-memory-server:
         specifier: ^11.2.0
         version: 11.2.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
@@ -1003,6 +1024,9 @@ importers:
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.11)(@vitest/ui@4.1.11)(jsdom@29.1.1(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.0(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
+      yauzl:
+        specifier: ^3.4.0
+        version: 3.4.0
 
   b4m-core/agents:
     dependencies:
