@@ -132,7 +132,6 @@ export async function getOrCreateSession(params: GetOrCreateSessionParams): Prom
   let session: ISessionDocument | null;
   let wasCreated = false;
 
-  // Shared by the create and attach paths below.
   const lakeAdapters = {
     // Imported at CALL time: the resolver's graph reaches the entitlement and Mongoose layers,
     // and it is only needed when files are actually attached.
