@@ -2,3 +2,4 @@
 // workspace package can import it without the services barrel.
 export * from './bank';
 export * from './grade';
+export * from './provision';
