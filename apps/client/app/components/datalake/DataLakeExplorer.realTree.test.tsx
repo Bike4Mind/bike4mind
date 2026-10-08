@@ -4,7 +4,10 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeExplorer from './DataLakeExplorer';
 
-const { fetchCalls } = vi.hoisted(() => ({ fetchCalls: [] as string[] }));
+const { fetchCalls, tagCountsState } = vi.hoisted(() => ({
+  fetchCalls: [] as string[],
+  tagCountsState: { tagCounts: [] as { tag: string; count: number; fileCount?: number }[] },
+}));
 
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
@@ -19,7 +22,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => ({
   activeOrgId: () => undefined,
   useGetDataLakeTagCounts: () => ({
     data: {
-      tagCounts: [],
+      tagCounts: tagCountsState.tagCounts,
       uniqueArticleCounts: { total: 2 },
       totalLakeFileCount: 2,
       lakeFileCounts: { 'datalake:lakea': 2 },
@@ -80,6 +83,7 @@ const appTheme = extendTheme({ ...getThemeConfig() });
 describe('DataLakeExplorer with the real tree: uncategorized bucket in a childless lake folder', () => {
   beforeEach(() => {
     fetchCalls.length = 0;
+    tagCountsState.tagCounts = [];
     vi.spyOn(console, 'info').mockImplementation(() => {});
   });
 
@@ -107,5 +111,29 @@ describe('DataLakeExplorer with the real tree: uncategorized bucket in a childle
     expect(fetchCalls).toContain('lake-a-id');
     expect(screen.getByTestId('datalake-file-f1')).toHaveTextContent('first');
     expect(screen.getByTestId('datalake-file-f2')).toHaveTextContent('second');
+  });
+});
+
+describe('DataLakeExplorer with the real tree: inner rows from server-shaped counts', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+  });
+
+  // The rows countDataLakeTagsByPrefix returns for 3 files each tagged lakea:legal:{a,b,c,d}.
+  it('shows the distinct file count on an inner row, not the sum of its leaves', () => {
+    tagCountsState.tagCounts = [
+      { tag: 'lakea', count: 0, fileCount: 3 },
+      { tag: 'lakea:legal', count: 0, fileCount: 3 },
+      ...['a', 'b', 'c', 'd'].map(leaf => ({ tag: `lakea:legal:${leaf}`, count: 3, fileCount: 3 })),
+    ];
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <DataLakeExplorer source="datalakes" chatSlot={<div />} chatEmbedded />
+      </CssVarsProvider>
+    );
+
+    fireEvent.click(screen.getByTestId('datalake-node-lakea'));
+
+    expect(screen.getByTestId('datalake-nodecount-legal')).toHaveTextContent(/^3$/);
   });
 });

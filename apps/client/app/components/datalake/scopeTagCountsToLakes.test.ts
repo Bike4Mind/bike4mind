@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { scopeTagCountsToLakes, seedEmptyLakeTags, type TagCount } from './scopeTagCountsToLakes';
+import type { TagPathCount } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import { scopeTagCountsToLakes, seedEmptyLakeTags } from './scopeTagCountsToLakes';
 
-const counts: TagCount[] = [
+const counts: TagPathCount[] = [
   { tag: 'research:reports:market', count: 3 },
   { tag: 'research:interviews:ops', count: 2 },
   { tag: 'legal:contracts', count: 5 },
@@ -28,7 +29,7 @@ describe('scopeTagCountsToLakes', () => {
   });
 
   it('keeps the lake-root row and its distinct count, but drops the rows above it', () => {
-    const withDistinct: TagCount[] = [
+    const withDistinct: TagPathCount[] = [
       { tag: 'acme', count: 0, fileCount: 7 },
       { tag: 'acme:legal', count: 0, fileCount: 4 },
       { tag: 'acme:legal:contracts', count: 3, fileCount: 3 },
@@ -43,6 +44,21 @@ describe('scopeTagCountsToLakes', () => {
     ]);
   });
 
+  // Another creator's `acme:` lake can tag a file exactly `acme:legal`, which the `acme:legal:` lake
+  // does not hold: the root keeps its path but not that file, so the tree sums the root's children.
+  it("drops the lake-root row's count when a nested prefix from another lake tags the root itself", () => {
+    const nested: TagPathCount[] = [
+      { tag: 'acme', count: 0, fileCount: 3 },
+      { tag: 'acme:legal', count: 1, fileCount: 3 },
+      { tag: 'acme:legal:nda', count: 2, fileCount: 2 },
+    ];
+
+    expect(scopeTagCountsToLakes(nested, [{ fileTagPrefix: 'acme:legal:' }])).toEqual([
+      { tag: 'acme:legal', count: 0 },
+      { tag: 'acme:legal:nda', count: 2, fileCount: 2 },
+    ]);
+  });
+
   it('yields nothing for a lake with no tagged content, rather than falling back to everything', () => {
     // The empty-vs-unscoped distinction is load-bearing: returning all tags here would make an
     // empty lake look like it contained every other lake's content.
@@ -52,7 +68,7 @@ describe('scopeTagCountsToLakes', () => {
   it('does not match a prefix that merely shares a leading substring', () => {
     // 'research' without the colon must not match 'researchers:'; the trailing colon is what makes
     // the prefix a namespace boundary rather than a text match.
-    const withNeighbour: TagCount[] = [...counts, { tag: 'researchers:notes', count: 9 }];
+    const withNeighbour: TagPathCount[] = [...counts, { tag: 'researchers:notes', count: 9 }];
     expect(scopeTagCountsToLakes(withNeighbour, [{ fileTagPrefix: 'research:' }]).map(c => c.tag)).not.toContain(
       'researchers:notes'
     );
@@ -62,7 +78,7 @@ describe('scopeTagCountsToLakes', () => {
     // Not desired behaviour - it is the consequence of prefix containment, and the reason
     // overlapping prefixes are refused at create time (tagPrefixIssue). Pinned so that if the
     // create-time guard is ever relaxed, this shows up as a decision rather than a surprise.
-    const nested: TagCount[] = [
+    const nested: TagPathCount[] = [
       { tag: 'research:reports:market', count: 3 },
       { tag: 'research:deep:genomics', count: 7 },
     ];
@@ -90,7 +106,7 @@ describe('scopeTagCountsToLakes', () => {
     // A per-lake pass concatenated together would duplicate the branch in the tree and double its
     // count. Only reachable through the legacy overlapping-prefix case, which is exactly why it
     // is pinned rather than assumed away.
-    const nested: TagCount[] = [{ tag: 'research:deep:genomics', count: 7 }];
+    const nested: TagPathCount[] = [{ tag: 'research:deep:genomics', count: 7 }];
     expect(
       scopeTagCountsToLakes(nested, [{ fileTagPrefix: 'research:' }, { fileTagPrefix: 'research:deep:' }])
     ).toEqual(nested);
@@ -120,7 +136,7 @@ describe('seedEmptyLakeTags', () => {
   it('does not match a prefix that merely shares a leading substring', () => {
     // 'research:' must not read 'researchers:notes' as content, or a genuinely empty
     // "research" lake would silently skip its seed.
-    const withNeighbour: TagCount[] = [{ tag: 'researchers:notes', count: 9 }];
+    const withNeighbour: TagPathCount[] = [{ tag: 'researchers:notes', count: 9 }];
     expect(seedEmptyLakeTags(withNeighbour, [{ fileTagPrefix: 'research:' }])).toEqual([
       ...withNeighbour,
       { tag: 'research', count: 0 },

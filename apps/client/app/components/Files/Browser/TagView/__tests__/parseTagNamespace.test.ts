@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildTagTree, countTagPaths, getNodeAtPath, getNodesAtPath, TagNode } from '../parseTagNamespace';
+import { countTagPaths } from '@bike4mind/common';
+import { buildTagTree, getNodeAtPath, getNodesAtPath, TagNode } from '../parseTagNamespace';
 
 describe('buildTagTree', () => {
   it('returns empty array for empty input', () => {
@@ -202,7 +203,7 @@ describe('buildTagTree with distinct per-path counts', () => {
   });
 
   it('falls back to the sum for a path no row counted distinctly', () => {
-    // A single-lake scope drops the rows above the lake root, as here for `acme`.
+    // A single-lake scope (`acme:legal:`) drops the rows strictly above its root, as here for `acme`.
     const tree = buildTagTree(multiTagged.filter(row => row.tag.startsWith('acme:')));
 
     expect(getNodeAtPath(tree, ['acme'])?.fileCount).toBe(3);
@@ -214,49 +215,5 @@ describe('buildTagTree with distinct per-path counts', () => {
     const tree = buildTagTree(countTagPaths([leaves, leaves, leaves]));
 
     expect(getNodeAtPath(tree, ['acme', 'legal'])?.fileCount).toBe(3);
-  });
-});
-
-describe('countTagPaths', () => {
-  const byTag = (rows: ReturnType<typeof countTagPaths>) => Object.fromEntries(rows.map(r => [r.tag, r]));
-
-  it('emits every ancestor path with distinct file counts', () => {
-    const rows = byTag(countTagPaths([['acme:legal:a', 'acme:legal:b'], ['acme:legal:a'], ['acme:hr']]));
-
-    expect(rows['acme']).toEqual({ tag: 'acme', count: 0, fileCount: 3 });
-    expect(rows['acme:legal']).toEqual({ tag: 'acme:legal', count: 0, fileCount: 2 });
-    expect(rows['acme:legal:a']).toEqual({ tag: 'acme:legal:a', count: 2, fileCount: 2 });
-    expect(rows['acme:legal:b']).toEqual({ tag: 'acme:legal:b', count: 1, fileCount: 1 });
-    expect(rows['acme:hr']).toEqual({ tag: 'acme:hr', count: 1, fileCount: 1 });
-  });
-
-  it('counts a tag repeated on one file once', () => {
-    expect(countTagPaths([['acme:a', 'acme:a']])).toEqual([
-      { tag: 'acme', count: 0, fileCount: 1 },
-      { tag: 'acme:a', count: 1, fileCount: 1 },
-    ]);
-  });
-
-  it('counts a file tagged with a branch and a tag under it once at the branch', () => {
-    const rows = byTag(countTagPaths([['acme:legal', 'acme:legal:a']]));
-
-    expect(rows['acme:legal']).toEqual({ tag: 'acme:legal', count: 1, fileCount: 1 });
-  });
-
-  // Same rows the server counter's suite pins for these tags - keep the two agreeing.
-  it('expands tags with empty segments the way the server counter does', () => {
-    const rows = countTagPaths([['acme::x', 'acme:legal:']]).sort((a, b) => a.tag.localeCompare(b.tag));
-
-    expect(rows).toEqual([
-      { tag: 'acme', count: 0, fileCount: 1 },
-      { tag: 'acme:', count: 0, fileCount: 1 },
-      { tag: 'acme::x', count: 1, fileCount: 1 },
-      { tag: 'acme:legal', count: 0, fileCount: 1 },
-      { tag: 'acme:legal:', count: 1, fileCount: 1 },
-    ]);
-  });
-
-  it('returns nothing for files with no tags', () => {
-    expect(countTagPaths([[], []])).toEqual([]);
   });
 });

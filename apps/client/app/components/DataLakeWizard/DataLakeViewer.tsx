@@ -20,14 +20,20 @@ import ChatIcon from '@mui/icons-material/Chat';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
-import { buildTagTree, countTagPaths } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
+import { buildTagTree } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useDataLakeFiles, useReprocessFabFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
 import type { DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
-import { describePipelineStall, humanizeTagSegment, satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
+import {
+  countTagPaths,
+  describePipelineStall,
+  humanizeTagSegment,
+  satisfiesTagPrefix,
+  submittedTagPrefix,
+} from '@bike4mind/common';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 

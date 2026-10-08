@@ -19,8 +19,8 @@ export interface TagNode {
 
 /**
  * One input row per tag-tree path. `count` is files tagged with exactly `tag`; `fileCount`, when
- * known, is distinct files tagged with `tag` or anything under it (see countTagPaths, and the
- * server's countDataLakeTagsByPrefix, which return both).
+ * known, is distinct files tagged with `tag` or anything under it (see countTagPaths in
+ * `@bike4mind/common`, which the server's countDataLakeTagsByPrefix also builds its rows with).
  */
 export interface TagPathCount {
   tag: string;
@@ -82,34 +82,6 @@ export function buildTagTree(tagCounts: TagPathCount[]): TagNode[] {
   sortLevel(rootChildren);
 
   return rootChildren;
-}
-
-/**
- * Rows for buildTagTree from each file's tag names (one inner array per file), counting distinct
- * files per path: a file with four tags under `a:b` adds one to `a:b`, not four. Emits every
- * ancestor path too. The client-side mirror of countDataLakeTagsByPrefix - keep the two agreeing.
- */
-export function countTagPaths(tagLists: string[][]): Required<TagPathCount>[] {
-  const rows = new Map<string, Required<TagPathCount>>();
-  const rowFor = (tag: string) => {
-    let row = rows.get(tag);
-    if (!row) {
-      row = { tag, count: 0, fileCount: 0 };
-      rows.set(tag, row);
-    }
-    return row;
-  };
-  for (const tags of tagLists) {
-    const own = new Set(tags);
-    const paths = new Set<string>();
-    for (const tag of own) {
-      const segments = tag.split(':');
-      for (let i = 1; i <= segments.length; i++) paths.add(segments.slice(0, i).join(':'));
-    }
-    for (const path of paths) rowFor(path).fileCount++;
-    for (const tag of own) rowFor(tag).count++;
-  }
-  return Array.from(rows.values());
 }
 
 /**

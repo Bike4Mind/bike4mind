@@ -20,6 +20,7 @@ import {
   DocumentDateSource,
   FabFileSourceType,
   KnowledgeType,
+  countTagPathsByTagSet,
   normalizeTagPrefix,
   REBUILD_PENDING_STALE_MS,
   UNCATEGORIZED_TAG_SUFFIX,
@@ -31,7 +32,7 @@ import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
 import { convertId, convertIds, softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import BaseRepository, { withTransaction } from '@bike4mind/db-core';
-import { addLowercaseField } from '../../utils/documentdb-compat';
+import { addLowercaseField, USE_DOCUMENTDB } from '../../utils/documentdb-compat';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from './SharableDocumentModel';
 import {
   buildFabFileSearchQuery,
@@ -57,30 +58,6 @@ const META_TAG_REGEX = new RegExp(`^${DATALAKE_TAG_PREFIX}`);
  * membership, never content, so it must not appear in the tag tree or inflate a prefix's count.
  */
 const NOT_META_TAG = { $not: META_TAG_REGEX };
-
-/**
- * Aggregation expression: `$$this` (a tag name) expanded to itself and every ancestor path,
- * splitting on `:` exactly as buildTagTree does - `a:b:c` gives `['a', 'a:b', 'a:b:c']`. Use it as
- * the `in` of a `$map` that keeps the default `this` binding (no `as:`).
- */
-const TAG_SELF_AND_ANCESTOR_PATHS = {
-  $let: {
-    vars: { segments: { $split: ['$$this', ':'] } },
-    in: {
-      $map: {
-        input: { $range: [1, { $add: [{ $size: '$$segments' }, 1] }] },
-        as: 'depth',
-        in: {
-          $reduce: {
-            input: { $slice: ['$$segments', '$$depth'] },
-            initialValue: null,
-            in: { $cond: [{ $eq: ['$$value', null] }, '$$this', { $concat: ['$$value', ':', '$$this'] }] },
-          },
-        },
-      },
-    },
-  },
-};
 
 /**
  * The `$project` stage behind every MEMBERSHIP-dimension read, shared by the lake-wide scan
@@ -1303,8 +1280,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * `count` is files tagged with exactly `tag`; `fileCount` is distinct files tagged with `tag` or
    * anything under it. Rows include every ancestor path of a matched tag (`acme` and `acme:legal`
    * for `acme:legal:a`), with `count: 0` when no file carries that path itself. buildTagTree reads
-   * `fileCount` for branch rows - see parseTagNamespace.ts, whose countTagPaths mirrors this on the
-   * client.
+   * `fileCount` for branch rows. The rows come from countTagPathsByTagSet (`@bike4mind/common`),
+   * which the client's Manager trees share.
    */
   async countDataLakeTagsByPrefix(
     userId: string,
@@ -1332,7 +1309,43 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     const prefixPattern = usablePrefixes.map(p => escapeRegex(p)).join('|');
     const prefixRegex = new RegExp(`^(${prefixPattern})`);
 
-    const result = await this.fabFileModel.aggregate<{ tag: string; count: number; fileCount: number }>([
+    // Each file's matched tag names as a deduped set. The default path filters in place; DocumentDB
+    // compatibility mode unwinds instead, with the $unwind/$match pair the old per-tag counter ran there.
+    const ownTagSet: PipelineStage[] = USE_DOCUMENTDB()
+      ? [
+          { $unwind: '$tags' },
+          { $match: { $and: [{ 'tags.name': { $regex: prefixRegex } }, { 'tags.name': NOT_META_TAG }] } },
+          { $group: { _id: '$_id', own: { $addToSet: '$tags.name' } } },
+        ]
+      : [
+          {
+            $project: {
+              own: {
+                $setUnion: [
+                  {
+                    $filter: {
+                      input: '$tags.name',
+                      cond: {
+                        // $regexMatch throws on a non-string input (the old $match skipped it); tags
+                        // are [Object] in the schema, so test the type first. $and short-circuits.
+                        $and: [
+                          { $eq: [{ $type: '$$this' }, 'string'] },
+                          { $regexMatch: { input: '$$this', regex: prefixRegex } },
+                          { $not: [{ $regexMatch: { input: '$$this', regex: META_TAG_REGEX } }] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ];
+
+    // The aggregate stops at one row per distinct tag set, weighted by how many files share it, and
+    // the path expansion runs in JS through the same countTagPathsByTagSet the client trees use, so
+    // the two cannot disagree. If an unordered set splits one tag set into two groups, counts still add.
+    const tagSets = await this.fabFileModel.aggregate<{ _id: unknown[]; files: number }>([
       {
         // Pre-unwind filter: use $elemMatch with the prefix regex so MongoDB can use
         // the tags.name index and skip non-data-lake files entirely before the $unwind
@@ -1349,62 +1362,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           tags: { $elemMatch: { name: { $regex: prefixRegex } } },
         },
       },
-      {
-        // Each file's matched tags as a deduped set, so a file counts once per path however many of
-        // its tags sit under that path.
-        $project: {
-          own: {
-            $setUnion: [
-              {
-                $filter: {
-                  input: '$tags.name',
-                  cond: {
-                    // $regexMatch throws on a non-string input (the old $match skipped it); tags are
-                    // [Object] in the schema, so test the type first. $and short-circuits.
-                    $and: [
-                      { $eq: [{ $type: '$$this' }, 'string'] },
-                      { $regexMatch: { input: '$$this', regex: prefixRegex } },
-                      { $not: [{ $regexMatch: { input: '$$this', regex: META_TAG_REGEX } }] },
-                    ],
-                  },
-                },
-              },
-            ],
-          },
-        },
-      },
-      // Path expansion is the expensive step (about 2x the whole old per-tag pipeline when run per
-      // file), so it runs once per distinct tag set, weighted by how many files share that set.
-      // Grouping only saves work: if $setUnion's unspecified order splits one set, counts still add.
+      ...ownTagSet,
       { $group: { _id: '$own', files: { $sum: 1 } } },
-      {
-        $project: {
-          own: '$_id',
-          files: 1,
-          paths: {
-            $setUnion: [
-              {
-                $reduce: {
-                  input: { $map: { input: '$_id', in: TAG_SELF_AND_ANCESTOR_PATHS } },
-                  initialValue: [],
-                  in: { $concatArrays: ['$$value', '$$this'] },
-                },
-              },
-            ],
-          },
-        },
-      },
-      { $unwind: '$paths' },
-      {
-        $group: {
-          _id: '$paths',
-          count: { $sum: { $cond: [{ $in: ['$paths', '$own'] }, '$files', 0] } },
-          fileCount: { $sum: '$files' },
-        },
-      },
-      { $project: { tag: '$_id', count: 1, fileCount: 1, _id: 0 } },
     ]);
-    return result;
+    // The compat path's $regex also matches a string INSIDE an array-valued name, which the default
+    // path's $type check rejects, so drop non-strings here to keep the two paths' rows identical.
+    return countTagPathsByTagSet(
+      tagSets.map(set => ({ tags: set._id.filter((tag): tag is string => typeof tag === 'string'), files: set.files }))
+    );
   }
 
   /**

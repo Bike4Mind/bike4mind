@@ -136,6 +136,7 @@ export * from './utils/dataLakeTaxonomy';
 export * from './utils/dataLakeSlug';
 export * from './utils/dataLakeAccessContext';
 export * from './utils/tagName';
+export * from './utils/tagPaths';
 export * from './utils/generatedMedia';
 export * from './utils/imageSize';
 export * from './utils/latticeIntentScan';

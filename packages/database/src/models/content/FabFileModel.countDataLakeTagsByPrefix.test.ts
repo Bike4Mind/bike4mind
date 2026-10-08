@@ -139,6 +139,32 @@ describe('FabFileRepository.countDataLakeTagsByPrefix', () => {
     });
   });
 
+  // The compat pipeline swaps $regexMatch for $unwind/$match; both must emit the same rows.
+  it('returns the same rows in DocumentDB compatibility mode', async () => {
+    const leaves = ['acme:legal:a', 'acme:legal:b', 'acme:legal:c'];
+    await makeFile({ tags: leaves });
+    await makeFile({ tags: [...leaves, 'acme:legal:a', 'datalake:acme:x', 'invoices'] });
+    await makeFile({ tags: ['acme::x', 'acme:legal'] });
+    await FabFile.create({
+      userId: USER,
+      fileName: 'malformed',
+      type: KnowledgeType.TEXT,
+      tags: [{ name: 'acme:hr' }, { name: 123 }, { name: ['acme:x'] }, { name: { x: 1 } }],
+    });
+
+    const defaultRows = sortedByTag(await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:']));
+    const previous = process.env.USE_DOCUMENTDB_COMPATIBILITY;
+    process.env.USE_DOCUMENTDB_COMPATIBILITY = 'true';
+    try {
+      const compatRows = sortedByTag(await fabFileRepository.countDataLakeTagsByPrefix(USER, ['acme:']));
+      expect(compatRows).toEqual(defaultRows);
+      expect(defaultRows.find(row => row.tag === 'acme:legal')).toEqual({ tag: 'acme:legal', count: 1, fileCount: 3 });
+    } finally {
+      if (previous === undefined) delete process.env.USE_DOCUMENTDB_COMPATIBILITY;
+      else process.env.USE_DOCUMENTDB_COMPATIBILITY = previous;
+    }
+  });
+
   it('ignores tags outside the requested prefixes', async () => {
     await makeFile({ tags: ['acme:industry', 'invoices'] });
 
