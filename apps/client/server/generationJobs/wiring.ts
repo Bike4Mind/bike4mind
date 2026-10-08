@@ -184,8 +184,9 @@ const GENERATED_IMAGE_MIME_TYPES: Record<string, string> = {
   gif: 'image/gif',
 };
 
-// Same ownership rule as edit_image (callerOwnsGeneratedImage). No moderation gate: generated images are
-// moderated before they are uploaded.
+// Same ownership rule as edit_image (callerOwnsGeneratedImage), and like edit_image no moderation gate
+// here: this trusts that whatever wrote the key into quest.images moderated it (image_generation and
+// edit_image do, before upload).
 const loadInputGeneratedImage = async (userId: string, key: string) => {
   const lookup = { userId, quests: questRepository, sessions: sessionRepository, logger };
   if (!(await callerOwnsGeneratedImage(key, lookup))) return null;
